@@ -123,7 +123,7 @@ async function commandsToResolve(
  * `path` as the filesystem actually resolves it, for a value that is about to
  * be compared byte-for-byte against main's own idea of the same file
  * (`volliCheck`, `packages/shared/src/doctor.ts`): a symlink followed (the
- * global `/usr/local/bin/volli` link main installs points AT the shim rather
+ * user-space `~/.local/bin/volli` link main installs points AT the shim rather
  * than BEING it, so an unresolved comparison reads a correct install as
  * "another install owns the link"), and on macOS `/tmp` normalized to
  * `/private/tmp` the same way. `null` stays `null` — nothing to resolve — and

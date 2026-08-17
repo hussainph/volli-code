@@ -54,13 +54,13 @@ describe("bootChatSession", () => {
     stubChatStore(create);
     const land = vi.fn(() => true);
 
-    const sessionId = await bootChatSession(SCOPE, { title: "Chat 1", land });
+    const sessionId = await bootChatSession(SCOPE, { land });
 
     expect(sessionId).toBe("durable-1");
     expect(create).toHaveBeenCalledWith({
       projectId: "p1",
       ticketId: "t1",
-      title: "Chat 1",
+      title: null,
     });
     expect(land).toHaveBeenCalledWith("durable-1");
     expect(useChatSessionsStore.getState().starting).toEqual({});
@@ -73,7 +73,6 @@ describe("bootChatSession", () => {
     await bootChatSession(
       { kind: "scratch", projectId: "p1" },
       {
-        title: "Chat 1",
         land: () => true,
       },
     );
@@ -81,7 +80,7 @@ describe("bootChatSession", () => {
     expect(create).toHaveBeenCalledWith({
       projectId: "p1",
       ticketId: null,
-      title: "Chat 1",
+      title: null,
     });
   });
 
@@ -90,9 +89,9 @@ describe("bootChatSession", () => {
     const create = vi.fn(() => new Promise<string | null>((resolve) => (release = resolve)));
     stubChatStore(create);
 
-    const first = bootChatSession(SCOPE, { title: "Chat 1", land: () => true });
+    const first = bootChatSession(SCOPE, { land: () => true });
     expect(useChatSessionsStore.getState().starting).toEqual({ t1: true });
-    const second = await bootChatSession(SCOPE, { title: "Chat 2", land: () => true });
+    const second = await bootChatSession(SCOPE, { land: () => true });
 
     expect(second).toBeNull();
     expect(create).toHaveBeenCalledOnce();
@@ -107,7 +106,7 @@ describe("bootChatSession", () => {
     stubChatStore(create);
     useProjectsStore.setState({ projects: [] });
 
-    await expect(bootChatSession(SCOPE, { title: "Chat 1", land: () => true })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { land: () => true })).resolves.toBeNull();
 
     expect(create).not.toHaveBeenCalled();
   });
@@ -120,7 +119,7 @@ describe("bootChatSession", () => {
     stubChatStore(async () => "durable-1");
     const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { title: "Chat 1", land })).resolves.toBe("durable-1");
+    await expect(bootChatSession(SCOPE, { land })).resolves.toBe("durable-1");
 
     expect(land).toHaveBeenCalledOnce();
   });
@@ -129,7 +128,7 @@ describe("bootChatSession", () => {
     const { closeChatSession } = stubChatStore(async () => null);
     const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { title: "Chat 1", land })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { land })).resolves.toBeNull();
 
     expect(land).not.toHaveBeenCalled();
     expect(closeChatSession).not.toHaveBeenCalled();
@@ -139,9 +138,7 @@ describe("bootChatSession", () => {
   it("lets the Session go when the owner vanished mid-flight", async () => {
     const { closeChatSession } = stubChatStore(async () => "durable-1");
 
-    await expect(
-      bootChatSession(SCOPE, { title: "Chat 1", land: () => false }),
-    ).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { land: () => false })).resolves.toBeNull();
 
     expect(closeChatSession).toHaveBeenCalledWith("durable-1");
   });
@@ -153,7 +150,7 @@ describe("bootChatSession", () => {
     });
     const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { title: "Chat 1", land })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { land })).resolves.toBeNull();
 
     expect(land).not.toHaveBeenCalled();
     expect(closeChatSession).toHaveBeenCalledWith("durable-1");
@@ -164,7 +161,7 @@ describe("bootChatSession", () => {
       throw new Error("socket hang up");
     });
 
-    await expect(bootChatSession(SCOPE, { title: "Chat 1", land: () => true })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { land: () => true })).resolves.toBeNull();
 
     expect(toast.error).toHaveBeenCalledWith(
       "Couldn't start chat: socket hang up",

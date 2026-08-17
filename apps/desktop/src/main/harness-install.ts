@@ -4,8 +4,11 @@ import { lstat, mkdir, open, readlink, rename, rm, symlink, writeFile } from "no
 import { dirname } from "node:path";
 
 import {
+  fencedBlockPattern,
+  fencedBodyPattern,
   managedWriteDecision,
   mergeFencedSection,
+  type FenceComment,
   type InstallAction,
   type ManagedWriteDecision,
 } from "@volli/shared";
@@ -197,13 +200,14 @@ function writeManagedSymlink(
   );
 }
 
-function fencedBody(content: string): string | null {
-  // Tolerate CRLF and a missing newline adjacent to either marker: a strict
-  // `\n` requirement makes the body null on Windows-edited or trailing-newline-
-  // stripped files, which fails the guard open (null → "write" → silent
-  // overwrite of user edits). Normalize CRLF→LF so the same logical body hashes
-  // identically regardless of the file's line-ending convention.
-  const match = content.match(/<!-- volli:begin v=\d+ -->\r?\n?([\s\S]*?)\r?\n?<!-- volli:end -->/);
+function fencedBody(content: string, comment: FenceComment): string | null {
+  // Tolerance for CRLF and a missing newline adjacent to either marker lives in
+  // the shared pattern (`fencedBodyPattern`): a strict `\n` requirement makes
+  // the body null on Windows-edited or trailing-newline-stripped files, which
+  // fails the guard open (null → "write" → silent overwrite of user edits).
+  // Normalize CRLF→LF so the same logical body hashes identically regardless of
+  // the file's line-ending convention.
+  const match = content.match(fencedBodyPattern(comment));
   return match ? match[1].replace(/\r\n/g, "\n") : null;
 }
 
@@ -212,9 +216,10 @@ async function writeManagedFence(
   manifest: InstallManifest,
   result: HarnessInstallResult,
 ): Promise<void> {
+  const comment = action.comment ?? "html";
   const current = (await textAt(action.path)) ?? "";
-  const currentBody = fencedBody(current);
-  const merged = mergeFencedSection(current, action.content, action.version);
+  const currentBody = fencedBody(current, comment);
+  const merged = mergeFencedSection(current, action.content, action.version, comment);
   await applyManagedAction(
     action.path,
     action.kind,
@@ -308,7 +313,7 @@ export async function uninstallHarnessPlan(
       const current = await textAt(action.path);
       if (current === null) continue;
       const withoutBlock = current.replace(
-        /\n?<!-- volli:begin v=\d+ -->[\s\S]*?<!-- volli:end -->\n?/,
+        new RegExp(`\\n?${fencedBlockPattern(action.comment ?? "html").source}\\n?`),
         "\n",
       );
       if (withoutBlock !== current) {

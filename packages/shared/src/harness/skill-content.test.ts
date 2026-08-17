@@ -1,8 +1,45 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { parseHarnessManifest } from "./manifest";
-import { VOLLI_CLI_REFERENCE, VOLLI_PLUGIN_DOC } from "./skill-content";
+import {
+  VOLLI_CLI_REFERENCE,
+  VOLLI_COMMAND_DOC,
+  VOLLI_FENCED_INSTRUCTIONS,
+  VOLLI_PATH_PROFILE_BLOCK,
+  VOLLI_PLUGIN_DOC,
+  VOLLI_SKILL,
+} from "./skill-content";
 import { HARNESS_EVENTS } from "./types";
+
+describe("injected content is inert outside Volli (VC-42 F18)", () => {
+  // These land in GLOBAL files (~/.codex/AGENTS.md, ~/AGENTS.md, shared skill
+  // dirs) that every session of that harness reads — almost all of them outside
+  // Volli. Each one must gate itself on the Volli env vars and say what NOT to
+  // do when they are absent, or a plain Codex/Claude session burns its context
+  // running `volli identify` and `volli app launch` against nothing.
+  const gated: Record<string, string> = {
+    VOLLI_FENCED_INSTRUCTIONS,
+    VOLLI_SKILL,
+    VOLLI_COMMAND_DOC,
+  };
+
+  for (const [name, content] of Object.entries(gated)) {
+    it(`${name} names the env-var gate and the stand-down instruction`, () => {
+      expect(content).toContain("VOLLI_SESSION");
+      expect(content).toContain("VOLLI_SOCKET");
+      // The negative instruction has to be explicit: "applies only when…" alone
+      // still reads as an invitation to try the command and see.
+      expect(content).toMatch(/do not run|never run/);
+    });
+  }
+});
+
+describe("VOLLI_PATH_PROFILE_BLOCK", () => {
+  it("is a zsh-safe fragment that prepends ~/.local/bin without expanding $HOME early", () => {
+    expect(VOLLI_PATH_PROFILE_BLOCK).toContain('export PATH="$HOME/.local/bin:$PATH"');
+    expect(VOLLI_PATH_PROFILE_BLOCK).not.toContain("<!--");
+  });
+});
 
 describe("VOLLI_CLI_REFERENCE", () => {
   it("reinforces the worktree orientation contract and the read-only worktree commands", () => {

@@ -121,6 +121,49 @@ describe("harness install executor", () => {
     expect(await readFile(instructionsPath, "utf8")).toBe(crlfEdited);
   });
 
+  it("round-trips a hash-comment fence (shell profile) through install, refresh, and excision", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
+    const profilePath = join(root, ".zprofile");
+    const manifestPath = join(root, ".volli-managed.json");
+    await writeFile(profilePath, "export EDITOR=vim\n");
+    const plan = [
+      {
+        kind: "fenced",
+        path: profilePath,
+        content: 'export PATH="$HOME/.local/bin:$PATH"',
+        version: 1,
+        comment: "hash",
+        managed: true,
+      } as const,
+    ];
+
+    const installed = await applyHarnessInstallPlan(plan, manifestPath);
+    expect(installed.written).toContain(profilePath);
+    const written = await readFile(profilePath, "utf8");
+    expect(written).toContain("# volli:begin v=1");
+    expect(written).not.toContain("<!--");
+
+    // Idempotent refresh: byte-identical body skips.
+    const refreshed = await applyHarnessInstallPlan(plan, manifestPath);
+    expect(refreshed.skipped).toContain(profilePath);
+    expect(refreshed.conflicts).toEqual([]);
+
+    // A user-edited body is a conflict, matched by the HASH pattern.
+    const edited = written.replace(".local/bin", "custom/bin");
+    await writeFile(profilePath, edited);
+    const conflicted = await applyHarnessInstallPlan(plan, manifestPath);
+    expect(conflicted.conflicts.map((conflict) => conflict.path)).toContain(profilePath);
+    expect(await readFile(profilePath, "utf8")).toBe(edited);
+
+    // Excision removes exactly the block, leaving the user's own lines.
+    await writeFile(profilePath, written);
+    const removal = await uninstallHarnessPlan(plan, manifestPath);
+    expect(removal.removed).toContain(profilePath);
+    const after = await readFile(profilePath, "utf8");
+    expect(after).toContain("export EDITOR=vim");
+    expect(after).not.toContain("volli:begin");
+  });
+
   it("refuses to follow a dangling managed-file symlink", async () => {
     root = await mkdtemp(join(tmpdir(), "volli-harness-test-"));
     const plan = buildHarnessInstallPlan({ home: root, adapters: adaptersFor("codex") });

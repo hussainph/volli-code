@@ -40,8 +40,14 @@
  * else tells them apart. So the filled share is a GRADIENT of the accent rather
  * than a fill of it — one colour stop per effort stop, clipped at the seam — and
  * the substance warms and thickens toward the value instead of only reaching
- * further. How far that can go is not a taste decision: both labels sit ON the
- * wash, and the alpha ceiling is whatever holds them at AA in the appearance
+ * further. A SQUIGGLE rides the same share (VC-57, the Arc-lineage wave the
+ * vibrancy pass was always headed for): a hairline wave along the pill's free
+ * bottom band, clipped at the same seam, whose amplitude stands with the value
+ * — the lowest stop's empty share clips it away entirely, and each stop up
+ * from there stands taller until full wave at `max` — so the filled substance
+ * is not merely warmer toward the top but visibly more agitated. How far that
+ * can go is not a taste decision: both labels sit ON the wash, and the alpha
+ * ceiling is whatever holds them at AA in the appearance
  * that binds (`chat/composer-effort.ts` carries the measurements). Which is why
  * the part of the idea that runs UNBOUNDED is outside the pill — an ember halo
  * thrown onto the popover behind it, squared against the ramp so it is absent
@@ -66,11 +72,15 @@ import { CaretUpDownIcon, GaugeIcon } from "@phosphor-icons/react";
 
 import {
   EFFORT_DEAD_ZONE,
+  EFFORT_SQUIGGLE_AMPLITUDE,
+  EFFORT_SQUIGGLE_WAVELENGTH,
   EFFORT_STRETCH_LIMIT,
   effortChroma,
   effortGlow,
   effortIndex,
   effortLabel,
+  effortSquigglePath,
+  effortSquiggleScale,
   effortStopPercent,
   effortWashMix,
   readEffortPointer,
@@ -175,6 +185,14 @@ const EFFORT_HALO_SHADOW = [
   "0 0 12px oklch(from var(--primary) l c h / 0.6)",
   "0 0 30px 6px oklch(from var(--primary) l c h / 0.38)",
 ].join(", ");
+
+/**
+ * The rail's fixed width — `w-56` on the slider root, the one place the pill's
+ * geometry is authored — which is what lets the squiggle's path be baked once
+ * per mount instead of measured. The elastic overdrag scales the pill and the
+ * wave stretches with it, which is what material doing the stretching should do.
+ */
+const EFFORT_PILL_WIDTH = 224;
 
 /** How far the pill can be pulled past a dead zone before it stops giving. */
 function stretchLimit(reduced: boolean): number {
@@ -425,7 +443,7 @@ function EffortSlider({
 
             DERIVED FROM LIVE TOKENS, NEVER AUTHORED. Both ends of the mix are
             variables — the accent the canvas engine derived for this scope and
-            the pill's own unfilled colour — so a workspace that reseeds its
+            the pill's own unfilled colour — so a project that reseeds its
             accent reseeds this ramp with it, and the floor is the control's own
             groove rather than a colour someone picked to sit near it. A
             hand-mixed hex here would be the one colour in the app the theme does
@@ -460,6 +478,78 @@ function EffortSlider({
             "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
           )}
         />
+
+        {/* THE SQUIGGLE — the magnitude, drawn as agitation rather than only as
+            reach and warmth.
+
+            IT LIVES IN THE BOTTOM BAND, for the comb's own reason mirrored:
+            the text's line box owns the middle 20px of the 28px pill (y 4–24),
+            the comb owns the top edge, and a wave through either would read
+            as a rendering fault. The box below (`bottom-0.5 h-1.5`) spans
+            y 20–26, so the peaks ride y 21–25 — the top of that travel sits
+            ~3px inside the line box's tail, which is descender space: only a
+            glyph like the `g` in "High" dips there, and a hairline at `/40`
+            under a descender is the human feel-check's first watch item, not
+            a collision the geometry rules out.
+
+            IT IS CLIPPED AT THE SEAM, by the same inset the wash uses and on
+            the same clock, so the wave and the wash are one substance seen
+            twice — the wave never runs ahead of the colour or lags it.
+
+            THE VALUE IS THE AMPLITUDE, via `scaleY` on the path rather than a
+            regenerated `d`: Chromium interpolates a transform and does not
+            interpolate a path, so scale is the one channel on which two
+            amplitudes can meet mid-gesture (`composer-effort.ts` carries the
+            ramp). `non-scaling-stroke` holds the ink at hairline weight while
+            the geometry flattens — without it the wave would thin toward the
+            bottom of the range and vanish before it arrived. `fill-box` makes
+            the scale's origin the wave's own centreline, which is what lets it
+            flatten in place instead of sagging toward an edge.
+
+            AND IT DOES NOT DRIFT. An ambient phase-scroll while dragging was
+            considered and refused on Ignite's precedent: continuous motion
+            under the hand decorates the gesture rather than reporting it, and
+            the grip already answers being gripped. The only thing that moves
+            here is the amplitude, and only because the value moved. */}
+        <svg
+          aria-hidden
+          data-slot="effort-squiggle"
+          viewBox={`0 ${-(EFFORT_SQUIGGLE_AMPLITUDE + 1)} ${EFFORT_PILL_WIDTH} ${
+            2 * (EFFORT_SQUIGGLE_AMPLITUDE + 1)
+          }`}
+          preserveAspectRatio="none"
+          style={{ clipPath: `inset(0 ${100 - filled}% 0 0)` }}
+          className={cn(
+            "pointer-events-none absolute inset-x-0 bottom-0.5 h-1.5",
+            "transition-[clip-path] duration-150 ease-out",
+            "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+          )}
+        >
+          <path
+            d={effortSquigglePath(
+              EFFORT_PILL_WIDTH,
+              EFFORT_SQUIGGLE_WAVELENGTH,
+              EFFORT_SQUIGGLE_AMPLITUDE,
+            )}
+            fill="none"
+            vectorEffect="non-scaling-stroke"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            style={{
+              transform: `scaleY(${effortSquiggleScale(index, stops)})`,
+              transformBox: "fill-box",
+              transformOrigin: "center",
+            }}
+            className={cn(
+              // `/40`: a redundant channel — the seam and the grip already say
+              // the value — so it sits a rung under the comb's resting `/50`
+              // and reads as texture of the wash rather than as a second comb.
+              "stroke-foreground/40",
+              "transition-transform duration-150 ease-out",
+              "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+            )}
+          />
+        </svg>
 
         {/* Interior stops only — the pill's own ends are the first and last,
             and a hairline drawn on a rounded cap is a smudge, not a tick.

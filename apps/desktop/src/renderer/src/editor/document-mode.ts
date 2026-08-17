@@ -51,7 +51,20 @@ export function documentModeOptions(
     overviewRulerLanes: 0,
     overviewRulerBorder: false,
     hideCursorInOverviewRuler: true,
-    scrollbar: { horizontal: "hidden", useShadows: false, verticalScrollbarSize: 10 },
+    // `alwaysConsumeMouseWheel: false` is load-bearing: a document surface is
+    // auto-height (its host is sized to `getContentHeight()`), so the editor
+    // itself never has anything to scroll — the ancestor column does. Monaco's
+    // default (`true`) cancels every wheel event over the editor regardless,
+    // which froze the ticket body and markdown views for the whole height of
+    // the document; the page only moved when the cursor found the gutter.
+    // With `false`, Monaco consumes the wheel only when it actually scrolled,
+    // which here is never, and the event chains to the scrolling column.
+    scrollbar: {
+      horizontal: "hidden",
+      useShadows: false,
+      verticalScrollbarSize: 10,
+      alwaysConsumeMouseWheel: false,
+    },
     stickyScroll: { enabled: false },
     // --- reads as prose ---
     wordWrap: "on",

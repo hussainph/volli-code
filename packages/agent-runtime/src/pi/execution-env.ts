@@ -9,6 +9,21 @@ import {
   type ExecutionEnv,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
+import { VOLLI_SESSION_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
+
+/**
+ * The Volli identity a Session's commands run under: the durable Session id,
+ * and the display id of the Ticket it works (`null` for a ticketless Session).
+ *
+ * Handed in by the host, never read off `process.env` — main's own environment
+ * holds no `VOLLI_SESSION`, and if it somehow did, it would name the wrong
+ * session for every attachment but one.
+ */
+export interface PiSessionEnvIdentity {
+  sessionId: string;
+  /** e.g. `VC-51`; `null` for a ticketless project Session. */
+  ticketDisplayId: string | null;
+}
 
 export interface PiExecutionEnvOptions {
   /**
@@ -16,12 +31,27 @@ export interface PiExecutionEnvOptions {
    * before every `exec`. See {@link piExecutionEnv} for why this exists.
    */
   pathPrefixes?: readonly string[];
+  /**
+   * When present, every command is told which Volli Session it runs for:
+   * `VOLLI_SESSION` (and `VOLLI_TICKET`, when the Session works a Ticket) are
+   * set in the environment a child is handed.
+   *
+   * A deliberate exception to this module's rule that the environment carries
+   * "nothing that says who is running it": these two names are exactly who is
+   * running it, minted by the host for this one Session rather than carried
+   * over from the host's own environment. They are what the bundled `volli`
+   * CLI resolves `session done` / `session blocked` against, and what makes a
+   * socket write attribute to the Session instead of to the user — the same
+   * contract a Volli-spawned PTY gets from `agentSessionEnv` (VC-51).
+   */
+  identity?: PiSessionEnvIdentity;
 }
 
 /**
  * What a CLI needs to render text, and nothing that says who is running it.
  * Both environments below are this list plus what their own path can afford;
- * neither has a second copy of it.
+ * neither has a second copy of it. The one identity a command IS told about is
+ * host-minted, not carried over — see {@link PiExecutionEnvOptions.identity}.
  */
 const BENIGN_VARIABLES = [
   "LANG",
@@ -116,18 +146,36 @@ function prefixedPath(path: string, pathPrefixes: readonly string[]): string {
   return result.join(":");
 }
 
+/** The two identity variables, as the environment entries a child is handed. */
+function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<string, string> {
+  if (identity === undefined) return {};
+  return {
+    [VOLLI_SESSION_ENV]: identity.sessionId,
+    ...(identity.ticketDisplayId === null ? {} : { [VOLLI_TICKET_ENV]: identity.ticketDisplayId }),
+  };
+}
+
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
+  readonly #identityVariables: Record<string, string>;
 
-  constructor(options: { cwd: string; pathPrefixes?: readonly string[] }) {
+  constructor(options: {
+    cwd: string;
+    pathPrefixes?: readonly string[];
+    identity?: PiSessionEnvIdentity;
+  }) {
     super({ cwd: options.cwd });
     this.#pathPrefixes = options.pathPrefixes ?? [];
+    this.#identityVariables = identityVariables(options.identity);
   }
 
   /** Pi's bash tool asks for the host environment; here is the only place that can decline. */
   override async exec(command: string, options?: ShellExecOptions) {
     const sanitized = unsandboxedEnvironment(process.env);
-    const merged = { ...sanitized, ...options?.env };
+    // Identity sits between the sanitized set and the caller's own `env`: a
+    // tool call that names VOLLI_SESSION explicitly is believed, exactly as it
+    // is for every other variable.
+    const merged = { ...sanitized, ...this.#identityVariables, ...options?.env };
     return super.exec(command, {
       ...options,
       env: {
@@ -166,6 +214,13 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * whole, with the stricter {@link scopedEnvironment} it was written against;
  * nothing wires it up.
  *
+ * `identity` exists for the same caller: main hands in the Session's durable
+ * id and its Ticket's display id, so `VOLLI_SESSION`/`VOLLI_TICKET` are set in
+ * a structured Session's shell exactly as `agentSessionEnv` sets them in a
+ * Volli-spawned PTY. Without them the bundled CLI's `session done` /
+ * `session blocked` had no context to act on, and every socket write from a
+ * structured Session attributed to the user (VC-51).
+ *
  * `pathPrefixes` exists for one caller: main hands in `<userData>/bin`, the
  * directory the CLI shim and every harness wrapper live in, so `volli` and a
  * detected toolchain resolve inside a structured Session exactly as they do
@@ -181,5 +236,9 @@ export async function piExecutionEnv(
   workspacePath: string,
   options?: PiExecutionEnvOptions,
 ): Promise<ExecutionEnv> {
-  return new SanitizedEnvExecutionEnv({ cwd: workspacePath, pathPrefixes: options?.pathPrefixes });
+  return new SanitizedEnvExecutionEnv({
+    cwd: workspacePath,
+    pathPrefixes: options?.pathPrefixes,
+    identity: options?.identity,
+  });
 }

@@ -101,15 +101,18 @@ export default defineConfig(({ mode }) => ({
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
+        "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
+        "src/components/sidebar/edge-region.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
+        "src/components/ticket/label-picker-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
@@ -117,6 +120,10 @@ export default defineConfig(({ mode }) => ({
         // report as view glue, but the roving-tabindex arithmetic left a
         // component file precisely so the gate could reach it.
         "src/components/ui/tab-focus.ts",
+        // Same shape: the wheel-detach decision for the conversation (VC-32)
+        // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
+        // gate can reach it; the `.tsx` glue that calls it stays outside.
+        "src/components/ui/ai-elements/scroll-chaining.ts",
         "src/lib/boundary-timer.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",

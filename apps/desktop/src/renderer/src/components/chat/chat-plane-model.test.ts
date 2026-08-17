@@ -29,6 +29,7 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  messageCopyText,
   messageRoute,
   resolvingWith,
   sameInteractionId,
@@ -739,6 +740,45 @@ describe("messageRoute", () => {
   });
 });
 
+describe("messageCopyText", () => {
+  it("keeps every visible text part in feed order", () => {
+    const messages: readonly UIMessage[] = [
+      {
+        id: "user-1",
+        role: "user",
+        parts: [
+          { type: "text", text: "Rewrite this prompt." },
+          { type: "text", text: "Keep the examples." },
+        ],
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Here is a tighter version." }],
+      },
+    ];
+
+    expect(messageCopyText(messages)).toBe(
+      "Rewrite this prompt.\n\nKeep the examples.\n\nHere is a tighter version.",
+    );
+  });
+
+  it("offers no copy for a feed row with no message text", () => {
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "Private reasoning", state: "done" },
+          { type: "text", text: "" },
+        ],
+      },
+    ];
+
+    expect(messageCopyText(messages)).toBeNull();
+  });
+});
+
 describe("dispatchHeldMessage", () => {
   it("does not deliver direct typing until its held copy is durable", async () => {
     let acknowledge!: (durable: boolean) => void;
@@ -1174,6 +1214,27 @@ describe("steerQueuedMessage", () => {
     expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
   });
 
+  // The other half of the strip's VC-49 round trip: `heldStrip` keeps a held
+  // row's skill resources, and this pins that a steer's rebuilt submit row
+  // carries them too — a `/skill` message queued behind a live turn delivers
+  // what it resolved to at ⏎, not bare text.
+  it("hands a held row's skill resources to submit when steered", async () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    const state = steerHarness({
+      held: [{ ...heldMessage("q1", "/logos go", "unsent"), resources }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "/logos go", resources });
+        expect(delivery).toBe("steer");
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+
+    expect(state.held()).toEqual([]);
+    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
+  });
+
   it("restores a refused queue-only row between its original neighbors", async () => {
     const state = steerHarness({
       queue: [
@@ -1417,6 +1478,15 @@ describe("heldStrip", () => {
       { id: "m2", text: "two" },
     ]);
   });
+
+  // The row is also what `beginQueuedSteer` persists back, so a skill body
+  // riding the held copy must survive the strip round trip (VC-49).
+  it("keeps a held row's skill resources on its strip row", () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    expect(heldStrip([{ ...heldMessage("m1", "/logos go", "unsent"), resources }], [])).toEqual([
+      { id: "m1", text: "/logos go", resources },
+    ]);
+  });
 });
 
 describe("settledHeldIds", () => {
@@ -1472,6 +1542,16 @@ describe("sameQueuedMessage", () => {
 
     expect(sameQueuedMessage(row, { id: "m1", text: "ship it now" })).toBe(false);
     expect(sameQueuedMessage(row, { id: "m2", text: "ship it" })).toBe(false);
+  });
+
+  it("separates rows whose resolved skill resources differ, and holds a shared list", () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    const row = { id: "m1", text: "/logos go", resources };
+
+    // The strip reuses the stored array, so identity is the honest comparison.
+    expect(sameQueuedMessage(row, { ...row })).toBe(true);
+    expect(sameQueuedMessage(row, { ...row, resources: [...resources] })).toBe(false);
+    expect(sameQueuedMessage(row, { id: "m1", text: "/logos go" })).toBe(false);
   });
 
   it("holds a strip's identity across a rebuild that changed nothing", () => {

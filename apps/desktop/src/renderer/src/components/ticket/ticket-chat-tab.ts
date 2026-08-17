@@ -59,11 +59,6 @@ export function chatTabStatus(slice: ChatTabReading | undefined): TicketTabStatu
   return (slice.projection?.interactions.active.length ?? 0) > 0 ? "waiting" : slice.lifecycle;
 }
 
-/** The next chat's ordinal, from whichever count of this ticket's chats is larger. */
-export function nextChatOrdinal(durable: number, open: number): number {
-  return Math.max(durable, open) + 1;
-}
-
 /** Stable tab id for a chat Session (`chat:<sessionId>`). */
 export function chatTabId(sessionId: string): string {
   return `${CHAT_TAB_PREFIX}${sessionId}`;

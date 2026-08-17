@@ -149,7 +149,6 @@ async function main() {
     dbPath,
     userDataDir,
     extraEnv: {
-      VOLLI_AGENT_CONSENT_CHOICE: "defer",
       ZDOTDIR: zdotDir,
       PATH: `${fakeBin}:${process.env.PATH}`,
     },

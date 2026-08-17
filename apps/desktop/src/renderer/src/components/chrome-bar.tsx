@@ -154,8 +154,9 @@ function TerminalFocusBreadcrumb() {
 }
 
 /**
- * Visibility control for the outer Slack-style project/workspace switcher.
- * It sits immediately before the primary nav's existing SidebarTrigger so the
+ * Visibility control for the outer Slack-style project switcher ("project" is
+ * the one user-facing word for a rail entry — CONTEXT.md's ruling). It sits
+ * immediately before the primary nav's existing SidebarTrigger so the
  * controls follow the same outside-to-inside order as the panes they affect.
  */
 function WorkspaceRailToggle() {
@@ -168,20 +169,20 @@ function WorkspaceRailToggle() {
       size="icon-sm"
       // No `aria-pressed`: the label below already carries the state, and the
       // button has no pressed appearance for it to describe. Both together
-      // announce "Show workspace switcher, pressed" while the switcher is
+      // announce "Show project switcher, pressed" while the switcher is
       // hidden, which reads as its own opposite.
       onClick={() => toggleWorkspaceRailHidden()}
-      aria-label={workspaceRailHidden ? "Show workspace switcher" : "Hide workspace switcher"}
-      title={`${workspaceRailHidden ? "Show" : "Hide"} workspace switcher`}
+      aria-label={workspaceRailHidden ? "Show project switcher" : "Hide project switcher"}
+      title={`${workspaceRailHidden ? "Show" : "Hide"} project switcher`}
     >
       <SidebarIcon />
-      <span className="sr-only">Toggle workspace switcher</span>
+      <span className="sr-only">Toggle project switcher</span>
     </Button>
   );
 }
 
 /**
- * Slack-style ←/→ workspace navigation. Reads the back/forward stack depth from
+ * Slack-style ←/→ project navigation. Reads the back/forward stack depth from
  * the workspace store's in-memory history; each button is disabled (muted,
  * non-interactive) when its stack is empty. `navBack` / `navForward` apply the
  * step to the live stores — see hooks/use-nav-history.ts.

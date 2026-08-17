@@ -92,6 +92,16 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const containers = useSessionsStore((state) => state.byOwner);
   const openChatTabs = useChatSessionsStore((state) => state.openTabs);
+  const residentChatTitles = useChatSessionsStore(
+    useShallow((state) => {
+      const titles: Record<string, string> = {};
+      for (const [sessionId, slice] of Object.entries(state.sessions)) {
+        const title = slice.projection?.session.title;
+        if (title !== null && title !== undefined) titles[sessionId] = title;
+      }
+      return titles;
+    }),
+  );
   const parkState = useSessionsStore((state) => state.parkState);
   const harness = useSessionsStore((state) => state.harness);
   const nav = useWorkspaceStore((state) => state.byProject[project.id]?.nav ?? "board");
@@ -331,6 +341,18 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     return () => window.clearInterval(timer);
   }, [visible]);
 
+  // The sidebar's durable read catches chats started outside this renderer.
+  // A resident title overlays it immediately, so the first exchange does not
+  // leave this surface behind the tab until its next activity refresh.
+  const titledChatSessions = React.useMemo(
+    () =>
+      chatSessions.map((record) => ({
+        ...record,
+        title: residentChatTitles[record.sessionId] ?? record.title,
+      })),
+    [chatSessions, residentChatTitles],
+  );
+
   const listing = React.useMemo(
     () =>
       buildActiveSessionListing({
@@ -339,7 +361,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
         scratchContainer,
         signalsByTicket,
         records,
-        chatSessions,
+        chatSessions: titledChatSessions,
         lastOutputAt,
         parkState,
         harness,
@@ -358,7 +380,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       scratchContainer,
       signalsByTicket,
       records,
-      chatSessions,
+      titledChatSessions,
       lastOutputAt,
       parkState,
       harness,

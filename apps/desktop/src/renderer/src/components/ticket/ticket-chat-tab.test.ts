@@ -5,7 +5,6 @@ import type { ChatSessionLifecycle } from "@renderer/chat/client";
 import {
   chatTabId,
   chatTabStatus,
-  nextChatOrdinal,
   parseChatTabId,
   resolveChatRelaunch,
   type ChatTabReading,
@@ -59,14 +58,6 @@ describe("chatTabStatus", () => {
 
   it("reads a Session whose first snapshot has not arrived as its lifecycle", () => {
     expect(chatTabStatus({ lifecycle: "starting", projection: null })).toBe("starting");
-  });
-});
-
-describe("nextChatOrdinal", () => {
-  it("counts from whichever answer is larger", () => {
-    expect(nextChatOrdinal(0, 0)).toBe(1);
-    expect(nextChatOrdinal(3, 1)).toBe(4);
-    expect(nextChatOrdinal(0, 2)).toBe(3);
   });
 });
 

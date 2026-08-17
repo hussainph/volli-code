@@ -1,7 +1,7 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { PromptTemplate } from "@volli/shared";
+import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
 import type { ComposerPickerState } from "@renderer/chat/composer-picker";
@@ -375,6 +375,23 @@ function submitComposer(props: Partial<SessionComposerProps>): string | undefine
   return sent;
 }
 
+/** {@link submitComposer}, keeping the message-scoped resources too. */
+function submitComposerWithResources(
+  props: Partial<SessionComposerProps>,
+): { text: string; resources: readonly PromptResource[] } | undefined {
+  let sent: { text: string; resources: readonly PromptResource[] } | undefined;
+  const tree = composerTree(
+    composerProps({
+      working: false,
+      queued: [],
+      onSubmit: (text, _intent, resources) => (sent = { text, resources: resources ?? [] }),
+      ...props,
+    }),
+  );
+  findElements(tree, PromptInput)[0]?.props.onSubmit?.();
+  return sent;
+}
+
 describe("what a composed message actually sends", () => {
   it("expands a staged command with its arguments before the submit path sees it", () => {
     expect(submitComposer({ value: "/review src/app.ts", promptTemplates: TEMPLATES })).toBe(
@@ -410,6 +427,34 @@ describe("what a composed message actually sends", () => {
 
   it("cannot expand what it was never given", () => {
     expect(submitComposer({ value: "/ship" })).toBe("/ship");
+  });
+
+  // VC-49: a skill reference is never rewritten into the body. The text keeps
+  // the slash reference — mid-sentence included — and the resolved body
+  // travels beside it as a message-scoped resource.
+  it("sends a skill reference as typed, with its body beside the message", () => {
+    const skills: readonly SkillReference[] = [
+      {
+        name: "logos",
+        description: "Design logos",
+        body: "# Logos",
+        userInvokeOnly: false,
+        root: ".agents/skills/logos",
+      },
+    ];
+    const sent = submitComposerWithResources({
+      value: "can you tell me what /logos does?",
+      promptTemplates: TEMPLATES,
+      skills,
+    });
+    expect(sent?.text).toBe("can you tell me what /logos does?");
+    expect(sent?.text).not.toContain("BEGIN RESOURCE");
+    expect(sent?.resources).toEqual([
+      {
+        name: "logos",
+        text: "Skill directory: .agents/skills/logos/ — file references in this skill resolve relative to it.\n\n# Logos",
+      },
+    ]);
   });
 });
 

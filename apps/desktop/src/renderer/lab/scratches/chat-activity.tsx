@@ -37,6 +37,7 @@ import { composerAnswerPrompt } from "@renderer/chat/interaction";
 import { enqueueMessage, type QueuedMessage } from "@renderer/chat/session-model";
 import { composerPress } from "@renderer/components/chat/chat-plane-model";
 import { ActivityBundle, AttentionReceipt, ToolRow } from "@renderer/components/chat/activity-ui";
+import { TurnRunningMark } from "@renderer/components/chat/chat-plane";
 import {
   SessionComposer,
   type ComposerModel,
@@ -763,6 +764,16 @@ export default function ChatActivityScratch() {
         <ToolRow part={EDITING_ROW} />
         <ToolRow part={GATED_ROW} />
         <ToolRow part={FAILED_RUN_ROW} />
+      </Section>
+
+      {/* The running mark in both dresses, side by side, because the thing to
+          judge is whether the second one still reads as "not finished" once the
+          word is gone — and in the app the two are minutes apart. Neither can
+          be summoned from a live Session on demand: the first exists only in
+          the gap before a turn's first token. */}
+      <Section label="Turn · the mark that says the turn has not ended">
+        <TurnRunningMark narrated={false} />
+        <TurnRunningMark narrated />
       </Section>
 
       <Section label="Bundle · everything between two things the agent said">

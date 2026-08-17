@@ -151,9 +151,11 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
               observer.next({ result: { data: reply.data } });
               observer.complete();
             } catch (cause) {
-              // A boot whose database failed registers no handler at all, so
-              // the invoke REJECTS rather than answering `{ ok: false }`. It
-              // reaches a caller as a plain TRPCClientError either way.
+              // A boot whose database failed now claims the channel with a
+              // degraded handler that answers `{ ok: false }` naming the
+              // reason (VC-76) — this rejection path is for a bridge that is
+              // genuinely gone (a preload/main channel mismatch). It reaches
+              // a caller as a plain TRPCClientError either way.
               observer.error(unreachable(cause, op.path));
             }
           })();

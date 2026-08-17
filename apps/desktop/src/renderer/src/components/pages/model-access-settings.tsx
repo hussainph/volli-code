@@ -161,7 +161,6 @@ export function ModelAccessSettings() {
       </SettingsSection>
       <ModelAccessAccounts
         providers={providers}
-        loading={loading}
         onRecover={() => void retry()}
         onChanged={() => load(true)}
       />

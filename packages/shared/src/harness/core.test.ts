@@ -11,6 +11,8 @@ import {
 import {
   buildHarnessInstallPlan,
   CANONICAL_SKILL_FILES,
+  fencedBlockPattern,
+  fencedBodyPattern,
   harnessAdapters,
   harnessBaselineActions,
   managedWriteDecision,
@@ -56,6 +58,39 @@ describe("mergeFencedSection", () => {
 
     const replaced = mergeFencedSection(appended.content, body, 1);
     expect(replaced).toEqual({ changed: false, content: appended.content });
+  });
+
+  it("writes hash-comment markers into a shell profile, where HTML comments are syntax errors", () => {
+    const merged = mergeFencedSection(
+      "export EDITOR=vim\n",
+      'export PATH="$HOME/.local/bin:$PATH"',
+      1,
+      "hash",
+    );
+    expect(merged.content).toBe(
+      'export EDITOR=vim\n\n# volli:begin v=1\nexport PATH="$HOME/.local/bin:$PATH"\n# volli:end\n',
+    );
+    expect(merged.content).not.toContain("<!--");
+
+    const replaced = mergeFencedSection(merged.content, "export PATH=changed", 2, "hash");
+    expect(replaced.content).toBe(
+      "export EDITOR=vim\n\n# volli:begin v=2\nexport PATH=changed\n# volli:end\n",
+    );
+  });
+});
+
+describe("fence patterns", () => {
+  it("recognizes the same block the merge writes, in both comment styles", () => {
+    const html = mergeFencedSection("", "body", 3).content;
+    expect(html.match(fencedBlockPattern())?.[0]).toContain("body");
+    expect(html.match(fencedBodyPattern())?.[1]).toBe("body");
+
+    const hash = mergeFencedSection("", "body", 3, "hash").content;
+    expect(hash.match(fencedBlockPattern("hash"))?.[0]).toContain("body");
+    expect(hash.match(fencedBodyPattern("hash"))?.[1]).toBe("body");
+
+    // Cross-style: a zsh profile block must be invisible to the HTML patterns.
+    expect(hash.match(fencedBlockPattern("html"))).toBeNull();
   });
 });
 
@@ -413,7 +448,7 @@ describe("buildHarnessInstallPlan", () => {
 describe("genericHarnessActions", () => {
   it("describes a fenced managed instructions block", () => {
     expect(genericHarnessActions("/home/dev/AGENTS.md")).toEqual([
-      expect.objectContaining({ kind: "fenced", path: "/home/dev/AGENTS.md", version: 1 }),
+      expect.objectContaining({ kind: "fenced", path: "/home/dev/AGENTS.md", version: 2 }),
     ]);
   });
 });

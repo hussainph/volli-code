@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   diffManagedContent,
+  displayTicketId,
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
@@ -32,7 +33,7 @@ import {
 import type { PromptResource, SessionEvent, SessionInput } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
-import type { ManagedConflict } from "./harness-install";
+import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -55,9 +56,10 @@ import { getTicket } from "./db/tickets-repo";
 import { listAttachments } from "./db/attachments-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { createDesktopSessionEngine } from "./session-control";
-import { createDesktopSessionRuntime } from "./session-runtime";
+import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import { describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
@@ -72,7 +74,10 @@ import {
   readDefaultModelSelection,
   writeDefaultModelSelection,
 } from "./session-runtime/model-access-preferences";
-import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import {
+  registerDegradedSessionRpcIpcHandlers,
+  registerSessionRpcIpcHandlers,
+} from "./session-rpc-ipc";
 import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
@@ -127,15 +132,20 @@ import {
 import { loginShellPath } from "./login-path";
 import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
 import {
+  cleanupLegacyGlobalCliLink,
   detectHarnesses,
+  ensureUserBinOnPath,
+  ensureUserCliLink,
   installHarnessSkills,
-  installGlobalCliLink,
-  removeGlobalCliLinkIfOurs,
+  removeUserBinPathBlock,
+  removeUserCliLinkIfOurs,
   resolveOnPath,
-  runAgentToolsConsent,
   uninstallAllHarnessSkills,
-  type AgentToolsConsentStatus,
+  userCliLinkPath,
 } from "./agent-tools";
+import { registerCliIpcHandlers } from "./cli-ipc";
+import { probeCliDoctor } from "./cli-doctor";
+import { readCliStatus } from "./cli-status";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { readAllowPrerelease, startAutoUpdate } from "./auto-update";
 import {
@@ -543,7 +553,11 @@ app.whenReady().then(async () => {
     mkdirSync(dirname(dbPath), { recursive: true });
     dbHandle = { ok: true, db: openVolliDb(dbPath) };
   } catch (error) {
-    dbHandle = { ok: false, error: errorMessage(error) };
+    // The recorded reason is what every degraded handler answers with, so it
+    // is classified here, once: a native-ABI failure names the Node
+    // incompatibility and the fix instead of a bare NODE_MODULE_VERSION
+    // number (VC-76).
+    dbHandle = { ok: false, error: describeDbOpenFailure(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
@@ -587,13 +601,33 @@ app.whenReady().then(async () => {
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           // Makes `volli` and every detected toolchain resolve inside a
-          // structured Session's shell tool with or without the consented
-          // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
-          // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
-          // directory (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath) => {
+          // structured Session's shell tool whether or not the background
+          // install's `~/.local/bin/volli` link is reachable yet — the same
+          // recovery a spawned PTY gets from `agentSessionEnv`/
+          // `ticketSessionEnv` prepending this same directory
+          // (`harness-runtime.ts`).
+          executionEnvFactory: async (workspacePath, identity) => {
             await loginPathBootstrap.apply();
-            return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+            // The Session's own name rides beside the PATH recovery:
+            // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
+            // exactly as `agentSessionEnv` exports them into a spawned PTY —
+            // what lets `volli session done`/`blocked` resolve their context
+            // and makes socket writes attribute to the Session (VC-51). The
+            // display id is looked up per attachment, so a Ticket renamed by a
+            // prefix change is right on the next attach.
+            const ticket =
+              identity.ticketId === null ? null : getTicket(dbHandle.db, identity.ticketId);
+            const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+            return piExecutionEnv(workspacePath, {
+              pathPrefixes: [runtimePaths.binDir],
+              identity: {
+                sessionId: identity.sessionId,
+                ticketDisplayId:
+                  ticket && ticketProject
+                    ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+                    : null,
+              },
+            });
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -665,13 +699,19 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  // One store for the launch: the runtime writes and replays through it, and
+  // `session peek` reads a chat Session's transcript tail through it straight
+  // off the ledger, without a runtime in the middle (VC-79).
+  const transcriptDirectory = join(app.getPath("userData"), "session-transcripts");
+  const transcriptArtifacts = createFileTranscriptArtifactStore(transcriptDirectory);
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
-          transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
+          transcriptDirectory,
           executor: piRuntimeHost.adapter,
           sessionEngine,
+          artifacts: transcriptArtifacts,
         })
       : null;
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
@@ -803,6 +843,18 @@ app.whenReady().then(async () => {
           createSession: sessions?.create,
           attachSession: sessions?.attach,
         });
+  // No runtime, no bridge — but the channels are still claimed, answering
+  // every request with the reason the runtime is down (in practice: the
+  // database open recorded above, Node-ABI classification included). Left
+  // unregistered, the renderer's Model Access page would toast Electron's
+  // nameless "No handler registered" instead of the actual problem (VC-76).
+  if (sessionRuntime === null) {
+    registerDegradedSessionRpcIpcHandlers(
+      dbHandle.ok
+        ? "The agent runtime is unavailable."
+        : `The local database failed to open: ${dbHandle.error}`,
+    );
+  }
   // Signing in is a Model Access task, not a Session one, so it gets its own
   // surface rather than a Session RPC namespace — see the contract in
   // `@volli/shared`'s VolliModelAccessIpcContract for why a channel that can
@@ -811,6 +863,13 @@ app.whenReady().then(async () => {
     piModelAccess === null
       ? null
       : new ModelAccessSignInService({ pi: piSignIn(piModelAccess.models) }),
+    // When the runtime is down because the database never opened, the sign-in
+    // surface must answer with the recorded (already-classified) reason — a
+    // Node-ABI failure names the incompatibility, not a generic "unavailable"
+    // (VC-76).
+    dbHandle.ok
+      ? undefined
+      : `Sign-in is unavailable — the local database failed to open: ${dbHandle.error}`,
   );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
@@ -1267,7 +1326,15 @@ app.whenReady().then(async () => {
 
   let shimPath = join(runtimePaths.binDir, "volli");
 
-  const agentToolsConsentKey = "volli:agent-tools-consent";
+  // The File → Remove tombstone (VC-52). Install is background and has no
+  // opt-out, so an EXPLICIT removal must leave something behind that the next
+  // boot honors — otherwise File → Remove would be silently undone at relaunch.
+  // Cleared by File → Install. The old consent key (`volli:agent-tools-consent`)
+  // is deliberately ignored: "deferred" was a first-boot dialog answer that
+  // latched forever, which is the failure this ticket removes.
+  const agentToolsRemovedKey = "volli:agent-tools-removed";
+  const agentToolsRemoved = (): boolean =>
+    dbHandle.ok && getAllAppState(dbHandle.db)[agentToolsRemovedKey] === "true";
 
   // The skill installer targets the real OS home via app.getPath("home"), which
   // on macOS ignores $HOME — so a
@@ -1276,9 +1343,12 @@ app.whenReady().then(async () => {
   // exactly that. Unset in production, so the real home is used unchanged.
   const agentToolsHome =
     (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
-  const managedLegacyCliTarget = isDev
-    ? undefined
-    : join(dirname(app.getPath("userData")), `${app.getName()}-dev`, "bin", "volli");
+  // The one other shim this install may claim a link from: the packaged app
+  // repoints a dev profile's link (the dev shim dies with its checkout), never
+  // the reverse — a dev boot must not steal the install the user actually uses.
+  const managedSiblingShims: readonly string[] = isDev
+    ? []
+    : [join(dirname(app.getPath("userData")), `${app.getName()}-dev`, "bin", "volli")];
 
   const harnessesDir = join(agentToolsHome, ".agents", "harnesses");
 
@@ -1335,57 +1405,103 @@ app.whenReady().then(async () => {
     });
   };
 
-  const installAgentTools = async (): Promise<void> => {
-    // Each step names itself in any thrown error so the failure dialog says what
-    // broke (skill files vs. the /usr/local/bin symlink) rather than a bare
-    // osascript/fs message. A throw leaves consent un-persisted on purpose, so a
-    // transient failure re-offers next boot instead of latching a broken state.
-    let result;
-    try {
-      // The same set the wrappers are generated from, so a registered manifest's
-      // declared surfaces earn it the skill pack the moment it is trusted —
-      // there is no second notion here of which harnesses this host has.
-      result = await installHarnessSkills({
-        home: agentToolsHome,
-        adapters: (await resolveHostAdapters()).adapters,
-      });
-    } catch (error) {
-      dialog.showErrorBox(
-        "Agent Tools Installation Failed",
-        `Installing the agent skill pack failed: ${errorMessage(error)}`,
+  /**
+   * The whole CLI + skills install, user-space and dialog-free (VC-52): the
+   * `~/.local/bin/volli` link, best-effort cleanup of the retired admin-owned
+   * `/usr/local/bin` link, the hash-guarded skill pack, and — when the login
+   * shell is zsh and cannot already reach `~/.local/bin` — the managed PATH
+   * block in `~/.zprofile`. Idempotent by construction: boot runs it every
+   * launch, the File menu re-runs it on demand, and doctor's Fix rides it.
+   * The ONLY dialog it can raise is the conflict warning for managed files the
+   * user hand-edited — which is a preservation notice, not a prompt.
+   */
+  const installAgentToolsQuietly = async (): Promise<void> => {
+    const link = await ensureUserCliLink({
+      home: agentToolsHome,
+      shimPath,
+      managedTargets: managedSiblingShims,
+    });
+    if (link.state === "kept") {
+      // Never clobber a name that is not ours; the CLI pane states this.
+      console.warn(
+        `[volli] ${userCliLinkPath(agentToolsHome)} is not Volli's (→ ${link.target ?? "a regular file"}); left alone`,
       );
-      throw error;
     }
-    // The /usr/local/bin symlink needs an administrator (osascript) prompt that
-    // no headless e2e can answer,
-    // so when a test pre-answers consent via VOLLI_AGENT_CONSENT_CHOICE the link
-    // step is skipped. Unset in production, so the admin prompt runs unchanged.
-    if (!isDev || process.env["VOLLI_AGENT_CONSENT_CHOICE"] === undefined) {
+    const legacy = await cleanupLegacyGlobalCliLink({
+      shimPath,
+      managedTargets: managedSiblingShims,
+    });
+    if (legacy === "kept") {
+      console.info(
+        "[volli] legacy /usr/local/bin/volli link left in place (admin-owned; ~/.local/bin shadows it)",
+      );
+    }
+    // The same set the wrappers are generated from, so a registered manifest's
+    // declared surfaces earn it the skill pack the moment it is trusted —
+    // there is no second notion here of which harnesses this host has.
+    const skills = await installHarnessSkills({
+      home: agentToolsHome,
+      adapters: (await resolveHostAdapters()).adapters,
+    });
+    let conflicts = skills.conflicts;
+    try {
+      // PATH wiring is zsh-only (like the shell chain); the CLI pane names the
+      // limitation for other shells rather than writing a profile they never read.
+      if (basename(resolveShell(process.env).file) === "zsh") {
+        const wired = await ensureUserBinOnPath({
+          home: agentToolsHome,
+          loginPath: await loginShellPath(),
+        });
+        conflicts = [...conflicts, ...wired.conflicts];
+      }
+    } finally {
+      // In a `finally` so a profile-write failure (say, a symlinked ~/.zprofile
+      // the managed-write engine refuses) cannot swallow the skill conflicts
+      // collected above — those are preservation notices the user must see
+      // regardless of what the PATH step did. The error still propagates.
+      if (conflicts.length > 0) {
+        await showSkillConflictWarning(conflicts);
+      }
+    }
+  };
+
+  // Menu action: the same quiet installer, but loud about failure (a click
+  // deserves an answer) — and it clears the removal tombstone, which is the
+  // one thing that distinguishes "install again" from every boot's refresh.
+  const installAgentTools = async (): Promise<void> => {
+    if (dbHandle.ok) {
       try {
-        await installGlobalCliLink(shimPath, managedLegacyCliTarget);
+        setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
       } catch (error) {
-        dialog.showErrorBox(
-          "Agent Tools Installation Failed",
-          `Linking the volli CLI into /usr/local/bin failed: ${errorMessage(error)}`,
-        );
+        dialog.showErrorBox("Agent Tools Installation Failed", errorMessage(error));
         throw error;
       }
     }
-    if (result.conflicts.length > 0) {
-      await showSkillConflictWarning(result.conflicts);
+    try {
+      await installAgentToolsQuietly();
+    } catch (error) {
+      dialog.showErrorBox(
+        "Agent Tools Installation Failed",
+        `Installing the Volli CLI and agent skills failed: ${errorMessage(error)}`,
+      );
+      throw error;
     }
   };
 
   // Menu action: confirm, remove every harness's managed files (hand-edited
-  // ones survive via the uninstall hash guard), drop the /usr/local/bin link
-  // only if it still points at our shim, then reset consent to null so the
-  // first-launch offer returns. Every failure surfaces its own dialog.
+  // ones survive via the uninstall hash guard), drop the ~/.local/bin link and
+  // the managed PATH block only if they are still ours, then set the removal
+  // tombstone so the next boot does NOT silently reinstall what this just
+  // removed. Uninstall stays explicit and loud; every failure has a dialog.
   const uninstallAgentTools = async (): Promise<void> => {
+    // The PATH line is named only where one can exist: it is written for zsh
+    // alone, so promising its removal on another shell would be removal copy
+    // describing work this host never had.
+    const managesZprofile = basename(resolveShell(process.env).file) === "zsh";
     const confirm = await dialog.showMessageBox(mainWindow, {
       type: "warning",
       message: "Remove the Volli CLI and agent skills?",
-      detail:
-        "Removes the bundled skill pack and the /usr/local/bin/volli link. Files you edited yourself stay.",
+      detail: `Removes the bundled skill pack and the ~/.local/bin/volli link${managesZprofile ? ", and Volli's PATH line in ~/.zprofile" : ""}. Files you edited yourself stay. Volli won't reinstall these unless you choose Install from the File menu.`,
       buttons: ["Remove", "Cancel"],
       defaultId: 1,
       cancelId: 1,
@@ -1408,35 +1524,97 @@ app.whenReady().then(async () => {
       );
       return;
     }
+    let pathRemoval: HarnessUninstallResult;
+    let linkRemoved: boolean;
+    let legacyOutcome: "removed" | "kept" | "absent";
     try {
-      await removeGlobalCliLinkIfOurs(shimPath);
+      // The PATH block first (it is excised, never destroyed), then the link.
+      pathRemoval = await removeUserBinPathBlock(agentToolsHome);
+      linkRemoved = await removeUserCliLinkIfOurs({
+        home: agentToolsHome,
+        shimPath,
+        managedTargets: managedSiblingShims,
+      });
+      // Best-effort, unprivileged: the retired admin-owned link usually
+      // survives (root-owned dir) — the CLI pane reports it truthfully.
+      legacyOutcome = await cleanupLegacyGlobalCliLink({
+        shimPath,
+        managedTargets: managedSiblingShims,
+      });
     } catch (error) {
       dialog.showErrorBox(
         "Agent Tools Removal Failed",
-        `Removing the /usr/local/bin/volli link failed: ${errorMessage(error)}`,
+        `Removing the volli CLI link failed: ${errorMessage(error)}`,
       );
       return;
     }
     if (dbHandle.ok) {
       try {
-        setAppState(dbHandle.db, agentToolsConsentKey, JSON.stringify(null), Date.now());
+        setAppState(dbHandle.db, agentToolsRemovedKey, "true", Date.now());
       } catch (error) {
         dialog.showErrorBox("Agent Tools Removal Failed", errorMessage(error));
         return;
       }
     }
+    // The count spans everything this removal touched — the skill plan, the
+    // PATH block, the user-space link, and (rarely) the legacy link — so the
+    // summary neither undercounts the work nor claims files it kept.
+    const preserved = [...removal.preserved, ...pathRemoval.preserved];
+    const removedCount =
+      removal.removed.length +
+      pathRemoval.removed.length +
+      (linkRemoved ? 1 : 0) +
+      (legacyOutcome === "removed" ? 1 : 0);
     const preservedNote =
-      removal.preserved.length > 0
-        ? `\n\nKept, because you edited them:\n${removal.preserved.join("\n")}`
-        : "";
+      preserved.length > 0 ? `\n\nKept, because you edited them:\n${preserved.join("\n")}` : "";
     await dialog.showMessageBox(mainWindow, {
       type: "info",
       message: "Volli CLI and agent skills removed.",
-      detail: `Removed ${removal.removed.length} item(s).${preservedNote}`,
+      detail: `Removed ${removedCount} item(s).${preservedNote}`,
     });
   };
 
   registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools });
+
+  // Settings → CLI (VC-52): the detection surface over the silent install, and
+  // the in-app doctor. Registered before the awaited socket work below for the
+  // same reason the harness-trust channels are: a channel that only exists
+  // once boot settles is a channel the renderer can `invoke()` into a hang.
+  // Every dep reads at CALL time — `shimPath` and the wrapper set are
+  // reassigned once generation runs.
+  registerCliIpcHandlers({
+    status: () =>
+      readCliStatus({
+        home: agentToolsHome,
+        shimPath: () => shimPath,
+        managedTargets: managedSiblingShims,
+        socketPath: runtimePaths.socketPath,
+        socketLive: () => agentSocket.live(),
+        loginShellPath: () => loginShellPath(),
+        wrapperCommands: () =>
+          [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
+            (wrapperPath) => basename(wrapperPath),
+          ),
+        shellFile: resolveShell(process.env).file,
+        shellChainActive: () =>
+          agentRuntime.shellEnv?.["ZDOTDIR"] !== undefined &&
+          existsSync(join(runtimePaths.zdotDir, ".zlogin")),
+        installSuppressed: agentToolsRemoved,
+      }),
+    doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
+    repair: async () => {
+      // Fix is as explicit a request for working tools as File → Install, so it
+      // clears the removal tombstone the same way — otherwise a repaired
+      // install would sit in a half-state: present on disk, still suppressed
+      // at every boot. Cleared FIRST: if the write fails, the repair fails
+      // loudly rather than reinstalling behind a tombstone it could not lift.
+      if (dbHandle.ok && agentToolsRemoved()) {
+        setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
+      }
+      await regenerateHarnessRuntime();
+      await installAgentToolsQuietly();
+    },
+  });
 
   try {
     const execute = dbHandle.ok
@@ -1445,12 +1623,31 @@ app.whenReady().then(async () => {
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
+          // The chat half of the same verb (VC-79): a peek at a structured
+          // Session renders its transcript tail from these artifacts.
+          readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
           notify: (title, message) => new Notification({ title, body: message }).show(),
           // The product Session start route (VC-13): the same facade the
           // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
           ...(sessions !== null ? { sessions } : {}),
+          // Model discovery (VC-78): `model list` reads the same Model Access
+          // snapshot every other surface does — never a parallel provider
+          // probe, never raw provider files. The door bounds the read itself
+          // (abort + race), so a hung probe cannot hang the CLI verb.
+          ...(piRuntimeHost !== null
+            ? {
+                inspectModelAccess: (input: { signal: AbortSignal }) =>
+                  piRuntimeHost.inspectModelAccess(input),
+              }
+            : {}),
+          // `prompt baseline` (VC-66) prices the index through the SAME port a
+          // real start records it through — nothing injected, so the answer is
+          // the fresh-session default. Absent with the runtime, same as above.
+          ...(sessionSkills !== null
+            ? { skillsIndex: (projectId: string) => sessionSkills.index(projectId, []) }
+            : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.
@@ -1521,7 +1718,7 @@ app.whenReady().then(async () => {
             shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
             // Resolved through the real filesystem: `volli doctor` compares this
             // byte-for-byte against what a CLI process's own PATH walk found,
-            // which follows the `/usr/local/bin/volli` symlink main installs (or
+            // which follows the `~/.local/bin/volli` symlink main installs (or
             // a scratch profile's `/tmp` vs `/private/tmp` on macOS) to whatever
             // it actually points at. An unresolved comparison would call a
             // correct install "another Volli install owns the link".
@@ -1592,59 +1789,32 @@ app.whenReady().then(async () => {
     }).show();
   }
 
-  if (dbHandle.ok) {
-    const consentKey = agentToolsConsentKey;
-    const stored = getAllAppState(dbHandle.db)[consentKey];
-    const current: AgentToolsConsentStatus | null =
-      stored === '"installed"' ? "installed" : stored === '"deferred"' ? "deferred" : null;
-    if (current === "installed") {
-      // Re-run the hash-guarded, idempotent skill installer on app updates so
-      // managed files track the shipped version —
-      // byte-identical files skip, user-edited ones conflict and are preserved.
-      // The one-time /usr/local/bin symlink is deliberately NOT re-run here: the
-      // shim it points at is already regenerated every boot, and re-linking would
-      // resurface an admin prompt. Fully non-blocking and swallowed (logged) so a
-      // failed refresh never blocks boot or spams dialogs; only a genuine
-      // conflict warns.
-      void resolveHostAdapters()
-        .then((host) => installHarnessSkills({ home: agentToolsHome, adapters: host.adapters }))
-        .then(async (result) => {
-          if (result.conflicts.length > 0) await showSkillConflictWarning(result.conflicts);
-        })
-        .catch((error: unknown) => {
-          console.error("[volli] agent skill refresh failed:", errorMessage(error));
-        });
-    }
-    try {
-      await runAgentToolsConsent({
-        current,
-        prompt: async () => {
-          // A headless e2e cannot click a native dialog, and this prompt fires
-          // during boot before a
-          // Playwright client can patch dialog.showMessageBox, so
-          // VOLLI_AGENT_CONSENT_CHOICE pre-answers it. Honored only when set to
-          // "install"/"defer"; unset in production, so the dialog shows as before.
-          const preAnswer = isDev ? process.env["VOLLI_AGENT_CONSENT_CHOICE"] : undefined;
-          if (preAnswer === "install" || preAnswer === "defer") return preAnswer;
-          const choice = await dialog.showMessageBox(mainWindow, {
-            type: "question",
-            message: "Install the Volli CLI and agent skills?",
-            detail:
-              "Adds the volli command to /usr/local/bin and installs its skill for the agents you already have. You can do this later from the File menu.",
-            buttons: ["Install", "Not Now"],
-            defaultId: 0,
-            cancelId: 1,
-          });
-          return choice.response === 0 ? "install" : "defer";
-        },
-        install: installAgentTools,
-        persist: async (status) => {
-          setAppState(dbHandle.db, consentKey, JSON.stringify(status), Date.now());
-        },
-      });
-    } catch {
-      // installAgentTools already surfaced the actionable failure.
-    }
+  // Background user-space CLI + skills install (VC-52): no dialog, no admin
+  // prompt, no opt-out — the CLI is core app functionality, surfaced only as
+  // detection in Settings → CLI. Fire-and-forget so boot never waits on a
+  // login-shell probe or dotfile writes; failures log, and the pane reads the
+  // truth from disk regardless. Two suppressions only:
+  //  - the File → Remove tombstone — an explicit removal must survive relaunch;
+  //  - the VOLLI_SKIP_AGENT_TOOLS seam, so tests and smokes never write into a
+  //    developer's real home (e2e sets it by default and the installer smokes
+  //    opt back in against a VOLLI_AGENT_HOME scratch).
+  // Gated on a healthy db like the consent flow it replaces: with the tombstone
+  // unreadable, installing would silently undo a removal we cannot see.
+  //
+  // The skip seam is honored in PACKAGED builds too — deliberately. In the
+  // consent era a dialog stood between a packaged smoke run and the developer's
+  // real dotfiles; now nothing does, so a `VOLLI_SMOKE_APP_BINARY` run against
+  // a packaged build needs this seam or it links ~/.local/bin/volli and appends
+  // to the real ~/.zprofile. It is a test seam, not a user opt-out: unset in
+  // every ordinary launch, undocumented, and the CLI pane still reports
+  // whatever state skipping left behind. VOLLI_AGENT_HOME stays dev-only —
+  // redirecting a production install's writes is a sharper knife than skipping
+  // them.
+  const skipAgentTools = process.env["VOLLI_SKIP_AGENT_TOOLS"] === "1";
+  if (dbHandle.ok && !skipAgentTools && !agentToolsRemoved()) {
+    void installAgentToolsQuietly().catch((error: unknown) => {
+      console.error("[volli] background agent-tools install failed:", errorMessage(error));
+    });
   }
 
   app.on("activate", () => {

@@ -184,6 +184,13 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("abcdef12  ticket  running  Work\n");
+    expect(
+      renderCliSuccess(
+        "session.list",
+        { sessions: [{ id: "fedcba98", kind: "chat", ticket: "VC-52", title: "Validate VC-52" }] },
+        options,
+      ),
+    ).toBe("fedcba98  chat  VC-52  Validate VC-52\n");
     expect(renderCliSuccess("ticket.events", { events: [{ kind: "created" }] }, options)).toBe(
       '{"kind":"created"}\n',
     );
@@ -281,6 +288,115 @@ describe("renderCliSuccess", () => {
     ).toBe("VC-2  Todo  No labels\n");
   });
 
+  it("renders model.list with the default first, copyable model rows, and an honest rollup", () => {
+    const options = { json: false };
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: { model: "anthropic/claude-opus-5", reasoning: "medium" },
+          providers: [
+            {
+              id: "anthropic",
+              label: "Anthropic",
+              state: "available",
+              models: [
+                {
+                  model: "anthropic/claude-opus-5",
+                  label: "Claude Opus 5",
+                  state: "available",
+                  reasoning: ["low", "medium", "high"],
+                },
+              ],
+              omittedModels: 2,
+            },
+            {
+              id: "openai-codex",
+              label: "OpenAI Codex",
+              state: "authentication-required",
+              omittedModels: 0,
+              models: [
+                {
+                  model: "openai-codex/gpt-5.6-terra",
+                  label: "Terra",
+                  state: "authentication-required",
+                  reasoning: [],
+                },
+              ],
+            },
+          ],
+          omittedProviders: 37,
+        },
+        options,
+      ),
+    ).toBe(
+      "default  anthropic/claude-opus-5  medium\n" +
+        "anthropic  Anthropic  available\n" +
+        "  anthropic/claude-opus-5  low|medium|high\n" +
+        "  … and 2 more models not available (use --all)\n" +
+        "openai-codex  OpenAI Codex  authentication-required\n" +
+        "  openai-codex/gpt-5.6-terra  -  authentication-required\n" +
+        "… and 37 more providers not available (use --all)\n",
+    );
+    // No configured default and nothing signed in: the answer is still legible.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        { observedAt: 1_000, default: null, providers: [], omittedProviders: 0 },
+        options,
+      ),
+    ).toBe("default  -\n");
+  });
+
+  it("keeps malformed model.list provider rows legible instead of crashing", () => {
+    const options = { json: false };
+    // Providers survive `recordsAt`, but a row's `models`, a model's
+    // `reasoning`, or the `omittedModels` counter may still be the wrong shape
+    // — each defensive arm answers with the row it can render, never a throw.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: null,
+          providers: [
+            { id: "p1", label: "P1", state: "available", models: "not-an-array" },
+            {
+              id: "p2",
+              label: "P2",
+              state: "available",
+              models: [
+                {
+                  model: "p2/model-a",
+                  label: "A",
+                  state: "available",
+                  reasoning: "not-an-array",
+                },
+                {
+                  model: "p2/model-b",
+                  label: "B",
+                  state: "available",
+                  reasoning: ["low", 7],
+                },
+                null,
+              ],
+              omittedModels: "not-a-number",
+            },
+          ],
+          omittedProviders: 0,
+        },
+        options,
+      ),
+    ).toBe(
+      "default  -\n" +
+        "p1  P1  available\n" +
+        "p2  P2  available\n" +
+        "  p2/model-a  -\n" +
+        "  p2/model-b  low\n",
+    );
+  });
+
   it("keeps empty results stable and safely falls back for malformed response shapes", () => {
     const options = { json: false };
     expect(renderCliSuccess("ticket.list", { tickets: [] }, options)).toBe("");
@@ -328,6 +444,7 @@ describe("renderCliSuccess", () => {
       ["ticket.comment", { comment: { ticket: 1 } }],
       ["project.list", {}],
       ["label.list", {}],
+      ["model.list", {}],
       ["session.list", {}],
       ["session.peek", { session: 1, status: "idle" }],
       ["session.peek", { session: "s", status: 1 }],
@@ -389,6 +506,83 @@ describe("renderCliSuccess", () => {
         "appVersion  -\n" +
         "degraded  true\n",
     );
+  });
+
+  it("renders a chat peek as an activity line over a one-line-per-message tail", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "working",
+          waitingOn: null,
+          lastActivityAgeMs: 12_000,
+          turns: 7,
+          turnDepth: 3,
+          messages: 41,
+          unreadable: 0,
+          transcript: [
+            { ageMs: 5_400_000, role: "user", text: "Ship the CLI", tools: [] },
+            { ageMs: 240_000, role: "assistant", text: "", tools: ["bash", "read_file"] },
+            { ageMs: 12_000, role: "assistant", text: "Tests pass.", tools: ["edit_file"] },
+          ],
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "abcdef12  working  last 12s  turn 7 depth 3\n" +
+        "1h  user  Ship the CLI\n" +
+        "4m  assistant  [bash read_file]\n" +
+        "12s  assistant  [edit_file] Tests pass.\n",
+    );
+  });
+
+  it("names what a chat peek is waiting on, and what it could not read", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "waiting",
+          waitingOn: "permission",
+          lastActivityAgeMs: -1,
+          turns: null,
+          turnDepth: undefined,
+          unreadable: 2,
+          transcript: [
+            "not a record",
+            { ageMs: "unknown", role: "assistant", text: 12, tools: ["bash", 7] },
+            // A message that said nothing and called nothing keeps its row:
+            // the caller learns a turn happened, not that it was empty.
+            { ageMs: 0, role: "user" },
+          ],
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "abcdef12  waiting on permission  last -  turn - depth -  2 unreadable\n" +
+        "-  assistant  [bash]\n" +
+        "0s  user\n",
+    );
+  });
+
+  it("renders an empty chat tail as the activity line alone", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "idle",
+          waitingOn: null,
+          lastActivityAgeMs: 0,
+          turns: 0,
+          turnDepth: 0,
+          unreadable: 0,
+          transcript: [],
+        },
+        { json: false },
+      ),
+    ).toBe("abcdef12  idle  last 0s  turn 0 depth 0\n");
   });
 
   it("covers every usage exit-code spelling", () => {
@@ -523,6 +717,54 @@ describe("renderCliSuccess", () => {
     );
     expect(rendered).toContain("VC-12  working-tree  0 files  +0 -0");
     expect(rendered.split("\n").filter((l) => l.startsWith("  "))).toEqual([]);
+  });
+});
+
+describe("renderCliSuccess — prompt.baseline", () => {
+  const data = {
+    project: { name: "Volli Code", prefix: "VC" },
+    role: "project",
+    workspace: "/repo/volli",
+    charsPerToken: 4,
+    sections: [
+      { id: "operating", chars: 420, tokens: 105 },
+      { id: "resource:skills index", chars: 40000, tokens: 10000 },
+      { id: "brief", chars: 300, tokens: 75 },
+    ],
+    system: { chars: 44000, tokens: 11000 },
+    brief: { chars: 300, tokens: 75 },
+    total: { chars: 44300, tokens: 11075 },
+    excluded: "tool definitions, the user's first message, and provider overhead",
+  };
+
+  it("renders the rollup, one row per section, and the named exclusions", () => {
+    const text = renderCliSuccess("prompt.baseline", data, { json: false });
+    expect(text).toContain("prompt baseline  project  ~11075 tokens  44300 chars");
+    expect(text).toContain("(est. at 4 chars/token)");
+    expect(text).toContain("  operating  ~105 tokens  420 chars");
+    expect(text).toContain("  resource:skills index  ~10000 tokens  40000 chars");
+    expect(text).toContain("  brief  ~75 tokens  300 chars");
+    expect(text).toContain(
+      "excluded  tool definitions, the user's first message, and provider overhead",
+    );
+  });
+
+  it("passes the structured breakdown straight through with --json", () => {
+    expect(JSON.parse(renderCliSuccess("prompt.baseline", data, { json: true }))).toEqual(data);
+  });
+
+  it("falls back to the generic renderer when the reply is not a breakdown", () => {
+    expect(() =>
+      renderCliSuccess("prompt.baseline", { unexpected: true }, { json: false }),
+    ).not.toThrow();
+    expect(() => renderCliSuccess("prompt.baseline", null, { json: false })).not.toThrow();
+  });
+
+  it("omits the excluded line when the server names no exclusions", () => {
+    const { excluded: _excluded, ...withoutExcluded } = data;
+    const text = renderCliSuccess("prompt.baseline", withoutExcluded, { json: false });
+    expect(text).toContain("prompt baseline  project");
+    expect(text).not.toContain("excluded");
   });
 });
 
