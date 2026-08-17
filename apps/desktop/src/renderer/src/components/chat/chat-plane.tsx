@@ -16,9 +16,12 @@
  */
 import * as React from "react";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
+import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import type {
   ModelAccessModel,
   ModelAccessProvider,
@@ -59,7 +62,7 @@ import {
   useSessionController,
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
-import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -69,6 +72,7 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  messageCopyText,
   messageRoute,
   resolvingWith,
   sameInteractionId,
@@ -900,6 +904,7 @@ export const ChatTurn = React.memo(function ChatTurn({
           ),
     [messages, role],
   );
+  const copyableText = React.useMemo(() => messageCopyText(messages), [messages]);
   // The visible receipt of a message-scoped skill delivery (VC-49): the text
   // above keeps `/skill` exactly as typed, and this chip row is what says the
   // body actually rode along — the compact reference, never the fifteen
@@ -925,7 +930,7 @@ export const ChatTurn = React.memo(function ChatTurn({
   if (segments && segments.length === 0) return null;
 
   return (
-    <Message from={role} className="max-w-full">
+    <Message from={role} className="relative max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
         <div className={SEGMENT_GAP}>
           {segments
@@ -952,9 +957,53 @@ export const ChatTurn = React.memo(function ChatTurn({
           </div>
         ) : null}
       </MessageContent>
+      {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}
     </Message>
   );
 });
+
+/** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
+const COPY_FEEDBACK_MS = 1200;
+
+/**
+ * Copy is a hover/focus action in the message's outside gutter.
+ *
+ * The message remains the reading target; the action occupies no resting space
+ * and never competes with the prose for a line. User bubbles expose it on their
+ * leading side and assistant turns on their trailing side, so the control stays
+ * outside the message surface at either edge of the feed.
+ */
+function MessageCopyAction({ text, from }: { text: string; from: UIMessage["role"] }) {
+  const [copyState, setCopyState] = React.useState<"idle" | "copied" | "failed">("idle");
+  React.useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), COPY_FEEDBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+  const CopyStateIcon =
+    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+
+  return (
+    <span
+      className={cn(
+        "pointer-events-none absolute top-0 flex opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+        from === "user" ? "right-[calc(100%+0.25rem)]" : "left-[calc(100%+0.25rem)]",
+      )}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={
+          copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"
+        }
+        onClick={() => void copyText(text).then(setCopyState)}
+      >
+        <CopyStateIcon className={cn("size-3", copyState === "failed" && "text-destructive")} />
+      </Button>
+    </span>
+  );
+}
 
 function renderSegment(
   segment: ChatSegment,
