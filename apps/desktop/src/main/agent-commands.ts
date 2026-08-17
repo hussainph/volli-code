@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
+import { promptBaseline } from "@volli/agent-runtime";
 import { readSessionTranscriptTail } from "@volli/session-engine";
 import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-engine";
 import {
@@ -42,8 +43,10 @@ import type {
   DoctorFacts,
   DoctorObservation,
   HarnessId,
+  ModelAccessSnapshot,
   Observed,
   Project,
+  PromptResource,
   ReasoningLevel,
   SessionActivityState,
   SessionProjection,
@@ -75,8 +78,10 @@ import {
   terminalNativeReference,
   terminalSessionRecord,
 } from "./session-control";
+import { PI_TOOLS } from "./session-runtime/pi-adapter";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type { Sessions } from "./session-runtime/sessions";
+import { readDefaultModelSelection } from "./session-runtime/model-access-preferences";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -211,6 +216,24 @@ export interface AgentCommandServiceOptions {
   readTranscriptArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
   notify?: (title: string, message: string) => void;
   /**
+   * The Model Access snapshot read `model.list` serves (VC-78) — the same
+   * `inspectPiModelAccess` seam every app surface reads, threaded in the way
+   * {@link sessions} is so no parallel provider probe can grow here. Absent
+   * means the Pi runtime never came up this launch, which the verb reports as
+   * retryable APP_UNREACHABLE. The snapshot is structurally secret-free
+   * (`ModelAccessSnapshot` has no credential field), so passing it through is
+   * what keeps this verb's output credential-free.
+   */
+  inspectModelAccess?: (input: { signal: AbortSignal }) => Promise<ModelAccessSnapshot>;
+  /**
+   * How long `model.list` waits on the snapshot before answering TIMEOUT.
+   * Bounded below the CLI's own 10s socket deadline so a hung provider probe
+   * (VC-61's live pain — the sequential inspect loop has no per-probe bound
+   * yet) surfaces as this verb's legible TIMEOUT rather than the socket's.
+   * A seam only so tests need not wait out the real bound.
+   */
+  modelAccessTimeoutMs?: number;
+  /**
    * The product Session start route (VC-13) — the same facade the renderer's
    * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
    * so no parallel creation path can grow here. Raw `session.create` over
@@ -279,6 +302,16 @@ export interface AgentCommandServiceOptions {
    * so `--fix` is never destructive and never needs confirming.
    */
   doctorRepair?: () => Promise<void>;
+  /**
+   * The skills index a fresh Session with no explicit skills would carry — the
+   * SAME port `session start` composes through (`SessionSkillPorts.index` with
+   * nothing injected), threaded in so `prompt baseline` prices the index a real
+   * start would record rather than a reconstruction that could drift. `null`
+   * means no index (no skills, unreadable tier): a real, smaller baseline.
+   * Absent (tests, runtime never up) makes the command refuse rather than
+   * report a baseline it knows is missing a section.
+   */
+  skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
 }
 
 export interface AgentCommandService {
@@ -368,6 +401,41 @@ function positiveIntOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+/** See {@link AgentCommandServiceOptions.modelAccessTimeoutMs}. */
+const MODEL_ACCESS_TIMEOUT_MS = 8_000;
+
+/**
+ * The bounded Model Access read (VC-61's direction, applied in this arm): the
+ * inspect gets an abort signal AND is raced against the same timer, because
+ * the signal only helps a probe that honors it — a hung OAuth refresh inside
+ * pi-ai ignores both, and the race is what keeps it from hanging the verb.
+ * `null` is the timeout verdict; a pre-timeout inspection failure still
+ * rejects through the race so the caller can name it.
+ */
+async function boundedModelAccessSnapshot(
+  inspect: (input: { signal: AbortSignal }) => Promise<ModelAccessSnapshot>,
+  timeoutMs: number,
+): Promise<ModelAccessSnapshot | null> {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, timeoutMs);
+  });
+  const inspection = inspect({ signal: controller.signal });
+  // A probe that loses the race settles later (usually rejecting on the
+  // abort); that late settlement is already answered and must not surface as
+  // an unhandled rejection.
+  inspection.catch(() => {});
+  try {
+    return await Promise.race([inspection, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type ProjectResolution = { ok: true; project: Project } | { ok: false; response: AgentResponse };
 
 function finalizeContext(
@@ -387,16 +455,30 @@ function finalizeContext(
 }
 
 /**
+ * The identity `VOLLI_SESSION` names — enough to attribute a write and resolve
+ * a project or ticket, and deliberately nothing about how the Session runs.
+ * Resolved against the Session Engine itself, so a structured (chat) Session
+ * answers exactly like a PTY one (VC-51); `terminalSessionRecord` stays the
+ * door to terminal facts (cwd, harness, exit), which identity never carries.
+ */
+interface EnvSessionIdentity {
+  id: string;
+  projectId: string;
+  ticketId: string | null;
+}
+
+/**
  * Resolves the project for a read/create request along the context ladder, doing
  * work proportional to the request: an explicit `--project` or a Volli session
  * env resolves from project metadata alone (no ticket/session scan). Only the
  * env-ticket and cwd rungs build the ticket index (display ids + worktree
- * paths); sessions are never scanned here — `VOLLI_SESSION` is resolved directly.
+ * paths); sessions are never scanned here — `VOLLI_SESSION` arrives already
+ * resolved as {@link EnvSessionIdentity}.
  */
 function projectForCreate(
   db: Database.Database,
   projects: readonly Project[],
-  sessions: readonly SessionRecord[],
+  envSession: EnvSessionIdentity | null,
   request: AgentRequest,
 ): ProjectResolution {
   const selector = request.args["project"];
@@ -418,16 +500,15 @@ function projectForCreate(
       }),
     );
   }
-  const envSession = request.ctx.env.session;
-  if (envSession !== undefined) {
-    const session = sessions.find((candidate) => candidate.id === envSession);
-    if (!session) {
+  const envSessionId = request.ctx.env.session;
+  if (envSessionId !== undefined) {
+    if (!envSession) {
       return {
         ok: false,
-        response: failure("SESSION_NOT_FOUND", `No session matches ${envSession}`),
+        response: failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}`),
       };
     }
-    const project = projects.find(({ id }) => id === session.projectId);
+    const project = projects.find(({ id }) => id === envSession.projectId);
     return project
       ? { ok: true, project }
       : {
@@ -579,7 +660,7 @@ function ticketForDisplayId(
 function resolveWorktreeTicket(
   db: Database.Database,
   projects: readonly Project[],
-  sessions: readonly SessionRecord[],
+  envSession: EnvSessionIdentity | null,
   request: AgentRequest,
 ): { ok: true; ticket: Ticket; project: Project } | { ok: false; response: AgentResponse } {
   if (request.args["id"] !== undefined) {
@@ -617,11 +698,21 @@ function resolveWorktreeTicket(
       displayId: ticketDisplayById.get(ticket.id)!,
       projectId: ticket.projectId,
     })),
-    sessions: sessions.map((session) => ({
-      id: session.id,
-      projectId: session.projectId,
-      ticketDisplayId: session.ticketId ? (ticketDisplayById.get(session.ticketId) ?? null) : null,
-    })),
+    // The ladder only ever looks `VOLLI_SESSION` up by exact id, so the one
+    // resolved identity is the whole session index it needs — and it covers a
+    // structured Session no terminal snapshot would contain.
+    sessions:
+      envSession === null
+        ? []
+        : [
+            {
+              id: envSession.id,
+              projectId: envSession.projectId,
+              ticketDisplayId: envSession.ticketId
+                ? (ticketDisplayById.get(envSession.ticketId) ?? null)
+                : null,
+            },
+          ],
   });
   if (ladder.ok && ladder.context.ticketDisplayId !== null) {
     return ticketForDisplayId(db, projects, ladder.context.ticketDisplayId, {
@@ -723,15 +814,14 @@ function publicEvent(
 
 function requestActor(
   request: AgentRequest,
-  sessions: readonly SessionRecord[],
+  envSession: EnvSessionIdentity | null,
 ): { ok: true; actor: TicketEventActor } | { ok: false; response: AgentResponse } {
   const sessionId = request.ctx.env.session;
   if (!sessionId) return { ok: true, actor: { kind: "user" } };
-  const session = sessions.find((candidate) => candidate.id === sessionId);
-  return session
+  return envSession
     ? {
         ok: true,
-        actor: { kind: "session", sessionId: session.id, ticketId: session.ticketId },
+        actor: { kind: "session", sessionId: envSession.id, ticketId: envSession.ticketId },
       }
     : {
         ok: false,
@@ -1093,14 +1183,16 @@ export function createAgentCommandService(
       // merely to find it. Other commands retain the established list snapshot
       // until their own command-specific resolution is made lazy.
       // Every Session of every project, folded once. `sessions` below narrows
-      // it to the terminal rows the addressable verbs (identify, rename,
-      // resume, hooks) are about — those are all about a PTY the CLI's own
-      // wrapper runs inside, so a structured-only Session has nothing there to
-      // answer to. `session.peek` is the one verb that reads BOTH halves
-      // (VC-79), and it reads them from this same snapshot rather than listing
-      // the world twice.
+      // it to the terminal rows — the verbs that need a PTY (resume, rename,
+      // the terminal half of list) have nothing a structured-only Session can
+      // answer, and dropping it there is correct, not a compatibility gap.
+      // `session.peek` is the one verb that reads BOTH halves (VC-79), and it
+      // reads them from this same snapshot rather than listing the world
+      // twice. Identity questions — who is `VOLLI_SESSION` — are answered by
+      // `envSession` below instead.
       const projections =
         request.cmd === "hook" ||
+        request.cmd === "model.list" ||
         request.cmd === "session.done" ||
         request.cmd === "session.blocked" ||
         request.cmd === "session.link" ||
@@ -1114,26 +1206,54 @@ export function createAgentCommandService(
               )
             ).flat();
       const sessions = projections.flatMap((projection) => terminalSessionRecord(projection) ?? []);
+      // The `VOLLI_SESSION` identity rung, resolved against the Session Engine
+      // rather than the terminal-only snapshot above: a structured (chat)
+      // Session exports `VOLLI_SESSION` too (VC-51), and it has no terminal
+      // attachment for `terminalSessionRecord` to answer with. The verbs that
+      // need terminal FACTS on top of identity (hook, session.link,
+      // session.harness) still resolve their own terminal record and are
+      // skipped here so the hook hot path pays for one lookup, not two.
+      const envSessionId = request.ctx.env.session;
+      let envSession: EnvSessionIdentity | null = null;
+      if (
+        envSessionId !== undefined &&
+        request.cmd !== "hook" &&
+        request.cmd !== "session.link" &&
+        request.cmd !== "session.harness"
+      ) {
+        const projection = await sessionEngine.getSession({ sessionId: envSessionId });
+        if (projection !== null) {
+          envSession = {
+            id: projection.session.id,
+            projectId: projection.session.projectId,
+            ticketId: projection.session.ticketId,
+          };
+        }
+      }
       if (request.cmd === "identify") {
-        const sessionId = request.ctx.env.session;
-        if (sessionId) {
-          const session = sessions.find((candidate) => candidate.id === sessionId);
-          if (!session) {
-            return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        if (envSessionId) {
+          if (!envSession) {
+            return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
           }
-          const project = projects.find(({ id }) => id === session.projectId);
+          const project = projects.find(({ id }) => id === envSession.projectId);
           if (!project) {
             return failure("PROJECT_NOT_FOUND", "The session's project no longer exists.");
           }
-          const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
+          const ticket = envSession.ticketId
+            ? getTicket(options.db, envSession.ticketId)
+            : undefined;
+          // A PTY session's directory is its terminal's cwd; a structured
+          // Session has no PTY, so its workspace is the ticket worktree — or
+          // the project root a ticketless Session was pointed at.
+          const terminal = sessions.find((candidate) => candidate.id === envSessionId);
           return {
             v: 1,
             ok: true,
             data: {
               project: { name: project.name, prefix: project.ticketPrefix, path: project.path },
               ticket: ticket ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null,
-              session: shortSessionId(session.id),
-              worktreePath: session.cwd,
+              session: shortSessionId(envSession.id),
+              worktreePath: terminal?.cwd ?? ticket?.worktreePath ?? project.path,
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
             },
@@ -1146,7 +1266,7 @@ export function createAgentCommandService(
         if (ticket && !ticket.ok) return ticket.response;
         const resolved = ticket?.ok
           ? { ok: true as const, project: ticket.project }
-          : projectForCreate(options.db, projects, sessions, request);
+          : projectForCreate(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         return {
           v: 1,
@@ -1168,7 +1288,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "board") {
-        const resolved = projectForCreate(options.db, projects, sessions, request);
+        const resolved = projectForCreate(options.db, projects, envSession, request);
         return resolved.ok
           ? { v: 1, ok: true, data: boardData(options.db, resolved.project) }
           : resolved.response;
@@ -1189,7 +1309,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "label.list") {
-        const resolved = projectForCreate(options.db, projects, sessions, request);
+        const resolved = projectForCreate(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         const projectTickets = listTicketsByProject(options.db, resolved.project.id);
         const labels = listAllLabels(options.db)
@@ -1200,6 +1320,83 @@ export function createAgentCommandService(
             tickets: projectTickets.filter((ticket) => ticket.labels.includes(label.name)).length,
           }));
         return { v: 1, ok: true, data: { labels } };
+      }
+      if (request.cmd === "model.list") {
+        // Same structural stance as `session.start`: the only transport is the
+        // app-owned socket, the Pi runtime lives in Electron main, and a launch
+        // whose runtime never came up reports the retryable class.
+        const inspect = options.inspectModelAccess;
+        if (!inspect) {
+          return failure(
+            "APP_UNREACHABLE",
+            "The Model Access runtime is not available this launch.",
+          );
+        }
+        let snapshot: ModelAccessSnapshot | null;
+        try {
+          snapshot = await boundedModelAccessSnapshot(
+            inspect,
+            options.modelAccessTimeoutMs ?? MODEL_ACCESS_TIMEOUT_MS,
+          );
+        } catch (error) {
+          return failure("MUTATION_FAILED", errorMessage(error));
+        }
+        if (snapshot === null) {
+          return failure(
+            "TIMEOUT",
+            "Model Access did not answer in time (a provider probe may be hung). Retry, or check provider sign-in in the app.",
+          );
+        }
+        // The signed-in slice is the default view: the full registered catalog
+        // is ~1,200 rows, and dumping it into an agent's context window is the
+        // failure mode this verb exists to prevent. `--all` is the explicit
+        // opt-in, and the rollup count keeps the omission honest.
+        const all = request.args["all"] === true;
+        const shownProviders = all
+          ? snapshot.providers
+          : snapshot.providers.filter((provider) => provider.state === "available");
+        const providers = shownProviders.map((provider) => {
+          const catalog = snapshot.models.filter((model) => model.providerId === provider.id);
+          const models = catalog
+            .filter((model) => all || model.state === "available")
+            .map((model) => ({
+              // The copyable string: `session start --model` takes it verbatim
+              // (the parser splits on the FIRST slash, so gateway model ids
+              // containing one survive the round trip).
+              model: `${model.providerId}/${model.modelId}`,
+              label: model.label,
+              state: model.state,
+              reasoning: model.reasoningLevels,
+            }));
+          return {
+            id: provider.id,
+            label: provider.label,
+            state: provider.state,
+            models,
+            // Models the filter withheld inside this shown provider get the
+            // same honesty counter `omittedProviders` gives the provider list.
+            omittedModels: catalog.length - models.length,
+          };
+        });
+        // The app default is reported even when it names a model the filtered
+        // view no longer shows — what `session start` will do without an
+        // override is a fact about the app, not about this view.
+        const selection = readDefaultModelSelection(options.db);
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            observedAt: snapshot.observedAt,
+            default: selection
+              ? {
+                  model: `${selection.providerId}/${selection.modelId}`,
+                  reasoning: selection.reasoningLevel,
+                }
+              : null,
+            providers,
+            omittedProviders: snapshot.providers.length - shownProviders.length,
+          },
+        };
       }
       if (request.cmd === "session.list") {
         const ticketSelector = request.args["ticket"];
@@ -1212,7 +1409,7 @@ export function createAgentCommandService(
         // let the ticket's project win over what the caller explicitly asked
         // for. When both are present and disagree, refuse and name both.
         if (request.args["project"] !== undefined && ticketResolution?.ok) {
-          const selected = projectForCreate(options.db, projects, sessions, request);
+          const selected = projectForCreate(options.db, projects, envSession, request);
           if (!selected.ok) return selected.response;
           if (selected.project.id !== ticketResolution.project.id) {
             return failure(
@@ -1223,7 +1420,7 @@ export function createAgentCommandService(
         }
         const resolvedProject = ticketResolution?.ok
           ? ticketResolution.project
-          : projectForCreate(options.db, projects, sessions, request);
+          : projectForCreate(options.db, projects, envSession, request);
         if (!("id" in resolvedProject)) {
           if (!resolvedProject.ok) return resolvedProject.response;
         }
@@ -1362,7 +1559,7 @@ export function createAgentCommandService(
         }
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const message = request.args["message"];
         const model = request.args["model"];
@@ -1475,16 +1672,20 @@ export function createAgentCommandService(
         return { v: 1, ok: true, data: { notified: true } };
       }
       if (request.cmd === "session.done" || request.cmd === "session.blocked") {
-        const sessionId = request.ctx.env.session;
-        if (!sessionId) {
+        if (!envSessionId) {
           return failure(
             "CONTEXT_REQUIRED",
             "session done and blocked require VOLLI_SESSION context.",
           );
         }
-        const projection = await sessionEngine.getSession({ sessionId });
-        const session = projection === null ? null : terminalSessionRecord(projection);
-        if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        // Identity is the whole requirement: a structured (chat) Session
+        // signals through the same door a PTY session does, and neither needs
+        // a terminal attachment for it (VC-51). Deliberately no cwd fallback —
+        // one ticket worktree hosts any number of sessions, so a directory can
+        // never say which one is signalling.
+        if (!envSession) {
+          return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
+        }
         const reasonValue = request.args["reason"];
         if (reasonValue !== undefined && typeof reasonValue !== "string") {
           return failure("INVALID_REQUEST", "The lifecycle reason must be text.");
@@ -1493,8 +1694,11 @@ export function createAgentCommandService(
         const signal = request.cmd === "session.done" ? "done" : "blocked";
         const submitted = await sessionEngine.submit({
           commandId: newId(),
-          sessionId: session.id,
+          sessionId: envSession.id,
           intent: { kind: "session.signal", signal, reason },
+          // `adapter`/`terminal` predates structured callers; kept as-is so a
+          // replayed ledger reads one vocabulary. Nothing routes or renders on
+          // this source today (`session.signal` routes to no adapter).
           provenance: {
             source: { kind: "adapter", id: "terminal", detail: null },
             venue: { id: "local", kind: "local" },
@@ -1504,15 +1708,15 @@ export function createAgentCommandService(
           return failure("MUTATION_FAILED", "The Session signal was not durably completed.");
         }
         options.onMutation?.({
-          ...(session.ticketId === null ? {} : { ticketId: session.ticketId }),
-          projectId: session.projectId,
+          ...(envSession.ticketId === null ? {} : { ticketId: envSession.ticketId }),
+          projectId: envSession.projectId,
           kind: "session",
         });
         return {
           v: 1,
           ok: true,
           data: {
-            session: shortSessionId(session.id),
+            session: shortSessionId(envSession.id),
             signal,
             reason,
             recorded: true,
@@ -1901,7 +2105,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "ticket.list") {
-        const resolved = projectForCreate(options.db, projects, sessions, request);
+        const resolved = projectForCreate(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         const status = request.args["status"];
         const priority = request.args["priority"];
@@ -1968,11 +2172,68 @@ export function createAgentCommandService(
           },
         };
       }
+      if (request.cmd === "prompt.baseline") {
+        // The diagnostic must price what a real start composes, and the index
+        // port is how a real start composes it — no port, no honest number.
+        if (!options.skillsIndex) {
+          return failure("APP_UNREACHABLE", "The session runtime is not available this launch.");
+        }
+        const ticketArg = request.args["ticket"];
+        let role: "ticket" | "project";
+        let project: Project;
+        let workspacePath: string;
+        let brief: string;
+        if (ticketArg !== undefined) {
+          const resolved = ticketForDisplayId(options.db, projects, ticketArg);
+          if (!resolved.ok) return resolved.response;
+          role = "ticket";
+          project = resolved.project;
+          // The directory a fresh attach would run in: the stamped worktree
+          // when the ticket has one, the main checkout when it never will.
+          workspacePath = resolved.ticket.worktreePath ?? project.path;
+          brief = composeTicketBrief({
+            project,
+            ticket: resolved.ticket,
+            attachments: listAttachments(options.db, resolved.ticket.id),
+          });
+        } else {
+          const resolved = projectForCreate(options.db, projects, envSession, request);
+          if (!resolved.ok) return resolved.response;
+          role = "project";
+          project = resolved.project;
+          workspacePath = project.path;
+          brief = composeProjectBrief({ project });
+        }
+        // A start with no named skills carries the index alone — the fresh-
+        // session baseline this command exists to price. `null` is a real
+        // measurement: a prompt with no resources section at all.
+        const index = await options.skillsIndex(project.id);
+        const baseline = promptBaseline({
+          role,
+          workspacePath,
+          tools: { tools: [...PI_TOOLS.tools] },
+          ...(index === null ? {} : { promptResources: [index] }),
+          brief: { text: brief },
+        });
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            project: { name: project.name, prefix: project.ticketPrefix },
+            role,
+            workspace: workspacePath,
+            ...baseline,
+            // Named rather than guessed: these are serialized provider-side and
+            // no count Volli invents for them would be a measurement.
+            excluded: "tool definitions, the user's first message, and provider overhead",
+          },
+        };
+      }
       if (request.cmd === "worktree.status") {
         // Context resolution (which ticket the agent means) stays this door's
         // concern; the git compose + the no-worktree / stamped-but-deleted
         // discrimination live behind the ticketId-in read verb (CONCEPT #42).
-        const resolved = resolveWorktreeTicket(options.db, projects, sessions, request);
+        const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         const read = readWorktreeStatus(
           { db: options.db, git, worktreeExists },
@@ -2007,7 +2268,7 @@ export function createAgentCommandService(
         }
       }
       if (request.cmd === "worktree.diff") {
-        const resolved = resolveWorktreeTicket(options.db, projects, sessions, request);
+        const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         // Merge-base ("what the PR would contain") is the default; --working-tree
         // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
@@ -2059,7 +2320,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.update") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const title = request.args["title"];
         const priority = request.args["priority"];
@@ -2140,7 +2401,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.archive") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         try {
           const archivedAt = now();
@@ -2171,7 +2432,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.move") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const to = request.args["to"];
         if (!isTicketStatus(to)) {
@@ -2255,7 +2516,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.comment") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const message = request.args["message"];
         if (typeof message !== "string" || message.trim().length === 0) {
@@ -2309,7 +2570,7 @@ export function createAgentCommandService(
       if (request.cmd !== "ticket.create") {
         return failure("UNSUPPORTED_COMMAND", `Unsupported command ${request.cmd}`);
       }
-      const resolved = projectForCreate(options.db, projects, sessions, request);
+      const resolved = projectForCreate(options.db, projects, envSession, request);
       if (!resolved.ok) return resolved.response;
       const createPriorityError = invalidPriorityResponse(request.args["priority"]);
       if (createPriorityError) return createPriorityError;
@@ -2334,7 +2595,7 @@ export function createAgentCommandService(
 
       try {
         const createdAt = now();
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const ticket = createTicketCommand(
           options.db,

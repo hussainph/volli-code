@@ -215,8 +215,10 @@ Keep it narrow: a peek is spent out of the asking agent's own context.
 volli session done [--reason <text>]
 ```
 
-Signals that the session's work is finished and moves the ticket to Needs Review.
-Acts on the session in `VOLLI_SESSION`.
+Records that the session's work is finished. The signal lands in the session's
+own ledger; the board does not move — an agent may not declare its own ticket
+ready for review, so the `ticket move` stays an explicit step. Acts on the
+session in `VOLLI_SESSION`.
 
 ### volli session blocked
 
@@ -224,8 +226,9 @@ Acts on the session in `VOLLI_SESSION`.
 volli session blocked [--reason <text>]
 ```
 
-Signals that the session has stopped and needs a person. The `--reason` text
-appears on the board.
+Signals that the session has stopped and needs a person. Volli raises
+attention on that exact session, and the `--reason` text is what the person
+sees.
 
 ### volli session link
 
@@ -289,7 +292,9 @@ something that could interrupt a running agent.
 | `VOLLI_SESSION` | The current session. Set by Volli; `session done` and `session blocked` act on it. |
 | `VOLLI_TICKET` | The current ticket, used when you omit `<id>`. |
 
-Volli sets all three in the sessions it starts.
+Volli sets `VOLLI_SESSION` and `VOLLI_TICKET` in every session it starts —
+terminal and chat alike. `VOLLI_SOCKET` is exported into terminal sessions and
+baked into the bundled `volli` shim, so the CLI reaches the app either way.
 
 ## Exit codes
 

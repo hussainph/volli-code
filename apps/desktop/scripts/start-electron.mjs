@@ -4,6 +4,13 @@ import { createRequire } from "node:module";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { assertSupportedNode } from "./check-node-version.mjs";
+
+// Same door as dev.mjs (VC-76): an unsupported Node means the postinstall
+// native rebuilds targeted the wrong ABI, and the built app boots into a dead
+// database with sign-in disabled. Name it here, before Electron spawns.
+assertSupportedNode();
+
 const scriptDir = NodePath.dirname(fileURLToPath(import.meta.url));
 const desktopDir = NodePath.resolve(scriptDir, "..");
 const require = createRequire(import.meta.url);

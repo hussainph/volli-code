@@ -65,6 +65,24 @@ describe("document-mode.css surface", () => {
     expect(surface).not.toContain("#");
   });
 
+  it("keeps every block's box paint on the whole-line element alone", () => {
+    // A line class reaches BOTH the whole-line element and every glyph span in
+    // the line (document-decorations.ts). A box property left on the bare class
+    // is therefore painted again per span — the blockquote's rule in front of
+    // each run of text, the fence's ground over the selection wash. Only the
+    // whole-line element carries `volli-md-box`, so that is where they belong.
+    // Ends at the image rules: a view zone is the app's own DOM, not a line
+    // decoration, so it has no whole-line element to hang a radius off.
+    const blocks = css.slice(css.indexOf("/* --- blocks"), css.indexOf("/* Images live in"));
+    const boxProperty =
+      /\b(background|border(-top|-bottom|-left|-right)?(-left|-right)?-?(radius|width|color)?)\s*:/;
+    for (const rule of blocks.split("}")) {
+      const [selector, body = ""] = rule.split("{");
+      if (!boxProperty.test(body)) continue;
+      expect(selector).toContain(".volli-md-box");
+    }
+  });
+
   it("resets catalog token colours above the decoration rules that tie with it", () => {
     // Monaco renders a decorated token as `class="mtk1 volli-md-h1"`, so both
     // rules match the same span at the same specificity and source order is the

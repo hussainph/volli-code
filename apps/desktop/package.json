@@ -9,6 +9,7 @@
     "cache:node-sqlite": "node scripts/cache-node-sqlite.mjs",
     "check:theme-css": "node scripts/generate-theme-css.mjs --check",
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
+    "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",
     "start": "node scripts/start-electron.mjs",

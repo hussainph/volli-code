@@ -68,10 +68,15 @@ jobs:
       #   check:design-tokens  — self-tests its matcher, then fails on any
       #                          off-ladder utility not recorded in
       #                          scripts/design-token-allowlist.json.
+      #   check:node-version   — self-tests the dev-preflight's range matcher
+      #                          (VC-76): an engines.node shape the matcher
+      #                          cannot read fails HERE, instead of silently
+      #                          letting every local Node through the gate.
       - name: Check design system
         run: |
           vp run --filter @volli/desktop check:theme-css
           vp run --filter @volli/desktop check:design-tokens
+          vp run --filter @volli/desktop check:node-version
 
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.

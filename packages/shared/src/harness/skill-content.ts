@@ -41,9 +41,10 @@ Inspect state before mutating it: read the board and the target ticket first, so
 
 ## Comment vs move vs signal
 
-- Comment (\`volli ticket comment\`) to record findings or hand off context.
-- Move (\`volli ticket move\`) only for a deliberate, real status change.
-- Signal (\`volli session done\` / \`volli session blocked\`) to report your own session's outcome; use exact body edits so a stale read fails instead of clobbering.
+- Comment (\`volli ticket comment\`) to record findings or hand off context; use exact body edits so a stale read fails instead of clobbering.
+- Move (\`volli ticket move\`) only for a deliberate, real status change. Signals never move the board: when the ticket is ready, the move is its own explicit step.
+- Signal \`volli session blocked\` when you are stuck and need a person — the \`--reason\` is exactly what they see.
+- Signal \`volli session done\` to record that your session finished; it lands in the session ledger only, so pair it with the comment and move that actually hand the work over.
 
 Surface every CLI error; never continue silently after a failed mutation.
 `;

@@ -22,6 +22,15 @@
  * changes a LINE's height is duplicated as a `lineHeight` multiplier in
  * document-decorations.ts, because Monaco lays lines out itself and cannot read
  * a stylesheet to find out.
+ *
+ * One rule about where a property may go. A line class reaches TWO elements:
+ * the full-width box Monaco draws behind the line, and every glyph span in it
+ * (see document-decorations.ts). Anything that paints a box — a background, a
+ * border, a radius — therefore belongs under `.volli-md-box`, the marker only
+ * the first of those carries. On the bare class it would be drawn again for
+ * each span: the blockquote's rule in front of every run of text, the fence's
+ * ground over the top of the selection wash. Face, size and colour stay on the
+ * bare class, which is how they reach the glyphs.
  */
 
 .volli-document-mode {
@@ -235,26 +244,30 @@
 /* --- blocks -------------------------------------------------------------- */
 
 .volli-document-mode .volli-md-blockquote {
-  border-left: 3px solid var(--border-strong);
   color: var(--muted-foreground);
+}
+.volli-document-mode .volli-md-box.volli-md-blockquote {
+  border-left: 3px solid var(--border-strong);
 }
 
 .volli-document-mode .volli-md-fence {
   font-family: var(--font-mono);
   font-size: var(--text-ui);
+}
+.volli-document-mode .volli-md-box.volli-md-fence {
   background: var(--card);
 }
-.volli-document-mode .volli-md-fence-open {
+.volli-document-mode .volli-md-box.volli-md-fence-open {
   border-top-left-radius: var(--radius-md);
   border-top-right-radius: var(--radius-md);
 }
-.volli-document-mode .volli-md-fence-close {
+.volli-document-mode .volli-md-box.volli-md-fence-close {
   border-bottom-left-radius: var(--radius-md);
   border-bottom-right-radius: var(--radius-md);
 }
 
 /* A thematic break: the `---` collapses and the line itself carries the rule. */
-.volli-document-mode .volli-md-hr {
+.volli-document-mode .volli-md-box.volli-md-hr {
   border-top: 1px solid var(--border);
   height: 0;
   margin-top: 0.6em;

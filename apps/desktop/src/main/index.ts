@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   diffManagedContent,
+  displayTicketId,
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
@@ -58,6 +59,7 @@ import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import { describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
@@ -72,7 +74,10 @@ import {
   readDefaultModelSelection,
   writeDefaultModelSelection,
 } from "./session-runtime/model-access-preferences";
-import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import {
+  registerDegradedSessionRpcIpcHandlers,
+  registerSessionRpcIpcHandlers,
+} from "./session-rpc-ipc";
 import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
@@ -543,7 +548,11 @@ app.whenReady().then(async () => {
     mkdirSync(dirname(dbPath), { recursive: true });
     dbHandle = { ok: true, db: openVolliDb(dbPath) };
   } catch (error) {
-    dbHandle = { ok: false, error: errorMessage(error) };
+    // The recorded reason is what every degraded handler answers with, so it
+    // is classified here, once: a native-ABI failure names the Node
+    // incompatibility and the fix instead of a bare NODE_MODULE_VERSION
+    // number (VC-76).
+    dbHandle = { ok: false, error: describeDbOpenFailure(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
@@ -591,9 +600,28 @@ app.whenReady().then(async () => {
           // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
           // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
           // directory (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath) => {
+          executionEnvFactory: async (workspacePath, identity) => {
             await loginPathBootstrap.apply();
-            return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+            // The Session's own name rides beside the PATH recovery:
+            // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
+            // exactly as `agentSessionEnv` exports them into a spawned PTY —
+            // what lets `volli session done`/`blocked` resolve their context
+            // and makes socket writes attribute to the Session (VC-51). The
+            // display id is looked up per attachment, so a Ticket renamed by a
+            // prefix change is right on the next attach.
+            const ticket =
+              identity.ticketId === null ? null : getTicket(dbHandle.db, identity.ticketId);
+            const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+            return piExecutionEnv(workspacePath, {
+              pathPrefixes: [runtimePaths.binDir],
+              identity: {
+                sessionId: identity.sessionId,
+                ticketDisplayId:
+                  ticket && ticketProject
+                    ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+                    : null,
+              },
+            });
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -809,6 +837,18 @@ app.whenReady().then(async () => {
           createSession: sessions?.create,
           attachSession: sessions?.attach,
         });
+  // No runtime, no bridge — but the channels are still claimed, answering
+  // every request with the reason the runtime is down (in practice: the
+  // database open recorded above, Node-ABI classification included). Left
+  // unregistered, the renderer's Model Access page would toast Electron's
+  // nameless "No handler registered" instead of the actual problem (VC-76).
+  if (sessionRuntime === null) {
+    registerDegradedSessionRpcIpcHandlers(
+      dbHandle.ok
+        ? "The agent runtime is unavailable."
+        : `The local database failed to open: ${dbHandle.error}`,
+    );
+  }
   // Signing in is a Model Access task, not a Session one, so it gets its own
   // surface rather than a Session RPC namespace — see the contract in
   // `@volli/shared`'s VolliModelAccessIpcContract for why a channel that can
@@ -817,6 +857,13 @@ app.whenReady().then(async () => {
     piModelAccess === null
       ? null
       : new ModelAccessSignInService({ pi: piSignIn(piModelAccess.models) }),
+    // When the runtime is down because the database never opened, the sign-in
+    // surface must answer with the recorded (already-classified) reason — a
+    // Node-ABI failure names the incompatibility, not a generic "unavailable"
+    // (VC-76).
+    dbHandle.ok
+      ? undefined
+      : `Sign-in is unavailable — the local database failed to open: ${dbHandle.error}`,
   );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
@@ -1460,6 +1507,22 @@ app.whenReady().then(async () => {
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
           ...(sessions !== null ? { sessions } : {}),
+          // Model discovery (VC-78): `model list` reads the same Model Access
+          // snapshot every other surface does — never a parallel provider
+          // probe, never raw provider files. The door bounds the read itself
+          // (abort + race), so a hung probe cannot hang the CLI verb.
+          ...(piRuntimeHost !== null
+            ? {
+                inspectModelAccess: (input: { signal: AbortSignal }) =>
+                  piRuntimeHost.inspectModelAccess(input),
+              }
+            : {}),
+          // `prompt baseline` (VC-66) prices the index through the SAME port a
+          // real start records it through — nothing injected, so the answer is
+          // the fresh-session default. Absent with the runtime, same as above.
+          ...(sessionSkills !== null
+            ? { skillsIndex: (projectId: string) => sessionSkills.index(projectId, []) }
+            : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.
