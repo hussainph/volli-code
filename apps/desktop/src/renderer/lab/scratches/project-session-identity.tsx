@@ -1,41 +1,41 @@
 /**
- * PROTOTYPE — VC-55, pass 3. The empty chat as a scope-matched instrument.
+ * PROTOTYPE — VC-55, pass 4. The empty chat as a scope-matched instrument.
  *
- * THE MODEL THIS PASS SETTLES ON, and the reason the axes are shaped the way
- * they are: the empty-state visual is a CHOICE, but not a free one. Each visual
- * is only legible at one scope, so the menu a surface offers is itself the
- * identity signal — a Home chat can draw the streak or the board, a ticket chat
- * cannot, and that asymmetry is the thing the user eventually internalises.
- * The two pickers in the bar are deliberately shaped like the Settings control
- * this would become: one default per scope, chosen from that scope's legal set.
+ * THE MODEL. The empty-state visual is a CHOICE, but not a free one: each
+ * visual is only legible at one scope, so the menu a surface OFFERS is itself
+ * the identity signal. A Home chat can draw the streak or the board; a ticket
+ * chat cannot, and that asymmetry is what the user internalises.
  *
  *   Home    → Streak · Board · Venue
  *   Ticket  → Venue        (default)
  *
- * WHAT MOVED SINCE PASS 2 (all owner notes):
- *   1. The session FIELD is gone. It grew without bound and said nothing on a
- *      ticket. Replaced by STREAK — a GitHub-style per-day matrix of every
- *      session run in Volli, project and ticket alike. It is a fixed 26-week
- *      window, so it cannot grow; and it is deliberately NOT offered on a
- *      ticket, where a cross-project achievement read is nonsense.
- *   2. BOARD keeps its bars but they are no longer flat: each column takes a
- *      hue fanned off the LIVE canvas primary (`--primary`, read at render and
- *      rotated in OKLCH), so the chart is themed rather than painted. Hover
- *      names the column and its count. Home only.
- *   3. VENUE is the merged one, and the only visual both scopes offer. The
- *      uncommitted ticks stack directly over the +/− bar so one object answers
- *      "what is loose here" and "what has this branch done" together.
+ * Every visual sits over a CAPTION, and the caption is its own axis because the
+ * mono path line under pass 3's drawings read as thrown together rather than
+ * composed. Four treatments, from silent to conversational — see {@link Caption}.
  *
- * VENUE IS KEYED ON THE VENUE, NOT THE SESSION KIND. A ticket that runs in the
- * main checkout (no worktree — see VC-96) draws main's tree and no branch bar,
- * because there is no branch to diff. That is the whole reason this visual can
- * serve both scopes: it describes the DIRECTORY, which is the fact VC-55 exists
- * to surface.
+ * VENUE IS DESIGNED FIVE WAYS (owner note: "unbalanced"), under the design-it-
+ * twice discipline — radically different shapes under different constraints,
+ * compared rather than iterated:
  *
- * DITHER-KIT is wired as a second drawing of the Board bars (`Board · dither`)
- * so the aesthetic can be judged against the cost. Read the note on
- * {@link DITHER_COLOR} before adopting it — its palette is seven fixed sRGB
- * triples, which is the one thing this repo's generated-canvas theming forbids.
+ *   stack       CONTROL. Two stacked reads in one card: loose over committed.
+ *   figure      MINIMISE. One dominant numeral; everything else subordinate.
+ *   single-bar  COMMON CASE. Loose and committed as segments of ONE object,
+ *               which is the direct answer to "the two-part stack feels
+ *               unbalanced" — there is no stack left to balance.
+ *   ledger      MAXIMISE DENSITY. An aligned mono ledger, no card. `git status`
+ *               set properly.
+ *   files       BORROW THE VOCABULARY of the thing it describes: changed-file
+ *               rows with per-file diff gutters. Concrete, not abstract.
+ *
+ * VENUE KEYS ON THE VENUE, NOT THE SESSION KIND. A ticket that runs in the main
+ * checkout (no worktree — VC-96) draws main's tree and no branch bar, because
+ * there is no branch to diff. That is why one visual can serve both scopes.
+ *
+ * DITHER-KIT WAS REMOVED (owner ruling: too much work). The record of why, so
+ * nobody re-litigates it: its `ChartConfig` accepts only seven hard-coded colour
+ * NAMES with no arbitrary-hex path, which the generated-canvas theming forbids;
+ * its 23 vendored files tripped `vp lint` in 6 places; and it added d3-scale and
+ * d3-shape to the desktop app's production dependencies for one chart.
  *
  * Fixtures are frozen; the board counts are this repo's real ones. The lab has
  * no main-process half (CLAUDE.md), so nothing here reads git or the ledger.
@@ -52,10 +52,6 @@ import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple"
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { hexToOklch, lerp, oklchToHex } from "@volli/shared";
 
-import { BarChart } from "@renderer/components/dither-kit/bar-chart";
-import { Bar } from "@renderer/components/dither-kit/bar";
-import { Tooltip as DitherTooltip } from "@renderer/components/dither-kit/tooltip";
-import { XAxis } from "@renderer/components/dither-kit/x-axis";
 import { Button } from "@renderer/components/ui/button";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
@@ -68,18 +64,36 @@ import {
 import { cn } from "@renderer/lib/utils";
 
 export const title = "Project session · identity, info, empty chat";
-export const note = "Streak / Board / Venue — the scope decides the menu (VC-55 pass 3)";
+export const note = "Streak / Board / Venue ×5, with caption treatments (VC-55 pass 4)";
 export const viewport = "window" as const;
 
 // ---------------------------------------------------------------------------
 // Venue — the thing every visual is really about
 
+/**
+ * A file's state, and the four are DISJOINT by construction — `committed` means
+ * changed on this branch and now clean in the tree.
+ *
+ * That disjointness is load-bearing, not tidiness. The first single-bar summed
+ * loose files and `diff.files` for its headline and printed 14 for a worktree
+ * holding 7 changed files, because every file that was both committed and dirty
+ * got counted twice. A segmented bar is a claim that its parts partition the
+ * whole, so the data has to actually partition.
+ */
+type FileState = "committed" | "modified" | "added" | "untracked";
+
+interface ChangedFile {
+  path: string;
+  added: number;
+  removed: number;
+  state: FileState;
+}
+
 interface Venue {
   kind: "main-checkout" | "worktree";
   path: string;
   branch: string;
-  /** Loose in this directory right now. */
-  dirty: { modified: number; added: number; untracked: number };
+  files: readonly ChangedFile[];
   /** What this branch has done vs its base. `null` when there is no base to diff. */
   diff: { added: number; removed: number; files: number; base: string } | null;
 }
@@ -88,7 +102,14 @@ const MAIN_CHECKOUT: Venue = {
   kind: "main-checkout",
   path: "~/Desktop/code/volli-code",
   branch: "main",
-  dirty: { modified: 2, added: 1, untracked: 3 },
+  files: [
+    { path: "docs/DESIGN.md", added: 18, removed: 4, state: "modified" },
+    { path: "apps/desktop/src/renderer/src/globals.css", added: 6, removed: 6, state: "modified" },
+    { path: "packages/shared/src/theme/canvas/ladder.ts", added: 31, removed: 0, state: "added" },
+    { path: "notes/scratch.md", added: 12, removed: 0, state: "untracked" },
+    { path: "notes/palette-trials.md", added: 44, removed: 0, state: "untracked" },
+    { path: ".env.local", added: 2, removed: 0, state: "untracked" },
+  ],
   diff: null,
 };
 
@@ -96,11 +117,67 @@ const TICKET_WORKTREE: Venue = {
   kind: "worktree",
   path: "~/.volli/worktrees/volli-code-f3732f45/VC-81-auto-title…",
   branch: "volli/VC-81-auto-title-model-generated-titles",
-  dirty: { modified: 4, added: 2, untracked: 1 },
-  diff: { added: 214, removed: 63, files: 7, base: "main" },
+  files: [
+    { path: "packages/shared/src/session-title.ts", added: 96, removed: 12, state: "committed" },
+    {
+      path: "packages/session-engine/src/title-model.ts",
+      added: 74,
+      removed: 0,
+      state: "committed",
+    },
+    {
+      path: "apps/desktop/src/renderer/src/chat/rename.ts",
+      added: 22,
+      removed: 31,
+      state: "committed",
+    },
+    {
+      path: "packages/shared/src/session-title.test.ts",
+      added: 22,
+      removed: 20,
+      state: "committed",
+    },
+    {
+      path: "apps/desktop/src/renderer/src/stores/chat-sessions.ts",
+      added: 14,
+      removed: 3,
+      state: "modified",
+    },
+    { path: "packages/cli/src/session.ts", added: 9, removed: 1, state: "modified" },
+    { path: "docs/plans/auto-title.md", added: 27, removed: 0, state: "untracked" },
+  ],
+  diff: { added: 214, removed: 63, files: 4, base: "main" },
 };
 
+const TICKET_ID = "VC-81";
 const SESSION_MODEL = { model: "Claude Opus 4.6", effort: "High" } as const;
+
+function counts(venue: Venue) {
+  const of = (state: FileState) => venue.files.filter((file) => file.state === state).length;
+  const modified = of("modified");
+  const added = of("added");
+  const untracked = of("untracked");
+  return {
+    committed: of("committed"),
+    modified,
+    added,
+    untracked,
+    /** Dirty right now. */
+    loose: modified + added + untracked,
+    /** Every file this venue has touched, committed or not. The four states
+     *  partition this, which is what lets a segmented bar total it honestly. */
+    total: venue.files.length,
+  };
+}
+
+const STATE_TONE: Record<FileState, string> = {
+  // Committed work takes the accent: it is the only state that means progress
+  // rather than exposure.
+  committed: "bg-primary",
+  modified: "bg-attention",
+  added: "bg-positive",
+  untracked: "bg-muted-foreground/40",
+};
 
 /** This repo's real board, so the bars are honestly proportioned. */
 const BOARD = [
@@ -118,18 +195,16 @@ const MENTIONED = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Streak fixture — sessions per day, across the whole install
+// Streak fixture
 
 const STREAK_WEEKS = 26;
 
 interface StreakDay {
   id: string;
   count: number;
-  /** Days back from today, for the tooltip's date. */
   ago: number;
 }
 
-/** Deterministic, with a believable weekday/weekend rhythm and a ramp-up. */
 function streakDays(): readonly StreakDay[] {
   const out: StreakDay[] = [];
   const total = STREAK_WEEKS * 7;
@@ -139,7 +214,6 @@ function streakDays(): readonly StreakDay[] {
     const roll = x / 2147483648;
     const weekday = index % 7;
     const weekend = weekday === 0 || weekday === 6;
-    // Volli got used more as it got built — the recent end is denser.
     const ramp = index / total;
     const lift = roll * (weekend ? 0.35 : 1) * (0.25 + ramp);
     const ago = total - 1 - index;
@@ -160,7 +234,6 @@ function streakDays(): readonly StreakDay[] {
 
 const STREAK = streakDays();
 
-/** Which of the four ramp steps a day's count lands on. */
 function streakStep(count: number): number {
   return count === 0 ? 0 : count >= 9 ? 3 : count >= 5 ? 2 : 1;
 }
@@ -168,16 +241,12 @@ function streakStep(count: number): number {
 function streakDayLabel(day: StreakDay): string {
   const sessions =
     day.count === 0 ? "No sessions" : `${day.count} session${day.count === 1 ? "" : "s"}`;
-  return `${sessions} · ${day.ago === 0 ? "today" : `${day.ago}d ago`}`;
+  const when = day.ago === 0 ? "today" : day.ago === 1 ? "yesterday" : `${day.ago} days ago`;
+  return `${sessions} · ${when}`;
 }
 
 // ---------------------------------------------------------------------------
-// Theme-derived series colour
-//
-// The app's colour tokens are GENERATED from a canvas (CLAUDE.md), so a chart
-// may not carry a palette of its own. These read `--primary` off the live
-// document and fan hues around it in OKLCH, which means the chart re-themes
-// with the window instead of fighting it.
+// Theme-derived colour
 
 function readToken(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
@@ -188,17 +257,11 @@ function readToken(name: string, fallback: string): string {
 /**
  * Ticks whenever the theme changes, so anything derived from a token recomputes.
  *
- * This is not optional bookkeeping — it is the whole reason a derived colour is
- * allowed to exist. `readToken` samples the document once; without a
- * subscription, a ramp memoised on mount keeps painting the appearance that was
- * live when it mounted. The first version of the streak grid did exactly that
- * and drew dark-mode colours on light paper, which read as an inverted grid
- * (empty days heavier than busy ones) and looked like a palette bug rather than
- * a staleness bug.
- *
- * Appearance is stamped as a CLASS on `documentElement` and the canvas writes
- * its tokens there as inline custom properties (CLAUDE.md), so watching those
- * two attributes covers both.
+ * Not optional bookkeeping — it is the whole reason a derived colour is allowed
+ * to exist. `readToken` samples the document once; without a subscription, a
+ * ramp memoised on mount keeps painting the appearance that was live when it
+ * mounted. The first streak grid did exactly that and drew dark-mode colours on
+ * light paper, which read as an inverted grid rather than a staleness bug.
  */
 function useThemeEpoch(): number {
   const [epoch, setEpoch] = React.useState(0);
@@ -213,14 +276,9 @@ function useThemeEpoch(): number {
   return epoch;
 }
 
-/**
- * `count` hues fanned across ±`spread` degrees around the canvas primary,
- * holding its lightness and chroma so the series reads as one family. Returns
- * hex, because that is what a canvas painter and an inline style both take.
- */
+/** `count` hues fanned around the canvas primary, holding its L and C. */
 function seriesColors(count: number, spread = 70): string[] {
-  const primary = readToken("--primary", "#d37550");
-  const { L, C, h } = hexToOklch(primary);
+  const { L, C, h } = hexToOklch(readToken("--primary", "#d37550"));
   if (count === 1) return [oklchToHex(L, C, h)];
   return Array.from({ length: count }, (_, index) => {
     const t = index / (count - 1) - 0.5;
@@ -229,39 +287,28 @@ function seriesColors(count: number, spread = 70): string[] {
 }
 
 /**
- * The streak ramp: four steps travelling from the BACKGROUND to the primary,
- * in the primary's hue.
+ * Four steps travelling from the BACKGROUND to the primary, in the primary's hue.
  *
- * Lightness has to travel, not just chroma. Draining chroma out of a mid-tone
- * primary lands on a mid-tone grey, which on a light canvas is DARKER than the
- * paper — so the first version drew empty days heavier than busy ones and the
- * grid read inside out. Interpolating from the background instead is also what
- * makes one ramp correct in both appearances: light mode ramps down from paper,
- * dark mode ramps up from ink, and neither is special-cased.
+ * Lightness has to travel, not just chroma: draining chroma out of a mid-tone
+ * primary lands on a mid grey, which on a light canvas is DARKER than the paper.
+ * Interpolating from the background is also what makes one ramp correct in both
+ * appearances — light ramps down from paper, dark ramps up from ink.
  */
 function streakRamp(): string[] {
   const base = hexToOklch(readToken("--background", "#1a1210"));
   const tip = hexToOklch(readToken("--primary", "#d37550"));
-  // Not 0: an empty day still has to be a cell you can see the grid through.
   return [0.12, 0.42, 0.72, 1].map((t) =>
     oklchToHex(lerp(base.L, tip.L, t), lerp(0.004, tip.C, t), tip.h),
   );
 }
 
-/**
- * dither-kit's `config` only accepts one of seven hard-coded colour NAMES
- * (`components/dither-kit/palette.ts` — fixed sRGB triples). There is no
- * arbitrary-hex path, so a dithered chart cannot take {@link seriesColors}
- * without us rewriting that palette to derive from the canvas. `orange` is the
- * nearest neighbour to the ember accent; it is a stand-in, not an endorsement.
- */
-const DITHER_COLOR = "orange" as const;
-
 // ---------------------------------------------------------------------------
 // Axes
 
-type HomeVisual = "mark" | "streak" | "board" | "board-dither" | "venue";
+type HomeVisual = "mark" | "streak" | "board" | "venue";
 type TicketVisual = "mark" | "venue";
+type VenueShape = "stack" | "figure" | "single-bar" | "ledger" | "files";
+type CaptionMode = "none" | "path" | "chips" | "greeter";
 type Info = "none" | "rail" | "venue-bar";
 type View = "home" | "ticket" | "both" | "feed";
 
@@ -269,13 +316,27 @@ const HOME_VISUAL_LABELS: Record<HomeVisual, string> = {
   mark: "Mark (today)",
   streak: "Streak",
   board: "Board",
-  "board-dither": "Board · dither-kit",
   venue: "Venue",
 };
 
 const TICKET_VISUAL_LABELS: Record<TicketVisual, string> = {
   mark: "Mark (today)",
   venue: "Venue",
+};
+
+const VENUE_SHAPE_LABELS: Record<VenueShape, string> = {
+  stack: "Stack (pass 3)",
+  figure: "Figure",
+  "single-bar": "Single bar",
+  ledger: "Ledger",
+  files: "Files",
+};
+
+const CAPTION_LABELS: Record<CaptionMode, string> = {
+  none: "None",
+  path: "Path (pass 3)",
+  chips: "Chips",
+  greeter: "Greeter",
 };
 
 const INFO_LABELS: Record<Info, string> = {
@@ -288,35 +349,95 @@ const VIEW_LABELS: Record<View, string> = {
   home: "Home",
   ticket: "Ticket",
   both: "Both (at-a-glance test)",
-  feed: "Feed (backlink chips)",
+  feed: "Feed (mid-session)",
 };
 
 // ---------------------------------------------------------------------------
-// Shared parts
+// Caption — four treatments of the same footing
 
-function ScopeCaption({ venue }: { venue: Venue }) {
-  return (
-    <div className="flex flex-wrap items-center justify-center gap-2 font-mono text-ui text-muted-foreground">
-      <span className="flex items-center gap-1" title={venue.path}>
-        <FolderOpenIcon weight="bold" className="size-3" aria-label="Directory" />
-        {venue.path}
-      </span>
-      <span className="flex items-center gap-1">
-        <GitBranchIcon weight="bold" className="size-3" aria-label="Branch" />
-        {venue.branch}
-      </span>
-    </div>
-  );
+function partOfDay(hour: number): string {
+  if (hour < 5) return "Late one";
+  if (hour < 12) return "Morning";
+  if (hour < 18) return "Afternoon";
+  return "Evening";
 }
 
-function MentionChip({ id }: { id: string }) {
+/**
+ * Greeters. Click to cycle — this is a lab affordance for browsing the set, not
+ * a product interaction.
+ *
+ * The line that separates a greeter from the prose the owner killed: a greeter
+ * does not EXPLAIN the surface. It opens a conversation. "Orchestrates from the
+ * main checkout" is a description of the UI you are already looking at;
+ * "Morning. What are we building?" is a question.
+ */
+function greeters(project: boolean, hour: number): string[] {
+  const part = partOfDay(hour);
+  return project
+    ? [
+        `${part}. What are we building?`,
+        `${part} — where do you want to start?`,
+        "What's on the board?",
+        "What should we ship today?",
+        "Got something to shape?",
+      ]
+    : [
+        `${part}. Back on ${TICKET_ID}.`,
+        `Picking up ${TICKET_ID}.`,
+        `${TICKET_ID} — what's next?`,
+        "Where did we leave this?",
+      ];
+}
+
+function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; project: boolean }) {
+  const [cycle, setCycle] = React.useState(0);
+  if (mode === "none") return null;
+
+  if (mode === "path") {
+    return (
+      <div className="flex flex-wrap items-center justify-center gap-2 font-mono text-ui text-muted-foreground">
+        <span className="flex items-center gap-1" title={venue.path}>
+          <FolderOpenIcon weight="bold" className="size-3" aria-label="Directory" />
+          {venue.path}
+        </span>
+        <span className="flex items-center gap-1">
+          <GitBranchIcon weight="bold" className="size-3" aria-label="Branch" />
+          {venue.branch}
+        </span>
+      </div>
+    );
+  }
+
+  if (mode === "chips") {
+    return (
+      <div className="flex flex-wrap items-center justify-center gap-1">
+        <span
+          className="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground"
+          title={venue.path}
+        >
+          <FolderOpenIcon weight="bold" className="size-3" />
+          {venue.kind === "main-checkout" ? "Main checkout" : "Worktree"}
+        </span>
+        <span
+          className="inline-flex h-7 max-w-56 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground"
+          title={venue.branch}
+        >
+          <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+          <span className="truncate">{venue.branch}</span>
+        </span>
+      </div>
+    );
+  }
+
+  const lines = greeters(project, new Date().getHours());
   return (
     <button
       type="button"
-      className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-card px-2 align-baseline font-mono text-ui text-foreground transition-colors hover:border-primary/40 hover:text-primary-text"
+      onClick={() => setCycle((value) => value + 1)}
+      title="Lab: click to cycle greeters"
+      className="text-heading text-foreground transition-opacity hover:opacity-70"
     >
-      <TicketIcon weight="bold" className="size-3 text-muted-foreground" />
-      {id}
+      {lines[cycle % lines.length]}
     </button>
   );
 }
@@ -324,15 +445,15 @@ function MentionChip({ id }: { id: string }) {
 // ---------------------------------------------------------------------------
 // STREAK — every session run in Volli, one cell per day. Home only.
 
-function StreakVisual({ venue }: { venue: Venue }) {
+function StreakVisual() {
   // Subscribe, then derive on every render. Four colours is cheaper to compute
   // than to memoise correctly against a subscription the linter cannot see.
   useThemeEpoch();
   const ramp = streakRamp();
+  const [hover, setHover] = React.useState<{ day: StreakDay; x: number; y: number } | null>(null);
+
   const total = STREAK.reduce((sum, day) => sum + day.count, 0);
   const active = STREAK.filter((day) => day.count > 0).length;
-
-  // Current run of consecutive days with at least one session, counting back.
   let run = 0;
   for (let index = STREAK.length - 1; index >= 0; index -= 1) {
     if ((STREAK[index]?.count ?? 0) === 0) break;
@@ -341,24 +462,50 @@ function StreakVisual({ venue }: { venue: Venue }) {
 
   return (
     <div className="flex flex-col items-center gap-4">
-      {/* Column-major, like GitHub: each column is a week, each row a weekday. */}
+      {/* ONE tooltip for 182 cells, driven by event delegation off the grid.
+          Per-cell Radix tooltips would mount 182 portal roots for a hint nobody
+          reads twice; per-cell handlers would allocate 182 closures a render.
+          The grid reads `data-day` off whatever the pointer is over. */}
       <div
-        className="grid grid-flow-col grid-rows-7 gap-1"
-        role="img"
-        aria-label={`${total} sessions over ${STREAK_WEEKS} weeks`}
+        className="relative"
+        onPointerOver={(event) => {
+          const cell = (event.target as HTMLElement).closest<HTMLElement>("[data-day]");
+          if (cell === null) return;
+          const day = STREAK[Number(cell.dataset.day)];
+          if (day === undefined) return;
+          const grid = event.currentTarget.getBoundingClientRect();
+          const box = cell.getBoundingClientRect();
+          setHover({
+            day,
+            x: box.left - grid.left + box.width / 2,
+            y: box.top - grid.top,
+          });
+        }}
+        onPointerLeave={() => setHover(null)}
       >
-        {/* Native `title`, not a Radix Tooltip: this grid is 182 cells, and
-            182 portalled tooltip roots is a measurable mount cost for a hover
-            hint nobody reads twice. The board bars below DO get Radix — five
-            of them, and the hover is the whole point there. */}
-        {STREAK.map((day) => (
-          <span
-            key={day.id}
-            title={streakDayLabel(day)}
-            className="size-2.5 rounded-sm"
-            style={{ backgroundColor: ramp[streakStep(day.count)] }}
-          />
-        ))}
+        <div
+          className="grid grid-flow-col grid-rows-7 gap-1"
+          role="img"
+          aria-label={`${total} sessions over ${STREAK_WEEKS} weeks`}
+        >
+          {STREAK.map((day, index) => (
+            <span
+              key={day.id}
+              data-day={index}
+              className="size-2.5 rounded-sm"
+              style={{ backgroundColor: ramp[streakStep(day.count)] }}
+            />
+          ))}
+        </div>
+        {hover === null ? null : (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-ui text-popover-foreground shadow-overlay"
+            style={{ left: hover.x, top: hover.y - 6 }}
+          >
+            {streakDayLabel(hover.day)}
+          </div>
+        )}
       </div>
       <div className="flex items-baseline gap-2">
         <span className="text-title text-foreground">{total}</span>
@@ -368,7 +515,6 @@ function StreakVisual({ venue }: { venue: Venue }) {
         <span>{active} active days</span>
         {run > 0 ? <span>{run}-day streak</span> : null}
       </div>
-      <ScopeCaption venue={venue} />
     </div>
   );
 }
@@ -376,7 +522,7 @@ function StreakVisual({ venue }: { venue: Venue }) {
 // ---------------------------------------------------------------------------
 // BOARD — the project's column distribution. Home only.
 
-function BoardVisual({ venue }: { venue: Venue }) {
+function BoardVisual() {
   useThemeEpoch();
   const colors = seriesColors(BOARD.length);
   const peak = Math.max(...BOARD.map((entry) => entry.count));
@@ -390,14 +536,12 @@ function BoardVisual({ venue }: { venue: Venue }) {
               <div className="flex min-w-0 flex-1 cursor-default flex-col items-center gap-1">
                 <span className="text-ui text-muted-foreground">{entry.count}</span>
                 <span
-                  className="w-full rounded-md transition-opacity hover:opacity-80"
+                  className="w-full rounded-md transition-opacity hover:opacity-100"
                   style={{
                     height: `${Math.max(3, (entry.count / peak) * 68)}px`,
                     backgroundColor: entry.count === 0 ? undefined : colors[index],
                     opacity: entry.count === 0 ? undefined : 0.85,
                   }}
-                  // A zero column still needs a body to hover, and it must not
-                  // read as a tiny amount of something.
                   data-empty={entry.count === 0 ? "true" : "false"}
                 />
               </div>
@@ -418,129 +562,250 @@ function BoardVisual({ venue }: { venue: Venue }) {
           </span>
         ))}
       </div>
-      <ScopeCaption venue={venue} />
-    </div>
-  );
-}
-
-/** The same data through dither-kit, so the aesthetic can be judged directly. */
-function BoardDitherVisual({ venue }: { venue: Venue }) {
-  const data = React.useMemo(
-    () => BOARD.map((entry) => ({ column: entry.column, tickets: entry.count })),
-    [],
-  );
-  const config = React.useMemo(() => ({ tickets: { label: "Tickets", color: DITHER_COLOR } }), []);
-
-  return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="h-32 w-80">
-        <BarChart data={data} config={config} bloom="low">
-          <XAxis dataKey="column" />
-          <DitherTooltip labelKey="column" />
-          <Bar dataKey="tickets" variant="gradient" />
-        </BarChart>
-      </div>
-      <ScopeCaption venue={venue} />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// VENUE — the merged working-tree overview. Both scopes; ticket default.
+// VENUE ×5 — design it twice (and then three more times)
 
-/**
- * Two stacked reads of one directory:
- *
- *   TOP     what is loose right now — ticks, one per uncommitted file, coloured
- *           by kind. Not summed into the diff below, because loose changes are
- *           not yet part of what the branch has done.
- *   BOTTOM  what this branch has done vs its base — the proportional +/− bar.
- *
- * A venue with no base to diff (the main checkout) draws only the top half and
- * says so, rather than drawing an empty bar that reads as "no work".
- */
-function VenueVisual({ venue }: { venue: Venue }) {
-  const { modified, added, untracked } = venue.dirty;
-  const loose = modified + added + untracked;
-  const ticks = [
-    ...Array.from({ length: modified }, (_, i) => ({
-      id: `m${i}`,
-      tone: "bg-attention",
-      kind: "modified",
-    })),
-    ...Array.from({ length: added }, (_, i) => ({
-      id: `a${i}`,
-      tone: "bg-positive",
-      kind: "added",
-    })),
-    ...Array.from({ length: untracked }, (_, i) => ({
-      id: `u${i}`,
-      tone: "bg-muted-foreground/40",
-      kind: "untracked",
-    })),
-  ];
+/** CONTROL — pass 3's two stacked reads in one card. */
+function VenueStack({ venue }: { venue: Venue }) {
+  const n = counts(venue);
   const diff = venue.diff;
   const span = diff === null ? 0 : diff.added + diff.removed;
-
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="flex w-80 flex-col gap-4 rounded-row border border-border bg-card p-4">
-        {/* Loose */}
+    <div className="flex w-80 flex-col gap-4 rounded-row border border-border bg-card p-4">
+      <div className="flex flex-col gap-2">
+        <div className="flex h-10 items-end justify-center gap-1">
+          {venue.files
+            .filter((file) => file.state !== "committed")
+            .map((file) => (
+              <span
+                key={file.path}
+                className={cn("h-full w-2 rounded-full", STATE_TONE[file.state])}
+              />
+            ))}
+        </div>
+        <div className="flex items-baseline justify-center gap-2">
+          <span className="text-heading text-foreground">{n.loose}</span>
+          <span className="text-ui text-muted-foreground">uncommitted</span>
+        </div>
+      </div>
+      <div className="h-px bg-border" />
+      {diff === null ? (
+        <p className="text-center text-ui text-muted-foreground">no branch of its own</p>
+      ) : (
         <div className="flex flex-col gap-2">
-          <div className="flex h-10 items-end justify-center gap-1">
-            {loose === 0 ? (
-              <span className="h-1 w-full rounded-full bg-border" />
-            ) : (
-              ticks.map((tick) => (
-                <Tooltip key={tick.id}>
-                  <TooltipTrigger asChild>
-                    <span className={cn("h-full w-2 rounded-full", tick.tone)} />
-                  </TooltipTrigger>
-                  <TooltipContent side="top" sideOffset={6}>
-                    {tick.kind}
-                  </TooltipContent>
-                </Tooltip>
-              ))
-            )}
+          <div className="flex h-3 overflow-hidden rounded-full">
+            <span className="bg-positive" style={{ width: `${(diff.added / span) * 100}%` }} />
+            <span className="bg-destructive" style={{ width: `${(diff.removed / span) * 100}%` }} />
           </div>
-          <div className="flex items-baseline justify-center gap-2">
-            <span className="text-heading text-foreground">{loose}</span>
-            <span className="text-ui text-muted-foreground">uncommitted</span>
+          <div className="flex items-baseline justify-center gap-4">
+            <span className="text-heading text-positive">+{diff.added}</span>
+            <span className="text-heading text-destructive">−{diff.removed}</span>
           </div>
         </div>
-
-        <div className="h-px bg-border" />
-
-        {/* Committed on this branch */}
-        {diff === null ? (
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-ui text-muted-foreground">
-              on <span className="font-mono text-foreground">{venue.branch}</span>
-            </span>
-            <span className="text-ui text-muted-foreground">no branch of its own</span>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <div className="flex h-3 overflow-hidden rounded-full">
-              <span className="bg-positive" style={{ width: `${(diff.added / span) * 100}%` }} />
-              <span
-                className="bg-destructive"
-                style={{ width: `${(diff.removed / span) * 100}%` }}
-              />
-            </div>
-            <div className="flex items-baseline justify-center gap-4">
-              <span className="text-heading text-positive">+{diff.added}</span>
-              <span className="text-heading text-destructive">−{diff.removed}</span>
-              <span className="text-ui text-muted-foreground">
-                {diff.files} files vs {diff.base}
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-      <ScopeCaption venue={venue} />
+      )}
     </div>
   );
+}
+
+/**
+ * MINIMISE — one number carries the surface, everything else is a footnote.
+ *
+ * The number is files touched HERE, because that is the one quantity that means
+ * the same thing in a worktree and in the main checkout.
+ */
+function VenueFigure({ venue }: { venue: Venue }) {
+  const n = counts(venue);
+  const diff = venue.diff;
+  return (
+    <div className="flex flex-col items-center gap-2">
+      {/* OFF-LADDER, and recorded as a finding rather than hidden: the type
+          scale tops out at `text-title` (24px), so a hero numeral has no rung.
+          Adopting this variant means arguing a new step into docs/DESIGN.md. */}
+      <span className="text-[3.5rem] leading-none font-light text-foreground tabular-nums">
+        {n.total}
+      </span>
+      <span className="text-ui text-muted-foreground">files touched here</span>
+      <div className="mt-2 flex items-center gap-3 text-ui">
+        {n.committed > 0 ? (
+          <span className="text-primary-text">{n.committed} committed</span>
+        ) : null}
+        {n.modified > 0 ? <span className="text-attention">{n.modified} modified</span> : null}
+        {n.added > 0 ? <span className="text-positive">{n.added} added</span> : null}
+        {n.untracked > 0 ? (
+          <span className="text-muted-foreground">{n.untracked} untracked</span>
+        ) : null}
+      </div>
+      {diff === null ? null : (
+        <div className="flex items-center gap-3 text-ui text-muted-foreground">
+          <span className="text-positive">+{diff.added}</span>
+          <span className="text-destructive">−{diff.removed}</span>
+          <span>committed vs {diff.base}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * COMMON CASE — one object, not two.
+ *
+ * The direct answer to "the stack feels unbalanced": there is no stack. Loose
+ * work and committed work are segments of a single bar, so the eye reads one
+ * quantity split by state instead of two charts competing for the same slot.
+ */
+function VenueSingleBar({ venue }: { venue: Venue }) {
+  const n = counts(venue);
+  const diff = venue.diff;
+  // The four states partition `total` by construction, so the segments sum to
+  // the headline. Deriving the committed count from `diff.files` instead double
+  // counted every file that was both committed and dirty.
+  const total = n.total;
+  const segments = [
+    { key: "committed", value: n.committed, tone: "bg-primary", label: "committed" },
+    { key: "modified", value: n.modified, tone: "bg-attention", label: "modified" },
+    { key: "added", value: n.added, tone: "bg-positive", label: "added" },
+    {
+      key: "untracked",
+      value: n.untracked,
+      tone: "bg-muted-foreground/40",
+      label: "untracked",
+    },
+  ].filter((segment) => segment.value > 0);
+
+  return (
+    <div className="flex w-80 flex-col gap-3">
+      <div className="flex h-8 gap-1 overflow-hidden rounded-full">
+        {segments.map((segment) => (
+          <Tooltip key={segment.key}>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  "h-full cursor-default first:rounded-l-full last:rounded-r-full",
+                  segment.tone,
+                )}
+                style={{ width: `${(segment.value / total) * 100}%` }}
+              />
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>
+              {segment.value} {segment.label}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+      <div className="flex items-baseline justify-center gap-2">
+        <span className="text-title text-foreground">{total}</span>
+        <span className="text-ui text-muted-foreground">
+          files {diff === null ? "loose here" : "in this worktree"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** MAXIMISE DENSITY — `git status` set properly. No card, no chart. */
+function VenueLedger({ venue }: { venue: Venue }) {
+  const n = counts(venue);
+  const diff = venue.diff;
+  const rows: Array<[string, React.ReactNode]> = [
+    [venue.kind === "main-checkout" ? "checkout" : "worktree", venue.path],
+    ["branch", venue.branch],
+    ...(diff === null
+      ? ([["base", "— none"]] as Array<[string, React.ReactNode]>)
+      : ([
+          ["base", diff.base],
+          [
+            "committed",
+            <span key="c">
+              <span className="text-positive">+{diff.added}</span>{" "}
+              <span className="text-destructive">−{diff.removed}</span>
+            </span>,
+          ],
+        ] as Array<[string, React.ReactNode]>)),
+    [
+      "loose",
+      <span key="l">
+        {n.modified}M {n.added}A {n.untracked}U
+      </span>,
+    ],
+  ];
+
+  return (
+    <dl className="grid w-96 grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-1 text-left font-mono text-ui">
+      {rows.map(([key, value]) => (
+        <React.Fragment key={key}>
+          <dt className="text-muted-foreground">{key}</dt>
+          <dd
+            className="truncate text-foreground"
+            title={typeof value === "string" ? value : undefined}
+          >
+            {value}
+          </dd>
+        </React.Fragment>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * BORROW THE VOCABULARY — changed-file rows with per-file diff gutters.
+ *
+ * The only variant that names anything concrete. Its risk is the opposite of
+ * the others': it stops being a glanceable identity signal and becomes a list
+ * you read, which on a busy tree is a wall.
+ */
+function VenueFiles({ venue }: { venue: Venue }) {
+  const widest = Math.max(...venue.files.map((file) => file.added + file.removed), 1);
+  return (
+    <div className="flex w-96 flex-col gap-1">
+      {venue.files.slice(0, 6).map((file) => {
+        const span = file.added + file.removed;
+        return (
+          <div key={file.path} className="flex items-center gap-2">
+            <span className={cn("size-1.5 shrink-0 rounded-full", STATE_TONE[file.state])} />
+            <span
+              className="min-w-0 flex-1 truncate text-left font-mono text-ui text-muted-foreground"
+              title={file.path}
+            >
+              {file.path}
+            </span>
+            <span className="flex h-1.5 w-20 shrink-0 gap-px overflow-hidden rounded-full">
+              {span === 0 ? (
+                <span className="w-full bg-border" />
+              ) : (
+                <>
+                  <span
+                    className="bg-positive"
+                    style={{ width: `${(file.added / widest) * 100}%` }}
+                  />
+                  <span
+                    className="bg-destructive"
+                    style={{ width: `${(file.removed / widest) * 100}%` }}
+                  />
+                </>
+              )}
+            </span>
+          </div>
+        );
+      })}
+      {venue.files.length > 6 ? (
+        <span className="pt-1 text-left text-ui text-muted-foreground">
+          +{venue.files.length - 6} more
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function VenueVisual({ venue, shape }: { venue: Venue; shape: VenueShape }) {
+  if (shape === "figure") return <VenueFigure venue={venue} />;
+  if (shape === "single-bar") return <VenueSingleBar venue={venue} />;
+  if (shape === "ledger") return <VenueLedger venue={venue} />;
+  if (shape === "files") return <VenueFiles venue={venue} />;
+  return <VenueStack venue={venue} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -553,14 +818,26 @@ function MarkVisual() {
   );
 }
 
-function EmptyChat({ visual, venue }: { visual: HomeVisual; venue: Venue }) {
+function EmptyChat({
+  visual,
+  venue,
+  project,
+  venueShape,
+  caption,
+}: {
+  visual: HomeVisual;
+  venue: Venue;
+  project: boolean;
+  venueShape: VenueShape;
+  caption: CaptionMode;
+}) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-gutter py-8 text-center">
+    <div className="flex flex-col items-center justify-center gap-6 px-gutter py-8 text-center">
       {visual === "mark" ? <MarkVisual /> : null}
-      {visual === "streak" ? <StreakVisual venue={venue} /> : null}
-      {visual === "board" ? <BoardVisual venue={venue} /> : null}
-      {visual === "board-dither" ? <BoardDitherVisual venue={venue} /> : null}
-      {visual === "venue" ? <VenueVisual venue={venue} /> : null}
+      {visual === "streak" ? <StreakVisual /> : null}
+      {visual === "board" ? <BoardVisual /> : null}
+      {visual === "venue" ? <VenueVisual venue={venue} shape={venueShape} /> : null}
+      <Caption mode={caption} venue={venue} project={project} />
     </div>
   );
 }
@@ -569,7 +846,7 @@ function EmptyChat({ visual, venue }: { visual: HomeVisual; venue: Venue }) {
 // Info surfaces — Home only. The ticket rail is a non-goal.
 
 function VenueBar({ venue }: { venue: Venue }) {
-  const { modified, added, untracked } = venue.dirty;
+  const n = counts(venue);
   return (
     <div className="flex shrink-0 items-center gap-4 border-b border-border px-4 py-2 font-mono text-ui text-muted-foreground">
       <span className="flex items-center gap-1">
@@ -582,7 +859,7 @@ function VenueBar({ venue }: { venue: Venue }) {
       </span>
       <span className="flex items-center gap-1 text-attention">
         <span className="size-2 rounded-full bg-attention" />
-        {modified + added + untracked}
+        {n.loose}
       </span>
       <span className="ml-auto">
         {SESSION_MODEL.model} · {SESSION_MODEL.effort}
@@ -592,7 +869,7 @@ function VenueBar({ venue }: { venue: Venue }) {
 }
 
 function InfoRail({ venue }: { venue: Venue }) {
-  const { modified, added, untracked } = venue.dirty;
+  const n = counts(venue);
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-sidebar">
       <section className="flex flex-col gap-2 px-4 py-4">
@@ -608,7 +885,7 @@ function InfoRail({ venue }: { venue: Venue }) {
             </span>
             <span className="flex shrink-0 items-center gap-1 text-ui text-attention">
               <span className="size-2 rounded-full bg-attention" />
-              {modified + added + untracked}
+              {n.loose}
             </span>
           </div>
         </div>
@@ -657,7 +934,27 @@ function InfoRail({ venue }: { venue: Venue }) {
   );
 }
 
-function FeedPreview() {
+function MentionChip({ id }: { id: string }) {
+  return (
+    <button
+      type="button"
+      className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-card px-2 align-baseline font-mono text-ui text-foreground transition-colors hover:border-primary/40 hover:text-primary-text"
+    >
+      <TicketIcon weight="bold" className="size-3 text-muted-foreground" />
+      {id}
+    </button>
+  );
+}
+
+/**
+ * A transcript, for the ONE question the empty state cannot answer: is the venue
+ * bar redundant?
+ *
+ * It only duplicates the empty state while the empty state is on screen — which
+ * is exactly as long as it takes to type one message. Judge the bar here, not
+ * on the empty surface.
+ */
+function Transcript() {
   return (
     <div className="mx-auto flex max-w-content flex-col gap-6 px-gutter py-8">
       <div className="flex flex-col gap-2">
@@ -671,7 +968,15 @@ function FeedPreview() {
         <span className="text-label uppercase text-muted-foreground">Agent</span>
         <p className="text-sm leading-prose text-foreground">
           The tab-strip half of <MentionChip id="VC-55" /> dissolves into <MentionChip id="VC-54" />{" "}
-          — after Home the two kinds never share a strip.
+          — after Home the two kinds never share a strip. The rail and the empty chat are the parts
+          that survive on their own.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="text-label uppercase text-muted-foreground">You</span>
+        <p className="text-sm leading-prose text-foreground">
+          Right — and now that the transcript has scrolled, nothing on this surface says which
+          directory the session is touching.
         </p>
       </div>
     </div>
@@ -681,7 +986,21 @@ function FeedPreview() {
 // ---------------------------------------------------------------------------
 // Surface
 
-function Surface({ project, visual, info }: { project: boolean; visual: HomeVisual; info: Info }) {
+function Surface({
+  project,
+  visual,
+  info,
+  venueShape,
+  caption,
+  transcript,
+}: {
+  project: boolean;
+  visual: HomeVisual;
+  info: Info;
+  venueShape: VenueShape;
+  caption: CaptionMode;
+  transcript: boolean;
+}) {
   const venue = project ? MAIN_CHECKOUT : TICKET_WORKTREE;
   const Glyph = project ? CompassIcon : ChatCircleIcon;
   const PermanentGlyph = project ? KanbanIcon : TicketIcon;
@@ -741,8 +1060,23 @@ function Surface({ project, visual, info }: { project: boolean; visual: HomeVisu
 
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
-            <EmptyChat visual={visual} venue={venue} />
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 overflow-y-auto",
+              transcript ? "flex-col" : "items-center justify-center",
+            )}
+          >
+            {transcript ? (
+              <Transcript />
+            ) : (
+              <EmptyChat
+                visual={visual}
+                venue={venue}
+                project={project}
+                venueShape={venueShape}
+                caption={caption}
+              />
+            )}
           </div>
           <div className="shrink-0 px-4 pb-4">
             <div className="mx-auto flex max-w-content flex-col gap-2 rounded-container border border-border bg-card p-4 shadow-raised">
@@ -794,13 +1128,16 @@ function AxisPicker<T extends string>({
 }
 
 export default function ProjectSessionIdentityScratch() {
-  // Two pickers, not one: this is the shape the Settings control would take —
-  // a default per scope, chosen from that scope's legal set. The ticket set
-  // being shorter is the point, not an omission.
+  // Two visual pickers, not one: this is the shape the Settings control would
+  // take — a default per scope, chosen from that scope's legal set.
   const [homeVisual, setHomeVisual] = React.useState<HomeVisual>("streak");
   const [ticketVisual, setTicketVisual] = React.useState<TicketVisual>("venue");
-  const [info, setInfo] = React.useState<Info>("venue-bar");
+  const [venueShape, setVenueShape] = React.useState<VenueShape>("single-bar");
+  const [caption, setCaption] = React.useState<CaptionMode>("chips");
+  const [info, setInfo] = React.useState<Info>("none");
   const [view, setView] = React.useState<View>("both");
+
+  const transcript = view === "feed";
 
   return (
     // The app shell mounts this once at its root; a scratch that uses `Tooltip`
@@ -808,21 +1145,29 @@ export default function ProjectSessionIdentityScratch() {
     <TooltipProvider>
       <div className="flex h-svh w-full flex-col bg-rail">
         <div className="flex min-h-0 flex-1 gap-2 p-2 pb-16">
-          {view === "feed" ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-xl border border-border bg-background">
-              <FeedPreview />
-            </div>
-          ) : (
-            <>
-              {view !== "ticket" ? <Surface project visual={homeVisual} info={info} /> : null}
-              {view !== "home" ? (
-                <Surface project={false} visual={ticketVisual} info={info} />
-              ) : null}
-            </>
+          {view === "ticket" ? null : (
+            <Surface
+              project
+              visual={homeVisual}
+              info={info}
+              venueShape={venueShape}
+              caption={caption}
+              transcript={transcript}
+            />
+          )}
+          {view === "home" || view === "feed" ? null : (
+            <Surface
+              project={false}
+              visual={ticketVisual}
+              info={info}
+              venueShape={venueShape}
+              caption={caption}
+              transcript={false}
+            />
           )}
         </div>
 
-        <div className="fixed bottom-3 left-3 z-[9998] flex max-w-[calc(100vw-14rem)] flex-wrap items-center gap-4 rounded-full border border-border bg-background/90 px-4 py-2 shadow-overlay backdrop-blur">
+        <div className="fixed bottom-3 left-3 z-[9998] flex max-w-[calc(100vw-14rem)] flex-wrap items-center gap-3 rounded-full border border-border bg-background/90 px-4 py-2 shadow-overlay backdrop-blur">
           <AxisPicker
             label="Home"
             value={homeVisual}
@@ -835,11 +1180,20 @@ export default function ProjectSessionIdentityScratch() {
             options={TICKET_VISUAL_LABELS}
             onChange={setTicketVisual}
           />
+          <AxisPicker
+            label="Venue"
+            value={venueShape}
+            options={VENUE_SHAPE_LABELS}
+            onChange={setVenueShape}
+          />
+          <AxisPicker
+            label="Caption"
+            value={caption}
+            options={CAPTION_LABELS}
+            onChange={setCaption}
+          />
           <AxisPicker label="Info" value={info} options={INFO_LABELS} onChange={setInfo} />
           <AxisPicker label="View" value={view} options={VIEW_LABELS} onChange={setView} />
-          <code className="font-mono text-label text-muted-foreground">
-            {homeVisual} / {ticketVisual}
-          </code>
         </div>
       </div>
     </TooltipProvider>
