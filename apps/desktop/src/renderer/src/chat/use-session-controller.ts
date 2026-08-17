@@ -105,6 +105,8 @@ export interface SessionController {
   /** The single action an error row offers; which one it is is the client's call. */
   recover(): Promise<boolean>;
   retryRuntime(): Promise<boolean>;
+  /** Clears the error band — see {@link ChatSessionClient.dismissError}. */
+  dismissError(): void;
   close(): void;
 }
 
@@ -204,6 +206,10 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
       getChatClient(sessionId)?.cancelInteraction(interactionId) ?? refused,
     recover: () => getChatClient(sessionId)?.recover() ?? refused,
     retryRuntime: () => getChatClient(sessionId)?.retryRuntime() ?? refused,
+    // No client is no band: there is nothing on screen asking to be dismissed.
+    dismissError: () => {
+      getChatClient(sessionId)?.dismissError();
+    },
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

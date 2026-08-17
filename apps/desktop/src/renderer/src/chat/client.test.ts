@@ -28,8 +28,12 @@ import { getChatClient } from "@renderer/chat/registry";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { rejectedReceipt } from "@renderer/chat/wire";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { toast } from "sonner";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+/** The last error toast's message — the one surface event failures speak to. */
+const lastToast = (): unknown => vi.mocked(toast.error).mock.calls.at(-1)?.[0];
 
 /* ------------------------------------------------------------------ scripts */
 
@@ -1004,6 +1008,115 @@ describe("recover", () => {
     await expect(client.recover()).resolves.toBe(false);
     expect(rpc.commands).toHaveLength(0);
   });
+
+  it("reopens a stream it terminally lost — the failure the band names (VC-97)", async () => {
+    // The defect this regression pins: `Lost the Session stream` used to be
+    // answered with a reconcile alone, which repairs the durable binding and
+    // NOT the renderer's subscription — so Retry could report success, clear
+    // the band, and leave the transcript frozen behind it.
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up again");
+    const streamsAtLoss = rpc.streams.length;
+
+    await expect(client.recover()).resolves.toBe(true);
+    await settle();
+
+    expect(rpc.reconciles).toEqual([{ sessionId: expect.any(String), attachmentId: "attach-1" }]);
+    expect(rpc.streams.length).toBeGreaterThan(streamsAtLoss);
+    expect(rpc.streams.at(-1)!.unsubscribed).toBe(false);
+  });
+
+  it("does not churn a healthy stream on recover", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    await settle();
+    const streamsBefore = rpc.streams.length;
+
+    await expect(client.recover()).resolves.toBe(true);
+    await settle();
+
+    expect(rpc.streams.length).toBe(streamsBefore);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("latches a reconciliation the harness refused — recovery is plumbing", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+      fake.answerReconcile = () => REFUSED;
+    });
+
+    await expect(client.recover()).resolves.toBe(false);
+
+    expect(slice()!.sessionError).toBe("Reconcile: Pi is unavailable");
+  });
+
+  it("latches a reconciliation the transport dropped", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+      fake.answerReconcile = () => {
+        throw new Error("socket hang up");
+      };
+    });
+
+    await expect(client.recover()).resolves.toBe(false);
+
+    expect(slice()!.sessionError).toBe("Reconcile: socket hang up");
+  });
+});
+
+describe("dismissError", () => {
+  it("clears the latch without demanding anything of the transport", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    expect(slice()!.sessionError).not.toBeNull();
+    const streamsAtLoss = rpc.streams.length;
+
+    client.dismissError();
+    await settle();
+
+    expect(slice()!.sessionError).toBeNull();
+    expect(slice()!.lifecycle).toBe("ready");
+    // A dead stream is quietly reopened: a dismissal that left the transcript
+    // frozen would trade an honest band for an invisible one.
+    expect(rpc.streams.length).toBeGreaterThan(streamsAtLoss);
+    expect(rpc.reconciles).toHaveLength(0);
+  });
+
+  it("is a plain clear while the stream is healthy", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    await settle();
+    const streamsBefore = rpc.streams.length;
+
+    client.dismissError();
+    await settle();
+
+    expect(slice()!.sessionError).toBeNull();
+    expect(rpc.streams.length).toBe(streamsBefore);
+  });
 });
 
 describe("retryRuntime", () => {
@@ -1382,33 +1495,47 @@ describe("commands addressed to an attachment", () => {
     expect(rpc.reconciles).toHaveLength(0);
   });
 
-  it("clears a standing failure once the next command lands", async () => {
-    let attempts = 0;
-    const { client, slice } = await adopted((fake) => {
-      fake.answerCancel = () => {
-        attempts += 1;
-        return attempts === 1 ? REFUSED : ACCEPTED;
-      };
+  it("keeps a standing transport failure until recovery, not the next command", async () => {
+    // The old bargain — any successful command clears the latch — is what let
+    // a reconcile round trip hide a frozen stream: an unrelated command's
+    // success proves nothing about the failure the band names. A transport
+    // failure now stands until recovered or dismissed (VC-97).
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
     });
-    await client.cancelInteraction("ask-1");
-    expect(slice()!.lifecycle).toBe("error");
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up again");
 
     await client.cancelInteraction("ask-1");
+
+    expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up again");
+
+    await client.recover();
 
     expect(slice()!.sessionError).toBeNull();
-    expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("reports a command the harness refused", async () => {
+  it("toasts a command the harness refused, without latching the Session", async () => {
     const { client, slice } = await adopted((fake) => {
       fake.answerCancel = () => REFUSED;
     });
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Decision not cancelled: Pi is unavailable");
+
+    // A refused withdrawal is a moment, not a state: the card it addressed is
+    // still on screen saying so, so the failure is toasted and the Session's
+    // plumbing is not implicated.
+    expect(lastToast()).toBe("Decision not cancelled: Pi is unavailable");
+    expect(slice()!.sessionError).toBeNull();
+    expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("reports a command the transport dropped", async () => {
+  it("toasts a command the transport dropped, without latching the Session", async () => {
     const { client, slice } = await adopted((fake) => {
       fake.answerCancel = () => {
         throw new Error("socket hang up");
@@ -1416,7 +1543,9 @@ describe("commands addressed to an attachment", () => {
     });
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Decision not cancelled: socket hang up");
+
+    expect(lastToast()).toBe("Decision not cancelled: socket hang up");
+    expect(slice()!.sessionError).toBeNull();
   });
 });
 

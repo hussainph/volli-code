@@ -538,6 +538,14 @@ export interface SessionBlockerState {
   secondaryAction?: SessionBlockerAction | null;
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
+  /**
+   * Present only where the row reports renderer-local state the reader may
+   * retire without anyone's permission — the Session's own transport latch.
+   * Durable facts (attention, the catalog, the pinned model) carry no dismiss:
+   * they block typing for reasons a click cannot change, and a row that hid
+   * one would be promising the typing works when it does not.
+   */
+  dismiss?: SessionBlockerAction;
 }
 
 /** What the plane reads to decide whether anything is stopping the typing. */
@@ -562,6 +570,8 @@ export interface SessionBlockerActs {
   openSettings(): void;
   /** Opens Model Access AT the named provider's sign-in — never merely the category. */
   signIn(providerId: string): void;
+  /** Retires the transport latch the error row reports; see {@link SessionBlockerState.dismiss}. */
+  dismiss(): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -586,7 +596,9 @@ export function terminalCompanionTabId(
  * Four sources, in the order they answer:
  *
  * 1. `sessionError` — this Session's own transport. If the stream is gone the
- *    attention we hold is a memory, so it does not get to speak over it.
+ *    attention we hold is a memory, so it does not get to speak over it. It is
+ *    also the one row carrying a dismiss, because it alone reports state this
+ *    surface owns rather than a durable fact about the harness.
  * 2. `sessionModel` — the Session is pinned to a model this profile cannot run.
  *    It outranks the attention because every failure such a Session will ever
  *    raise is downstream of this one fact, the harness's own report of it names
@@ -614,7 +626,15 @@ export function sessionBlocker(
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
   if (input.sessionError !== null) {
-    return { message: input.sessionError, detail: null, tone: "error", action: retry };
+    return {
+      message: input.sessionError,
+      detail: null,
+      tone: "error",
+      action: retry,
+      // The latch is this surface's own state, so the reader may retire it —
+      // the failure it names stays recoverable through Retry either way.
+      dismiss: { label: "Dismiss", act: acts.dismiss },
+    };
   }
   // Only a catalog that has answered may accuse the Session's model: while it
   // loads, every model reads as unavailable.
