@@ -188,6 +188,31 @@ const BOARD = [
   { column: "Done", count: 24 },
 ] as const;
 
+/**
+ * The rail's Sessions page. PROJECT sessions only — a ticket's sessions live in
+ * that ticket's own rail, and listing them here would make Home a second index
+ * of the same rows.
+ */
+const PROJECT_SESSIONS = [
+  { id: "s1", title: "Shape the 0.1.0 train", ago: "now", state: "working" as const, open: true },
+  {
+    id: "s2",
+    title: "Triage the AX feedback batch",
+    ago: "2h",
+    state: "waiting" as const,
+    open: false,
+  },
+  { id: "s3", title: "Release notes draft", ago: "yesterday", state: "idle" as const, open: false },
+  {
+    id: "s4",
+    title: "Why is the CLI socket flaky?",
+    ago: "3d",
+    state: "idle" as const,
+    open: false,
+  },
+  { id: "s5", title: "Board cleanup pass", ago: "1w", state: "idle" as const, open: false },
+] as const;
+
 const MENTIONED = [
   { id: "VC-54", title: "Home taxonomy: board becomes a tabbed Home" },
   { id: "VC-75", title: "Active-session discoverability" },
@@ -307,9 +332,10 @@ function streakRamp(): string[] {
 
 type HomeVisual = "mark" | "streak" | "board" | "venue";
 type TicketVisual = "mark" | "venue";
-type VenueShape = "stack" | "figure" | "single-bar" | "ledger" | "files";
+type VenueShape = "unified" | "stack" | "figure" | "single-bar" | "ledger" | "files";
 type CaptionMode = "none" | "path" | "chips" | "greeter";
-type Info = "none" | "rail" | "venue-bar";
+type Info = "none" | "rail";
+type RailPage = "now" | "sessions";
 type View = "home" | "ticket" | "both" | "feed";
 
 const HOME_VISUAL_LABELS: Record<HomeVisual, string> = {
@@ -325,6 +351,7 @@ const TICKET_VISUAL_LABELS: Record<TicketVisual, string> = {
 };
 
 const VENUE_SHAPE_LABELS: Record<VenueShape, string> = {
+  unified: "Unified (bar + diff)",
   stack: "Stack (pass 3)",
   figure: "Figure",
   "single-bar": "Single bar",
@@ -342,7 +369,11 @@ const CAPTION_LABELS: Record<CaptionMode, string> = {
 const INFO_LABELS: Record<Info, string> = {
   none: "None (today)",
   rail: "Rail (⌥⌘B) — Home only",
-  "venue-bar": "Venue bar — Home only",
+};
+
+const RAIL_PAGE_LABELS: Record<RailPage, string> = {
+  now: "Now",
+  sessions: "Sessions",
 };
 
 const VIEW_LABELS: Record<View, string> = {
@@ -389,6 +420,40 @@ function greeters(project: boolean, hour: number): string[] {
       ];
 }
 
+/**
+ * One scope chip: capped width, ellipsised, full value on hover.
+ *
+ * The cap is on the CHIP, not the text, so a long branch name can never push the
+ * row wider than the drawing it sits under — which is what made these read as
+ * thrown together rather than composed. `min-w-0` on the label is what actually
+ * lets `truncate` fire inside a flex row; without it the text sets the width and
+ * the cap never bites.
+ */
+function ScopeChip({
+  icon: Icon,
+  full,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string; weight?: "bold" }>;
+  /** The untruncated value — the tooltip's whole reason to exist. */
+  full: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex h-7 max-w-48 cursor-default items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground">
+          <Icon weight="bold" className="size-3 shrink-0" />
+          <span className="min-w-0 truncate">{children}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6} className="font-mono">
+        {full}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; project: boolean }) {
   const [cycle, setCycle] = React.useState(0);
   if (mode === "none") return null;
@@ -411,20 +476,12 @@ function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; pr
   if (mode === "chips") {
     return (
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span
-          className="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground"
-          title={venue.path}
-        >
-          <FolderOpenIcon weight="bold" className="size-3" />
+        <ScopeChip icon={FolderOpenIcon} full={venue.path}>
           {venue.kind === "main-checkout" ? "Main checkout" : "Worktree"}
-        </span>
-        <span
-          className="inline-flex h-7 max-w-56 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground"
-          title={venue.branch}
-        >
-          <GitBranchIcon weight="bold" className="size-3 shrink-0" />
-          <span className="truncate">{venue.branch}</span>
-        </span>
+        </ScopeChip>
+        <ScopeChip icon={GitBranchIcon} full={venue.branch}>
+          {venue.branch}
+        </ScopeChip>
       </div>
     );
   }
@@ -568,6 +625,106 @@ function BoardVisual() {
 
 // ---------------------------------------------------------------------------
 // VENUE ×5 — design it twice (and then three more times)
+
+/**
+ * UNIFIED — the single bar and the stack's diff bar as ONE object.
+ *
+ * The stack failed because it was two centred charts with a rule between them:
+ * two silhouettes competing for the same slot, neither anchoring the other. The
+ * fix is not to shrink one of them, it is to stop them being two objects.
+ *
+ * So: one rounded body, two registers sharing its exact width and its corner
+ * radius. The thick track partitions FILES by state; the hairline track under it
+ * splits LINES added against removed. Same left edge, same right edge, one
+ * outline — the eye reads a single instrument with two scales, the way a level
+ * has a bubble and a rule.
+ *
+ * They are different units on purpose, and that is why the object works: files
+ * answer "how much of this tree is in play", lines answer "how much work is in
+ * it". Stacking two file-count bars would just be a bar chart with two rows.
+ *
+ * A venue with no base to diff (the main checkout) drops the hairline entirely
+ * rather than drawing an empty one — an empty track reads as "no work", which is
+ * the opposite of what a dirty main checkout means.
+ */
+function VenueUnified({ venue }: { venue: Venue }) {
+  const n = counts(venue);
+  const diff = venue.diff;
+  const span = diff === null ? 0 : diff.added + diff.removed;
+  const segments = [
+    { key: "committed", value: n.committed, tone: "bg-primary", label: "committed" },
+    { key: "modified", value: n.modified, tone: "bg-attention", label: "modified" },
+    { key: "added", value: n.added, tone: "bg-positive", label: "added" },
+    {
+      key: "untracked",
+      value: n.untracked,
+      tone: "bg-muted-foreground/40",
+      label: "untracked",
+    },
+  ].filter((segment) => segment.value > 0);
+
+  return (
+    <div className="flex w-80 flex-col gap-3">
+      {/* One silhouette: the wrapper owns the radius and clips both tracks, so
+          neither can round its own corners and become a separate object. */}
+      <div className="flex flex-col overflow-hidden rounded-control">
+        <div className="flex h-8">
+          {segments.map((segment) => (
+            <Tooltip key={segment.key}>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn("h-full cursor-default", segment.tone)}
+                  style={{ width: `${(segment.value / n.total) * 100}%` }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={6}>
+                {segment.value} {segment.label}
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+        {diff === null ? null : (
+          <div className="flex h-1.5 border-t border-background">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="h-full cursor-default bg-positive"
+                  style={{ width: `${(diff.added / span) * 100}%` }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                {diff.added} lines added
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="h-full cursor-default bg-destructive"
+                  style={{ width: `${(diff.removed / span) * 100}%` }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                {diff.removed} lines removed
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-baseline justify-center gap-3">
+        <span className="text-title text-foreground">{n.total}</span>
+        <span className="text-ui text-muted-foreground">files</span>
+        {diff === null ? null : (
+          <>
+            <span className="text-ui text-positive">+{diff.added}</span>
+            <span className="text-ui text-destructive">−{diff.removed}</span>
+            <span className="text-ui text-muted-foreground">vs {diff.base}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /** CONTROL — pass 3's two stacked reads in one card. */
 function VenueStack({ venue }: { venue: Venue }) {
@@ -801,6 +958,7 @@ function VenueFiles({ venue }: { venue: Venue }) {
 }
 
 function VenueVisual({ venue, shape }: { venue: Venue; shape: VenueShape }) {
+  if (shape === "unified") return <VenueUnified venue={venue} />;
   if (shape === "figure") return <VenueFigure venue={venue} />;
   if (shape === "single-bar") return <VenueSingleBar venue={venue} />;
   if (shape === "ledger") return <VenueLedger venue={venue} />;
@@ -845,34 +1003,94 @@ function EmptyChat({
 // ---------------------------------------------------------------------------
 // Info surfaces — Home only. The ticket rail is a non-goal.
 
-function VenueBar({ venue }: { venue: Venue }) {
-  const n = counts(venue);
+/**
+ * The rail's page switcher — the ticket rail's centred pill, with this surface's
+ * two pages. Presentational; the page lives in the caller's state.
+ */
+function RailTabs({ page, onSelect }: { page: RailPage; onSelect(next: RailPage): void }) {
   return (
-    <div className="flex shrink-0 items-center gap-4 border-b border-border px-4 py-2 font-mono text-ui text-muted-foreground">
-      <span className="flex items-center gap-1">
-        <FolderOpenIcon weight="bold" className="size-3" />
-        {venue.path}
-      </span>
-      <span className="flex items-center gap-1">
-        <GitBranchIcon weight="bold" className="size-3" />
-        {venue.branch}
-      </span>
-      <span className="flex items-center gap-1 text-attention">
-        <span className="size-2 rounded-full bg-attention" />
-        {n.loose}
-      </span>
-      <span className="ml-auto">
-        {SESSION_MODEL.model} · {SESSION_MODEL.effort}
-      </span>
+    <div className="sticky top-0 z-20 shrink-0 bg-sidebar/70 px-4 pt-4 pb-4 backdrop-blur-xl">
+      <div
+        role="tablist"
+        aria-label="Home rail pages"
+        className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
+      >
+        {(Object.keys(RAIL_PAGE_LABELS) as RailPage[]).map((key) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={page === key}
+            onClick={() => onSelect(key)}
+            className={cn(
+              "h-8 flex-1 rounded-full text-ui transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+              page === key
+                ? "bg-accent text-foreground shadow-raised"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+            )}
+          >
+            {RAIL_PAGE_LABELS[key]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * SESSIONS — project session history, and ONLY project sessions.
+ *
+ * The scoping is the decision, not a filter: a ticket's sessions already have a
+ * home in that ticket's own rail, so listing them here would make Home a second
+ * index of the same rows. What has no home today is the project session you
+ * closed — which is also VC-54's "closed project-session tabs are reopenable
+ * from Home". This page IS that surface; the two tickets should not build it
+ * twice.
+ */
+function RailSessions() {
+  return (
+    <div className="flex flex-col gap-2 px-4 pb-8">
+      <h3 className="text-label uppercase text-muted-foreground">Project sessions</h3>
+      <div className="flex flex-col gap-px">
+        {PROJECT_SESSIONS.map((session) => (
+          <button
+            key={session.id}
+            type="button"
+            className="flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              {session.state === "idle" ? (
+                <span className="size-1.5 shrink-0 rounded-full bg-transparent" />
+              ) : (
+                <StatusDot state={session.state} />
+              )}
+              <span
+                className={cn(
+                  "min-w-0 truncate text-ui",
+                  session.open ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {session.title}
+              </span>
+            </span>
+            <span className="pl-3.5 text-ui text-muted-foreground">
+              {session.open ? "Open" : session.ago}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
 function InfoRail({ venue }: { venue: Venue }) {
   const n = counts(venue);
+  const [page, setPage] = React.useState<RailPage>("now");
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-sidebar">
-      <section className="flex flex-col gap-2 px-4 py-4">
+      <RailTabs page={page} onSelect={setPage} />
+      {page === "sessions" ? <RailSessions /> : null}
+      <section className={cn("flex flex-col gap-2 px-4 pb-4", page !== "now" && "hidden")}>
         <h3 className="text-label uppercase text-muted-foreground">Venue</h3>
         <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
           <p className="truncate font-mono text-ui text-foreground" title={venue.path}>
@@ -891,7 +1109,7 @@ function InfoRail({ venue }: { venue: Venue }) {
         </div>
       </section>
 
-      <section className="flex flex-col gap-2 px-4 py-4">
+      <section className={cn("flex flex-col gap-2 px-4 py-4", page !== "now" && "hidden")}>
         <h3 className="text-label uppercase text-muted-foreground">Session</h3>
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
@@ -915,7 +1133,7 @@ function InfoRail({ venue }: { venue: Venue }) {
       {/* MENTIONED, not "Touched": the word states the mechanism. A ticket is
           here because someone wrote `@vc-nn` — the same taxonomy that makes it
           a backlink chip in the feed. One vocabulary, two surfaces. */}
-      <section className="flex flex-col gap-2 px-4 py-4">
+      <section className={cn("flex flex-col gap-2 px-4 py-4", page !== "now" && "hidden")}>
         <h3 className="text-label uppercase text-muted-foreground">Mentioned</h3>
         <div className="flex flex-col gap-1">
           {MENTIONED.map((row) => (
@@ -1056,8 +1274,6 @@ function Surface({
         ))}
       </TabStrip>
 
-      {project && info === "venue-bar" ? <VenueBar venue={venue} /> : null}
-
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
@@ -1132,7 +1348,7 @@ export default function ProjectSessionIdentityScratch() {
   // take — a default per scope, chosen from that scope's legal set.
   const [homeVisual, setHomeVisual] = React.useState<HomeVisual>("streak");
   const [ticketVisual, setTicketVisual] = React.useState<TicketVisual>("venue");
-  const [venueShape, setVenueShape] = React.useState<VenueShape>("single-bar");
+  const [venueShape, setVenueShape] = React.useState<VenueShape>("unified");
   const [caption, setCaption] = React.useState<CaptionMode>("chips");
   const [info, setInfo] = React.useState<Info>("none");
   const [view, setView] = React.useState<View>("both");
