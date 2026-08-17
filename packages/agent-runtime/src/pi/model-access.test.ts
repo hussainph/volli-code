@@ -231,18 +231,23 @@ describe("inspectPiModelAccess error containment", () => {
     expect(JSON.stringify(resolved)).not.toContain(secret);
   });
 
-  it("keeps a timed-out probe's provider text out of the snapshot too", async () => {
+  it("keeps a timed-out probe's provider text out of the snapshot without aborting it", async () => {
     vi.useFakeTimers();
     const secret = "sk-timeout-secret";
+    let probeSignal: AbortSignal | undefined;
     const models = fakeModels([
       {
         provider: provider("hung"),
-        // Honors the signal and rejects with a secret the moment the timeout
-        // aborts it — the snapshot must still carry none of that text.
-        checkAuth: (signal) =>
-          new Promise((_resolve, reject) =>
-            signal?.addEventListener("abort", () => reject(new Error(secret)), { once: true }),
-          ),
+        // A timeout stops waiting but does not interrupt a live credential
+        // refresh: a refresh token can rotate before the credential store
+        // persists its replacement. This rejection lands after the snapshot
+        // and must still remain contained by allSettled.
+        checkAuth: (signal) => {
+          probeSignal = signal;
+          return new Promise((_resolve, reject) =>
+            setTimeout(() => reject(new Error(secret)), PROBE_TIMEOUT_MS + 1),
+          );
+        },
         getAvailable: forever,
       },
     ]);
@@ -252,7 +257,10 @@ describe("inspectPiModelAccess error containment", () => {
     const resolved = await snapshot;
 
     expect(providersById(resolved.providers).hung?.state).toBe("unavailable");
+    expect(probeSignal).toBeInstanceOf(AbortSignal);
+    expect(probeSignal?.aborted).toBe(false);
     expect(JSON.stringify(resolved)).not.toContain(secret);
+    await vi.advanceTimersByTimeAsync(1);
   });
 });
 

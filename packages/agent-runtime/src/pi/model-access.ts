@@ -164,8 +164,10 @@ interface ProbeResult {
  * within `timeoutMs`, the provider is reported `unavailable`, the same direction
  * a rejected probe takes, and the rest of the snapshot proceeds without it. The
  * bound holds even when a call ignores its signal, because the race resolves on
- * the timer rather than on the call; aborting the calls when the timer or the
- * caller fires is best-effort cleanup so an abandoned request does not linger.
+ * the timer rather than on the call. The timer deliberately does not abort an
+ * in-flight credential refresh: OAuth servers can rotate a refresh token before
+ * its replacement has been persisted locally. Caller cancellation is still
+ * relayed to the pair while this inspection is live.
  *
  * Nothing here surfaces an error: a rejection is collapsed to `probeFailed`, so
  * no provider response text — a token echoed in a message, a refused key — can
@@ -183,7 +185,9 @@ async function probeProvider(
   callerSignal?.addEventListener("abort", abortForCaller, { once: true });
   const timedOut = Promise.withResolvers<"timeout">();
   const timer = setTimeout(() => {
-    controller.abort();
+    // Stop awaiting the probe but do not interrupt an OAuth refresh. It may
+    // have already rotated its credential server-side and still need to write
+    // the replacement locally; the race itself provides the inspection bound.
     timedOut.resolve("timeout");
   }, timeoutMs);
   try {
