@@ -10,8 +10,7 @@ import type {
   SessionHarnessNotice,
   SessionStartedNotice,
 } from "../ipc/contract";
-import type { TicketSessionStartInput } from "./session-runtime/ticket-sessions";
-import { StructuredSessionsError } from "./session-runtime/structured-sessions";
+import { StructuredSessionsError, type SessionStartInput } from "./session-runtime/sessions";
 
 import { createAttachment } from "./db/attachments-repo";
 import { listHarnessChannels } from "./db/harness-channel-repo";
@@ -3235,7 +3234,7 @@ describe("session.start", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
     );
-    const startInputs: TicketSessionStartInput[] = [];
+    const startInputs: SessionStartInput[] = [];
     const kickoffs: { sessionId: string; text: string }[] = [];
     const mutations: unknown[] = [];
     const notices: SessionStartedNotice[] = [];
@@ -3248,8 +3247,8 @@ describe("session.start", () => {
       ...(overrides.withoutFacade
         ? {}
         : {
-            ticketSessions: {
-              start: async (input: TicketSessionStartInput) => {
+            sessions: {
+              start: async (input: SessionStartInput) => {
                 startInputs.push(input);
                 if (overrides.startError !== undefined) throw overrides.startError;
                 return {
@@ -3469,7 +3468,7 @@ describe("session.start", () => {
         appVersion: "1.2.3",
         now: () => 1_000,
         newId: () => "generated-1",
-        ticketSessions: {
+        sessions: {
           start: async () => ({
             sessionId: startedSessionId,
             state: "ready" as const,

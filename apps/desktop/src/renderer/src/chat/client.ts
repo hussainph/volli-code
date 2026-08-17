@@ -343,11 +343,7 @@ export interface ChatSessionTransport {
     /** Skill slugs to inject at attach time. Absent means none. */
     skills?: readonly string[];
   }): Promise<{ sessionId: string }>;
-  attachSession(input: {
-    operationId: string;
-    sessionId: string;
-    bornTicketless: boolean;
-  }): Promise<ProductSessionResult>;
+  attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
 
 export interface ChatSessionClientDeps extends ChatSessionTransport {
@@ -363,31 +359,22 @@ export function browserChatTransport(): ChatSessionTransport {
     rpc,
     scheduler: racingFlushScheduler(window),
     newCommandId: () => crypto.randomUUID(),
+    // One procedure per verb: the nullable ticketId IS the Role on create,
+    // and an attach needs no Role at all — the server owns the Session's
+    // durable state, so nothing here re-derives what it already knows.
     createSession: (input) =>
-      input.ticketId === null
-        ? rpc.projectSessions.create.mutate({
-            operationId: input.operationId,
-            projectId: input.projectId,
-            title: input.title,
-            ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
-          })
-        : rpc.ticketSessions.create.mutate({
-            operationId: input.operationId,
-            projectId: input.projectId,
-            ticketId: input.ticketId,
-            title: input.title,
-            ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
-          }),
+      rpc.sessions.create.mutate({
+        operationId: input.operationId,
+        projectId: input.projectId,
+        ticketId: input.ticketId,
+        title: input.title,
+        ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
+      }),
     attachSession: (input) =>
-      input.bornTicketless
-        ? rpc.projectSessions.attach.mutate({
-            operationId: input.operationId,
-            sessionId: input.sessionId,
-          })
-        : rpc.ticketSessions.attach.mutate({
-            operationId: input.operationId,
-            sessionId: input.sessionId,
-          }),
+      rpc.sessions.attach.mutate({
+        operationId: input.operationId,
+        sessionId: input.sessionId,
+      }),
   };
 }
 
@@ -507,7 +494,6 @@ export class ChatSessionClient {
       const attached = await this.#attachSession({
         operationId: this.#newCommandId(),
         sessionId: this.sessionId,
-        bornTicketless: slice.projection.bornTicketless,
       });
       const refusal = rejectedReceipt(attached);
       const failure =

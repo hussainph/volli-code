@@ -20,6 +20,7 @@ import {
 } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
+import { UpdateInstallDialog } from "@renderer/components/update/update-install-dialog";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
@@ -589,6 +590,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       <Toaster />
       <NewTicketDialog />
       <HarnessTrustDialog />
+      <UpdateInstallDialog />
     </SidebarProvider>
   );
 }
