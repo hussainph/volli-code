@@ -524,7 +524,7 @@ function RowActions({ row }: { row: ActivityRow }) {
 /* -------------------------------------------------------------------- detail */
 
 const DETAIL_FRAME =
-  "max-h-72 overflow-auto overscroll-contain rounded-md border border-border/50 bg-muted/30 p-2 font-mono text-ui leading-5";
+  "max-h-72 overflow-auto rounded-md border border-border/50 bg-muted/30 p-2 font-mono text-ui leading-5";
 
 /**
  * The detail is a window, not a dump — and it is flush, not indented.
@@ -550,6 +550,14 @@ const DETAIL_FRAME =
  * from `--card`, and the same distance the other way from `--background`. Mixing
  * it the way the frame mixes it is the only value that leaves no edge, which is
  * why {@link DETAIL_FRAME}'s fill and this ramp must be changed together.
+ *
+ * The window scrolls, and at its edges the wheel CHAINS — no
+ * `overscroll-contain`. Contain turned the cap into a wheel trap: at the
+ * payload's top or bottom the transcript under the cursor went dead, and the
+ * reader had to go find a strip of plain transcript to scroll the feed at all
+ * (VC-32). Default overscroll behavior is the boundary the cap needs: inside
+ * the window the payload scrolls, at its edge the feed takes over, exactly
+ * like every nested scroller the platform ships.
  */
 function DetailFrame({
   revision,
@@ -721,7 +729,10 @@ export const ActivityBundle = React.memo(
         </button>
         <Disclosure open={open}>
           <div className="relative">
-            <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto overscroll-contain")}>
+            {/* No `overscroll-contain`: at the bundle's edges the wheel must
+                chain to the transcript, or the feed reads as dead under the
+                cursor for the whole height of the open bundle (VC-32). */}
+            <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto")}>
               {list}
             </div>
             {clipped ? (
