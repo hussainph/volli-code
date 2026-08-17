@@ -20,7 +20,8 @@ import type {
 } from "../ipc/contract";
 import { StructuredSessionsError, type SessionStartInput } from "./session-runtime/sessions";
 
-import { createAttachment } from "./db/attachments-repo";
+import { importBlob } from "./blob-import";
+import { blobsRoot } from "./blob-store";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
@@ -862,18 +863,26 @@ describe("agent command service", () => {
       args: { title: "Ship CLI", body: "Follow the implementation contract." },
       ctx: { cwd: "/repo/volli", env: {} },
     });
-    createAttachment(
+    const blobsRootDir = blobsRoot(mkdtempSync(join(tmpdir(), "volli-blobs-")));
+    importBlob(
       ctx.db,
-      { ticketId: "ticket-one", kind: "file", fileName: "spec.png", label: "homepage mock" },
+      blobsRootDir,
+      {
+        fileName: "spec.png",
+        bytes: Buffer.from("spec bytes"),
+        label: "homepage mock",
+        owner: { ticketId: "ticket-one" },
+      },
       100,
     );
-    createAttachment(
+    importBlob(
       ctx.db,
+      blobsRootDir,
       {
-        ticketId: "ticket-one",
-        kind: "url",
-        url: "https://example.com/design",
+        fileName: "design.pdf",
+        bytes: Buffer.from("design bytes"),
         label: "design doc",
+        owner: { ticketId: "ticket-one" },
       },
       200,
     );
@@ -895,8 +904,7 @@ describe("agent command service", () => {
           "## Attachments\n\n" +
           "Read each attached file before starting — they are part of the ticket's spec:\n" +
           "- `.volli/attachments/spec.png` — homepage mock\n" +
-          "Reference URLs:\n" +
-          "- https://example.com/design — design doc",
+          "- `.volli/attachments/design.pdf` — design doc",
       },
     });
   });

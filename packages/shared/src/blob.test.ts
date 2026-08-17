@@ -4,6 +4,7 @@ import {
   MAX_INLINE_IMAGE_BYTES,
   type NamedBlobLink,
   blobRelPath,
+  blobsSectionInput,
   blobUrl,
   isBlobHash,
   isImageMime,
@@ -95,6 +96,38 @@ describe("isImageMime", () => {
 describe("MAX_INLINE_IMAGE_BYTES", () => {
   it("is the 5 MB provider ceiling", () => {
     expect(MAX_INLINE_IMAGE_BYTES).toBe(5 * 1024 * 1024);
+  });
+});
+
+describe("blobsSectionInput", () => {
+  it("expresses every link as a workspace-relative path with its label", () => {
+    expect(
+      blobsSectionInput([
+        { linkId: "l1", blobHash: HASH, label: "homepage mock", originalName: "spec.png" },
+        { linkId: "l2", blobHash: OTHER_HASH, label: "the brief", originalName: "brief.pdf" },
+      ]),
+    ).toEqual({
+      files: [
+        { relPath: ".volli/attachments/spec.png", label: "homepage mock" },
+        { relPath: ".volli/attachments/brief.pdf", label: "the brief" },
+      ],
+      urls: [],
+    });
+  });
+
+  it("carries the collision counter into the path", () => {
+    const { files } = blobsSectionInput([
+      { linkId: "l1", blobHash: HASH, label: "first", originalName: "spec.png" },
+      { linkId: "l2", blobHash: OTHER_HASH, label: "second", originalName: "spec.png" },
+    ]);
+    expect(files.map((file) => file.relPath)).toEqual([
+      ".volli/attachments/spec.png",
+      ".volli/attachments/spec-2.png",
+    ]);
+  });
+
+  it("is empty for no links", () => {
+    expect(blobsSectionInput([])).toEqual({ files: [], urls: [] });
   });
 });
 

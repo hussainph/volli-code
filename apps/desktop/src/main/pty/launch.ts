@@ -1,12 +1,12 @@
 import type Database from "better-sqlite3";
 import {
-  attachmentsSectionInput,
+  blobsSectionInput,
   buildHarnessCommand,
   composeAttachmentsSection,
   worktreeOrientationPreamble,
 } from "@volli/shared";
 import type { HarnessAdapterLookup, HarnessWrapperLookup } from "@volli/shared";
-import { listAttachments } from "../db/attachments-repo";
+import { listMaterializableLinks } from "../db/blobs-repo";
 import type { EnsureOutcome } from "../worktree";
 import type { SessionScope } from "./scope";
 
@@ -38,7 +38,7 @@ export function composeWorktreeLaunchCommand(
   }
   if (worktree.kickoff !== null) {
     const attachmentsSection = composeAttachmentsSection(
-      attachmentsSectionInput(listAttachments(db, worktree.ticketId)),
+      blobsSectionInput(listMaterializableLinks(db, null, worktree.ticketId)),
     );
     const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
     const preamble = worktreeOrientationPreamble({

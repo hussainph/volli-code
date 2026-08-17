@@ -28,7 +28,7 @@ import {
   type WorktreeIdentity,
 } from "@volli/shared";
 
-import { materializeAttachments } from "../attachment-materialize";
+import { materializeBlobs } from "../blob-materialize";
 import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
@@ -195,7 +195,7 @@ async function runEnsure(
   // missing source file (row exists, bytes don't) throws with the
   // attachment's label, which becomes this stage's failure message.
   try {
-    await materializeAttachments(deps.db, deps.attachmentsRoot, ticketId, identity.path);
+    await materializeBlobs(deps.db, deps.blobsRoot, null, ticketId, identity.path);
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return fail(deps, ticketId, "attachments", message, message);

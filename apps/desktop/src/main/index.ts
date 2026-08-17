@@ -54,7 +54,7 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectById, listProjects } from "./db/projects-repo";
 import { getTicket } from "./db/tickets-repo";
-import { listAttachments } from "./db/attachments-repo";
+import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
@@ -685,7 +685,7 @@ app.whenReady().then(async () => {
                 text: composeTicketBrief({
                   project,
                   ticket,
-                  attachments: listAttachments(dbHandle.db, ticket.id),
+                  attachments: listMaterializableLinks(dbHandle.db, null, ticket.id),
                 }),
               },
               provenance,

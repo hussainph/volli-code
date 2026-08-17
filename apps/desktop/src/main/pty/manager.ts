@@ -218,7 +218,7 @@ export class PtyManager {
    * @param parkConfig warm-park tuning; disabled config makes every park path a
    *                   no-op. Additive with defaults so existing callers/tests
    *                   need not pass it.
-   * @param attachmentsRootPath the userData attachment-bytes root (issue #77
+   * @param blobsRootPath the userData attachment-bytes root (issue #77
    *                   PR 2) a non-worktree ticket's kickoff materializes from
    *                   before spawn — see `resolveScope`. Defaults to `""`
    *                   (never used in production; `registerTerminalIpcHandlers`
@@ -231,7 +231,7 @@ export class PtyManager {
     private readonly inspector: ProcessInspector = createProcessInspector(),
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
-    private readonly attachmentsRootPath: string = "",
+    private readonly blobsRootPath: string = "",
     sessionEngine: SessionEngine | null = null,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
@@ -328,7 +328,7 @@ export class PtyManager {
       db,
       sessionEngine,
       request,
-      this.attachmentsRootPath,
+      this.blobsRootPath,
       this.wrapperFor,
       this.adapterFor,
     );

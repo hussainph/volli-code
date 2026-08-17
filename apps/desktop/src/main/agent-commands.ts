@@ -8,7 +8,7 @@ import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-en
 import {
   applyTicketBodyMutation,
   autoTitleFromKickoff,
-  attachmentsSectionInput,
+  blobsSectionInput,
   composeAttachmentsSection,
   composeTicketPrompt,
   displayTicketId,
@@ -66,7 +66,7 @@ import type {
   WorktreeDiffMode,
 } from "../ipc/contract";
 
-import { listAttachments } from "./db/attachments-repo";
+import { listMaterializableLinks } from "./db/blobs-repo";
 import { listTicketEvents } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
 import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
@@ -116,7 +116,7 @@ export function composeTicketBrief(input: {
     Ticket,
     "id" | "ticketNumber" | "title" | "body" | "worktreePath" | "branch" | "baseBranch"
   >;
-  attachments: Parameters<typeof attachmentsSectionInput>[0];
+  attachments: Parameters<typeof blobsSectionInput>[0];
 }): string {
   const displayId = displayTicketId(input.project.ticketPrefix, input.ticket.ticketNumber);
   const ticketPrompt = composeTicketPrompt({
@@ -141,7 +141,7 @@ export function composeTicketBrief(input: {
   // the same deterministic relPath mapping main's `ensure` pipeline uses.
   // Relative paths are correct whether this session runs in the worktree or the
   // main checkout (cwd is the session root either way).
-  const attachmentsSection = composeAttachmentsSection(attachmentsSectionInput(input.attachments));
+  const attachmentsSection = composeAttachmentsSection(blobsSectionInput(input.attachments));
   const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
   return `${orientation}Board coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`;
 }
@@ -2177,7 +2177,7 @@ export function createAgentCommandService(
             prompt: composeTicketBrief({
               project: resolved.project,
               ticket: resolved.ticket,
-              attachments: listAttachments(options.db, resolved.ticket.id),
+              attachments: listMaterializableLinks(options.db, null, resolved.ticket.id),
             }),
           },
         };
@@ -2204,7 +2204,7 @@ export function createAgentCommandService(
           brief = composeTicketBrief({
             project,
             ticket: resolved.ticket,
-            attachments: listAttachments(options.db, resolved.ticket.id),
+            attachments: listMaterializableLinks(options.db, null, resolved.ticket.id),
           });
         } else {
           const resolved = projectForCreate(options.db, projects, envSession, request);

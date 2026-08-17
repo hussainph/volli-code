@@ -21,7 +21,7 @@ import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { errorMessage, type DirEntry, type Ticket, type TicketAttachment } from "@volli/shared";
+import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
 
 import {
   RAIL_PANEL_INSET,
@@ -173,7 +173,7 @@ export function TicketFilesList({
   );
 }
 
-const NO_ATTACHMENTS: readonly TicketAttachment[] = [];
+const NO_ATTACHMENTS: readonly NamedBlobLink[] = [];
 
 /**
  * Ticket Files panel: body refs + optional attachments + worktree directory
@@ -188,7 +188,7 @@ export function TicketFilesPanel({
   onPinFile,
 }: {
   ticket: Ticket;
-  attachments?: readonly TicketAttachment[];
+  attachments?: readonly NamedBlobLink[];
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
 }) {

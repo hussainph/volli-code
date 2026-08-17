@@ -161,6 +161,33 @@ export interface NamedBlobLink {
  * WITHOUT touching disk, and lets a pruned workspace be re-materialized to
  * exactly the names the transcript already mentions.
  */
+/** The workspace-relative directory Blobs materialize into. */
+export const SESSION_ATTACHMENTS_REL_DIR = ".volli/attachments";
+
+/**
+ * `harness-command.ts`'s `composeAttachmentsSection` input, derived from a
+ * Session's links: each one's materialized relative path plus its label. Pure —
+ * reused both when `blob-materialize.ts` has just copied the bytes AND when a
+ * caller (a worktree kickoff command, `ticket.brief`) re-derives the same list
+ * WITHOUT touching disk, since the naming is deterministic from the links alone.
+ *
+ * `urls` is always empty: link attachments are not part of VC-50, and the
+ * formatter keeps its URL branch rather than being narrowed for a feature that
+ * is deferred rather than cancelled.
+ */
+export function blobsSectionInput(links: readonly NamedBlobLink[]): {
+  files: { relPath: string; label: string }[];
+  urls: { url: string; label: string }[];
+} {
+  const names = materializedBlobNames(links);
+  const files = links.map((link) => ({
+    // Never misses: materializedBlobNames maps every link in the list it was given.
+    relPath: `${SESSION_ATTACHMENTS_REL_DIR}/${names.get(link.linkId)!}`,
+    label: link.label,
+  }));
+  return { files, urls: [] };
+}
+
 export function materializedBlobNames(links: readonly NamedBlobLink[]): Map<string, string> {
   const taken = new Set<string>();
   const names = new Map<string, string>();

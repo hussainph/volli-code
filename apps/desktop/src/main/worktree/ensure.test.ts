@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { attachmentsRoot, importAttachmentFile } from "../attachment-store";
-import { createAttachment } from "../db/attachments-repo";
+import { importBlob } from "../blob-import";
+import { blobsRoot, removeBlob } from "../blob-store";
 import { listTicketEvents } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
@@ -79,7 +79,7 @@ describe("ensure — success", () => {
     const { gitAsync, countMatching } = happyGit(projectPath);
 
     const result = await ensure(
-      { db: ctx.db, git: poisonedSyncGit, gitAsync, home, attachmentsRoot: "unused" },
+      { db: ctx.db, git: poisonedSyncGit, gitAsync, home, blobsRoot: "unused" },
       "ticket-1",
     );
 
@@ -105,7 +105,7 @@ describe("ensure — success", () => {
         gitAsync,
         home,
         onPhase: (_, phase) => phases.push(phase),
-        attachmentsRoot: "unused",
+        blobsRoot: "unused",
       },
       "ticket-1",
     );
@@ -143,7 +143,7 @@ describe("ensure — success", () => {
     // First ensure materializes the identity (git faked — create the dir it stamped).
     const first = happyGit(projectPath);
     const created = await ensure(
-      { db: ctx.db, git: first.git, gitAsync: first.gitAsync, home, attachmentsRoot: "unused" },
+      { db: ctx.db, git: first.git, gitAsync: first.gitAsync, home, blobsRoot: "unused" },
       "ticket-1",
     );
     expect(created.ok).toBe(true);
@@ -168,7 +168,7 @@ describe("ensure — success", () => {
       return "";
     });
     const result = await ensure(
-      { db: ctx.db, git: reuse.git, gitAsync: reuse.gitAsync, home, attachmentsRoot: "unused" },
+      { db: ctx.db, git: reuse.git, gitAsync: reuse.gitAsync, home, blobsRoot: "unused" },
       "ticket-1",
     );
 
@@ -184,7 +184,7 @@ describe("ensure — success", () => {
     seed(projectPath);
     const home = tempDir("home");
     const { git, gitAsync, countMatching } = happyGit(projectPath);
-    const deps = { db: ctx.db, git, gitAsync, home, attachmentsRoot: "unused" };
+    const deps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     const [a, b] = await Promise.all([ensure(deps, "ticket-1"), ensure(deps, "ticket-1")]);
 
@@ -222,7 +222,7 @@ describe("ensure — failure", () => {
         gitAsync,
         home,
         onPhase: (_, phase) => phases.push(phase),
-        attachmentsRoot: "unused",
+        blobsRoot: "unused",
       },
       "ticket-1",
     );
@@ -247,7 +247,7 @@ describe("ensure — failure", () => {
     const { git, gitAsync } = happyGit("/volli-nonexistent-project-dir");
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, attachmentsRoot: "unused" },
+      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
       "ticket-1",
     );
 
@@ -260,7 +260,7 @@ describe("ensure — failure", () => {
 
   it("errors on an unknown ticket without touching phases", async () => {
     const { git, gitAsync } = scriptedGit(() => "");
-    const result = await ensure({ db: ctx.db, git, gitAsync, attachmentsRoot: "unused" }, "nope");
+    const result = await ensure({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "nope");
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
@@ -271,19 +271,21 @@ describe("ensure — attachments stage", () => {
     const { ticket } = seed(projectPath);
     const home = tempDir("home");
     const { git, gitAsync } = happyGit(projectPath);
-    const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
+    const blobsRootDir = blobsRoot(tempDir("userdata"));
 
-    const attachment = createAttachment(
+    importBlob(
       ctx.db,
-      { ticketId: ticket.id, kind: "file", fileName: "spec.png" },
+      blobsRootDir,
+      {
+        fileName: "spec.png",
+        bytes: Buffer.from("spec bytes"),
+        owner: { ticketId: ticket.id },
+      },
       100,
     );
-    const source = join(tempDir("source"), "spec.png");
-    writeFileSync(source, "spec bytes");
-    importAttachmentFile(attachmentsRootDir, attachment.id, source, "spec.png");
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, attachmentsRoot: attachmentsRootDir },
+      { db: ctx.db, git, gitAsync, home, blobsRoot: blobsRootDir },
       "ticket-1",
     );
 
@@ -299,13 +301,19 @@ describe("ensure — attachments stage", () => {
     seed(projectPath);
     const home = tempDir("home");
     const { git, gitAsync } = happyGit(projectPath);
-    const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
+    const blobsRootDir = blobsRoot(tempDir("userdata"));
 
-    createAttachment(ctx.db, { ticketId: "ticket-1", kind: "file", fileName: "spec.png" }, 100);
-    // Bytes never imported — the missing-source guard fires.
+    const link = importBlob(
+      ctx.db,
+      blobsRootDir,
+      { fileName: "spec.png", bytes: Buffer.from("spec bytes"), owner: { ticketId: "ticket-1" } },
+      100,
+    );
+    // Bytes deleted out from under the row — the missing-source guard fires.
+    removeBlob(blobsRootDir, link.blobHash);
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, attachmentsRoot: attachmentsRootDir },
+      { db: ctx.db, git, gitAsync, home, blobsRoot: blobsRootDir },
       "ticket-1",
     );
 
@@ -327,10 +335,10 @@ describe("ensure — attachments stage", () => {
     seed(projectPath);
     const home = tempDir("home");
     const { git, gitAsync } = happyGit(projectPath);
-    const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
+    const blobsRootDir = blobsRoot(tempDir("userdata"));
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, attachmentsRoot: attachmentsRootDir },
+      { db: ctx.db, git, gitAsync, home, blobsRoot: blobsRootDir },
       "ticket-1",
     );
 

@@ -1,7 +1,11 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { getHarnessAdapter } from "@volli/shared";
 import type { HarnessAdapterLookup, HarnessId, HarnessWrapperLookup } from "@volli/shared";
-import { createAttachment } from "../db/attachments-repo";
+import { importBlob } from "../blob-import";
+import { blobsRoot } from "../blob-store";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
@@ -119,9 +123,15 @@ describe("composeWorktreeLaunchCommand", () => {
 
   it("appends the re-derived Attachments section after the prompt when the ticket has attachments", () => {
     setup();
-    createAttachment(
+    importBlob(
       ctx.db,
-      { ticketId: "tk1", kind: "url", url: "https://example.com/design", label: "design doc" },
+      blobsRoot(mkdtempSync(join(tmpdir(), "volli-blobs-"))),
+      {
+        fileName: "design.pdf",
+        bytes: Buffer.from("design bytes"),
+        label: "design doc",
+        owner: { ticketId: "tk1" },
+      },
       Date.now(),
     );
     const worktree = worktreeScope({
@@ -138,7 +148,7 @@ describe("composeWorktreeLaunchCommand", () => {
     );
     expect(line).not.toBeNull();
     expect(line).toContain("## Attachments");
-    expect(line).toContain("https://example.com/design");
+    expect(line).toContain(".volli/attachments/design.pdf");
     expect(line).toContain("design doc");
     // The section trails the ticket prompt.
     expect(line!.indexOf("run tests")).toBeLessThan(line!.indexOf("## Attachments"));

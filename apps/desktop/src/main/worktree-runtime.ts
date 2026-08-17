@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { VolliIpcEvent, WorktreePhaseEvent } from "../ipc/contract";
 
-import { attachmentsRoot } from "./attachment-store";
+import { blobsRoot } from "./blob-store";
 import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 import type { WorktreeDeps, WorktreePhase } from "./worktree";
 
@@ -39,7 +39,7 @@ function resolveHome(): string {
 
 /**
  * The standard runtime deps bundle for every worktree module call.
- * `attachmentsRoot` — the userData attachment-bytes root the post-copy
+ * `blobsRoot` — the userData Blob-bytes root the post-copy
  * materialize step reads from (issue #77 PR 2) — resolves off
  * `app.getPath("userData")` exactly like {@link resolveHome} resolves `~`: one
  * production resolution point every worktree-module consumer shares, even the
@@ -52,7 +52,7 @@ export function worktreeDeps(db: Database.Database): WorktreeDeps {
     gitAsync: runGitCapturingAsync,
     home: resolveHome(),
     onPhase: broadcastPhase,
-    attachmentsRoot: attachmentsRoot(app.getPath("userData")),
+    blobsRoot: blobsRoot(app.getPath("userData")),
   };
 }
 
