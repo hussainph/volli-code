@@ -103,6 +103,7 @@ import {
   terminalSessionRecord,
 } from "./session-control";
 import {
+  getTicket,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
@@ -128,6 +129,7 @@ import {
   type AgentSiteReleaseReport,
   archiveAndClean,
   commitTicketRemaining,
+  ensure,
   getRetentionTtlDays,
   listBranches,
   publishTicketBranch,
@@ -241,6 +243,55 @@ function sessionListingRows(sessions: readonly SessionProjection[]): SessionList
       ? { kind: "terminal", record: terminal }
       : { kind: "chat", record: chatSessionRecord(session) };
   });
+}
+
+/**
+ * Materializes the worktree of a ticket that was just switched INTO worktree
+ * scope (VC-98).
+ *
+ * `ensure` had exactly two callers, both Session boots, so switching scope on
+ * for a ticket whose Session already existed recorded `usesWorktree: true` and
+ * then had nothing create the checkout. Everything downstream believed the
+ * flag: the board showed the ticket as isolated, `volli worktree status`
+ * reported no worktree, and the agent already running went on writing to the
+ * main checkout. Scope is now a promise this keeps.
+ *
+ * Deliberately NOT inside `updateTicketFieldsCommand`'s transaction: `ensure`
+ * is git work, and no DB write may straddle it (ensure.ts). The flag is the
+ * user's recorded intent and stands committed whatever git does next — which
+ * is safe, because a ticket left worktree-scoped with no worktree refuses to
+ * bind a Session anywhere else (`prepare`, #38) rather than quietly falling
+ * back to the main checkout.
+ *
+ * Live Session bindings are left exactly where they are. A binding is fixed at
+ * attach and re-pointing one under a running agent would move its working
+ * directory mid-turn; the next attach picks up the materialized worktree on
+ * its own, and `volli identify` warns any agent still standing outside it.
+ */
+async function materializeSwitchedOnWorktree(
+  db: Database.Database,
+  ticketId: string,
+  committed: Ticket,
+): Promise<TicketResult> {
+  const outcome = await ensure(worktreeDeps(db), ticketId);
+  // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
+  // new identity stamp to show. Failure has a scope flag that really did change
+  // under a renderer that is about to revert it optimistically off the back of
+  // the error below — and the re-hydrate is what puts the true value back. It
+  // lands last by construction rather than by luck: this event is sent before
+  // the reply, so the renderer starts its bootstrap round-trip before it sees
+  // the error, and a round-trip cannot outrun a message already queued.
+  broadcastDataChanged({ ticketId, projectId: committed.projectId, kind: "worktree" });
+  if (!outcome.ok) {
+    // Surfaced as a failed mutation so it reaches a toast rather than living
+    // only in the phase stream (CLAUDE.md: never swallow a failed mutation).
+    // The ticket stays worktree-scoped with no worktree, which is a state the
+    // app already knows how to be in — it is what every ticket looks like
+    // before its first Session — and the next session start retries `ensure`.
+    return { ok: false, error: `worktree scope is on, but ${outcome.error}` };
+  }
+  // Re-read: `ensure` stamped path/branch/base after `committed` was captured.
+  return { ok: true, ticket: getTicket(db, ticketId) ?? committed };
 }
 
 // ---- registration --------------------------------------------------------
@@ -473,12 +524,20 @@ export function registerDataIpcHandlers(
       };
     },
 
-    "volli:ticket-update": (input: TicketUpdateInput): TicketResult => {
+    "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
       const now = Date.now();
-      return {
-        ok: true,
-        ticket: updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
-      };
+      // Read BEFORE the write: the returned ticket shows scope as it now stands,
+      // which cannot tell "just switched on" from "was already on" — and only
+      // the transition materializes.
+      const before = getTicketRow(db, input.ticketId);
+      const ticket = updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } });
+      // Only the one transition goes async. Every other update — a title, a
+      // body, a branch stamp — stays the synchronous write it has always been,
+      // the same split `volli:ticket-move` makes for its interrupt side effect.
+      const switchedOn =
+        before !== undefined && before.uses_worktree === 0 && ticket.usesWorktree === true;
+      if (!switchedOn) return { ok: true, ticket };
+      return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
     },
 
     "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => {

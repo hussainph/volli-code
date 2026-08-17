@@ -72,6 +72,9 @@ vi.mock("./worktree", () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
   sweepOrphans: vi.fn(),
+  // The scope-switch materialize path (VC-98). Mocked like every other git
+  // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
+  ensure: vi.fn(),
   // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` — needs a
   // stub export so that value import doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
@@ -92,7 +95,8 @@ import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
 import { worktreesHome } from "./worktree-runtime";
-import { listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
+import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
+import { updateTicketFieldsCommand } from "./ticket-commands";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
 const fakeEvent = { sender: {} };
@@ -581,6 +585,141 @@ describe("volli:ticket-update — worktree identity", () => {
       baseBranch: null,
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
+  /** A ticket that starts out running in the project's main checkout. */
+  function mainCheckoutTicket(projectId: string): Ticket {
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "A ticket",
+      usesWorktree: false,
+    });
+    if (!result.ok) throw new Error(result.error);
+    return result.ticket;
+  }
+
+  /** Stands in for the real pipeline: stamps identity the way `ensure` does on success. */
+  function ensureStamps(worktreePath: string): void {
+    vi.mocked(ensure).mockImplementation(async (_deps, ticketId: string) => {
+      updateTicketFieldsCommand(
+        ctx.db,
+        { ticketId, worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
+        { now: Date.now(), actor: { kind: "automation" } },
+      );
+      return {
+        ok: true as const,
+        value: {
+          identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
+          created: true,
+        },
+      };
+    });
+  }
+
+  it("materializes the worktree and answers with the stamped identity", async () => {
+    const projectId = createProject();
+    const ticket = mainCheckoutTicket(projectId);
+    ensureStamps("/wt/VC-1-a-ticket");
+
+    const result = await invoke<Promise<TicketResult>>("volli:ticket-update", {
+      ticketId: ticket.id,
+      usesWorktree: true,
+    });
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+    // The whole point of the ticket: scope is no longer an intention nothing
+    // acts on, and the answer carries the identity `ensure` stamped AFTER the
+    // scope write committed — so the caller never sees the stale null.
+    expect(result).toMatchObject({
+      ok: true,
+      ticket: {
+        usesWorktree: true,
+        worktreePath: "/wt/VC-1-a-ticket",
+        branch: "volli/VC-1-a-ticket",
+        baseBranch: "main",
+      },
+    });
+  });
+
+  it("re-hydrates every window so the rail stops showing a worktree-less ticket", async () => {
+    const projectId = createProject();
+    const ticket = mainCheckoutTicket(projectId);
+    ensureStamps("/wt/VC-1-a-ticket");
+    dataChangedSends.length = 0;
+
+    await invoke<Promise<TicketResult>>("volli:ticket-update", {
+      ticketId: ticket.id,
+      usesWorktree: true,
+    });
+
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:data-changed",
+      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    });
+  });
+
+  it("leaves scope on and surfaces the git reason when the worktree can't be created", async () => {
+    const projectId = createProject();
+    const ticket = mainCheckoutTicket(projectId);
+    vi.mocked(ensure).mockResolvedValue({
+      ok: false as const,
+      error: "fatal: not a git repository",
+    });
+
+    const result = await invoke<Promise<TicketResult>>("volli:ticket-update", {
+      ticketId: ticket.id,
+      usesWorktree: true,
+    });
+
+    // Reported as a failed mutation so it reaches a toast rather than dying in
+    // the phase stream. The scope flag still stands: it is the user's recorded
+    // intent, and a worktree-scoped ticket with no worktree refuses to bind a
+    // Session to the main checkout instead of quietly falling back to it.
+    expect(result).toEqual({
+      ok: false,
+      error: "worktree scope is on, but fatal: not a git repository",
+    });
+    const after = invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, title: "t" });
+    expect(after.ok && after.ticket.usesWorktree).toBe(true);
+    expect(after.ok && after.ticket.worktreePath).toBeNull();
+  });
+
+  it("does not touch git for an update that leaves worktree scope alone", () => {
+    const projectId = createProject();
+    const ticket = mainCheckoutTicket(projectId);
+
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      title: "New title",
+    });
+
+    // Still the synchronous write it has always been — a title edit must not
+    // become a promise, nor drag a worktree into being.
+    expect(result).toMatchObject({ ok: true });
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("does not materialize when scope is switched OFF", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId); // worktree-scoped by default
+
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, usesWorktree: false });
+
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("does not re-materialize when scope is re-asserted as already on", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId); // already worktree-scoped
+
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, usesWorktree: true });
+
+    // No transition, no git: `ensure` is idempotent but not free, and a ticket
+    // whose scope never moved has not asked for anything.
+    expect(ensure).not.toHaveBeenCalled();
   });
 });
 

@@ -482,6 +482,33 @@ describe("renderCliSuccess", () => {
     );
   });
 
+  it("prints the worktree-misalignment warning right after the path it contradicts", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: { name: "Volli Code", prefix: "VC", path: "/repo/volli" },
+          ticket: "VC-12",
+          session: "abcdef12",
+          worktreePath: "/repo/volli",
+          warning:
+            "You are working in /repo/volli, which is outside VC-12's worktree at /wt/VC-12.",
+          socket: null,
+          appVersion: "1.0.0",
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  Volli Code (VC)\n" +
+        "ticket  VC-12\n" +
+        "session  abcdef12\n" +
+        "worktreePath  /repo/volli\n" +
+        "warning  You are working in /repo/volli, which is outside VC-12's worktree at /wt/VC-12.\n" +
+        "socket  -\n" +
+        "appVersion  1.0.0\n",
+    );
+  });
+
   it("marks degraded identify output as distinguishable from a healthy read", () => {
     expect(
       renderCliSuccess(

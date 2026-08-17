@@ -53,7 +53,15 @@ export interface WorktreeReadDeps {
 /** The failure arms both read verbs share, discriminated by `kind`. */
 type WorktreeReadFailure =
   | { kind: "missing-ticket" }
-  | { kind: "no-worktree"; displayId: string }
+  /**
+   * `usesWorktree` separates the two futures this arm used to collapse: a
+   * worktree-scoped ticket that has simply not booted a Session yet (one
+   * materializes when it does, or the moment its scope is switched on), and a
+   * main-checkout ticket that will never have one at all. The CLI door tells
+   * an agent which of those it is looking at; without the flag its guidance
+   * had to guess, and guessed wrong in both directions (VC-98).
+   */
+  | { kind: "no-worktree"; displayId: string; usesWorktree: boolean }
   | { kind: "missing-on-disk"; displayId: string; worktreePath: string };
 
 /** The discriminated result of {@link readWorktreeStatus}. */
@@ -112,7 +120,9 @@ function resolveReadTarget(
   if (!project) return { kind: "missing-ticket" };
   const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
 
-  if (ticket.worktree_path === null) return { kind: "no-worktree", displayId };
+  if (ticket.worktree_path === null) {
+    return { kind: "no-worktree", displayId, usesWorktree: ticket.uses_worktree !== 0 };
+  }
   const exists = deps.worktreeExists ?? existsSync;
   if (!exists(ticket.worktree_path)) {
     return { kind: "missing-on-disk", displayId, worktreePath: ticket.worktree_path };
