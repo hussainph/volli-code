@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import type { SessionEngine } from "@volli/session-engine";
+import { readSessionTranscriptTail } from "@volli/session-engine";
+import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-engine";
 import {
   applyTicketBodyMutation,
   attachmentsSectionInput,
@@ -45,10 +46,12 @@ import type {
   Project,
   ReasoningLevel,
   SessionActivityState,
+  SessionProjection,
   SessionRecord,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
+  TranscriptReference,
 } from "@volli/shared";
 import type {
   DataChangedEvent,
@@ -161,6 +164,17 @@ export function composeProjectBrief(input: { project: Pick<Project, "path"> }): 
 export const DEFAULT_KICKOFF_MESSAGE =
   "Begin work on this ticket. Your assignment is the Ticket Brief above.";
 
+/**
+ * How many transcript messages a chat `session peek` shows when the caller
+ * names no `--lines`.
+ *
+ * Far smaller than the terminal default of 60 lines, and deliberately so: a
+ * peek is spent out of the ASKING agent's context, and one chat message is
+ * worth many terminal lines. Twelve is about one exchange plus the tool calls
+ * around it — enough to see what is happening now, not enough to be a replay.
+ */
+export const CHAT_PEEK_ENTRIES = 12;
+
 export interface AgentCommandServiceOptions {
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
@@ -187,6 +201,14 @@ export interface AgentCommandServiceOptions {
     sessionId: string,
     lines: number,
   ) => { status: SessionActivityState; output: string } | undefined;
+  /**
+   * Reads one durable transcript artifact — what `session peek` renders a chat
+   * Session's tail from (VC-79). The store is a content-addressed directory and
+   * needs neither the db nor a live runtime, so production always has one;
+   * absent (tests) means the peek answers with its activity counts and no
+   * transcript rather than failing.
+   */
+  readTranscriptArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
   notify?: (title: string, message: string) => void;
   /**
    * The product Session start route (VC-13) — the same facade the renderer's
@@ -915,6 +937,46 @@ function sessionForPublicId(
       };
 }
 
+/** Whether a refusal was simply a miss — the only one `session.peek` retries elsewhere. */
+function isSessionNotFound(response: AgentResponse): boolean {
+  return !response.ok && response.error.code === "SESSION_NOT_FOUND";
+}
+
+/**
+ * The structured half of {@link sessionForPublicId}: the chat Session behind a
+ * short id, addressed by the same public handle and refused the same three
+ * ways.
+ *
+ * Precedence mirrors the renderer's listing and `session.list`: a Session that
+ * ever opened a terminal IS its terminal row, so those are skipped here rather
+ * than answered twice in two vocabularies.
+ */
+function chatProjectionForPublicId(
+  projections: readonly SessionProjection[],
+  selector: unknown,
+): { ok: true; projection: SessionProjection } | { ok: false; response: AgentResponse } {
+  if (typeof selector !== "string") {
+    return { ok: false, response: failure("INVALID_REQUEST", "A session id is required.") };
+  }
+  const matches = projections.filter(
+    (projection) =>
+      shortSessionId(projection.session.id) === selector &&
+      terminalSessionRecord(projection) === null,
+  );
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      response: failure("AMBIGUOUS_CONTEXT", `Session id ${selector} is ambiguous.`),
+    };
+  }
+  return matches[0]
+    ? { ok: true, projection: matches[0] }
+    : {
+        ok: false,
+        response: failure("SESSION_NOT_FOUND", `No session matches ${selector}.`),
+      };
+}
+
 async function updateTerminalNative(
   locks: Map<string, Promise<void>>,
   sessionEngine: SessionEngine,
@@ -1030,12 +1092,14 @@ export function createAgentCommandService(
       // Session directly, so avoid taking a complete multi-project snapshot
       // merely to find it. Other commands retain the established list snapshot
       // until their own command-specific resolution is made lazy.
-      // Stays terminal-only, unlike the renderer's discriminated, chat-aware
-      // listing (`data-ipc.ts`'s `sessions.list`/`listForTicket`): every verb
-      // below (identify, rename, resume, hooks) is about a PTY the CLI's own
-      // wrapper is running inside, so a structured-only Session has nothing
-      // here to answer to and dropping it is correct, not a compatibility gap.
-      const sessions =
+      // Every Session of every project, folded once. `sessions` below narrows
+      // it to the terminal rows the addressable verbs (identify, rename,
+      // resume, hooks) are about — those are all about a PTY the CLI's own
+      // wrapper runs inside, so a structured-only Session has nothing there to
+      // answer to. `session.peek` is the one verb that reads BOTH halves
+      // (VC-79), and it reads them from this same snapshot rather than listing
+      // the world twice.
+      const projections =
         request.cmd === "hook" ||
         request.cmd === "session.done" ||
         request.cmd === "session.blocked" ||
@@ -1048,9 +1112,8 @@ export function createAgentCommandService(
                   sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
                 ),
               )
-            ).flatMap((projections) =>
-              projections.flatMap((projection) => terminalSessionRecord(projection) ?? []),
-            );
+            ).flat();
+      const sessions = projections.flatMap((projection) => terminalSessionRecord(projection) ?? []);
       if (request.cmd === "identify") {
         const sessionId = request.ctx.env.session;
         if (sessionId) {
@@ -1221,22 +1284,69 @@ export function createAgentCommandService(
       }
       if (request.cmd === "session.peek") {
         const resolved = sessionForPublicId(sessions, request.args["id"]);
-        if (!resolved.ok) return resolved.response;
-        const lines = positiveIntOr(request.args["lines"], 60);
-        const observation = options.observeSession?.(resolved.session.id, lines);
-        if (!observation) {
-          return failure(
-            "SESSION_NOT_FOUND",
-            `Session ${shortSessionId(resolved.session.id)} has no observable live terminal.`,
-          );
+        if (resolved.ok) {
+          const lines = positiveIntOr(request.args["lines"], 60);
+          const observation = options.observeSession?.(resolved.session.id, lines);
+          if (!observation) {
+            return failure(
+              "SESSION_NOT_FOUND",
+              `Session ${shortSessionId(resolved.session.id)} has no observable live terminal.`,
+            );
+          }
+          return {
+            v: 1,
+            ok: true,
+            data: {
+              session: shortSessionId(resolved.session.id),
+              status: observation.status,
+              output: observation.output,
+            },
+          };
         }
+        // No terminal answers to that handle — try the structured side (VC-79).
+        // Only a MISS falls through: an ambiguous or malformed handle is the
+        // caller's mistake either way, and answering it from the other half of
+        // the id space would hide the collision rather than report it.
+        if (!isSessionNotFound(resolved.response)) return resolved.response;
+        const chat = chatProjectionForPublicId(projections, request.args["id"]);
+        if (!chat.ok) return chat.response;
+        const record = chatSessionRecord(chat.projection);
+        const tail = await readSessionTranscriptTail(
+          {
+            listEvents: (query) => sessionEngine.listEvents(query),
+            ...(options.readTranscriptArtifact
+              ? { readArtifact: options.readTranscriptArtifact }
+              : {}),
+          },
+          {
+            sessionId: record.sessionId,
+            limit: positiveIntOr(request.args["lines"], CHAT_PEEK_ENTRIES),
+          },
+        );
+        const observedAt = now();
         return {
           v: 1,
           ok: true,
           data: {
-            session: shortSessionId(resolved.session.id),
-            status: observation.status,
-            output: observation.output,
+            session: shortSessionId(record.sessionId),
+            // The same three words the app's own sidebar row says, so one
+            // vocabulary describes a Session whichever surface asks.
+            status: record.activity,
+            waitingOn: record.waitingOn,
+            lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
+            turns: tail.turns,
+            turnDepth: tail.turnDepth,
+            messages: tail.messages,
+            unreadable: tail.unreadable,
+            // Ages, not timestamps: "when did it last do anything" is the
+            // question, and every other session field here already answers in
+            // elapsed milliseconds against the caller's own clock.
+            transcript: tail.entries.map((entry) => ({
+              ageMs: Math.max(0, observedAt - entry.at),
+              role: entry.role,
+              text: entry.text,
+              tools: entry.tools,
+            })),
           },
         };
       }

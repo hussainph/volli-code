@@ -188,7 +188,8 @@ Both commands are read-only.
 volli session list [--project <name>] [--ticket <id>]
 ```
 
-Active terminal sessions, with the short handles `session peek` takes.
+Active sessions — terminals and chats — with the short handles `session peek`
+takes.
 
 ### volli session peek
 
@@ -196,8 +197,17 @@ Active terminal sessions, with the short handles `session peek` takes.
 volli session peek <handle> [--lines <n>]
 ```
 
-Recent output from a session, by its short handle. Lets one agent see what
-another is doing without attaching to it.
+What a session is doing, by its short handle. Lets one agent see what another is
+doing without attaching to it.
+
+A terminal answers with its recent output. A chat answers with an activity line
+— whether it is working, waiting on a person, or idle; how long since anything
+happened; which turn it is on and how deep into it — followed by a compact
+transcript tail: one line per message, with the tools it called and its words
+truncated.
+
+`--lines` is trailing terminal lines (60 by default) or chat messages (12).
+Keep it narrow: a peek is spent out of the asking agent's own context.
 
 ### volli session done
 
