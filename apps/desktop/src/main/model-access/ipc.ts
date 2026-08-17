@@ -39,10 +39,18 @@ const SIGN_IN_EVENT = "volli:model-access-sign-in" satisfies VolliIpcEvent;
  * `service` is null when the Pi runtime never came up. The channels are still
  * claimed, because an unregistered `invoke` channel does not fail — it hangs,
  * and a Sign in button that never returns is worse than one that says why.
+ *
+ * `unavailableReason` is that refusal's text. The caller that knows WHY the
+ * runtime is down (a database that never opened, a Node-ABI mismatch behind
+ * it — VC-76) passes the classified reason; the fallback stays for a caller
+ * with nothing better to say.
  */
-export function registerModelAccessIpcHandlers(service: ModelAccessSignInService | null): void {
+export function registerModelAccessIpcHandlers(
+  service: ModelAccessSignInService | null,
+  unavailableReason: string = "The agent runtime is unavailable.",
+): void {
   if (service === null) {
-    registerDegradedIpcHandlers(MODEL_ACCESS_CHANNELS, "The agent runtime is unavailable.");
+    registerDegradedIpcHandlers(MODEL_ACCESS_CHANNELS, unavailableReason);
     return;
   }
 

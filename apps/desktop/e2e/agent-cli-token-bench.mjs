@@ -45,6 +45,7 @@ const COMMANDS = [
   "ticket brief",
   "project list",
   "label list",
+  "model list",
   "ticket create",
   "ticket update",
   "ticket move",

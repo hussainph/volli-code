@@ -506,15 +506,21 @@ function sessionSignalSpec(
 }
 
 const SESSION_DONE_SPEC = sessionSignalSpec(
-  "Signal the current session's ticket ready for review.",
+  "Record that this session's work is finished.",
   'volli session done --reason "Tests pass"',
-  ["Acts on VOLLI_SESSION; needs a Volli session.", "Moves the session's ticket to Needs Review."],
+  [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
+  ],
 );
 
 const SESSION_BLOCKED_SPEC = sessionSignalSpec(
-  "Signal the current session is blocked.",
+  "Signal the current session is blocked and needs a person.",
   'volli session blocked --reason "Needs credentials"',
-  ["Acts on VOLLI_SESSION; needs a Volli session."],
+  [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Raises attention on this session; --reason is the text a person sees.",
+  ],
 );
 
 /**
@@ -673,9 +679,9 @@ const BOARD_SPEC: CommandSpec = {
 };
 
 const SESSION_LIST_SPEC: CommandSpec = {
-  summary: "List active terminal sessions.",
+  summary: "List a project's active sessions, terminal and chat.",
   example: "volli session list --ticket VC-12",
-  notes: ["Prints the short session ids used by session peek."],
+  notes: ["Prints the short session ids used by session peek, chats included."],
   options: {
     "--project": { kind: "value", key: "project", placeholder: "<p>", help: "Filter by project." },
     "--ticket": { kind: "value", key: "ticket", placeholder: "<id>", help: "Filter by ticket." },
@@ -687,6 +693,30 @@ const LABEL_LIST_SPEC: CommandSpec = {
   example: "volli label list --project VC",
   options: {
     "--project": { kind: "value", key: "project", placeholder: "<p>", help: "Target project." },
+  },
+};
+
+/**
+ * `volli model list` — what `session start --model/--reasoning` can actually
+ * name (VC-78). Reads the app's Model Access snapshot over the socket; the
+ * default view is the signed-in slice because the full registered catalog is
+ * over a thousand rows, which is the context-window failure mode this verb
+ * exists to prevent.
+ */
+const MODEL_LIST_SPEC: CommandSpec = {
+  summary: "List signed-in providers, model ids, and reasoning levels.",
+  example: "volli model list",
+  notes: [
+    "Copy a printed <provider/model> verbatim into session start --model.",
+    "Shows available models only; --all includes signed-out providers.",
+  ],
+  options: {
+    "--all": {
+      kind: "flag",
+      key: "all",
+      value: true,
+      help: "Include signed-out providers and unavailable models.",
+    },
   },
 };
 
@@ -770,11 +800,13 @@ const WORKTREE_DIFF_SPEC: CommandSpec = {
 };
 
 const SESSION_PEEK_SPEC: CommandSpec = {
-  summary: "Peek at a session's recent terminal output.",
+  summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
   example: "volli session peek a1b2c3 --lines 60",
   notes: [
-    "Handle is a short session id from session list.",
-    "Keep peeks narrow — raw output consumes the caller's context.",
+    "Handle is a short session id from session list — terminal or chat.",
+    "A chat answers activity, last-event age, turn depth, then its transcript tail.",
+    "--lines is trailing terminal lines (60), or chat messages (12).",
+    "Keep peeks narrow — output consumes the caller's context.",
   ],
   positionalId: { label: "session peek" },
   options: {
@@ -783,7 +815,7 @@ const SESSION_PEEK_SPEC: CommandSpec = {
       key: "lines",
       parse: positiveIntValue,
       placeholder: "<n>",
-      help: "How many trailing lines to show.",
+      help: "How much trailing output to show.",
     },
   },
 };
@@ -819,6 +851,30 @@ const PROJECT_LIST_SPEC: CommandSpec = {
   summary: "List all registered projects.",
   example: "volli project list",
   options: {},
+};
+
+const PROMPT_BASELINE_SPEC: CommandSpec = {
+  summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
+  example: "volli prompt baseline",
+  notes: [
+    "Token counts are estimates at 4 characters/token; the provider's own meter is the count of record.",
+    "Excludes tool definitions, the user's first message, and provider overhead, which ride on top of everything counted here.",
+    "--ticket prices a Ticket Session instead, including that ticket's Brief.",
+  ],
+  options: {
+    "--ticket": {
+      kind: "value",
+      key: "ticket",
+      placeholder: "<id>",
+      help: "Price a Ticket Session for this ticket instead of a project chat.",
+    },
+    "--project": {
+      kind: "value",
+      key: "project",
+      placeholder: "<p>",
+      help: "Resolve against this project instead of the context ladder.",
+    },
+  },
 };
 
 const DOCTOR_SPEC: CommandSpec = {
@@ -870,6 +926,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "worktree diff", group: "Read", spec: WORKTREE_DIFF_SPEC },
   { name: "project list", group: "Read", spec: PROJECT_LIST_SPEC },
   { name: "label list", group: "Read", spec: LABEL_LIST_SPEC },
+  { name: "model list", group: "Read", spec: MODEL_LIST_SPEC },
   { name: "ticket create", group: "Write", spec: TICKET_CREATE_SPEC },
   { name: "ticket update", group: "Write", spec: TICKET_UPDATE_SPEC },
   { name: "ticket move", group: "Write", spec: TICKET_MOVE_SPEC },
@@ -883,6 +940,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "session link", group: "Session", spec: SESSION_LINK_SPEC },
   { name: "notify", group: "Session", spec: NOTIFY_SPEC },
   { name: "app launch", group: "App", spec: APP_LAUNCH_SPEC },
+  { name: "prompt baseline", group: "App", spec: PROMPT_BASELINE_SPEC },
   { name: "doctor", group: "App", spec: DOCTOR_SPEC },
   { name: "help", group: "App", spec: HELP_SPEC },
 ];
@@ -958,9 +1016,15 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   if (argv[0] === "label" && argv[1] === "list") {
     return parseWithSpec("label.list", argv.slice(2), LABEL_LIST_SPEC);
   }
+  if (argv[0] === "model" && argv[1] === "list") {
+    return parseWithSpec("model.list", argv.slice(2), MODEL_LIST_SPEC);
+  }
   if (argv[0] === "notify") return parseWithSpec("notify", argv.slice(1), NOTIFY_SPEC);
   if (argv[0] === "app" && argv[1] === "launch") {
     return parseWithSpec("app.launch", argv.slice(2), APP_LAUNCH_SPEC);
+  }
+  if (argv[0] === "prompt" && argv[1] === "baseline") {
+    return parseWithSpec("prompt.baseline", argv.slice(2), PROMPT_BASELINE_SPEC);
   }
   if (argv[0] === "doctor") return parseWithSpec("doctor", argv.slice(1), DOCTOR_SPEC);
   if (argv[0] === "help") return parseHelp(argv.slice(1));
