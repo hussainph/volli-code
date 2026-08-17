@@ -144,6 +144,19 @@ export interface SessionComposerProps {
    */
   interactionOpen?: boolean;
   /**
+   * The question above this composer takes what is typed here as its answer
+   * (`chat/interaction.ts`'s `composerAnswerPrompt`).
+   *
+   * A state of the Session, not a mode of the box: the composer is the same
+   * control doing the same thing — one press sends what was written — and what
+   * changes is only where the words land. So what changes here is what the box
+   * asks for and what the control is called, and nothing about how either one
+   * behaves. In particular the box is never disabled and never disables its
+   * neighbours: the whole point of answering from here is that a question
+   * cannot take the composer away from the person it is asking.
+   */
+  answering?: boolean;
+  /**
    * The Session's context occupancy, or null while nothing has been metered.
    * Settles once per turn, never per frame — the parent memoizes it on the
    * durable transcript, so it cannot switch the memo boundary off.
@@ -190,6 +203,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   files = NO_FILES,
   onFilePickerOpen,
   interactionOpen = false,
+  answering = false,
   contextUsage = null,
   className,
 }: SessionComposerProps) {
@@ -356,6 +370,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           <ComposerTextarea
             value={value}
             ready={ready}
+            answering={answering}
             onValueChange={onValueChange}
             onSteer={() => send("steer")}
             queued={queued}
@@ -490,11 +505,18 @@ export const SessionComposer = React.memo(function SessionComposer({
                 <SquareIcon className="size-3" weight="fill" />
               </Button>
             ) : null}
+            {/* Three words for one control, and the third one outranks the
+                other two: a turn is live for the whole of a blocked question,
+                so "Queue" is what this said while the words being typed were
+                the very thing the turn was waiting for — and a queue that
+                drains into an idle Session could not have released them until
+                after the question they answer had been answered some other
+                way. */}
             <PromptInputSubmit
               status="ready"
               size="icon-xs"
               disabled={!canSubmit}
-              aria-label={working ? "Queue" : "Send"}
+              aria-label={answering ? "Answer" : working ? "Queue" : "Send"}
             >
               {/* 12px, and therefore both `bold`. The house rule is that
                   `bold`'s flat 1.50x is the small-size tier — at ≤12px regular
@@ -502,7 +524,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                   scale-invariant, so nothing about a smaller button can be
                   answered by a bigger glyph. Queue was outline at 14px and had
                   no reason to change until the button did. */}
-              {working ? (
+              {working && !answering ? (
                 <QueueIcon className="size-3" weight="bold" />
               ) : (
                 <ArrowUpIcon className="size-3" weight="bold" />
@@ -593,6 +615,7 @@ function ComposerPickerStack({
 function ComposerTextarea({
   value,
   ready,
+  answering,
   onValueChange,
   onSteer,
   queued,
@@ -600,6 +623,8 @@ function ComposerTextarea({
 }: {
   value: string;
   ready: boolean;
+  /** The open question takes these words — see {@link SessionComposerProps.answering}. */
+  answering: boolean;
   onValueChange(value: string): void;
   onSteer(): void;
   queued: readonly QueuedMessage[];
@@ -612,9 +637,14 @@ function ComposerTextarea({
       value={value}
       disabled={!ready}
       // A placeholder is not a name — it is gone the moment anyone types —
-      // and this is the surface's primary input.
-      aria-label="Message"
-      placeholder="Ask, plan, or implement…"
+      // and this is the surface's primary input. Under an open question the
+      // name changes with the destination: the words go into that question's
+      // answer, and "Message" would be the one word for it that is wrong.
+      // `Your answer` is the card's own field asking (`interaction-ui.tsx`),
+      // said here because this box IS that field for as long as the question
+      // stands — the card does not draw a second one.
+      aria-label={answering ? "Answer" : "Message"}
+      placeholder={answering ? "Your answer" : "Ask, plan, or implement…"}
       // FOUR LINES AT REST: 8 + (4 × 20) + 8 = 96px, which is `min-h-24`
       // against `text-sm`'s 20px leading and the `py-2` below.
       //

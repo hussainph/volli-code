@@ -10,6 +10,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askFieldOpen,
   canSubmitInteraction,
+  composerAnswer,
+  composerAnswerPrompt,
   indexOpenedInteractions,
   readInteractionResolutionMessage,
   describeInteractionResolution,
@@ -676,14 +678,19 @@ describe("an interaction that declares no questions", () => {
       subject: "rm -rf node_modules",
       trailer: "once",
     });
-    // Words with no selection are still an answer, whatever we can name of it.
+    // Words with no selection are still an answer — and they are the whole of
+    // what was answered, so they are what the line says.
     expect(
       describeInteractionResolution(question([]), {
         optionIds: [],
         response: "the release branch",
         answers: [],
       }),
-    ).toMatchObject({ verdict: "answered", lead: "You answered", trailer: null });
+    ).toMatchObject({
+      verdict: "answered",
+      lead: "You answered",
+      trailer: "the release branch",
+    });
   });
 
   it("still reads a refusal of one as a refusal", () => {
@@ -878,6 +885,44 @@ describe("receipt", () => {
       subject: "Before I continue",
       trailer: "main",
     });
+  });
+
+  it("reads back the words a person typed, not only the options they clicked", () => {
+    // The receipt is the whole of what an answer leaves in the transcript, and
+    // the composer is where those words are now typed — so a line naming only
+    // the untyped half reads as a paragraph that went nowhere.
+    const interaction = question([prompt({ custom: true })]);
+    const typed = composerAnswer(interaction, "cut a patch instead");
+    expect(typed).not.toBeNull();
+    expect(describeInteractionResolution(interaction, typed!.resolution).trailer).toBe(
+      "cut a patch instead",
+    );
+  });
+
+  it("names the choice and the words where a question took both", () => {
+    const interaction = question([prompt({ custom: true })]);
+    const draft = setPromptResponse(
+      selectOption(
+        emptyInteractionDraft(interaction),
+        prompt({ custom: true }),
+        "question:0:bWFpbg",
+      ),
+      "prompt:0",
+      "but rebase it first",
+    );
+    expect(
+      describeInteractionResolution(interaction, interactionResolution(interaction, draft)).trailer,
+    ).toBe("main · but rebase it first");
+  });
+
+  it("collapses a typed paragraph onto the one line the receipt is", () => {
+    const interaction = question([prompt({ custom: true })]);
+    expect(
+      describeInteractionResolution(interaction, {
+        optionIds: [],
+        response: "  first thought\n\nthen the second  ",
+      }).trailer,
+    ).toBe("first thought then the second");
   });
 
   it("reads a flat resolution stored before answers existed", () => {
@@ -1157,6 +1202,78 @@ describe("the box beside an ask-user question's options", () => {
 
   it("opens anyway where there is nothing else to answer with", () => {
     expect(askFieldOpen(prompt({ options: [], custom: false }))).toBe(true);
+  });
+});
+
+describe("what the composer's own words do while a request is open", () => {
+  it("answers the question where the harness left free text open", () => {
+    // `allowOther` defaults to true and the runtime writes `custom` from it, so
+    // this is the ordinary ask_user question rather than a special case.
+    const asked = question([prompt({ custom: true })]);
+    expect(composerAnswerPrompt(asked)?.id).toBe("prompt:0");
+    expect(composerAnswer(asked, "the release branch")).toEqual({
+      resolution: {
+        optionIds: [],
+        response: "the release branch",
+        answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
+      },
+      message: null,
+    });
+  });
+
+  it("sends exactly what the card's own control would send", () => {
+    // The pin on `composerAnswer` building its submission rather than asking
+    // for one: the two must not be able to drift into two readings of the same
+    // words, one of them landing on the wire and the other in the transcript.
+    const asked = question([prompt({ custom: true })]);
+    const typed = setPromptResponse(emptyInteractionDraft(asked), "prompt:0", "the release branch");
+    expect(composerAnswer(asked, "the release branch")).toEqual(
+      interactionSubmission(asked, typed),
+    );
+  });
+
+  it("chooses nothing on a question that also listed options", () => {
+    // Free text beside options is an answer of its own, not a vote for whatever
+    // happened to be on the card.
+    const asked = question([prompt({ custom: true })]);
+    expect(composerAnswer(asked, "neither — cut a patch")?.resolution.optionIds).toEqual([]);
+  });
+
+  it("leaves a permission to be pressed rather than typed", () => {
+    // A verdict inferred from prose is a grant nobody gave.
+    expect(composerAnswerPrompt(permission())).toBeNull();
+    expect(composerAnswer(permission(), "go ahead")).toBeNull();
+  });
+
+  it("leaves a sandbox escalation alone too, question though it is", () => {
+    expect(composerAnswerPrompt(escalation())).toBeNull();
+  });
+
+  it("stays a message where the model asked for one of its listed answers", () => {
+    // The reply has no slot for words a prompt without `custom` never declared,
+    // so answering with them would be accepting words an adapter then drops.
+    const closed = question([prompt({ custom: false })]);
+    expect(composerAnswerPrompt(closed)).toBeNull();
+    expect(composerAnswer(closed, "neither")).toBeNull();
+  });
+
+  it("stays a message on a request that asked more than one thing", () => {
+    // The card walks those with a counter; the composer has no position in the
+    // walk, so its words could only be stamped onto a question nobody named.
+    const several = question([
+      prompt({ custom: true }),
+      prompt({ id: "prompt:1", label: "And after that?", custom: true }),
+    ]);
+    expect(composerAnswerPrompt(several)).toBeNull();
+  });
+
+  it("stays a message on a request that declares no questions at all", () => {
+    expect(composerAnswerPrompt(question([]))).toBeNull();
+  });
+
+  it("never answers with nothing, which is what a refusal is", () => {
+    const asked = question([prompt({ custom: true })]);
+    expect(composerAnswer(asked, "   ")).toBeNull();
   });
 });
 

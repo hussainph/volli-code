@@ -49,8 +49,13 @@ export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
  * Session — a chat plane with its own status header would be a third chrome
  * band saying a word the tab has said already. A terminal tab reads it off its
  * PTY, a chat tab off its resident slice's lifecycle.
+ *
+ * `waiting` is not a lifecycle: it is a request standing open on a Session that
+ * is otherwise `working`, and it is here because a tab is the whole of what a
+ * background chat shows of itself. `ui/status-dot.tsx` owns what colour it is,
+ * and reserves that one for the single state that is asking for a person.
  */
-export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "error";
+export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "waiting" | "error";
 
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
@@ -219,12 +224,19 @@ function TicketTab({
       dirty={tab.dirty === true}
       // The one line a hover can add to what the tab already says. Silent for
       // every tab whose label is the whole truth.
+      //
+      // The waiting dot gets one, in the sidebar's own words: this is the only
+      // surface where that dot stands with nothing beside it to say what it
+      // means, and "a Session is asking you something" is not a colour anyone
+      // should have to have learnt.
       title={
         exited
           ? `Exited (${terminal?.exitCode ?? "?"})`
           : parked
             ? "Parked to save memory. Click to wake."
-            : tab.label
+            : tab.status === "waiting"
+              ? `${tab.label}\nWaiting for you`
+              : tab.label
       }
       // Preview File tabs are italic (same convention as Project Files); an
       // exited terminal is struck through, the same as on the other strip.

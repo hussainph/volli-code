@@ -11,6 +11,7 @@ import type {
   ModelAccessProvider,
   ModelAccessState,
   ModelSelection,
+  RendererSessionInteraction,
   SessionAttention,
   SessionAttentionProjection,
   SessionInteraction,
@@ -19,7 +20,7 @@ import type {
 import { REASONING_LEVELS } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import type { InteractionSubmission } from "@renderer/chat/interaction";
+import { composerAnswer, type InteractionSubmission } from "@renderer/chat/interaction";
 import type { ComposerIntent, QueuedMessage } from "@renderer/chat/session-model";
 import type { HeldMessage } from "@renderer/stores/chat-drafts";
 
@@ -171,6 +172,38 @@ export function messageCopyText(messages: readonly UIMessage[]): string | null {
 
 export function messageRoute(intent: ComposerIntent, deliverable: boolean): MessageRoute {
   return intent !== "queue" && deliverable ? "send" : "hold";
+}
+
+/**
+ * What one press of the composer turns out to have been.
+ *
+ * Two things, and only the first of them is new: a message is what every press
+ * has always been, and an answer is what a press becomes while a question is
+ * standing open above the box that can take its words
+ * ({@link composerAnswer}, which owns the rule and the reasons).
+ *
+ * It is a decision rather than a mode, and that distinction is the whole
+ * design: the composer is not put into an answering state that a reader has to
+ * leave, and no press is ever refused for being the wrong kind. What the words
+ * are is read off the request that is open at the moment they are sent, and
+ * where they are not an answer they are a message — which is exactly what the
+ * surface did before, and remains the road for everything a question cannot
+ * take: a permission waiting on a verdict, a walk through several questions, a
+ * model that asked for one of its own listed answers.
+ */
+export type ComposerPress =
+  | { kind: "answer"; interactionId: string; submission: InteractionSubmission }
+  | { kind: "message" };
+
+export function composerPress(
+  pending: RendererSessionInteraction | null,
+  text: string,
+): ComposerPress {
+  if (pending === null) return { kind: "message" };
+  const submission = composerAnswer(pending, text);
+  return submission === null
+    ? { kind: "message" }
+    : { kind: "answer", interactionId: pending.id, submission };
 }
 
 export type HeldDispatchOutcome = "delivered" | "recorded" | "refused" | "held";

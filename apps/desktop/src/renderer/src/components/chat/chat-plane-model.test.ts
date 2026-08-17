@@ -9,7 +9,9 @@
 import type {
   ModelAccessModel,
   ModelAccessProvider,
+  RendererSessionInteraction,
   SessionAttention,
+  SessionInteractionPrompt,
   SessionInteractionResolution,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -20,6 +22,7 @@ import { createChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-d
 import {
   answerInteraction,
   composerModelSelection,
+  composerPress,
   coordinateQueuedMutation,
   coordinateQueuedSteerStart,
   dispatchHeldMessage,
@@ -657,6 +660,67 @@ describe("resolvingWith", () => {
     resolvingWith(current, "permission:2", true);
 
     expect([...current]).toEqual(["permission:1"]);
+  });
+});
+
+function askPrompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionInteractionPrompt {
+  return {
+    id: "prompt:0",
+    label: "Which branch should this land on?",
+    detail: null,
+    options: [{ id: "question:0:bWFpbg", label: "main", description: null }],
+    multiple: false,
+    custom: true,
+    ...overrides,
+  };
+}
+
+/** A model's own question: encoded ids, so none of them can read as a declared no. */
+function ask(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
+  return {
+    id: "ask-user:call-7",
+    attachmentId: "attach-1",
+    kind: "question",
+    title: "Which branch should this land on?",
+    detail: null,
+    options: prompts.flatMap((prompt) => prompt.options),
+    multiple: false,
+    prompts,
+    native: { id: null, detail: null },
+  };
+}
+
+describe("composerPress", () => {
+  it("answers the open question with what was typed, under that question's id", () => {
+    // The dead end this closes: a press here used to be a message, and a
+    // message typed at a blocked turn joins a queue that only an idle Session
+    // drains — which this one cannot become until the question is answered.
+    expect(composerPress(ask([askPrompt()]), "the release branch")).toEqual({
+      kind: "answer",
+      interactionId: "ask-user:call-7",
+      submission: {
+        resolution: {
+          optionIds: [],
+          response: "the release branch",
+          answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
+        },
+        message: null,
+      },
+    });
+  });
+
+  it("is an ordinary message while nothing is being asked", () => {
+    expect(composerPress(null, "ship it")).toEqual({ kind: "message" });
+  });
+
+  it("is an ordinary message wherever the request cannot take the words", () => {
+    // The rule and its reasons are `composerAnswer`'s; what is pinned here is
+    // that a press it refuses is never dropped — it falls back to the road it
+    // has always taken.
+    expect(composerPress(ask([askPrompt({ custom: false })]), "neither")).toEqual({
+      kind: "message",
+    });
+    expect(composerPress(ask([askPrompt()]), "   ")).toEqual({ kind: "message" });
   });
 });
 
