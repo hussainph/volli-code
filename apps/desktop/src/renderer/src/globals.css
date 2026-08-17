@@ -881,8 +881,9 @@
   /* Cancels the card's 1px border — see WHY `inset` IS NEGATIVE above. */
   inset: -1px;
   border-radius: inherit;
+  --session-ring-width: 1.5px;
   /* The visible thickness of the ring, and the only thing the mask leaves. */
-  padding: 1.5px;
+  padding: var(--session-ring-width);
   overflow: hidden;
   pointer-events: none;
   display: none;
@@ -912,6 +913,24 @@
   .session-ring[data-activity] {
     opacity: 0;
   }
+}
+
+/* Light appearance carries the ring THICKER, and it is the one axis that may
+ * move here. The hues are generated, never authored, and in light they are ink
+ * colours — dark green and dark brown — so "make it glow more" would mean
+ * lightening them, which lowers contrast rather than raising it (see COLOUR
+ * above; both already clear 4.5:1). What a dark line on a light canvas actually
+ * lacks is WEIGHT: at 1.5px it reads as a hairline against a warm busy card and
+ * washes out at arm's length, where the same 1.5px in dark is a filament
+ * against near-black and is already loud.
+ *
+ * So the same mark is drawn at the weight each canvas needs to carry it, which
+ * is what the two-block generated token set does for every other colour in the
+ * app — this is the non-colour half of the same idea. The outer radius is
+ * unchanged, so the ring stays seated on the border either way; only the inner
+ * edge moves in, and 12 − 2.5 leaves the corners comfortably concentric. */
+:root.light .session-ring {
+  --session-ring-width: 2.5px;
 }
 
 .session-ring[data-activity="waiting"] {

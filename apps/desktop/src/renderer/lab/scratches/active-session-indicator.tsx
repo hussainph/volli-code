@@ -39,7 +39,14 @@
  * Both hues clear 4.5:1 against `--card` in both appearances — about 9:1 dark,
  * 5.5:1 light. They still read differently, and that is the generated token
  * set doing its job rather than a bug: ink on a light canvas, light on a dark
- * one. Toggle Light/Dark above and judge them separately.
+ * one.
+ *
+ * Which is why LIGHT DRAWS THE RING THICKER (2.5px against dark's 1.5px), and
+ * it will look like a mistake if you toggle between them not knowing. A dark
+ * line on paper does not want to be lightened — that costs contrast rather than
+ * buying presence — it wants weight, while the same 1.5px in dark is already a
+ * filament against near-black. Judge the two appearances separately, not as a
+ * before-and-after: 3px was tried and reads as a chunky bordered box.
  *
  * Static, and deliberately so: there is no store behind these, because what is
  * under review is the drawing rather than the derivation. The derivation has
