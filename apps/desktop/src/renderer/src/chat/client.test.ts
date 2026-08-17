@@ -536,6 +536,16 @@ describe("browserChatTransport", () => {
       title: "VC-1",
       skills: ["svg-logo-designer"],
     });
+    // A picked model becomes the wire's `modelOverride` — the same parameter
+    // `volli session start --model` carries, split into its two halves here
+    // (VC-56). The composer states both; nobody else states either.
+    await transport.createSession({
+      operationId: "ticket-kickoff-create",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Work on VC-1",
+      model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+    });
     await transport.attachSession({
       operationId: "project-retry",
       sessionId: "session-1",
@@ -551,6 +561,7 @@ describe("browserChatTransport", () => {
       "sessions.create",
       "sessions.create",
       "sessions.create",
+      "sessions.create",
       "sessions.attach",
       "sessions.attach",
     ]);
@@ -560,6 +571,17 @@ describe("browserChatTransport", () => {
     expect(inputs[1]).not.toHaveProperty("skills");
     expect(inputs[2]).toMatchObject({ skills: ["svg-logo-designer"] });
     expect(inputs[3]).toMatchObject({ skills: ["svg-logo-designer"] });
+    expect(inputs[0]).not.toHaveProperty("modelOverride");
+    expect(inputs[4]).toMatchObject({
+      modelOverride: {
+        model: { providerId: "anthropic", modelId: "sonnet-4.5" },
+        reasoningLevel: "high",
+      },
+    });
+    // The selection is SPLIT, never forwarded whole: the wire's override names
+    // a model and a level, and a `model` key holding a reasoning level too
+    // would be a second spelling of the same policy.
+    expect(inputs[4]).not.toHaveProperty("model");
     vi.unstubAllGlobals();
   });
 });

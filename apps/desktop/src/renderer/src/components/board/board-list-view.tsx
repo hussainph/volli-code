@@ -11,6 +11,7 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
+import { BoardEmpty } from "@renderer/components/board/board-empty";
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
@@ -244,6 +245,8 @@ interface BoardListViewProps {
   shownStatuses: readonly TicketStatus[];
   /** Empty-at-start statuses shown as slim drop rows — only during a drag (board's `hidden`). */
   emptyDropStatuses: readonly TicketStatus[];
+  /** The project has no tickets at all — a different nothing from "no tickets match". */
+  boardEmpty: boolean;
   dragActive: boolean;
   selectedId: string | null;
   onSelect(ticketId: string): void;
@@ -265,13 +268,19 @@ export function BoardListView({
   groups,
   shownStatuses,
   emptyDropStatuses,
+  boardEmpty,
   dragActive,
   selectedId,
   onSelect,
   onOpen,
 }: BoardListViewProps) {
   if (shownStatuses.length === 0 && emptyDropStatuses.length === 0) {
-    return (
+    // Two different nothings, and only one of them is the reader's fault: a
+    // filter that matched nothing is a report, while a board with no tickets is
+    // an invitation (VC-42 audit F6). The columns view draws the same pair.
+    return boardEmpty ? (
+      <BoardEmpty className="min-h-0 flex-1" />
+    ) : (
       <div className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
         <p className="text-sm text-muted-foreground">No tickets match</p>
       </div>

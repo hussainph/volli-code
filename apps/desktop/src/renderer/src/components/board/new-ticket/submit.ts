@@ -9,24 +9,42 @@
  * - {@link runPlainCreate}: create the ticket in the chip's status, toast its
  *   display id on success.
  * - {@link runKickoff}: create the ticket DIRECTLY in Doing (regardless of the
- *   chip), then boot a terminal session that auto-launches the chosen harness
- *   with the ticket's composed prompt. With "Create more" off it navigates into
- *   the ticket detail and focuses the freshly booted session tab — the whole
- *   point of one-step kickoff is landing in the terminal as the agent starts;
- *   with it on it boots the agent in the background and stays put.
+ *   chip), then open the ticket's CHAT Session on the model and effort the
+ *   composer picked and hand it its opening turn. With "Create more" off it
+ *   navigates into the ticket workspace, where the chat's own tab is already in
+ *   front — the whole point of one-step kickoff is landing on the running agent;
+ *   with it on it starts the Session in the background and stays put.
+ *
+ * WHAT KICKOFF IS NOT ANY MORE. It used to boot a PTY and auto-launch a TUI
+ * with the ticket's composed prompt as an argv, and the composer carried a
+ * terminal-harness picker to choose which one (VC-15, subsumed by VC-56). The
+ * product has one structured executor and terminals are manual companions, so
+ * "Create & start" starts the thing the ticket workspace is built around and
+ * never a terminal. Two consequences worth stating, because they look like
+ * omissions:
+ *
+ *  - **No prompt is composed here.** A Ticket Session's agent is handed the
+ *    Ticket Brief — id, title, body, worktree orientation — as its Runtime
+ *    Brief at attach, so sending the ticket back to it as a message would be
+ *    the same text twice. What kickoff sends is the instruction to begin
+ *    ({@link DEFAULT_KICKOFF_MESSAGE}), which is the same sentence the agent
+ *    socket's `volli session start` sends when nobody dictated one.
+ *  - **No harness is persisted.** `preferredHarnessId` is the ticket's TERMINAL
+ *    default, read when a terminal resumes; a kickoff that starts no terminal
+ *    has no opinion to record, so it leaves the DB default alone.
  *
  * Failure policy (CLAUDE.md: never silently swallow a failed mutation): the
- * ticket create toasts its own failure via the board store, and the session
- * boot toasts its own failure via `createTerminalSession` — so a partial
- * failure (ticket created, session boot failed) still leaves the user somewhere
- * sane: the ticket exists in Doing, the session error is toasted, and the
- * foreground flow has already navigated into the detail view so they can retry
- * from there.
+ * ticket create toasts its own failure via the board store, and the Session
+ * start toasts (or, for a missing default model, opens Model Access) via the
+ * chat-sessions store — so a partial failure still leaves the user somewhere
+ * sane: the ticket exists in Doing, the failure is surfaced, and the foreground
+ * flow has already navigated into the ticket so they can retry from there.
  */
 import {
-  composeTicketPrompt,
+  autoTitleFromKickoff,
+  DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
-  type HarnessId,
+  type ModelSelection,
   type Ticket,
   type TicketPriority,
   type TicketStatus,
@@ -53,6 +71,28 @@ export interface ComposerFields {
   baseBranch: string | null;
 }
 
+/** How a kickoff opens the ticket's chat Session — see {@link runKickoff}. */
+export interface KickoffChat {
+  /**
+   * The Session's durable title at birth.
+   *
+   * Chats are normally named by their first delivered message, and this one's
+   * first message is a stock instruction — "Begin work on this ticket…" is not
+   * what the rail should call it. `autoTitleFromKickoff` already answers this
+   * for the socket door; kickoff asks it the same question.
+   */
+  title: string;
+  /** The opening turn, queued for release the moment an executor is live. */
+  message: string;
+  /**
+   * The model and effort the composer's run row picked. Absent means the
+   * composer had nothing to offer (Model Access unconfigured), in which case
+   * the Ticket default answers — or refuses, which the start surfaces as the
+   * configuration state it is.
+   */
+  model?: ModelSelection;
+}
+
 /** The effectful callbacks the orchestration drives; the React layer wires these to the stores. */
 export interface SubmitDeps {
   addTicket(
@@ -64,29 +104,24 @@ export interface SubmitDeps {
       body: string;
       labels: string[];
       usesWorktree: boolean;
-      /** Persisted as the ticket's default harness (kickoff only); omitted keeps the DB default. */
-      preferredHarnessId?: HarnessId;
       /** The worktree's base ref; omitted leaves it to worktree-time detection. */
       baseBranch?: string | null;
     },
   ): Promise<Ticket | null>;
-  /** Boot a ticket session, auto-launching the harness with `prompt`; resolves the sessionId or null on failure. */
-  startSession(
-    projectId: string,
-    ticketId: string,
-    kickoff: { harnessId: HarnessId; prompt: string },
-  ): Promise<string | null>;
+  /**
+   * Mint the ticket's chat Session, land its tab in front of the ticket's other
+   * tabs, and queue `message` as its opening turn. Resolves the Session's id, or
+   * null when the start failed (it has already surfaced why).
+   */
+  startChat(projectId: string, ticketId: string, chat: KickoffChat): Promise<string | null>;
   /**
    * Makes the ticket's workspace visible NOW — switches nav to Board, opens
    * its detail, and selects it on the board (workspace.openTicketWorkspace).
    * Using the narrower `workspace.openTicket` here was the bug: it never
    * touches nav, so invoking Create-&-start from Files/Sessions (the "c"
-   * shortcut is app-wide) left the promised detail/terminal unrendered.
+   * shortcut is app-wide) left the promised workspace unrendered.
    */
   openTicketWorkspace(projectId: string, ticketId: string): void;
-  /** Focus `sessionId`'s tab inside the ticket's detail view (tab ids are session ids). */
-  focusSession(projectId: string, ticketId: string, sessionId: string): void;
-  persistHarness(harnessId: HarnessId): void;
   toastSuccess(message: string): void;
 }
 
@@ -123,57 +158,48 @@ export async function runPlainCreate(
 }
 
 /**
- * Create the ticket in Doing (forced, regardless of the chip) and kick off the
- * chosen harness. `createMore` off → navigate into the detail view and focus
- * the booted session's tab (the terminal, live, as the agent starts); on →
- * background boot, no navigation. The caller resets/closes the form off
- * `created`.
+ * Create the ticket in Doing (forced, regardless of the chip) and open its chat
+ * Session on the chosen model. `createMore` off → navigate into the ticket
+ * workspace, where the Session's tab is already the active one; on → background
+ * start, no navigation. The caller resets/closes the form off `created`.
  */
 export async function runKickoff(
   fields: ComposerFields,
   deps: SubmitDeps,
-  opts: { createMore: boolean; harnessId: HarnessId },
+  opts: { createMore: boolean; model?: ModelSelection },
 ): Promise<SubmitResult> {
-  deps.persistHarness(opts.harnessId);
-  // Kickoff forces Doing — a "Create & start" ticket is booting an agent now,
-  // so it belongs in Doing whatever the Status chip says. Persist the chosen
-  // harness as the ticket's preference so later resume sessions boot the SAME
-  // harness (pty.ts resolveScope falls back to it), not the DB default.
+  // Kickoff forces Doing — a "Create & start" ticket is starting an agent now,
+  // so it belongs in Doing whatever the Status chip says.
   const ticket = await deps.addTicket(fields.projectId, "doing", fields.title, {
     priority: fields.priority,
     body: fields.body,
     labels: fields.labels,
     usesWorktree: fields.usesWorktree,
-    preferredHarnessId: opts.harnessId,
     baseBranch: baseBranchFor(fields),
   });
   if (ticket === null) return { created: false };
 
   const displayId = displayTicketId(fields.ticketPrefix, ticket.ticketNumber);
-  const prompt = composeTicketPrompt({ displayId, title: fields.title, body: fields.body });
   deps.toastSuccess(`${displayId} created`);
+  const chat: KickoffChat = {
+    title: autoTitleFromKickoff(DEFAULT_KICKOFF_MESSAGE, displayId),
+    message: DEFAULT_KICKOFF_MESSAGE,
+    ...(opts.model === undefined ? {} : { model: opts.model }),
+  };
 
   if (opts.createMore) {
-    // Background boot: the composer stays open, so we don't navigate; the
-    // session (and any boot failure toast) happens off-screen.
-    await deps.startSession(fields.projectId, ticket.id, {
-      harnessId: opts.harnessId,
-      prompt,
-    });
+    // Background start: the composer stays open, so we don't navigate; the
+    // Session (and any failure it surfaces) happens off-screen.
+    await deps.startChat(fields.projectId, ticket.id, chat);
     return { created: true };
   }
 
-  // Foreground: navigate FIRST so that even if the session boot fails (it
-  // toasts its own error), the user lands in the ticket detail and can retry.
-  // Once the session lands, focus its tab — "create & start" means landing in
-  // the terminal as the agent boots, not on the Doc tab with the session
-  // parked behind it. A failed boot (null) leaves Doc focused, which is the
-  // sane retry surface.
+  // Foreground: navigate FIRST so that even if the Session start fails (it
+  // surfaces its own reason), the user lands in the ticket and can retry. The
+  // chat's tab is put in front by the start itself, so there is no second
+  // "focus it" step to get wrong — and a start that never landed leaves the Doc
+  // tab active, which is the sane retry surface.
   deps.openTicketWorkspace(fields.projectId, ticket.id);
-  const sessionId = await deps.startSession(fields.projectId, ticket.id, {
-    harnessId: opts.harnessId,
-    prompt,
-  });
-  if (sessionId !== null) deps.focusSession(fields.projectId, ticket.id, sessionId);
+  await deps.startChat(fields.projectId, ticket.id, chat);
   return { created: true };
 }

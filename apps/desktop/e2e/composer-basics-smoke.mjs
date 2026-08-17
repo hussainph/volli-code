@@ -10,12 +10,15 @@
  *     RETARGETS which project the ticket is created in;
  *   • a title input (placeholder "Ticket title") + a Monaco Document Mode
  *     markdown description editor (placeholder "Add description…");
- *   • a metadata chip row: Status ("Backlog"), Priority ("Medium"),
- *     Labels ("Labels"), the "Terminal harness" picker, and the branch
- *     relationship — a "Base branch" chip and a "Working destination" chip
- *     (defaulting to a new worktree, which is what the footer's old Worktree
- *     switch bound; the destination chip is that same `usesWorktree` field
- *     named by what it produces);
+ *   • a metadata chip row, on ONE line: Status ("Backlog"), Priority
+ *     ("Medium"), Labels ("Labels"), and the branch relationship — a "Base
+ *     branch" chip and a "Working destination" chip (defaulting to a new
+ *     worktree, which is what the footer's old Worktree switch bound; the
+ *     destination chip is that same `usesWorktree` field named by what it
+ *     produces). There is NO terminal-harness picker: it left with the terminal
+ *     kickoff it described (VC-15/VC-56), and what replaced it — the model and
+ *     effort a Create & start will run on — lives in the footer and is proved
+ *     by composer-kickoff-smoke.mjs, which can seed a default model;
  *   • a footer with a "Create more" switch, a secondary "Create" button, and
  *     the primary kickoff button (data-testid="composer-kickoff").
  *   • the dialog root carries data-testid="new-ticket-composer".
@@ -124,7 +127,7 @@ async function main() {
     // === 2. The opened dialog is the COMPOSER with the full header + fields ===
     await attempt(
       2,
-      'Composer structure: data-testid root, project chip + static "New ticket" + Expand/Close, title/description, Status/Priority/Labels/harness chips, base → destination branch row, Create-more + Create + kickoff',
+      'Composer structure: data-testid root, project chip + static "New ticket" + Expand/Close, title/description, Status/Priority/Labels chips, base → destination branch row, Create-more + Create + kickoff, and NO terminal harness',
       async () => {
         const opened = await openComposerViaHeader(page);
         const root = await composer(page).count();
@@ -139,6 +142,9 @@ async function main() {
         const statusChip = await composer(page).getByRole("button", { name: "Backlog" }).count();
         const priorityChip = await composer(page).getByRole("button", { name: "Medium" }).count();
         const labelsChip = await composer(page).getByRole("button", { name: "Labels" }).count();
+        // Retired, and asserted absent rather than dropped from the check: a
+        // picker that chose which TUI a kickoff launched has no meaning now
+        // that Create & start opens a chat (VC-56).
         const harnessChip = await composer(page)
           .getByRole("button", { name: "Terminal harness" })
           .count();
@@ -169,7 +175,7 @@ async function main() {
           statusChip === 1 &&
           priorityChip === 1 &&
           labelsChip === 1 &&
-          harnessChip === 1 &&
+          harnessChip === 0 &&
           baseChip === 1 &&
           destinationChip === 1 &&
           createMore === 1 &&
@@ -177,7 +183,7 @@ async function main() {
           kickoff === 1;
         return {
           ok,
-          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harness=${harnessChip} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
+          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
         };
       },
     );

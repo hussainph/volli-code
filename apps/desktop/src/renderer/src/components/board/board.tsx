@@ -28,6 +28,7 @@ import {
 
 import { resolveDrop, ticketPosition } from "@renderer/components/board/board-dnd";
 import { BoardColumn } from "@renderer/components/board/board-column";
+import { BoardEmpty } from "@renderer/components/board/board-empty";
 import { BoardHeader } from "@renderer/components/board/board-header";
 import { BoardListView, TicketRowContent } from "@renderer/components/board/board-list-view";
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
@@ -226,6 +227,10 @@ export const Board = React.memo(function Board({
   // The list view's slim drop rows exist only during a drag; outside one this
   // is the frozen empty array rather than a fresh `[]` per render.
   const emptyDropStatuses = drag ? hidden : NO_STATUSES;
+  // A board with nothing on it, which is not the same as a filter matching
+  // nothing: this reads the PROJECT's tickets, so a filter that hides them all
+  // still leaves the columns (and the collapsed rail) standing. See BoardEmpty.
+  const boardEmpty = storeTickets.length === 0;
 
   const handleSelect = React.useCallback(
     (ticketId: string | null) => selectTicket(projectId, ticketId),
@@ -337,6 +342,7 @@ export const Board = React.memo(function Board({
               groups={sortedGroups}
               shownStatuses={shown}
               emptyDropStatuses={emptyDropStatuses}
+              boardEmpty={boardEmpty}
               dragActive={drag !== null}
               selectedId={selectedId}
               onSelect={handleSelect}
@@ -355,6 +361,7 @@ export const Board = React.memo(function Board({
                 panning ? "cursor-grabbing select-none" : "cursor-grab",
               )}
             >
+              {boardEmpty ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
               {shown.map((status) => (
                 <BoardColumn
                   key={status}
@@ -377,12 +384,14 @@ export const Board = React.memo(function Board({
                   animateEnter={boardMounted.current}
                 />
               ))}
-              <CollapsedColumnRail
-                statuses={hidden}
-                dragActive={drag !== null}
-                onExpand={setExpandedEmptyStatus}
-                animateEnter={boardMounted.current}
-              />
+              {boardEmpty ? null : (
+                <CollapsedColumnRail
+                  statuses={hidden}
+                  dragActive={drag !== null}
+                  onExpand={setExpandedEmptyStatus}
+                  animateEnter={boardMounted.current}
+                />
+              )}
             </div>
           )}
           <DragOverlay

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { autoTitleFromKickoff, autoTitleFromMessage } from "./session-title";
+import {
+  autoTitleFromKickoff,
+  autoTitleFromMessage,
+  DEFAULT_KICKOFF_MESSAGE,
+} from "./session-title";
 
 describe("autoTitleFromMessage", () => {
   it("uses the first visible line and collapses whitespace", () => {
@@ -37,6 +41,14 @@ describe("autoTitleFromKickoff", () => {
         "VC-9",
       ),
     ).toBe("Work on VC-9");
+  });
+
+  // The stock-kickoff arm above is a regex, and the sentence it recognises is a
+  // constant every door starting a Ticket Session sends. Nothing else notices
+  // if the two drift — the door keeps working and quietly titles its Sessions
+  // after the instruction.
+  it("recognises the shipped DEFAULT_KICKOFF_MESSAGE as the stock instruction", () => {
+    expect(autoTitleFromKickoff(DEFAULT_KICKOFF_MESSAGE, "VC-56")).toBe("Work on VC-56");
   });
 
   it("keeps a meaningful kickoff that does not name a ticket", () => {

@@ -73,7 +73,7 @@
  *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
-import { DEFAULT_HARNESS_ID, type HarnessId, isFirstClassHarnessId } from "@volli/shared";
+
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -232,13 +232,6 @@ interface UiState {
   diffPresentation: DiffPresentation;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
-  /**
-   * The harness the New-ticket composer's "Create & start" last kicked off with.
-   * Persisted app-wide (like the chrome preferences above) so the primary action
-   * remembers your agent across restarts; sanitized through {@link isFirstClassHarnessId}
-   * on rehydrate, defaulting to {@link DEFAULT_HARNESS_ID}.
-   */
-  lastHarnessId: HarnessId;
   setSidebarWidth(width: number): void;
   setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
@@ -282,7 +275,6 @@ interface UiState {
    * screen.
    */
   clearTerminalFocusUnlessTicket(ticketId: string): void;
-  setLastHarnessId(harnessId: HarnessId): void;
 }
 
 type PersistedUiState = Pick<
@@ -295,7 +287,6 @@ type PersistedUiState = Pick<
   | "railCollapsed"
   | "railMode"
   | "diffPresentation"
-  | "lastHarnessId"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
@@ -327,7 +318,6 @@ export function createUiStore(storage?: StateStorage) {
         railMode: DEFAULT_TICKET_RAIL_MODE,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         terminalFocusTarget: null,
-        lastHarnessId: DEFAULT_HARNESS_ID,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
@@ -359,7 +349,6 @@ export function createUiStore(storage?: StateStorage) {
               ? { terminalFocusTarget: null }
               : {},
           ),
-        setLastHarnessId: (harnessId) => set({ lastHarnessId: harnessId }),
       }),
       {
         name: "volli:ui",
@@ -376,7 +365,6 @@ export function createUiStore(storage?: StateStorage) {
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
           diffPresentation: state.diffPresentation,
-          lastHarnessId: state.lastHarnessId,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -410,11 +398,6 @@ export function createUiStore(storage?: StateStorage) {
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
-            // A missing/unknown persisted harness (older build, corrupt JSON,
-            // or a since-removed custom id) falls back to the first-class default.
-            lastHarnessId: isFirstClassHarnessId(stored.lastHarnessId)
-              ? stored.lastHarnessId
-              : DEFAULT_HARNESS_ID,
           };
         },
       },

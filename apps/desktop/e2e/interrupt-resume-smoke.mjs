@@ -43,13 +43,25 @@
  * pushes `volli:terminal-exit`) would for a real harness exiting or a user
  * closing the pane.
  *
- * Sessions are booted through the REAL composer "Create & start" kickoff flow
- * (same helpers as composer-kickoff-smoke.mjs), not the bare
- * `window.api.terminal.create` bridge call worktree-smoke.mjs uses — kickoff
- * both forces the ticket into Doing (the "active column" precondition every
- * scenario needs) AND registers the session in the renderer's session store,
- * which is what makes the exited-pane "Resume session" button (a REAL UI
- * surface, not a bridge call) reachable for the resume scenarios.
+ * HOW A TICKET GETS A LIVE AGENT TERMINAL HERE, and why it changed. It used to
+ * be the composer's "Create & start": that button booted a PTY and launched the
+ * harness chosen in the composer's "Terminal harness" picker. Neither exists
+ * now — Create & start opens a chat Session on a model (VC-56) and the picker
+ * left with the launch it described — so the setup here is two real doors
+ * instead of one: the composer's plain Create with the Status chip on Doing
+ * (the "active column" precondition every scenario needs), then
+ * `window.api.terminal.create({ ticket: { kickoff } })`, the same bridge call
+ * worktree-smoke.mjs uses and the only door that still launches a TUI into a
+ * PTY. Terminals stayed exactly what they were — manual companions — so
+ * everything this smoke is ABOUT is untouched.
+ *
+ * ONE CONSEQUENCE TO WATCH on the next run: a session booted over the bridge is
+ * not registered in the renderer's session store the way the old composer
+ * kickoff registered it, so the exited-pane "Resume session" button may not
+ * mount for it. `resumeButton` already falls back to the ticket context menu's
+ * resume item, which reads the durable record — if a resume scenario reports
+ * the pane button missing, that fallback is the surface it took, and this is
+ * the paragraph that says so.
  *
  * Ticket moves run over the socket via the built `volli` CLI shim
  * (agent-board-live-move-smoke.mjs's pattern) — the choke point named above,
@@ -93,11 +105,17 @@ const harness = await buildFakeHarness(scratch, undefined, {
   interactiveDir: `${scratch}/stdin-logs`,
 });
 const LINKED_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+/**
+ * The seeded project's checkout path, for the PTY's cwd.
+ *
+ * Module-level because `kickoffTicket` boots the terminal itself now and needs
+ * it, while the repo is made inside `main()`; assigned there, read only after.
+ */
+let projectPathForBoot = null;
 
 // ---- composer / detail helpers (mirrors composer-kickoff-smoke.mjs) --------
 
 const composer = (page) => page.locator('[data-testid="new-ticket-composer"]');
-const kickoffButton = (page) => page.locator('[data-testid="composer-kickoff"]');
 const titleInput = (page) => composer(page).getByPlaceholder("Ticket title");
 
 async function openComposerViaHeader(page) {
@@ -179,37 +197,58 @@ async function waitForSessionEnded(page, ticketId, sessionId) {
 }
 
 /**
- * Boot one ticket through the real composer kickoff flow, forcing it into
- * Doing with a live fake agent session. Returns the ticket's identity plus the
- * live session's id (resolved via the durable record, not scraped from the UI).
+ * Put one ticket in Doing with a live fake agent terminal on it, through the
+ * two real doors that still do those things (see the header). Returns the
+ * ticket's identity plus the live session's id (resolved via the durable
+ * record, not scraped from the UI).
  *
- * `opts.agentLabel` picks a harness from the composer's "Terminal harness" menu
- * (composer-kickoff-smoke.mjs's same path) and `opts.command` names the fake
- * binary that choice must reach. The picker's choice is STICKY (`lastHarnessId`),
- * so every scenario that cares which harness it booted names one rather than
- * inheriting whatever the previous scenario left selected.
+ * `opts.harnessId`/`opts.command` name the TUI the launch must reach — the
+ * kickoff carries the harness explicitly now rather than inheriting whatever a
+ * sticky picker was last left on, so a scenario that cares says which.
  */
 async function kickoffTicket(page, projectId, title, body, opts = {}) {
   const command = opts.command ?? "claude";
+  const harnessId = opts.harnessId ?? "claude-code";
   await resetProbe();
   const opened = await openComposerViaHeader(page);
-  if (!opened || (await kickoffButton(page).count()) === 0) {
-    throw new Error("composer / kickoff button missing");
-  }
-  if (opts.agentLabel !== undefined) {
-    await composer(page).getByRole("button", { name: "Terminal harness" }).click();
-    await sleep(200);
-    await page.getByRole("menuitem", { name: opts.agentLabel, exact: true }).click();
-    await sleep(200);
-    const label = (await kickoffButton(page).getAttribute("aria-label")) ?? "";
-    if (!label.includes(opts.agentLabel)) {
-      throw new Error(`agent picker did not settle on ${opts.agentLabel} (label=${label})`);
-    }
-  }
+  if (!opened) throw new Error("composer did not open");
+  // Status chip → Doing: the plain Create honours the chip, and every scenario
+  // below needs the ticket in an active column before its agent starts.
+  await composer(page).getByRole("button", { name: "Backlog" }).click();
+  await page.getByRole("menuitemradio", { name: "Doing" }).click();
   await fillTitleAndBody(page, title, body);
-  await kickoffButton(page).click();
+  await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+  await waitUntil(
+    "the composer to close after Create",
+    async () => (await composer(page).count()) === 0,
+    { timeout: 8000 },
+  );
 
+  const created = (await ticketsFor(page, projectId)).find((t) => t.title === title);
+  if (created === undefined) throw new Error(`ticket "${title}" missing after create`);
+  // The one door that still launches a TUI into a PTY (worktree-smoke.mjs's).
+  const booted = await page.evaluate(
+    ({ workspaceId, cwd, tid, hid, promptText }) =>
+      window.api.terminal.create({
+        workspaceId,
+        cwd,
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: tid, kickoff: { harnessId: hid, prompt: promptText } },
+      }),
+    {
+      workspaceId: projectId,
+      cwd: projectPathForBoot,
+      tid: created.id,
+      hid: harnessId,
+      promptText: `${title}\n\n${body}`,
+    },
+  );
+  if (!booted?.ok) throw new Error(`terminal.create: ${booted?.error ?? "unknown failure"}`);
+  // Open the ticket so the resume surfaces below have a screen to be on.
+  await cardById(page, `${PROJECT.prefix}-${created.ticketNumber}`).dblclick();
   await waitUntil("detail view opens", () => detailOpen(page), { timeout: 8000 });
+
   await waitUntil(
     `harness probe records ${command} + title`,
     async () => {
@@ -221,8 +260,7 @@ async function kickoffTicket(page, projectId, title, body, opts = {}) {
     { timeout: 20000 },
   );
 
-  const ticket = (await ticketsFor(page, projectId)).find((t) => t.title === title);
-  if (ticket === undefined) throw new Error(`ticket "${title}" missing after kickoff`);
+  const ticket = created;
   const sessions = await waitUntil(
     "live agent session recorded for ticket",
     async () => {
@@ -330,6 +368,7 @@ async function main() {
     await sleep(1000);
 
     const projectPath = await makeGitRepo(scratch, "intr-");
+    projectPathForBoot = projectPath;
     await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
     await goToBoard(page);
     const { byName } = await readSeededProjects(page);
@@ -565,7 +604,7 @@ async function main() {
           projectId,
           "Resume unlinked ticket",
           "Resume unlinked body marker DELTA",
-          { agentLabel: "OpenCode", command: "opencode" },
+          { harnessId: "opencode", command: "opencode" },
         );
         liveSessionIds.push(session.id);
 
@@ -643,7 +682,7 @@ async function main() {
           "Resume minted ticket",
           "Resume minted body marker EPSILON",
           // Named, not inherited: check 4 left OpenCode selected.
-          { agentLabel: "Claude Code", command: "claude" },
+          { harnessId: "claude-code", command: "claude" },
         );
         liveSessionIds.push(session.id);
 
