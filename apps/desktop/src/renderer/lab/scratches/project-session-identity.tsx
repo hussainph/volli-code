@@ -140,7 +140,10 @@ function Chip({
         "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2 text-ui",
         tone === "quiet" && "border-border bg-card text-muted-foreground",
         tone === "accent" && "border-primary/30 bg-primary/10 text-primary-text",
-        tone === "warn" && "border-attention/30 bg-attention/10 text-attention-foreground",
+        // `text-attention`, NOT `-foreground`: the foreground token is the ink
+        // for a SOLID attention fill (white in light mode), so on a /10 wash it
+        // vanishes. The mid-tone is the one that reads on a wash.
+        tone === "warn" && "border-attention/30 bg-attention/10 text-attention",
       )}
     >
       {Icon ? <Icon weight="bold" className="size-3" /> : null}
@@ -376,7 +379,7 @@ function InfoRail({ emphasis, project }: { emphasis: "venue" | "worktree"; proje
         {project ? (
           // The stake, spelled where it is decided rather than in a doc: this
           // is the user's own tree, and a session running here is not isolated.
-          <p className="text-ui text-attention-foreground">Your working tree — not isolated.</p>
+          <p className="text-ui text-attention">Your working tree — not isolated.</p>
         ) : null}
       </div>
     </RailBlock>
@@ -389,7 +392,7 @@ function InfoRail({ emphasis, project }: { emphasis: "venue" | "worktree"; proje
           <span
             className={cn(
               "flex items-center gap-1 text-ui",
-              dirty > 0 ? "text-attention-foreground" : "text-muted-foreground",
+              dirty > 0 ? "text-attention" : "text-muted-foreground",
             )}
           >
             {dirty > 0 ? <WarningIcon weight="bold" className="size-3" /> : null}
@@ -495,6 +498,10 @@ function Surface({
   const style = identityStyle(identity, project);
   const Glyph = style.glyph;
   // Home's permanent Board tab (VC-54) vs a ticket's permanent Body tab.
+  // Capitalised binding, rendered as JSX below: a Phosphor icon is a
+  // forwardRef object, not a callable function, so `(a ? X : Y)(props)` throws
+  // at render even though it typechecks.
+  const PermanentGlyph = project ? KanbanIcon : TicketIcon;
   const tabs = project
     ? [
         { id: "board", label: "Board", permanent: true },
@@ -538,10 +545,7 @@ function Surface({
             labelClassName={index === activeIndex ? style.tab : undefined}
             leading={
               tab.permanent ? (
-                (project ? KanbanIcon : TicketIcon)({
-                  weight: "bold",
-                  className: "size-3 shrink-0 text-muted-foreground",
-                })
+                <PermanentGlyph weight="bold" className="size-3 shrink-0 text-muted-foreground" />
               ) : (
                 <Glyph
                   weight="bold"
