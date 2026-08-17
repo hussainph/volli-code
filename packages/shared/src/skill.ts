@@ -12,9 +12,11 @@
  * which is the precedence prompt templates already use for their two tiers.
  * Volli never loads one silently — so a skill's BODY reaches a
  * model one of three ways, each visible in the prompt or the transcript: a
- * `/slug` reference in the composer (expanded at submit into a delimited
- * RESOURCE block, `prompt-resource.ts`), an attach-time selection that rides
- * `SessionRuntimeSpec.promptResources` into the system prompt, or the model's
+ * `/slug` reference in the composer (resolved at submit into a message-scoped
+ * resource that travels BESIDE the text and is appended after it as a
+ * delimited RESOURCE block — never spliced into the user's words, VC-49), an
+ * attach-time selection that rides `SessionRuntimeSpec.promptResources` into
+ * the system prompt, or the model's
  * own `read` of a SKILL.md it learned about from the skills INDEX
  * ({@link skillsIndexResource}) — the Agent Skills progressive-disclosure
  * ladder: metadata first, instructions when activated, bundled files as
@@ -48,7 +50,7 @@
  * Node import into the other's world.
  */
 import type { PromptResource } from "./agent-runtime";
-import { promptResourceBlock } from "./prompt-resource";
+import { isPromptResource } from "./prompt-resource";
 import type { PromptTemplate } from "./prompt-template";
 
 /** One loaded skill: the slug it is invoked by, and what the file said. */
@@ -281,19 +283,47 @@ function clampIndexDescription(description: string): string {
 }
 
 /**
- * What a `/skill` invocation becomes in the sent message.
+ * The message part a `/skill` invocation attaches to the user's message.
  *
- * The body arrives inside the delimited RESOURCE block under its directory
- * header ({@link skillPromptResource}), and the body itself verbatim — never
- * through `substituteArgs`, because a skill body is arbitrary markdown and
- * shell snippets full of literal `$1`/`$@` that substitution would silently
- * blank. The rest of the invocation's line is the user's own words ("/svg
- * make me a wordmark"), so unlike a placeholder-less template — which drops
- * its arguments by Pi's grammar — a skill keeps them, on their own line after
- * the block. Swallowing them would lose the message, which is this module
- * family's oldest rule.
+ * The user's text keeps the `/slug` reference exactly as typed — rewriting it
+ * into the skill body made the transcript claim the person pasted the whole
+ * SKILL.md themselves (VC-49). Instead the resolved body travels as its own
+ * typed part beside the text, the same shape `data-interaction-resolution`
+ * already uses for structure a user message carries without speaking it. The
+ * durable record therefore holds both halves — the words as typed and the
+ * exact bytes delivered — which is the same rule the attach-time
+ * `prompt-resources` record keeps: the record says what THIS message actually
+ * carried, even after the skill file changes on disk.
+ *
+ * The body itself stays verbatim — never through `substituteArgs`, because a
+ * skill body is arbitrary markdown and shell snippets full of literal
+ * `$1`/`$@` that substitution would silently blank.
  */
-export function skillInvocationText(skill: SkillReference, argsString: string): string {
-  const block = promptResourceBlock(skillPromptResource(skill));
-  return argsString === "" ? block : `${block}\n\n${argsString}`;
+export const SKILL_RESOURCE_PART_TYPE = "data-skill-resource" as const;
+
+/** One skill body riding a user message — see {@link SKILL_RESOURCE_PART_TYPE}. */
+export interface SkillResourcePart {
+  readonly type: typeof SKILL_RESOURCE_PART_TYPE;
+  readonly data: PromptResource;
+}
+
+/** Wrap one resolved resource as the message part that carries it. */
+export function skillResourcePart(resource: PromptResource): SkillResourcePart {
+  return { type: SKILL_RESOURCE_PART_TYPE, data: { name: resource.name, text: resource.text } };
+}
+
+/**
+ * Every skill resource a message's parts carry, read defensively — the parts
+ * crossed the RPC edge as JSON, so a malformed one is dropped rather than
+ * delivered as a half-read block. Order is the parts' own; the composer
+ * already deduplicated by name when it resolved the invocations.
+ */
+export function readSkillResources(parts: readonly unknown[]): readonly PromptResource[] {
+  return parts.flatMap((part) => {
+    if (typeof part !== "object" || part === null) return [];
+    const candidate = part as Record<string, unknown>;
+    if (candidate.type !== SKILL_RESOURCE_PART_TYPE) return [];
+    const data = candidate.data;
+    return isPromptResource(data) ? [{ name: data.name, text: data.text }] : [];
+  });
 }

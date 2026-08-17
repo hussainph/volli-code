@@ -6,6 +6,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { TAG_COLORS } from "@volli/shared";
 
 import { TagChip } from "@renderer/components/board/tag-chip";
+import { LabelPickerPopover } from "@renderer/components/ticket/label-picker";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -14,7 +15,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Input } from "@renderer/components/ui/input";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -75,49 +75,30 @@ function LabelColorMenu({
  * The presentational core of the label editor: a wrap-flow of removable label
  * chips (reusing the board's `TagChip` + stored-color-or-hash treatment, and
  * `LabelColorMenu` on right-click for labels that exist as project rows) plus
- * an inline "add label" affordance — driven purely by a `value: string[]` and
- * `onChange`, so it works both against a persisted ticket (`ticket-properties.tsx`
- * calls this directly and writes through `setLabels`) and against plain local
- * state (the New-ticket composer, before any ticket exists).
+ * the `+` that opens the shared {@link LabelPickerPopover} — driven purely by a
+ * `value: string[]` and `onChange`, so it works both against a persisted ticket
+ * (`ticket-properties.tsx` calls this directly and writes through `setLabels`)
+ * and against plain local state.
  *
- * The add affordance has two modes:
- * - default (`alwaysInput` false): a `+` button reveals the text input, which
- *   commits on Enter/blur and dismisses on Escape — the ticket-detail behavior.
- * - `alwaysInput`: popover mode (the composer's Labels menu) — a quiet
- *   borderless input row sits on top (command-menu style, no focus ring; the
- *   popover autofocuses it, so a ring would flash on every open), selected
- *   chips wrap in a hairline-separated section below, and Enter commits
- *   without dismissing. Escape is left to bubble so it closes the popover
- *   rather than the field.
+ * The `+` used to reveal a bare text field, and that was the whole affordance:
+ * putting an existing label on a ticket meant retyping its name from memory,
+ * which is how `bug` and `Bug` end up as two labels on one board. The picker
+ * offers the project's own vocabulary first and still takes a new name typed
+ * into its field — see `label-picker.tsx`.
  *
- * Label-color edits still write straight through the board store (project
- * scoped, and only offered for labels that already have a project row), which
- * both surfaces share unchanged.
+ * Label-color edits write straight through the board store (project scoped, and
+ * only offered for labels that already have a project row).
  */
 export function LabelEditorCore({
   projectId,
   value,
   onChange,
-  addPlaceholder = "Label…",
-  alwaysInput = false,
 }: {
   projectId: string;
   value: readonly string[];
   onChange: (next: string[]) => void;
-  addPlaceholder?: string;
-  alwaysInput?: boolean;
 }) {
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
-  const [adding, setAdding] = React.useState(false);
-  const [draft, setDraft] = React.useState("");
-
-  function commitAdd() {
-    const trimmed = draft.trim();
-    setDraft("");
-    if (!alwaysInput) setAdding(false);
-    if (trimmed === "" || value.includes(trimmed)) return;
-    onChange([...value, trimmed]);
-  }
 
   function remove(label: string) {
     onChange(value.filter((existing) => existing !== label));
@@ -126,8 +107,6 @@ export function LabelEditorCore({
   function pickColor(labelId: string, color: string | null) {
     void useBoardStore.getState().setLabelColor(projectId, labelId, color);
   }
-
-  const showInput = alwaysInput || adding;
 
   const chips = value.map((label) => {
     const row = projectLabels?.find((candidate) => candidate.name === label);
@@ -158,66 +137,14 @@ export function LabelEditorCore({
     );
   });
 
-  if (alwaysInput) {
-    return (
-      <div className="flex flex-col">
-        <Input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commitAdd();
-            }
-          }}
-          placeholder={addPlaceholder}
-          // `dark:bg-transparent` only looks redundant next to `bg-transparent`:
-          // Input carries `dark:bg-border/30`, which outranks an unprefixed
-          // class, so the dark variant is what actually strips the fill there.
-          className="h-8 w-full rounded-none border-0 bg-transparent px-4 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
-        />
-        {value.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1 border-t border-border p-2">
-            {chips}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-wrap items-center gap-1">
       {chips}
-      {showInput ? (
-        <Input
-          autoFocus
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commitAdd}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commitAdd();
-            } else if (event.key === "Escape") {
-              // Escape just abandons the inline add.
-              event.preventDefault();
-              setDraft("");
-              setAdding(false);
-            }
-          }}
-          placeholder={addPlaceholder}
-          className="h-6 w-28 px-1 text-ui"
-        />
-      ) : (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Add label"
-          onClick={() => setAdding(true)}
-        >
+      <LabelPickerPopover projectId={projectId} value={value} onChange={onChange}>
+        <Button variant="ghost" size="icon-xs" aria-label="Add label">
           <PlusIcon />
         </Button>
-      )}
+      </LabelPickerPopover>
     </div>
   );
 }

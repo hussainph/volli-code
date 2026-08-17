@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { NEVER_GROWS_WHEN_TYPING_AT_EDGES, renderProjection } from "./document-decorations";
+import {
+  LINE_BOX_CLASS,
+  NEVER_GROWS_WHEN_TYPING_AT_EDGES,
+  renderProjection,
+} from "./document-decorations";
 import type { ProjectionOp } from "./markdown-projection";
 
 /** Render one op over `text` and return the decorations it produced. */
@@ -9,7 +13,7 @@ function decorationsFor(text: string, ops: readonly ProjectionOp[]) {
 }
 
 describe("renderProjection — line-class ops", () => {
-  it("covers the whole line and styles both the background and the text", () => {
+  it("covers the whole line and reaches its glyphs", () => {
     const [deco] = decorationsFor("# Title", [
       { kind: "line-class", line: 1, className: "volli-md-h1" },
     ]);
@@ -19,12 +23,40 @@ describe("renderProjection — line-class ops", () => {
       endLineNumber: 1,
       endColumn: 8,
     });
-    expect(deco.options.className).toBe("volli-md-h1");
     expect(deco.options.inlineClassName).toBe("volli-md-h1");
-    expect(deco.options.isWholeLine).toBe(true);
     // The text span changes glyph widths, so Monaco must measure the DOM rather
     // than assume the monospace grid.
     expect(deco.options.inlineClassNameAffectsLetterSpacing).toBe(true);
+  });
+
+  it("asks for a whole-line box only where there is a box to paint", () => {
+    // A blockquote's rule and a fence's ground are drawn across the line; a
+    // heading has no box at all, so a whole-line element carrying it would
+    // paint nothing on every heading line in the document.
+    const quote = decorationsFor("> quoted", [
+      { kind: "line-class", line: 1, className: "volli-md-blockquote" },
+    ]);
+    expect(quote[0].options.className).toBe(`${LINE_BOX_CLASS} volli-md-blockquote`);
+    expect(quote[0].options.isWholeLine).toBe(true);
+
+    const heading = decorationsFor("# Title", [
+      { kind: "line-class", line: 1, className: "volli-md-h1" },
+    ]);
+    expect(heading[0].options.className).toBeUndefined();
+    expect(heading[0].options.isWholeLine).toBeUndefined();
+  });
+
+  it("marks the box layer so its paint cannot repeat on every span in the line", () => {
+    // Both layers carry the same class — the box needs it to find its ground,
+    // the spans to find their face. Only the box carries the marker the
+    // stylesheet hangs `background`/`border` off, which is what keeps a fence's
+    // ground one band rather than one per run of text.
+    const [deco] = decorationsFor("```", [
+      { kind: "line-class", line: 1, className: "volli-md-fence" },
+    ]);
+    expect(deco.options.className).toBe(`${LINE_BOX_CLASS} volli-md-fence`);
+    expect(deco.options.inlineClassName).toBe("volli-md-fence");
+    expect(deco.options.inlineClassName).not.toContain(LINE_BOX_CLASS);
   });
 
   it("grows the line box for heading levels whose text outgrows it", () => {
@@ -44,13 +76,17 @@ describe("renderProjection — line-class ops", () => {
     const [deco] = decorationsFor("```\nx\n```", [
       { kind: "line-class", line: 1, className: "volli-md-fence volli-md-fence-open" },
     ]);
-    expect(deco.options.className).toBe("volli-md-fence volli-md-fence-open");
+    // The `-open` companion rounds the top of the same box, so it rides the box
+    // layer with it rather than being listed as a box of its own.
+    expect(deco.options.className).toBe(`${LINE_BOX_CLASS} volli-md-fence volli-md-fence-open`);
     expect(deco.options.lineHeight).toBeUndefined();
   });
 
   it("clamps a line number past the end of the document", () => {
     const [deco] = decorationsFor("one", [{ kind: "line-class", line: 9, className: "x" }]);
     expect(deco.range.startLineNumber).toBe(1);
+    // An unknown class paints nothing, so it gets no box either.
+    expect(deco.options.className).toBeUndefined();
   });
 });
 
@@ -204,7 +240,7 @@ describe("renderProjection — widget ops", () => {
     });
     expect(render.decorations[0].options.inlineClassName).toBe("volli-md-hidden");
     expect(render.decorations[1].options).toMatchObject({
-      className: "volli-md-hr",
+      className: `${LINE_BOX_CLASS} volli-md-hr`,
       isWholeLine: true,
     });
     expect(render.decorations[1].range.startLineNumber).toBe(2);

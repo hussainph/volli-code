@@ -31,6 +31,7 @@ import {
   type AuthoritySnapshot,
   type RuntimeAskUserRequest,
   type RuntimeObservation,
+  type RuntimeSessionIdentity,
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -911,6 +912,29 @@ describe("startSession", () => {
     ]);
     await handle.close();
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("hands the execution-env factory the Session's own identity beside its workspace", async () => {
+    // The factory is main's one chance to export who is running —
+    // `VOLLI_SESSION`/`VOLLI_TICKET` via `piExecutionEnv`'s identity option
+    // (VC-51) — so the runtime must pass the spec's identity, not just a path.
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const seen: Array<{ workspacePath: string; identity: RuntimeSessionIdentity }> = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+      executionEnvFactory: async (workspacePath, identity) => {
+        seen.push({ workspacePath, identity });
+        return { cwd: workspacePath, cleanup: async () => undefined } as unknown as ExecutionEnv;
+      },
+    });
+
+    const handle = await runtime.startSession(attachment.spec);
+
+    expect(seen).toEqual([
+      { workspacePath: attachment.worktreePath, identity: attachment.spec.identity },
+    ]);
+    await handle.close();
   });
 
   it("propagates an execution-environment factory rejection without observing it", async () => {

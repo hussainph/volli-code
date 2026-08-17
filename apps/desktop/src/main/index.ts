@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   diffManagedContent,
+  displayTicketId,
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
@@ -591,9 +592,28 @@ app.whenReady().then(async () => {
           // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
           // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
           // directory (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath) => {
+          executionEnvFactory: async (workspacePath, identity) => {
             await loginPathBootstrap.apply();
-            return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+            // The Session's own name rides beside the PATH recovery:
+            // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
+            // exactly as `agentSessionEnv` exports them into a spawned PTY —
+            // what lets `volli session done`/`blocked` resolve their context
+            // and makes socket writes attribute to the Session (VC-51). The
+            // display id is looked up per attachment, so a Ticket renamed by a
+            // prefix change is right on the next attach.
+            const ticket =
+              identity.ticketId === null ? null : getTicket(dbHandle.db, identity.ticketId);
+            const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+            return piExecutionEnv(workspacePath, {
+              pathPrefixes: [runtimePaths.binDir],
+              identity: {
+                sessionId: identity.sessionId,
+                ticketDisplayId:
+                  ticket && ticketProject
+                    ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+                    : null,
+              },
+            });
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -1451,6 +1471,22 @@ app.whenReady().then(async () => {
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
           ...(sessions !== null ? { sessions } : {}),
+          // Model discovery (VC-78): `model list` reads the same Model Access
+          // snapshot every other surface does — never a parallel provider
+          // probe, never raw provider files. The door bounds the read itself
+          // (abort + race), so a hung probe cannot hang the CLI verb.
+          ...(piRuntimeHost !== null
+            ? {
+                inspectModelAccess: (input: { signal: AbortSignal }) =>
+                  piRuntimeHost.inspectModelAccess(input),
+              }
+            : {}),
+          // `prompt baseline` (VC-66) prices the index through the SAME port a
+          // real start records it through — nothing injected, so the answer is
+          // the fresh-session default. Absent with the runtime, same as above.
+          ...(sessionSkills !== null
+            ? { skillsIndex: (projectId: string) => sessionSkills.index(projectId, []) }
+            : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.
