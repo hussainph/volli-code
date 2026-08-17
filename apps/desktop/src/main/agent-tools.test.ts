@@ -6,24 +6,30 @@ import {
   readFile,
   readlink,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { buildHarnessInstallPlan, harnessAdapters } from "@volli/shared";
+import { afterEach, describe, expect, it } from "vite-plus/test";
+import { buildHarnessInstallPlan, harnessAdapters, VOLLI_PATH_PROFILE_BLOCK } from "@volli/shared";
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { applyHarnessInstallPlan } from "./harness-install";
 import {
+  cleanupLegacyGlobalCliLink,
   detectHarnesses,
   detectInstalledHarnesses,
-  globalCliLinkShellCommand,
+  ensureUserBinOnPath,
+  ensureUserCliLink,
   installHarnessSkills,
+  loginPathHasUserBin,
+  removeUserBinPathBlock,
+  removeUserCliLinkIfOurs,
   resolveOnPath,
-  runAgentToolsConsent,
   uninstallAllHarnessSkills,
+  userCliLinkPath,
 } from "./agent-tools";
 
 let root: string | undefined;
@@ -125,28 +131,177 @@ describe("detectHarnesses", () => {
   });
 });
 
-describe("globalCliLinkShellCommand", () => {
-  it("creates /usr/local/bin before linking so fresh macOS never fails permanently", () => {
-    const command = globalCliLinkShellCommand("/Users/me/Library/App/bin/volli");
-    expect(command).toBe(
-      "/bin/mkdir -p /usr/local/bin && " +
-        "if [ -L /usr/local/bin/volli ] && [ \"$(/usr/bin/readlink /usr/local/bin/volli)\" = '/Users/me/Library/App/bin/volli' ]; then :; " +
-        "elif [ -e /usr/local/bin/volli ] || [ -L /usr/local/bin/volli ]; then echo 'Refusing to replace existing /usr/local/bin/volli' >&2; exit 1; " +
-        "else /bin/ln -sn '/Users/me/Library/App/bin/volli' /usr/local/bin/volli; fi",
-    );
-    expect(command.indexOf("/bin/mkdir")).toBeLessThan(command.indexOf("/bin/ln -sn"));
-    expect(command).not.toContain(" -f");
+describe("ensureUserCliLink", () => {
+  it("creates ~/.local/bin/volli pointing at the shim, directories included", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-user-link-"));
+    const shimPath = join(root, "userData", "bin", "volli");
+
+    const result = await ensureUserCliLink({ home: root, shimPath });
+
+    expect(result).toEqual({ state: "linked", changed: true });
+    expect(await readlink(userCliLinkPath(root))).toBe(shimPath);
   });
 
-  it("lets a packaged install replace only the exact legacy dev launcher", () => {
-    expect(
-      globalCliLinkShellCommand(
-        "/Users/me/Library/Application Support/Volli Code/bin/volli",
-        "/Users/me/Library/Application Support/Volli Code-dev/bin/volli",
-      ),
-    ).toContain(
-      `elif [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = '/Users/me/Library/Application Support/Volli Code-dev/bin/volli' ]; then /bin/ln -sfn '/Users/me/Library/Application Support/Volli Code/bin/volli' /usr/local/bin/volli;`,
+  it("is a no-op when the link already points at this shim", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-user-link-"));
+    const shimPath = join(root, "userData", "bin", "volli");
+    await ensureUserCliLink({ home: root, shimPath });
+
+    expect(await ensureUserCliLink({ home: root, shimPath })).toEqual({
+      state: "linked",
+      changed: false,
+    });
+  });
+
+  it("repoints a managed sibling's link but keeps a foreign one exactly as it is", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-user-link-"));
+    const devShim = join(root, "Volli Code-dev", "bin", "volli");
+    const shimPath = join(root, "Volli Code", "bin", "volli");
+    await mkdir(join(root, ".local", "bin"), { recursive: true });
+    await symlink(devShim, userCliLinkPath(root));
+
+    expect(await ensureUserCliLink({ home: root, shimPath, managedTargets: [devShim] })).toEqual({
+      state: "linked",
+      changed: true,
+    });
+    expect(await readlink(userCliLinkPath(root))).toBe(shimPath);
+
+    // Now make it foreign: someone else's volli.
+    const foreign = join(root, "other-tool", "volli");
+    const { rm } = await import("node:fs/promises");
+    await rm(userCliLinkPath(root));
+    await symlink(foreign, userCliLinkPath(root));
+    expect(await ensureUserCliLink({ home: root, shimPath, managedTargets: [devShim] })).toEqual({
+      state: "kept",
+      target: foreign,
+    });
+    expect(await readlink(userCliLinkPath(root))).toBe(foreign);
+  });
+
+  it("never replaces a regular file wearing the name", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-user-link-"));
+    await mkdir(join(root, ".local", "bin"), { recursive: true });
+    await writeFile(userCliLinkPath(root), "#!/bin/sh\n");
+
+    expect(await ensureUserCliLink({ home: root, shimPath: join(root, "shim") })).toEqual({
+      state: "kept",
+      target: null,
+    });
+    expect((await lstat(userCliLinkPath(root))).isSymbolicLink()).toBe(false);
+  });
+});
+
+describe("removeUserCliLinkIfOurs", () => {
+  it("removes our link, leaves a foreign one, and reports an absent one as not removed", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-user-unlink-"));
+    const shimPath = join(root, "userData", "bin", "volli");
+    await ensureUserCliLink({ home: root, shimPath });
+
+    expect(await removeUserCliLinkIfOurs({ home: root, shimPath })).toBe(true);
+    expect(await removeUserCliLinkIfOurs({ home: root, shimPath })).toBe(false);
+
+    await symlink(join(root, "other", "volli"), userCliLinkPath(root));
+    expect(await removeUserCliLinkIfOurs({ home: root, shimPath })).toBe(false);
+    expect(await readlink(userCliLinkPath(root))).toBe(join(root, "other", "volli"));
+  });
+});
+
+describe("cleanupLegacyGlobalCliLink", () => {
+  it("removes the legacy link only when it points at our shim (or a managed sibling's)", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-legacy-link-"));
+    const shimPath = join(root, "userData", "bin", "volli");
+    const legacyLinkPath = join(root, "usr-local-bin-volli");
+    await symlink(shimPath, legacyLinkPath);
+
+    expect(await cleanupLegacyGlobalCliLink({ shimPath, legacyLinkPath })).toBe("removed");
+    expect(await cleanupLegacyGlobalCliLink({ shimPath, legacyLinkPath })).toBe("absent");
+  });
+
+  it("keeps a foreign link and a regular file, reporting them as kept", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-legacy-link-"));
+    const shimPath = join(root, "userData", "bin", "volli");
+
+    const foreignLink = join(root, "foreign-link");
+    await symlink(join(root, "someone-elses", "volli"), foreignLink);
+    expect(await cleanupLegacyGlobalCliLink({ shimPath, legacyLinkPath: foreignLink })).toBe(
+      "kept",
     );
+    expect(await readlink(foreignLink)).toBe(join(root, "someone-elses", "volli"));
+
+    const plainFile = join(root, "plain-volli");
+    await writeFile(plainFile, "#!/bin/sh\n");
+    expect(await cleanupLegacyGlobalCliLink({ shimPath, legacyLinkPath: plainFile })).toBe("kept");
+  });
+});
+
+describe("login PATH wiring", () => {
+  it("recognizes ~/.local/bin on the login PATH, trailing slashes tolerated", () => {
+    expect(loginPathHasUserBin(`/usr/bin:${join("/home/me", ".local/bin")}`, "/home/me")).toBe(
+      true,
+    );
+    expect(loginPathHasUserBin(`/usr/bin:${join("/home/me", ".local/bin")}/`, "/home/me")).toBe(
+      true,
+    );
+    expect(loginPathHasUserBin("/usr/bin:/bin", "/home/me")).toBe(false);
+  });
+
+  it("writes the fenced PATH block to ~/.zprofile only when the login shell misses ~/.local/bin", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
+
+    const already = await ensureUserBinOnPath({
+      home: root,
+      loginPath: `/usr/bin:${join(root, ".local/bin")}`,
+    });
+    expect(already).toEqual({ state: "on-path", conflicts: [] });
+    await expect(readFile(join(root, ".zprofile"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const written = await ensureUserBinOnPath({ home: root, loginPath: "/usr/bin:/bin" });
+    expect(written.state).toBe("written");
+    const profile = await readFile(join(root, ".zprofile"), "utf8");
+    expect(profile).toContain("# volli:begin v=1");
+    expect(profile).toContain(VOLLI_PATH_PROFILE_BLOCK);
+    expect(profile).toContain("# volli:end");
+    // A zsh profile must never carry an HTML comment — that is a syntax error.
+    expect(profile).not.toContain("<!--");
+  });
+
+  it("writes nothing when the login shell could not be asked", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
+
+    expect(await ensureUserBinOnPath({ home: root, loginPath: null })).toEqual({
+      state: "unknown",
+      conflicts: [],
+    });
+    await expect(readFile(join(root, ".zprofile"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("preserves a user-edited block as a conflict instead of clobbering it", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
+    await ensureUserBinOnPath({ home: root, loginPath: "/usr/bin" });
+    const profile = await readFile(join(root, ".zprofile"), "utf8");
+    const edited = profile.replace("$HOME/.local/bin", "$HOME/custom/bin");
+    await writeFile(join(root, ".zprofile"), edited);
+
+    const second = await ensureUserBinOnPath({ home: root, loginPath: "/usr/bin" });
+    expect(second.state).toBe("conflict");
+    expect(second.conflicts).toHaveLength(1);
+    expect(await readFile(join(root, ".zprofile"), "utf8")).toBe(edited);
+  });
+
+  it("excises exactly the managed block on removal, leaving the user's profile", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
+    await writeFile(join(root, ".zprofile"), "export EDITOR=vim\n");
+    await ensureUserBinOnPath({ home: root, loginPath: "/usr/bin" });
+
+    const removal = await removeUserBinPathBlock(root);
+    expect(removal.removed).toContain(join(root, ".zprofile"));
+    const profile = await readFile(join(root, ".zprofile"), "utf8");
+    expect(profile).toContain("export EDITOR=vim");
+    expect(profile).not.toContain("volli:begin");
   });
 });
 
@@ -211,25 +366,5 @@ describe("uninstallAllHarnessSkills", () => {
     expect(removal.removed).toContain(skill);
     expect(removal.preserved).toEqual([]);
     await expect(readFile(skill, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-  });
-});
-
-describe("runAgentToolsConsent", () => {
-  it("installs only after explicit first-launch consent and persists the choice", async () => {
-    const prompt = vi.fn(async () => "install" as const);
-    const install = vi.fn(async () => undefined);
-    const persist = vi.fn(async () => undefined);
-
-    expect(await runAgentToolsConsent({ current: null, prompt, install, persist })).toBe(
-      "installed",
-    );
-    expect(install).toHaveBeenCalledTimes(1);
-    expect(persist).toHaveBeenCalledWith("installed");
-
-    prompt.mockClear();
-    install.mockClear();
-    await runAgentToolsConsent({ current: "deferred", prompt, install, persist });
-    expect(prompt).not.toHaveBeenCalled();
-    expect(install).not.toHaveBeenCalled();
   });
 });
