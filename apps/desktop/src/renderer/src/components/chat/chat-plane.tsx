@@ -48,6 +48,7 @@ import {
 import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
 import { sessionContextUsage } from "@renderer/chat/context-usage";
 import {
+  composerAnswerPrompt,
   footInteraction,
   interactionForApproval,
   readInteractionResolutionMessage,
@@ -62,6 +63,7 @@ import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
   composerModelSelection,
+  composerPress,
   coordinateQueuedMutation,
   coordinateQueuedSteerStart,
   dispatchHeldMessage,
@@ -80,6 +82,7 @@ import {
   settledHeldIds,
   withdrawInteraction,
   type CatalogState,
+  type HeldDispatchOutcome,
   type SessionBlockerActs,
   type SessionBlockerState,
 } from "@renderer/components/chat/chat-plane-model";
@@ -262,7 +265,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
 
   /**
    * The box empties on dispatch — but it is never the last thing holding the
-   * message.
+   * words.
    *
    * Pi answers a `message.submit` when the whole TURN has ended — the runtime
    * awaits `agent.prompt` — so "clear once it lands" means the words you sent
@@ -273,14 +276,22 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * it with no trace. So the words move from the box to the persisted held list
    * in one write, and leave it only for something that outlives this window: a
    * delivered turn, or a ledger that already records the intent.
+   *
+   * Written as a road the caller supplies, because the composer now has two:
+   * the message ({@link send}) and the answer to an open question
+   * ({@link answerTyped}). Everything around the road — the durable copy before
+   * delivery, and which outcome hands the words back — is the same promise for
+   * both, and it is not a promise either caller should be able to keep
+   * differently. A refused answer lands where a refused message lands: back in
+   * the strip under the composer, as words nothing took.
    */
-  const send = React.useCallback(
-    (text: string, intent: ComposerIntent) => {
+  const dispatch = React.useCallback(
+    (text: string, road: (message: QueuedMessage) => Promise<HeldDispatchOutcome>) => {
       const message = { id: nextId(), text };
       holdMessage(sessionId, message);
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
-        deliver: () => deliver(message, intent),
+        deliver: () => road(message),
         finish: async (outcome) => {
           if (outcome === "held") markHeld(sessionId, message.id, "queued");
           // `recorded` is the message the runtime committed before the executor
@@ -293,7 +304,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
         },
       });
     },
-    [deliver, dropHeld, holdMessage, markHeld, sessionId],
+    [dropHeld, holdMessage, markHeld, sessionId],
+  );
+
+  const send = React.useCallback(
+    (text: string, intent: ComposerIntent) => {
+      dispatch(text, (message) => deliver(message, intent));
+    },
+    [deliver, dispatch],
   );
 
   // What the Session is holding for you, from the two records that say it — see
@@ -432,6 +450,20 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    */
   const pending =
     interactions.length > 0 ? footInteraction(interactions, gatedToolCallIds(messages)) : null;
+  /**
+   * The question the composer's own words answer, held where a stable callback
+   * can read it.
+   *
+   * A ref rather than a dependency, and written during render like
+   * {@link useStableList}'s: `onSubmit` is a prop of the memoized composer, so a
+   * callback that closed over `pending` would be a new function on every frame
+   * of every streamed turn and switch that memo boundary off — for a value that
+   * is only ever read inside a press, at which point the current render's is the
+   * only correct one anyway.
+   */
+  const pendingRef = React.useRef<RendererSessionInteraction | null>(pending);
+  pendingRef.current = pending;
+  const answering = pending !== null && composerAnswerPrompt(pending) !== null;
 
   // What the composer's two caret-driven pickers rank over. All of it is
   // project-scoped: the file index is the one the editor's `@` already uses,
@@ -454,6 +486,46 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
         resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
       }),
     [resolveInteraction, send],
+  );
+
+  /**
+   * The other thing one press of the composer can be: the answer to the
+   * question standing above it.
+   *
+   * It takes {@link dispatch}'s road rather than calling `answer` directly, so
+   * words typed into the composer are durable before they are delivered and
+   * come back to the reader if nothing took them — the same promise the box has
+   * always made about a message, kept for the thing that is not one. A refused
+   * answer becomes an unsent row under the composer, and the question is still
+   * open above it: pressing send again is the retry.
+   */
+  const answerTyped = React.useCallback(
+    (interactionId: string, submission: InteractionSubmission, text: string) => {
+      dispatch(text, async () =>
+        (await answer(interactionId, submission)) ? "delivered" : "refused",
+      );
+    },
+    [answer, dispatch],
+  );
+
+  /**
+   * One press of the composer, and the one place it is decided what that press
+   * was.
+   *
+   * The rule is `composerAnswer`'s and the reasons are there. What is here is
+   * the fallback, and it is the one that used to be the only behaviour: a
+   * message, which while a turn is live joins the release queue. That is right
+   * for words typed alongside a running turn and was a dead end for words typed
+   * at a blocked one — the queue drains into an idle Session, and a Session
+   * waiting on a question never becomes idle on its own.
+   */
+  const submitComposer = React.useCallback(
+    (text: string, intent: ComposerIntent) => {
+      const press = composerPress(pendingRef.current, text);
+      if (press.kind === "answer") answerTyped(press.interactionId, press.submission, text);
+      else send(text, intent);
+    },
+    [answerTyped, send],
   );
 
   const withdraw = React.useCallback(
@@ -637,6 +709,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // One thing parks above the composer at a time; a pending
               // question outranks a list you can reopen by typing.
               interactionOpen={pending !== null}
+              // The card above draws no box of its own while this holds; this
+              // one is it. Both read the same rule off the same interaction —
+              // see `ComposerInteractionStack`.
+              answering={answering}
               models={composerModels}
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
@@ -648,7 +724,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               queued={strip}
               onQueuedChange={onQueuedChange}
               onSteerQueued={onSteerQueued}
-              onSubmit={send}
+              onSubmit={submitComposer}
               onStop={stopTurn}
             />
           </ComposerInteractionStack>

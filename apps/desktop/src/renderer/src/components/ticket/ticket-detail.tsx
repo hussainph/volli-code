@@ -185,7 +185,7 @@ export function TicketDetail({
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
-        chatTabStatus(state.sessions[sessionId]?.lifecycle),
+        chatTabStatus(state.sessions[sessionId]),
       ),
     ),
   );

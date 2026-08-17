@@ -591,9 +591,7 @@ function ScratchTabs({
     ),
   );
   const chatStatuses = useChatSessionsStore(
-    useShallow((state) =>
-      chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]?.lifecycle)),
-    ),
+    useShallow((state) => chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]))),
   );
   const tabs: SessionTabDescriptor[] = [
     ...terminalTabs.map(

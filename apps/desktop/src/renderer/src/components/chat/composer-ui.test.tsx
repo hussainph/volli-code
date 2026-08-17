@@ -413,6 +413,45 @@ describe("what a composed message actually sends", () => {
   });
 });
 
+describe("the composer while a question is waiting on an answer", () => {
+  /** The blocked turn, exactly as the plane hands it over: live, and asked. */
+  function answeringComposer(overrides: Partial<SessionComposerProps> = {}): string {
+    return renderToStaticMarkup(
+      <SessionComposer
+        {...composerProps({ working: true, interactionOpen: true, answering: true, ...overrides })}
+      />,
+    );
+  }
+
+  it("is a live box that says where its words are going", () => {
+    const html = answeringComposer();
+    // Never disabled, which is the whole point: a question must not be able to
+    // take the composer away from the person it is asking.
+    expect(html).toContain('placeholder="Your answer"');
+    expect(html).toContain('aria-label="Answer"');
+    expect(html).not.toContain("<textarea disabled");
+  });
+
+  it("stops calling the press a queue while the queue could not release it", () => {
+    // `ask_user` blocks INSIDE a turn, so `working` holds for the whole of a
+    // pending question — and a queue drains into an idle Session, which this
+    // one cannot become until the question is answered.
+    expect(answeringComposer()).toContain('aria-label="Answer"');
+    expect(answeringComposer()).not.toContain('aria-label="Queue"');
+    // The turn is still live, so the way to stop it is still on the row.
+    expect(answeringComposer()).toContain('aria-label="Stop turn"');
+  });
+
+  it("is the ordinary message box again the moment nothing is asked", () => {
+    const html = renderToStaticMarkup(
+      <SessionComposer {...composerProps({ working: true, interactionOpen: true })} />,
+    );
+    expect(html).toContain('placeholder="Ask, plan, or implement…"');
+    expect(html).toContain('aria-label="Message"');
+    expect(html).toContain('aria-label="Queue"');
+  });
+});
+
 function pickerState(overrides: Partial<ComposerPickerState> = {}): ComposerPickerState {
   return {
     mode: "command",

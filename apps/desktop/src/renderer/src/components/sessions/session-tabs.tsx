@@ -309,7 +309,10 @@ function ChatTab({
         <Tab
           {...sharedTabProps(title, shell)}
           label={title}
-          title={title}
+          // The waiting dot's one line of hover, in the sidebar's own words: a
+          // tab is the only place that dot stands with nothing beside it to say
+          // what it means.
+          title={status === "waiting" ? `${title}\nWaiting for you` : title}
           onActivate={onSelect}
           status={status}
           leading={

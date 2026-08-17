@@ -33,7 +33,9 @@ import {
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
 import { type BundleRow } from "@renderer/chat/activity";
+import { composerAnswerPrompt } from "@renderer/chat/interaction";
 import { enqueueMessage, type QueuedMessage } from "@renderer/chat/session-model";
+import { composerPress } from "@renderer/components/chat/chat-plane-model";
 import { ActivityBundle, AttentionReceipt, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
   SessionComposer,
@@ -889,15 +891,21 @@ function Section({ label, children }: React.PropsWithChildren<{ label: string }>
  * it, which is the only place a fixture can show what the harness would get.
  *
  * Fully live — click a row, arrow through them, press a numeral, type in the
- * box, Skip, come back. What it is *for* is the two things static markup cannot
- * catch: where focus lands when a step arrives, and whether the height tween
- * under a mounted composer reads as motion or as a jump.
+ * COMPOSER, Skip, come back. What it is *for* is the two things static markup
+ * cannot catch: where focus lands when a step arrives, and whether the height
+ * tween under a mounted composer reads as motion or as a jump.
+ *
+ * The composer is wired through `composerPress`, the same router the plane
+ * uses, so this is where the answer road is actually driven: a question that
+ * takes words is answered from the box below it, and one that does not leaves
+ * the box a message box — which the readout under it prints either way.
  */
 function AskUserStates() {
   const [shape, setShape] = React.useState<(typeof ASKS)[number]["name"]>("stepped");
   const [answered, setAnswered] = React.useState<string | null>(null);
   const [value, setValue] = React.useState("");
   const asked = ASKS.find((entry) => entry.name === shape) ?? ASKS[0];
+  const open = answered === null ? (asked?.interaction ?? null) : null;
 
   return (
     <section className="flex flex-col gap-3">
@@ -919,7 +927,7 @@ function AskUserStates() {
       </div>
 
       <ComposerInteractionStack
-        interaction={answered === null ? asked.interaction : null}
+        interaction={open}
         onResolve={(_id, submission) => {
           setAnswered(
             JSON.stringify(
@@ -943,10 +951,24 @@ function AskUserStates() {
           onSelectionChange={() => undefined}
           working={false}
           ready
+          interactionOpen={open !== null}
+          answering={open !== null && composerAnswerPrompt(open) !== null}
           queued={[]}
           onQueuedChange={() => undefined}
           onSteerQueued={() => undefined}
-          onSubmit={() => setValue("")}
+          onSubmit={(text) => {
+            const press = composerPress(open, text);
+            setValue("");
+            if (press.kind === "answer") {
+              setAnswered(
+                JSON.stringify(
+                  { resolution: press.submission.resolution, message: press.submission.message },
+                  null,
+                  1,
+                ),
+              );
+            } else setAnswered(JSON.stringify({ message: text }, null, 1));
+          }}
           onStop={() => undefined}
         />
       </ComposerInteractionStack>
