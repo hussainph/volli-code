@@ -739,9 +739,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // One thing parks above the composer at a time; a pending
               // question outranks a list you can reopen by typing.
               interactionOpen={pending !== null}
-              // The card above draws no box of its own while this holds; this
-              // one is it. Both read the same rule off the same interaction —
-              // see `ComposerInteractionStack`.
+              // What this box's words will do, not where the answer belongs.
+              // The card above keeps its own field and is the affordance; this
+              // is the fallback that stops a question standing over the
+              // composer from making it a dead end (VC-68). It changes the
+              // placeholder and the control's name, never the behaviour.
               answering={answering}
               models={composerModels}
               selection={selection}
