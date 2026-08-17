@@ -394,16 +394,14 @@ export const chatSessions: ChatSessionRecord[] = [
     live: false,
     lastActivityAt: NOW - 3 * HOUR,
   }),
-  // Two of these keep the title the app ACTUALLY leaves behind. Both kinds are
-  // named by an ordinal at birth ("Session 3", "Chat 2"); a chat then retitles
-  // itself off its first delivered message, but a TERMINAL never does, and no
-  // Session of either kind that was never talked to does either. A fixture set
-  // where every row had been helpfully renamed would flatter the design into
-  // looking scannable when a real band still carries ordinals, so both are here.
+  // An unopened chat has the same neutral fallback the app shows before its
+  // first delivered message. A fixture set where every row had been helpfully
+  // named would flatter the design into looking more scannable than the empty
+  // exchange state a real sidebar can still contain.
   chat({
     sessionId: "chat-12a",
     ticketId: "tkt-12",
-    title: "Chat 2",
+    title: "Chat",
     lastActivityAt: NOW - 20 * MINUTE,
   }),
   // A turn that outlived its executor. Main reports this as IDLE, not working —
@@ -443,13 +441,13 @@ export const chatSessions: ChatSessionRecord[] = [
     activity: "working",
     lastActivityAt: NOW - 2 * MINUTE,
   }),
-  // The worst case the bands can produce, and it is the default one: a
-  // ticketless Session never renamed. No ticket chip, no descriptive title —
-  // the row is a globe, an ordinal and an age.
+  // The worst case the bands can produce: a ticketless Session with no
+  // delivered message. No ticket chip and no descriptive title — only the
+  // neutral chat fallback and an age.
   chat({
     sessionId: "chat-scratch-b",
     ticketId: null,
-    title: "Chat 1",
+    title: "Chat",
     live: false,
     lastActivityAt: NOW - 3 * HOUR,
   }),

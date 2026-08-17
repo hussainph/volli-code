@@ -62,6 +62,8 @@ describe("runCli", () => {
         "VC-4",
         "-m",
         "Fix the flaky test",
+        "--title",
+        "Validate VC-4",
         "--model",
         "openai-codex/gpt-5.2",
         "--reasoning",
@@ -99,6 +101,7 @@ describe("runCli", () => {
         args: {
           id: "VC-4",
           message: "Fix the flaky test",
+          title: "Validate VC-4",
           model: { providerId: "openai-codex", modelId: "gpt-5.2" },
           reasoning: "high",
         },

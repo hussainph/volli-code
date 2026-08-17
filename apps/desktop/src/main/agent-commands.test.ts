@@ -4032,7 +4032,7 @@ describe("session.start", () => {
         operationId: "generated-1",
         projectId: "project-one",
         ticketId: "ticket-one",
-        title: null,
+        title: "Work on VC-1",
         actor: { kind: "user" },
       },
     ]);
@@ -4049,25 +4049,38 @@ describe("session.start", () => {
     ]);
   });
 
-  it("lets -m replace the kickoff and threads the model/reasoning override", async () => {
+  it("names a -m kickoff and threads the model/reasoning override", async () => {
     const harness = startHarness();
 
     await harness.execute({
       id: "VC-1",
-      message: "Fix the flaky auth test first",
+      message: "Validate VC-52 before release",
       model: { providerId: "anthropic", modelId: "claude-opus" },
       reasoning: "low",
     });
 
     expect(harness.kickoffs).toEqual([
-      { sessionId: startedSessionId, text: "Fix the flaky auth test first" },
+      { sessionId: startedSessionId, text: "Validate VC-52 before release" },
     ]);
     expect(harness.startInputs[0]).toMatchObject({
+      title: "Validate VC-52",
       modelOverride: {
         model: { providerId: "anthropic", modelId: "claude-opus" },
         reasoningLevel: "low",
       },
     });
+  });
+
+  it("uses --title unchanged instead of replacing a user-set name", async () => {
+    const harness = startHarness();
+
+    await harness.execute({
+      id: "VC-1",
+      message: "Validate VC-52 before release",
+      title: "My review",
+    });
+
+    expect(harness.startInputs[0]).toMatchObject({ title: "My review" });
   });
 
   it("announces the start to every surface without moving the board", async () => {
@@ -4177,6 +4190,7 @@ describe("session.start", () => {
 
   it.each([
     [{ id: "VC-1", message: "   " }],
+    [{ id: "VC-1", title: "   " }],
     [{ id: "VC-1", model: "openai/gpt" }],
     [{ id: "VC-1", model: { providerId: "openai" } }],
     [{ id: "VC-1", reasoning: "ultra" }],
@@ -4301,6 +4315,7 @@ describe("session.start", () => {
             id: structured.session.id.slice(0, 8),
             kind: "chat",
             ticket: "VC-1",
+            title: "Chat",
             ageMs: 100,
           },
         ],

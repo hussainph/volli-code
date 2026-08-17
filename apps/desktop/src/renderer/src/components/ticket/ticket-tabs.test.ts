@@ -12,7 +12,7 @@ describe("isClosableTicketTab", () => {
     const tab: TicketTabDescriptor = {
       id: "chat:sess-9",
       kind: "chat",
-      label: "Chat 1",
+      label: "Plan the migration",
       status: "working",
     };
     expect(isClosableTicketTab(tab.kind)).toBe(true);

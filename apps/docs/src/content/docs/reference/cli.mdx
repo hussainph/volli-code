@@ -188,8 +188,15 @@ Both commands are read-only.
 volli session list [--project <name>] [--ticket <id>]
 ```
 
-Active sessions — terminals and chats — with the short handles `session peek`
-takes.
+Active terminal and chat sessions, each with its title and short handle. `session peek` takes the short handle.
+
+### volli session start
+
+```sh
+volli session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
+```
+
+Starts an attended chat on a ticket. The kickoff message supplies a deterministic title when `--title` is absent; an explicit title is kept unchanged. Model overrides are validated against Model Access before the Session is created.
 
 ### volli session peek
 

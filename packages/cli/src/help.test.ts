@@ -107,6 +107,7 @@ describe("renderHelp command detail", () => {
   it("renders session start with the reasoning vocabulary and hides the -m alias", () => {
     const detail = renderHelp(["session", "start"]);
     expect(detail).toContain("Usage: volli session start <id> [options]");
+    expect(detail).toContain("--title <text>");
     expect(detail).toContain("--model <provider/model>");
     expect(detail).toContain("(valid: off, minimal, low, medium, high, xhigh, max)");
     expect(detail).not.toContain("--message");
