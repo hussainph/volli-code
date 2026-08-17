@@ -1451,6 +1451,16 @@ app.whenReady().then(async () => {
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
           ...(sessions !== null ? { sessions } : {}),
+          // Model discovery (VC-78): `model list` reads the same Model Access
+          // snapshot every other surface does — never a parallel provider
+          // probe, never raw provider files. The door bounds the read itself
+          // (abort + race), so a hung probe cannot hang the CLI verb.
+          ...(piRuntimeHost !== null
+            ? {
+                inspectModelAccess: (input: { signal: AbortSignal }) =>
+                  piRuntimeHost.inspectModelAccess(input),
+              }
+            : {}),
           // `prompt baseline` (VC-66) prices the index through the SAME port a
           // real start records it through — nothing injected, so the answer is
           // the fresh-session default. Absent with the runtime, same as above.

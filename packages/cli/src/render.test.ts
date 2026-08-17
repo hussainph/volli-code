@@ -281,6 +281,115 @@ describe("renderCliSuccess", () => {
     ).toBe("VC-2  Todo  No labels\n");
   });
 
+  it("renders model.list with the default first, copyable model rows, and an honest rollup", () => {
+    const options = { json: false };
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: { model: "anthropic/claude-opus-5", reasoning: "medium" },
+          providers: [
+            {
+              id: "anthropic",
+              label: "Anthropic",
+              state: "available",
+              models: [
+                {
+                  model: "anthropic/claude-opus-5",
+                  label: "Claude Opus 5",
+                  state: "available",
+                  reasoning: ["low", "medium", "high"],
+                },
+              ],
+              omittedModels: 2,
+            },
+            {
+              id: "openai-codex",
+              label: "OpenAI Codex",
+              state: "authentication-required",
+              omittedModels: 0,
+              models: [
+                {
+                  model: "openai-codex/gpt-5.6-terra",
+                  label: "Terra",
+                  state: "authentication-required",
+                  reasoning: [],
+                },
+              ],
+            },
+          ],
+          omittedProviders: 37,
+        },
+        options,
+      ),
+    ).toBe(
+      "default  anthropic/claude-opus-5  medium\n" +
+        "anthropic  Anthropic  available\n" +
+        "  anthropic/claude-opus-5  low|medium|high\n" +
+        "  … and 2 more models not available (use --all)\n" +
+        "openai-codex  OpenAI Codex  authentication-required\n" +
+        "  openai-codex/gpt-5.6-terra  -  authentication-required\n" +
+        "… and 37 more providers not available (use --all)\n",
+    );
+    // No configured default and nothing signed in: the answer is still legible.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        { observedAt: 1_000, default: null, providers: [], omittedProviders: 0 },
+        options,
+      ),
+    ).toBe("default  -\n");
+  });
+
+  it("keeps malformed model.list provider rows legible instead of crashing", () => {
+    const options = { json: false };
+    // Providers survive `recordsAt`, but a row's `models`, a model's
+    // `reasoning`, or the `omittedModels` counter may still be the wrong shape
+    // — each defensive arm answers with the row it can render, never a throw.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: null,
+          providers: [
+            { id: "p1", label: "P1", state: "available", models: "not-an-array" },
+            {
+              id: "p2",
+              label: "P2",
+              state: "available",
+              models: [
+                {
+                  model: "p2/model-a",
+                  label: "A",
+                  state: "available",
+                  reasoning: "not-an-array",
+                },
+                {
+                  model: "p2/model-b",
+                  label: "B",
+                  state: "available",
+                  reasoning: ["low", 7],
+                },
+                null,
+              ],
+              omittedModels: "not-a-number",
+            },
+          ],
+          omittedProviders: 0,
+        },
+        options,
+      ),
+    ).toBe(
+      "default  -\n" +
+        "p1  P1  available\n" +
+        "p2  P2  available\n" +
+        "  p2/model-a  -\n" +
+        "  p2/model-b  low\n",
+    );
+  });
+
   it("keeps empty results stable and safely falls back for malformed response shapes", () => {
     const options = { json: false };
     expect(renderCliSuccess("ticket.list", { tickets: [] }, options)).toBe("");
@@ -328,6 +437,7 @@ describe("renderCliSuccess", () => {
       ["ticket.comment", { comment: { ticket: 1 } }],
       ["project.list", {}],
       ["label.list", {}],
+      ["model.list", {}],
       ["session.list", {}],
       ["session.peek", { session: 1, status: "idle" }],
       ["session.peek", { session: "s", status: 1 }],

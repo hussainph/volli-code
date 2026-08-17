@@ -212,6 +212,57 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
 }
 
 /**
+ * The model.list catalog: the app default first, then one header line per
+ * provider with its copyable `provider/model` rows and reasoning levels
+ * beneath it, and honest rollups for everything the default view withholds
+ * (unavailable providers, and unavailable models inside a shown provider —
+ * they are behind --all, not missing).
+ */
+function renderModelList(data: Record<string, unknown>): string | null {
+  const providers = recordsAt(data, "providers");
+  if (providers === null) return null;
+  const def = data["default"];
+  const lines = [
+    isRecord(def) && typeof def["model"] === "string"
+      ? `default  ${terminalSafeInline(def["model"])}  ${terminalSafeInline(def["reasoning"])}`
+      : "default  -",
+  ];
+  for (const provider of providers) {
+    lines.push(
+      `${terminalSafeInline(provider["id"])}  ${terminalSafeInline(provider["label"])}  ${terminalSafeInline(provider["state"])}`,
+    );
+    const models = Array.isArray(provider["models"]) ? provider["models"].filter(isRecord) : [];
+    for (const model of models) {
+      const levels = Array.isArray(model["reasoning"])
+        ? model["reasoning"].filter((level): level is string => typeof level === "string")
+        : [];
+      // The default view holds only available models, so the state cell earns
+      // its width exactly when it says something other than "available".
+      const state = model["state"] === "available" ? "" : `  ${terminalSafeInline(model["state"])}`;
+      lines.push(
+        `  ${terminalSafeInline(model["model"])}  ${levels.length > 0 ? levels.map(terminalSafeInline).join("|") : "-"}${state}`,
+      );
+    }
+    // Models the default view withheld inside this shown provider get the same
+    // honesty counter the provider rollup has — nothing disappears silently.
+    const omittedModels = provider["omittedModels"];
+    if (typeof omittedModels === "number" && omittedModels > 0) {
+      lines.push(
+        `  … and ${terminalSafeInline(omittedModels)} more models not available (use --all)`,
+      );
+    }
+  }
+  // "not available", not "not signed in": a provider can be signed in and
+  // still be withheld here (probe failure, refresh error) — the wording must
+  // stay honest in both cases.
+  const omitted = data["omittedProviders"];
+  if (typeof omitted === "number" && omitted > 0) {
+    lines.push(`… and ${terminalSafeInline(omitted)} more providers not available (use --all)`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * The prompt.baseline report: one header with the honest rollup, one row per
  * composed section, and the named remainder the estimate deliberately excludes.
  */
@@ -259,6 +310,7 @@ function renderStableLines(command: string, data: unknown): string | null {
         .join("\n") ?? null
     );
   }
+  if (command === "model.list") return renderModelList(data);
   if (command === "label.list") {
     const labels = recordsAt(data, "labels");
     return (
