@@ -44,6 +44,24 @@
  * `interaction.ts`'s decisions (`askFieldOpen`, `promptFieldOpen`,
  * `promptTextCarrier`), not this file's.
  *
+ * **The box for those words is on the card, always — never delegated downstairs.**
+ * A question the composer could answer used to have its own field removed, on
+ * the argument that the card's box and the composer under it are one control
+ * drawn twice. They are not. They are two *distances*: the card's box is the
+ * last row of the list being answered, directly under the sentence doing the
+ * asking; the composer is a separate surface past a border, a gradient and the
+ * card's own footer. The first reads as part of the question and the second
+ * does not, which is why a card that hid its field was read as a question with
+ * no way to answer it — and where the question listed nothing to click, that is
+ * literally what it was: a headline, Cancel, Reject, and no box and no commit
+ * control anywhere on it.
+ *
+ * The composer still answers (`interaction.ts`'s `composerAnswerPrompt`), and
+ * must: a question standing over the box a reader's hands are already in cannot
+ * make that box a dead end, which is the whole of what VC-68 fixed. What
+ * changed is which of the two is the affordance and which is the fallback.
+ * Nothing about the wire moved — both send the same submission.
+ *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
  * plus the handful of things only a mounted card can own: whether a text answer
  * takes focus, that the reader asked for a box that was not already open, that
@@ -73,7 +91,6 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import {
   askFieldOpen,
-  composerAnswerPrompt,
   describeInteractionResolution,
   emptyInteractionDraft,
   interactionAdvance,
@@ -206,18 +223,6 @@ export interface InteractionCardProps {
   onWithdraw?(): void;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
   resolving?: boolean;
-  /**
-   * The composer below this card takes the words for this question, so the card
-   * draws no box of its own.
-   *
-   * Only ever true at the foot mount, and only for a question the composer can
-   * actually answer ({@link composerAnswerPrompt}). Two boxes stacked — the
-   * card's own field and the composer four pixels under it — are two things
-   * each claiming to be where the answer goes, which is the same mistake as
-   * two cards in one slot and reads worse: they are the same control, drawn
-   * twice, one of them smaller.
-   */
-  composerAnswers?: boolean;
   ref?: React.Ref<HTMLFormElement>;
   className?: string;
 }
@@ -512,7 +517,6 @@ function QuestionCard({
   onResolve,
   onWithdraw,
   resolving,
-  composerAnswers = false,
   ref,
   className,
 }: InteractionCardProps) {
@@ -538,15 +542,7 @@ function QuestionCard({
   const step = interactionStep(interaction, draft, index);
   const refusable = needsOwnRefusal(interaction);
   const askedId = step?.question.prompt.id ?? "";
-  // The card's commit control stands down with its box, but only where there is
-  // nothing else left to commit. A question that listed options still answers
-  // on the row that is clicked; one that listed none has its whole answer typed
-  // in the composer, and a button here could then only ever come back with
-  // "Write an answer" — a live control that lies about what it does.
-  const advanceLabel =
-    composerAnswers && step?.question.prompt.options.length === 0
-      ? null
-      : (step?.advanceLabel ?? null);
+  const advanceLabel = step?.advanceLabel ?? null;
 
   // Both cards in the AnimatePresence are mounted while one leaves, so the entry
   // is matched by the prompt it belongs to rather than by document order — the
@@ -694,7 +690,6 @@ function QuestionCard({
                   interaction={interaction}
                   draft={draft}
                   disabled={resolving}
-                  composerAnswers={composerAnswers}
                   onBack={() => go(step.index - 1)}
                   onChoose={choose}
                   onMark={mark}
@@ -883,7 +878,6 @@ function QuestionStep({
   interaction,
   draft,
   disabled,
-  composerAnswers = false,
   onBack,
   onChoose,
   onMark,
@@ -894,8 +888,6 @@ function QuestionStep({
   interaction: RendererSessionInteraction;
   draft: InteractionDraft;
   disabled?: boolean;
-  /** The composer under the card is this question's answer field. */
-  composerAnswers?: boolean;
   onBack(): void;
   onChoose(option: SessionInteractionOption): void;
   onMark(option: SessionInteractionOption): void;
@@ -915,16 +907,23 @@ function QuestionStep({
   const written = promptDraft(draft, prompt.id).response;
   const chosen = promptDraft(draft, prompt.id).optionIds;
   const fieldRole = promptFieldRole(prompt, draft);
-  // The harness's call, not the card's: `custom` is what says a written answer
-  // can be read back at all. Refusing is never gated on it — that is the
+  // The harness's call, and the only one: `custom` is what says a written
+  // answer can be read back at all. Refusing is never gated on it — that is the
   // card's own Reject, and it stands whether or not there is a box here.
   //
-  // And where the composer below takes those same words, the box is DOWNSTAIRS
-  // rather than absent: the card would otherwise draw a second, smaller copy of
-  // the input the reader's hands are already in, and a question whose answer
-  // can be typed in two places is a question that has to be read twice before
-  // it can be answered once.
-  const fieldOpen = askFieldOpen(prompt) && !composerAnswers;
+  // Nothing about the composer downstairs is consulted. It used to be: a
+  // question the composer could answer had its box moved down there, on the
+  // argument that two boxes are one control drawn twice. What that missed is
+  // that they are not one control — they are two DISTANCES. The card's box is
+  // the last row of the list being answered, under the sentence asking; the
+  // composer is a separate surface below a border, a gradient and the card's
+  // own footer. A reader looking at a question does not read "type your answer
+  // four inches below the question, past the buttons" — and where the question
+  // listed nothing to click, the card had a headline, Cancel, Reject and no way
+  // whatsoever to answer it. The composer still answers, because a question
+  // must never make the box under it a dead end; it is the fallback, not the
+  // affordance.
+  const fieldOpen = askFieldOpen(prompt);
   // Roving, the radio group's own rule: the chosen row is the tab stop, and
   // where nothing is chosen yet the first one is.
   const tabbable = Math.max(
@@ -1209,12 +1208,14 @@ function OptionChip({
  * themselves; the surface they land on is never redrawn. A computed transform
  * other than `none` on the origin is the bug, not the effect.
  *
- * **Whether the card draws its own answer box is decided HERE, not passed in.**
- * This is the one mount where a composer stands under the card, so it is the
- * one place that can say the composer is the box — and it says it from the same
- * function the composer's own `answering` reads ({@link composerAnswerPrompt}),
- * so the two cannot come apart into a card that hid its field beside a box that
- * sends the words somewhere else.
+ * **This mount no longer decides anything about the card's answer box.** It
+ * used to: being the one place where a composer stands under a card, it was the
+ * one place that could say the composer *was* the box, and it said so from the
+ * same function the composer's own `answering` reads. The coupling was sound;
+ * the conclusion was wrong. A card draws its own field wherever the harness
+ * takes words, here and on a row alike, and the composer below answers as a
+ * fallback rather than as the field — so there is nothing left here to keep in
+ * sync, and a card mounted anywhere now asks the same way.
  */
 export function ComposerInteractionStack({
   interaction,
@@ -1287,7 +1288,6 @@ export function ComposerInteractionStack({
               ref={drawerRef}
               interaction={interaction}
               resolving={resolving}
-              composerAnswers={composerAnswerPrompt(interaction) !== null}
               onResolve={(submission) => onResolve(interaction.id, submission)}
               onWithdraw={onWithdraw ? () => onWithdraw(interaction.id) : undefined}
             />

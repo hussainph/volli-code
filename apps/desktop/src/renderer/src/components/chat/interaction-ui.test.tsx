@@ -550,25 +550,26 @@ function stacked(interaction: RendererSessionInteraction): string {
   );
 }
 
-describe("the question whose answer is typed in the composer", () => {
-  it("draws no box of its own beside the composer that takes the words", () => {
-    // One box, not two. `askFieldOpen` still says this question accepts free
-    // text; what changed is where that text is typed — into the input the
-    // reader's hands are already in, four pixels below.
+describe("where a question's words are typed", () => {
+  it("keeps the box on the card, with the composer standing under it", () => {
+    // The card's field used to be removed wherever the composer could answer
+    // for it — one control drawn twice, the argument went. They are two
+    // distances, not one control: this box is the last row of the list being
+    // answered, and the composer is past a border, a gradient and a footer.
+    // Both boxes stand, and both send the same submission.
     const html = stacked(ask([askPrompt({ custom: true })]));
     expect(html).toContain('role="radio"');
-    expect(html.match(/<textarea/g)).toHaveLength(1);
+    expect(html.match(/<textarea/g)).toHaveLength(2);
     expect(html).toContain('placeholder="Your answer"');
   });
 
-  it("stands its own commit control down where there is nothing else to commit", () => {
-    // A question that listed nothing to choose between has its whole answer
-    // downstairs, so a button here could only ever come back with "Write an
-    // answer" at a box it does not have.
+  it("gives a question with nothing to click a box and a way to commit it", () => {
+    // The worst of the old rule: no options, no field and no submit control — a
+    // headline over Cancel and Reject, with the only way to answer it four
+    // inches down a surface nothing on the card pointed at.
     const html = stacked(ask([askPrompt({ options: [], custom: true })]));
-    expect(html).not.toContain('type="submit"');
-    // The two exits it keeps: refusing the question, and withdrawing it stays
-    // the caller's to offer.
+    expect(html).toContain("<textarea");
+    expect(html).toContain('type="submit"');
     expect(html).toContain(">Reject</button>");
   });
 
@@ -578,9 +579,32 @@ describe("the question whose answer is typed in the composer", () => {
     expect(html).toContain('type="submit"');
   });
 
-  it("keeps its own box wherever the composer cannot answer for it", () => {
-    // A permission: its words are a note beside a verdict, and a verdict is
-    // pressed rather than typed.
+  it("still draws no box where the harness said words cannot be read back", () => {
+    // The one gate that survives, and it was never the composer's: `custom` is
+    // the harness saying free text has a slot in the reply. Without it an
+    // "Other" row would be typed into, accepted, and dropped on the way out.
+    const html = stacked(ask([askPrompt({ custom: false })]));
+    expect(html).toContain('role="radio"');
+    // Only the composer's own, which is the caller's element, not the card's.
+    expect(html.match(/<textarea/g)).toHaveLength(1);
+    expect(html.slice(0, html.indexOf("composer-interaction-origin"))).not.toContain("<textarea");
+  });
+
+  it("asks the same way on a row as it does at the foot", () => {
+    // The mount used to change the card: only the foot had a composer, so only
+    // the foot could defer to one. With nothing deferred, the two agree.
+    const question = ask([askPrompt({ custom: true })]);
+    const row = drawn(question);
+    const foot = stacked(question);
+    expect(row).toContain("<textarea");
+    expect(row.match(/<textarea/g)).toHaveLength(1);
+    expect(foot.match(/<textarea/g)).toHaveLength(2);
+  });
+
+  it("keeps a permission's words behind the control that reveals them", () => {
+    // A verdict is pressed, not typed, and an empty box is the tallest thing on
+    // the commonest card in the app. `promptFieldOpen` owns that, and it is
+    // untouched by any of this.
     expect(
       renderToStaticMarkup(
         <ComposerInteractionStack interaction={permission()} onResolve={() => undefined}>
@@ -588,19 +612,12 @@ describe("the question whose answer is typed in the composer", () => {
         </ComposerInteractionStack>,
       ),
     ).toContain(">Note</button>");
-    // And a request that asked more than one thing: the composer has no
-    // position in that walk, so the card keeps the box the counter belongs to.
+    // And a walk keeps the box the counter belongs to, as it always did.
     const several = stacked(
       ask([askPrompt({ custom: true }), askPrompt({ id: "prompt:1", custom: true })]),
     );
     expect(several).toContain("Question 1 of 2");
     expect(several.match(/<textarea/g)).toHaveLength(2);
-  });
-
-  it("keeps its box on a card that has no composer under it", () => {
-    // The row mount. The deferral is the foot's to decide, because the foot is
-    // the only place a composer stands beside the card.
-    expect(drawn(ask([askPrompt({ custom: true })]))).toContain("<textarea");
   });
 });
 
