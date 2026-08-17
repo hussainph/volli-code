@@ -19,7 +19,7 @@
  * requirements for.
  */
 import type { SessionStreamOverlay } from "@volli/session-engine";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   ModelSelection,
   SessionInteractionResolution,
@@ -554,10 +554,19 @@ export class ChatSessionClient {
     const body = message.text.trim();
     if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
     try {
+      // The message-scoped resource channel (VC-49): each skill body the text's
+      // `/slug` references resolved to travels as its own typed part BESIDE the
+      // text, never spliced into it — the durable artifact records both halves,
+      // the transcript renders the text verbatim with a chip per resource, and
+      // the adapter appends the delimited RESOURCE blocks after the text when
+      // it composes the delivered prompt.
       const wireMessage = {
         id: message.id,
         role: "user" as const,
-        parts: [{ type: "text" as const, text: body }],
+        parts: [
+          { type: "text" as const, text: body },
+          ...(message.resources ?? []).map(skillResourcePart),
+        ],
       };
       const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
       const delivered = await this.#rpc.session.command.mutate({

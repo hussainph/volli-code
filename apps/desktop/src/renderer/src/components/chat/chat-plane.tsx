@@ -25,7 +25,7 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -276,8 +276,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * delivered turn, or a ledger that already records the intent.
    */
   const send = React.useCallback(
-    (text: string, intent: ComposerIntent) => {
-      const message = { id: nextId(), text };
+    (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
+      // The resources ride the message object itself — through hold, queue and
+      // steer — so a copy released later delivers exactly what `/skill`
+      // resolved to when ⏎ was pressed, not whatever the file says by then.
+      const message: QueuedMessage =
+        resources !== undefined && resources.length > 0
+          ? { id: nextId(), text, resources }
+          : { id: nextId(), text };
       holdMessage(sessionId, message);
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
@@ -915,6 +921,17 @@ export const ChatTurn = React.memo(function ChatTurn({
           ),
     [messages, role],
   );
+  // The visible receipt of a message-scoped skill delivery (VC-49): the text
+  // above keeps `/skill` exactly as typed, and this chip row is what says the
+  // body actually rode along — the compact reference, never the fifteen
+  // kilobytes it stands for.
+  const skillChips = React.useMemo<readonly string[]>(
+    () =>
+      role === "user"
+        ? messages.flatMap((message) => readSkillResources(message.parts).map(({ name }) => name))
+        : [],
+    [messages, role],
+  );
 
   if (first === null || role === null) return null;
 
@@ -938,6 +955,21 @@ export const ChatTurn = React.memo(function ChatTurn({
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
+        {skillChips.length > 0 ? (
+          // The same vocabulary as the attach-time receipt above: a skill name
+          // is a mono outline Badge behind a book icon, wherever it appears.
+          <div
+            className="flex flex-wrap items-center gap-1.5 pt-2 text-ui text-muted-foreground"
+            aria-label="Skills delivered with this message"
+          >
+            <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
+            {skillChips.map((name) => (
+              <Badge key={name} variant="outline" className="font-mono">
+                {name}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
       </MessageContent>
     </Message>
   );
