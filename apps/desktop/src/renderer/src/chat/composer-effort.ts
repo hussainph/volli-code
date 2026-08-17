@@ -317,3 +317,67 @@ export function effortStopPercent(index: number, stops: number): number {
   const last = stops - 1;
   return last <= 0 ? 0 : (Math.min(last, Math.max(0, index)) / last) * 100;
 }
+
+/* ---------------------------------------------------------------- squiggle */
+
+/**
+ * One full wave of the squiggle, in px (VC-57, the Arc-lineage wave).
+ *
+ * 12px puts a crest roughly every 6px — dense enough that the wave reads as a
+ * texture of the filled share rather than as a drawn curve with a countable
+ * number of bumps, and comfortably off the notch pitch (32–112px depending on
+ * the stop count) so crests never look like they are trying to be ticks.
+ */
+export const EFFORT_SQUIGGLE_WAVELENGTH = 12;
+
+/**
+ * The wave's peak, in px from its centreline, at full effort.
+ *
+ * 2px inside the ≈5px band the pill has spare under its labels' descenders:
+ * enough travel that the flattening ramp below is legible across seven stops,
+ * small enough that the wave never touches a glyph.
+ */
+export const EFFORT_SQUIGGLE_AMPLITUDE = 2;
+
+/**
+ * The squiggle's geometry: a wave along `y = 0`, one SVG path string.
+ *
+ * Alternating quadratic half-waves — an explicit `Q` for the first and `T`
+ * (smooth-quadratic, which reflects the previous control point) for the rest,
+ * so the whole wave after the opening segment is one coordinate per half-wave
+ * and cannot kink. The control point sits at `2 × amplitude` because a
+ * quadratic's midpoint takes half its control's offset — that is what makes
+ * `amplitude` the PEAK rather than a number near it.
+ *
+ * The wave runs to the first half-wave boundary AT or past `width` rather than
+ * stopping short: the drawer clips it with the same seam that clips the wash,
+ * so overshooting costs nothing and undershooting would leave the last stop's
+ * share bare. Degenerate inputs (an unmeasured rail, a zero wavelength) return
+ * the empty path rather than dividing by themselves.
+ */
+export function effortSquigglePath(width: number, wavelength: number, amplitude: number): string {
+  if (width <= 0 || wavelength <= 0) return "";
+  const half = wavelength / 2;
+  const crest = amplitude * 2;
+  const segments = Math.max(1, Math.ceil(width / half));
+  const parts = [`M 0 0 Q ${half / 2} ${crest} ${half} 0`];
+  for (let at = 2; at <= segments; at += 1) parts.push(`T ${at * half} 0`);
+  return parts.join(" ");
+}
+
+/**
+ * How much of the wave's amplitude is standing at a given stop: 0 flat, 1 full.
+ *
+ * LINEAR, like the mix and the chroma and unlike the halo's square, because it
+ * is the same kind of channel they are: read by comparison between neighbour
+ * stops, so every adjacent pair has to differ and a straight line is the only
+ * curve that guarantees it. Drawn as a `scaleY` on the path — the one property
+ * that can TRANSITION between two amplitudes; regenerating the path snaps,
+ * because Chromium does not interpolate `d` — with `non-scaling-stroke` holding
+ * the ink's weight while the geometry flattens. A single-stop set stands at
+ * full amplitude for the wash's reason: it has nothing to be calmer *than*,
+ * and a lone control drawn flat would read as disabled.
+ */
+export function effortSquiggleScale(index: number, stops: number): number {
+  return effortTravel(index, stops);
+}
