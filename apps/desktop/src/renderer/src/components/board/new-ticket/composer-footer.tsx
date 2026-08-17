@@ -5,7 +5,12 @@ import {
 } from "@renderer/components/board/new-ticket/composer-run";
 import { Button } from "@renderer/components/ui/button";
 import { Switch } from "@renderer/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
 import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
 
 /**
@@ -42,6 +47,16 @@ import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
  * first-timer is reading the footer and has typed nothing yet. The wrapper is
  * the hover target; focus still reaches the button and still opens the label,
  * because React's synthetic focus bubbles to it.
+ *
+ * The pair carries its own {@link TooltipProvider} rather than borrowing one.
+ * There IS one overhead in the app — `SidebarProvider` mounts it, and the
+ * composer happens to render inside that — but Radix throws outright when the
+ * context is missing, so "the sidebar happens to be an ancestor" was the whole
+ * of what kept a modal dialog from crashing its own subtree. It is not a
+ * relationship either component states, and the lab found it the first time the
+ * composer was mounted without the shell around it. Providers nest, so owning
+ * one costs nothing and the delay stays the house's (500ms — an extended hover,
+ * never a twitch).
  */
 export function ComposerFooter({
   fileIndex,
@@ -80,40 +95,42 @@ export function ComposerFooter({
       {/* No `overflow-hidden` on the group: each half keeps its own outer pill
           corners, so the press scale reads as that half depressing inside the
           control rather than as the seam tearing open. */}
-      <div className="flex shrink-0 items-center">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={onCreate}
-                disabled={disabled}
-                className="rounded-r-none"
-              >
-                Create
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">Adds the ticket. ⌘↵</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <Button
-                data-testid="composer-kickoff"
-                onClick={onKickoff}
-                disabled={disabled}
-                size="sm"
-                className="rounded-l-none"
-              >
-                Create &amp; start
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">Adds it and starts an agent on it. ⇧⌘↵</TooltipContent>
-        </Tooltip>
-      </div>
+      <TooltipProvider>
+        <div className="flex shrink-0 items-center">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onCreate}
+                  disabled={disabled}
+                  className="rounded-r-none"
+                >
+                  Create
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">Adds the ticket. ⌘↵</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button
+                  data-testid="composer-kickoff"
+                  onClick={onKickoff}
+                  disabled={disabled}
+                  size="sm"
+                  className="rounded-l-none"
+                >
+                  Create &amp; start
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">Adds it and starts an agent on it. ⇧⌘↵</TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
     </div>
   );
 }
