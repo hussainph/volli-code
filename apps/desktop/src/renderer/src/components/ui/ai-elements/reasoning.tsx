@@ -14,6 +14,7 @@
  * answer above it.
  */
 
+import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import { cn } from "@renderer/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -73,11 +74,19 @@ export const ReasoningLine = React.memo(
         className,
       )}
     >
-      <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden>
-        <span
-          className={cn("size-1.5 rounded-full bg-muted-foreground", streaming && "animate-pulse")}
-        />
-      </span>
+      {/* A live line and a settled one wear different marks in the same slot.
+          The pulse that used to serve both was one dot fading on Tailwind's
+          `animate-pulse` — a 2s cubic ramp that spends most of its cycle near
+          full opacity, so at a glance it read as the settled dot with a bit of
+          noise on it. Three orbs travelling in sequence read as motion from
+          across the pane, which is the whole job (`ui/thinking-orbs.tsx`). */}
+      {streaming ? (
+        <ThinkingOrbs className="text-primary" />
+      ) : (
+        <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden>
+          <span className="size-1.5 rounded-full bg-muted-foreground" />
+        </span>
+      )}
       {streaming ? (
         <Shimmer as="span" className="min-w-0 truncate" duration={1.6}>
           {verb}
