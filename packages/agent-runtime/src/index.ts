@@ -24,4 +24,8 @@ export {
   type PromptBaselineSection,
   type PromptBaselineTotal,
 } from "./prompt-baseline";
-export { piExecutionEnv, type PiExecutionEnvOptions } from "./pi/execution-env";
+export {
+  piExecutionEnv,
+  type PiExecutionEnvOptions,
+  type PiSessionEnvIdentity,
+} from "./pi/execution-env";

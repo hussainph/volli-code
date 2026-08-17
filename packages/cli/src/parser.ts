@@ -506,15 +506,21 @@ function sessionSignalSpec(
 }
 
 const SESSION_DONE_SPEC = sessionSignalSpec(
-  "Signal the current session's ticket ready for review.",
+  "Record that this session's work is finished.",
   'volli session done --reason "Tests pass"',
-  ["Acts on VOLLI_SESSION; needs a Volli session.", "Moves the session's ticket to Needs Review."],
+  [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
+  ],
 );
 
 const SESSION_BLOCKED_SPEC = sessionSignalSpec(
-  "Signal the current session is blocked.",
+  "Signal the current session is blocked and needs a person.",
   'volli session blocked --reason "Needs credentials"',
-  ["Acts on VOLLI_SESSION; needs a Volli session."],
+  [
+    "Acts on VOLLI_SESSION; needs a Volli session.",
+    "Raises attention on this session; --reason is the text a person sees.",
+  ],
 );
 
 /**
