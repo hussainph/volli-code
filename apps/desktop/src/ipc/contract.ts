@@ -581,7 +581,7 @@ export interface CliToolStatus {
   };
   /** Whether the login shell reaches `~/.local/bin`; `unknown` means the shell could not be asked. */
   path: { binDir: string; state: "reachable" | "missing" | "unknown" };
-  /** The agent socket this launch owns, and whether it came up. */
+  /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
   /** Harness wrapper command names the last runtime regeneration produced. */
   wrappers: { commands: string[] };

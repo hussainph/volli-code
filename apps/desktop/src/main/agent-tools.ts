@@ -17,7 +17,12 @@ import {
   type HarnessInstallResult,
   type HarnessUninstallResult,
 } from "./harness-install";
-import { loginShellPath, readLoginShellPath, type LoginShellDeps } from "./login-path";
+import {
+  loginShellPath,
+  readLoginShellPath,
+  resetLoginShellPathCache,
+  type LoginShellDeps,
+} from "./login-path";
 
 /**
  * The first executable named `executable` on `pathValue`, absolute — what a
@@ -270,6 +275,17 @@ export function loginPathHasUserBin(loginPath: string, home: string): boolean {
  * reach `~/.local/bin`. A `null` login PATH writes nothing: "we could not ask"
  * must not become a dotfile edit, the same stance {@link installHarnessSkills}
  * takes for an empty adapter census.
+ *
+ * A WRITE also drops the per-launch login-PATH cache ({@link loginShellPath}).
+ * That cache was warmed before this ran — it is how `loginPath` was measured —
+ * so after the profile changes it describes a shell that no longer exists.
+ * Every later measurement (the Settings → CLI pane's Login PATH row, harness
+ * detection, doctor) re-asks a fresh login shell, which reads the block this
+ * just wrote and reports `~/.local/bin` reachable — the same answer a new
+ * terminal gives. Without the drop, the pane would call the PATH "missing" for
+ * the whole first launch, at the exact moment a plain terminal resolves
+ * `volli` fine. A conflict preserves the user's bytes and writes nothing, so
+ * the cached answer still holds and stays.
  */
 export async function ensureUserBinOnPath(input: {
   home: string;
@@ -281,10 +297,9 @@ export async function ensureUserBinOnPath(input: {
     userBinPathActions(input.home),
     managedManifestPath(input.home),
   );
-  return {
-    state: result.conflicts.length > 0 ? "conflict" : "written",
-    conflicts: result.conflicts,
-  };
+  if (result.conflicts.length > 0) return { state: "conflict", conflicts: result.conflicts };
+  if (result.written.length > 0) resetLoginShellPathCache();
+  return { state: "written", conflicts: [] };
 }
 
 /** Excises the managed PATH block from `~/.zprofile`; surrounding user content survives. */

@@ -199,6 +199,29 @@ describe("agent socket", () => {
     }
   });
 
+  // The Settings → CLI pane reads this at call time: it must track the server's
+  // actual ownership, not latch the boot's answer (VC-52 review N1).
+  it("measures liveness — false before a server is claimed, true while owned, false after shutdown", async () => {
+    const close = vi.fn(async () => {});
+    const lifecycle = createAgentSocketLifecycle({
+      start: vi.fn(async (_options: unknown, claim?: (created: AgentSocketServer) => void) => {
+        const created = { close };
+        claim?.(created);
+        return created;
+      }),
+      reportFailure: vi.fn(),
+    });
+
+    expect(lifecycle.live()).toBe(false);
+    await lifecycle.start({
+      socketPath: "/tmp/volli-lifecycle-test.sock",
+      execute: async () => ({ v: 1, ok: true as const, data: {} }),
+    });
+    expect(lifecycle.live()).toBe(true);
+    await lifecycle.shutdown();
+    expect(lifecycle.live()).toBe(false);
+  });
+
   it("settles shutdown when an in-flight startup rejects without publishing a server", async () => {
     const failure = new Error("listen failed");
     let rejectStartup!: (error: unknown) => void;

@@ -156,6 +156,10 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
     // design — exactly what a smoke must never do. Off by default for every
     // probe; the installer smokes opt back in ("0") against a VOLLI_AGENT_HOME
     // scratch, the same posture VOLLI_WORKTREE_HOME_DIR takes for worktrees.
+    // Honored by packaged builds too (main gates only on the env var), so a
+    // VOLLI_SMOKE_APP_BINARY run is protected by the same default — the
+    // silent installer must never reach a developer's real dotfiles from a
+    // smoke, dev or packaged.
     VOLLI_SKIP_AGENT_TOOLS: "1",
     ...extraEnv,
     VOLLI_WORKTREE_HOME_DIR: worktreeHomeFor(dbPath, extraEnv),

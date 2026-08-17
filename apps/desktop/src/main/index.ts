@@ -32,7 +32,7 @@ import {
 import type { PromptResource, SessionEvent, SessionInput } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
-import type { ManagedConflict } from "./harness-install";
+import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -592,10 +592,11 @@ app.whenReady().then(async () => {
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           // Makes `volli` and every detected toolchain resolve inside a
-          // structured Session's shell tool with or without the consented
-          // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
-          // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
-          // directory (`harness-runtime.ts`).
+          // structured Session's shell tool whether or not the background
+          // install's `~/.local/bin/volli` link is reachable yet — the same
+          // recovery a spawned PTY gets from `agentSessionEnv`/
+          // `ticketSessionEnv` prepending this same directory
+          // (`harness-runtime.ts`).
           executionEnvFactory: async (workspacePath) => {
             await loginPathBootstrap.apply();
             return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
@@ -1271,9 +1272,6 @@ app.whenReady().then(async () => {
   });
 
   let shimPath = join(runtimePaths.binDir, "volli");
-  // Whether this launch's agent socket actually came up — the CLI pane's one
-  // process-level fact. Set below, once `agentSocket.start` resolves.
-  let socketLive = false;
 
   // The File → Remove tombstone (VC-52). Install is background and has no
   // opt-out, so an EXPLICIT removal must leave something behind that the next
@@ -1393,17 +1391,24 @@ app.whenReady().then(async () => {
       adapters: (await resolveHostAdapters()).adapters,
     });
     let conflicts = skills.conflicts;
-    // PATH wiring is zsh-only (like the shell chain); the CLI pane names the
-    // limitation for other shells rather than writing a profile they never read.
-    if (basename(resolveShell(process.env).file) === "zsh") {
-      const wired = await ensureUserBinOnPath({
-        home: agentToolsHome,
-        loginPath: await loginShellPath(),
-      });
-      conflicts = [...conflicts, ...wired.conflicts];
-    }
-    if (conflicts.length > 0) {
-      await showSkillConflictWarning(conflicts);
+    try {
+      // PATH wiring is zsh-only (like the shell chain); the CLI pane names the
+      // limitation for other shells rather than writing a profile they never read.
+      if (basename(resolveShell(process.env).file) === "zsh") {
+        const wired = await ensureUserBinOnPath({
+          home: agentToolsHome,
+          loginPath: await loginShellPath(),
+        });
+        conflicts = [...conflicts, ...wired.conflicts];
+      }
+    } finally {
+      // In a `finally` so a profile-write failure (say, a symlinked ~/.zprofile
+      // the managed-write engine refuses) cannot swallow the skill conflicts
+      // collected above — those are preservation notices the user must see
+      // regardless of what the PATH step did. The error still propagates.
+      if (conflicts.length > 0) {
+        await showSkillConflictWarning(conflicts);
+      }
     }
   };
 
@@ -1436,11 +1441,14 @@ app.whenReady().then(async () => {
   // tombstone so the next boot does NOT silently reinstall what this just
   // removed. Uninstall stays explicit and loud; every failure has a dialog.
   const uninstallAgentTools = async (): Promise<void> => {
+    // The PATH line is named only where one can exist: it is written for zsh
+    // alone, so promising its removal on another shell would be removal copy
+    // describing work this host never had.
+    const managesZprofile = basename(resolveShell(process.env).file) === "zsh";
     const confirm = await dialog.showMessageBox(mainWindow, {
       type: "warning",
       message: "Remove the Volli CLI and agent skills?",
-      detail:
-        "Removes the bundled skill pack, the ~/.local/bin/volli link, and Volli's PATH line in ~/.zprofile. Files you edited yourself stay. Volli won't reinstall these unless you choose Install from the File menu.",
+      detail: `Removes the bundled skill pack and the ~/.local/bin/volli link${managesZprofile ? ", and Volli's PATH line in ~/.zprofile" : ""}. Files you edited yourself stay. Volli won't reinstall these unless you choose Install from the File menu.`,
       buttons: ["Remove", "Cancel"],
       defaultId: 1,
       cancelId: 1,
@@ -1463,17 +1471,23 @@ app.whenReady().then(async () => {
       );
       return;
     }
+    let pathRemoval: HarnessUninstallResult;
+    let linkRemoved: boolean;
+    let legacyOutcome: "removed" | "kept" | "absent";
     try {
       // The PATH block first (it is excised, never destroyed), then the link.
-      await removeUserBinPathBlock(agentToolsHome);
-      await removeUserCliLinkIfOurs({
+      pathRemoval = await removeUserBinPathBlock(agentToolsHome);
+      linkRemoved = await removeUserCliLinkIfOurs({
         home: agentToolsHome,
         shimPath,
         managedTargets: managedSiblingShims,
       });
       // Best-effort, unprivileged: the retired admin-owned link usually
       // survives (root-owned dir) — the CLI pane reports it truthfully.
-      await cleanupLegacyGlobalCliLink({ shimPath, managedTargets: managedSiblingShims });
+      legacyOutcome = await cleanupLegacyGlobalCliLink({
+        shimPath,
+        managedTargets: managedSiblingShims,
+      });
     } catch (error) {
       dialog.showErrorBox(
         "Agent Tools Removal Failed",
@@ -1489,14 +1503,21 @@ app.whenReady().then(async () => {
         return;
       }
     }
+    // The count spans everything this removal touched — the skill plan, the
+    // PATH block, the user-space link, and (rarely) the legacy link — so the
+    // summary neither undercounts the work nor claims files it kept.
+    const preserved = [...removal.preserved, ...pathRemoval.preserved];
+    const removedCount =
+      removal.removed.length +
+      pathRemoval.removed.length +
+      (linkRemoved ? 1 : 0) +
+      (legacyOutcome === "removed" ? 1 : 0);
     const preservedNote =
-      removal.preserved.length > 0
-        ? `\n\nKept, because you edited them:\n${removal.preserved.join("\n")}`
-        : "";
+      preserved.length > 0 ? `\n\nKept, because you edited them:\n${preserved.join("\n")}` : "";
     await dialog.showMessageBox(mainWindow, {
       type: "info",
       message: "Volli CLI and agent skills removed.",
-      detail: `Removed ${removal.removed.length} item(s).${preservedNote}`,
+      detail: `Removed ${removedCount} item(s).${preservedNote}`,
     });
   };
 
@@ -1515,7 +1536,7 @@ app.whenReady().then(async () => {
         shimPath: () => shimPath,
         managedTargets: managedSiblingShims,
         socketPath: runtimePaths.socketPath,
-        socketLive: () => socketLive,
+        socketLive: () => agentSocket.live(),
         loginShellPath: () => loginShellPath(),
         wrapperCommands: () =>
           [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
@@ -1529,6 +1550,14 @@ app.whenReady().then(async () => {
       }),
     doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
     repair: async () => {
+      // Fix is as explicit a request for working tools as File → Install, so it
+      // clears the removal tombstone the same way — otherwise a repaired
+      // install would sit in a half-state: present on disk, still suppressed
+      // at every boot. Cleared FIRST: if the write fails, the repair fails
+      // loudly rather than reinstalling behind a tombstone it could not lift.
+      if (dbHandle.ok && agentToolsRemoved()) {
+        setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
+      }
       await regenerateHarnessRuntime();
       await installAgentToolsQuietly();
     },
@@ -1623,7 +1652,7 @@ app.whenReady().then(async () => {
             shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
             // Resolved through the real filesystem: `volli doctor` compares this
             // byte-for-byte against what a CLI process's own PATH walk found,
-            // which follows the `/usr/local/bin/volli` symlink main installs (or
+            // which follows the `~/.local/bin/volli` symlink main installs (or
             // a scratch profile's `/tmp` vs `/private/tmp` on macOS) to whatever
             // it actually points at. An unresolved comparison would call a
             // correct install "another Volli install owns the link".
@@ -1653,7 +1682,6 @@ app.whenReady().then(async () => {
       socketPath: runtimePaths.socketPath,
       execute,
     });
-    socketLive = true;
     // Only the process that owns this profile's socket may publish its client
     // bundle and launcher. A rejected second instance must not redirect the
     // global link or in-app PTYs to a build that does not own the live socket.
@@ -1701,12 +1729,22 @@ app.whenReady().then(async () => {
   // login-shell probe or dotfile writes; failures log, and the pane reads the
   // truth from disk regardless. Two suppressions only:
   //  - the File → Remove tombstone — an explicit removal must survive relaunch;
-  //  - the dev-only VOLLI_SKIP_AGENT_TOOLS seam, so tests and smokes never
-  //    write into a developer's real home (e2e sets it by default and the
-  //    installer smokes opt back in against a VOLLI_AGENT_HOME scratch).
+  //  - the VOLLI_SKIP_AGENT_TOOLS seam, so tests and smokes never write into a
+  //    developer's real home (e2e sets it by default and the installer smokes
+  //    opt back in against a VOLLI_AGENT_HOME scratch).
   // Gated on a healthy db like the consent flow it replaces: with the tombstone
   // unreadable, installing would silently undo a removal we cannot see.
-  const skipAgentTools = isDev && process.env["VOLLI_SKIP_AGENT_TOOLS"] === "1";
+  //
+  // The skip seam is honored in PACKAGED builds too — deliberately. In the
+  // consent era a dialog stood between a packaged smoke run and the developer's
+  // real dotfiles; now nothing does, so a `VOLLI_SMOKE_APP_BINARY` run against
+  // a packaged build needs this seam or it links ~/.local/bin/volli and appends
+  // to the real ~/.zprofile. It is a test seam, not a user opt-out: unset in
+  // every ordinary launch, undocumented, and the CLI pane still reports
+  // whatever state skipping left behind. VOLLI_AGENT_HOME stays dev-only —
+  // redirecting a production install's writes is a sharper knife than skipping
+  // them.
+  const skipAgentTools = process.env["VOLLI_SKIP_AGENT_TOOLS"] === "1";
   if (dbHandle.ok && !skipAgentTools && !agentToolsRemoved()) {
     void installAgentToolsQuietly().catch((error: unknown) => {
       console.error("[volli] background agent-tools install failed:", errorMessage(error));

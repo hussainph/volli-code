@@ -818,9 +818,9 @@ export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> }
     invalidError: "Invalid doctor request",
   },
 };
-
-/** Every channel the CLI surface owns, derived — never hand-synced. */
-export const CLI_CHANNELS = Object.keys(CLI_IPC) as readonly CliIpcChannel[];
+// No CLI_CHANNELS sibling to HARNESS_CHANNELS: that list exists to register
+// degraded-db handlers, and the CLI surface is deliberately db-free — a
+// derived list nothing consumes would be dead weight kept alive by its test.
 
 // ---- model-access sign-in descriptor table --------------------------------
 // The one request surface an argument can be a credential on, so the guards

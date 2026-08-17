@@ -8,7 +8,7 @@
  *      `~/.local/bin/volli` at this profile's shim, with no dialog to answer
  *      (the boot completing headless IS that assertion — a native sheet would
  *      have hung it).
- *   2. The dev-only VOLLI_SKIP_AGENT_TOOLS seam installs nothing at all —
+ *   2. The VOLLI_SKIP_AGENT_TOOLS seam installs nothing at all —
  *      the guarantee every other smoke's home-isolation now rests on.
  *   3. A second boot of the installed profile is the hash-guarded refresh
  *      (the manifest is rewritten; managed files are not).

@@ -17,7 +17,10 @@ export interface CliIpcDeps {
   /**
    * Main's idempotent repair: regenerate the harness runtime, then re-run the
    * background install (link, skills, PATH block) — the same work boot does,
-   * which is what lets Fix be offered without a confirmation.
+   * which is what lets Fix be offered without a confirmation. Like File →
+   * Install, it lifts the removal tombstone first: Fix is an explicit request
+   * for working tools, and repairing behind a standing suppression would
+   * leave the install present on disk yet skipped at every boot.
    */
   repair(): Promise<void>;
 }

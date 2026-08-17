@@ -17,6 +17,7 @@ import { buildHarnessInstallPlan, harnessAdapters, VOLLI_PATH_PROFILE_BLOCK } fr
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { applyHarnessInstallPlan } from "./harness-install";
+import { loginShellPath, resetLoginShellPathCache } from "./login-path";
 import {
   cleanupLegacyGlobalCliLink,
   detectHarnesses,
@@ -35,6 +36,7 @@ import {
 let root: string | undefined;
 
 afterEach(async () => {
+  resetLoginShellPathCache();
   if (!root) return;
   const { rm } = await import("node:fs/promises");
   await rm(root, { recursive: true, force: true });
@@ -290,6 +292,55 @@ describe("login PATH wiring", () => {
     expect(second.state).toBe("conflict");
     expect(second.conflicts).toHaveLength(1);
     expect(await readFile(join(root, ".zprofile"), "utf8")).toBe(edited);
+  });
+
+  // B1 (VC-52 review): the cache that measured `loginPath` was warmed BEFORE
+  // the profile changed. Without the drop, every reader for the rest of the
+  // launch — the Settings → CLI pane's Login PATH row above all — reports the
+  // PATH "missing" at the exact moment a new terminal resolves `volli` fine.
+  it("drops the login-PATH cache when it writes the profile, so the next measurement sees the wiring", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
+    const stale = await loginShellPath({
+      env: { SHELL: "/bin/zsh" },
+      runShell: async () => "__VOLLI_PATH__/usr/bin:/bin",
+    });
+    expect(stale).toBe("/usr/bin:/bin");
+
+    await ensureUserBinOnPath({ home: root, loginPath: stale });
+
+    // A fresh shell reads the block the write just added; the cached pre-write
+    // answer must not shadow it.
+    const rewired = `${join(root, ".local/bin")}:/usr/bin:/bin`;
+    const measured = await loginShellPath({
+      env: { SHELL: "/bin/zsh" },
+      runShell: async () => `__VOLLI_PATH__${rewired}`,
+    });
+    expect(measured).toBe(rewired);
+  });
+
+  it("keeps the cache when nothing was written — on-path, unanswered, and conflicting profiles", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
+    await ensureUserBinOnPath({ home: root, loginPath: "/usr/bin" });
+    const profile = await readFile(join(root, ".zprofile"), "utf8");
+    await writeFile(join(root, ".zprofile"), profile.replace("$HOME/.local/bin", "$HOME/x"));
+    resetLoginShellPathCache();
+
+    const cached = await loginShellPath({
+      env: { SHELL: "/bin/zsh" },
+      runShell: async () => "__VOLLI_PATH__/usr/bin:/bin",
+    });
+    expect(cached).toBe("/usr/bin:/bin");
+
+    await ensureUserBinOnPath({ home: root, loginPath: `${join(root, ".local/bin")}` }); // on-path
+    await ensureUserBinOnPath({ home: root, loginPath: null }); // could not ask
+    const conflicted = await ensureUserBinOnPath({ home: root, loginPath: "/usr/bin" });
+    expect(conflicted.state).toBe("conflict");
+
+    const after = await loginShellPath({
+      env: { SHELL: "/bin/zsh" },
+      runShell: async () => "__VOLLI_PATH__/changed",
+    });
+    expect(after).toBe("/usr/bin:/bin"); // still the cached answer — no write, no drop
   });
 
   it("excises exactly the managed block on removal, leaving the user's profile", async () => {

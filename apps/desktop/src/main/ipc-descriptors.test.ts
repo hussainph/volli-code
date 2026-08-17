@@ -6,7 +6,6 @@ import {
   FILE_IPC,
   HARNESS_CHANNELS,
   HARNESS_IPC,
-  CLI_CHANNELS,
   CLI_IPC,
   MODEL_ACCESS_CHANNELS,
   MODEL_ACCESS_IPC,
@@ -1923,13 +1922,6 @@ describe("CLI_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid doctor request");
-    });
-  });
-
-  describe("CLI_CHANNELS derivation", () => {
-    it("derives from the descriptor table's keys and covers the whole surface", () => {
-      expect(CLI_CHANNELS).toEqual(Object.keys(CLI_IPC));
-      expect(CLI_CHANNELS).toEqual(["volli:cli-status", "volli:cli-doctor"]);
     });
   });
 });

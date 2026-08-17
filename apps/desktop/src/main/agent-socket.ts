@@ -32,6 +32,13 @@ export type ShutdownAgentSocket = () => Promise<void>;
 export interface AgentSocketLifecycle {
   start(options: AgentSocketOptions): Promise<void>;
   shutdown(): Promise<void>;
+  /**
+   * Whether this launch currently OWNS a running socket server — read at call
+   * time, so the Settings → CLI pane's socket row is a measurement rather
+   * than a boot latch: false before `start` claims a server, false again the
+   * moment `shutdown` releases it, and never stuck on a stale yes.
+   */
+  live(): boolean;
 }
 
 /** Owns socket startup, publication, and idempotent process-lifetime shutdown. */
@@ -81,6 +88,9 @@ export function createAgentSocketLifecycle(options: {
         },
       );
       return startCompletion;
+    },
+    live(): boolean {
+      return server !== undefined;
     },
     shutdown(): Promise<void> {
       if (shutdown !== undefined) return shutdown;
