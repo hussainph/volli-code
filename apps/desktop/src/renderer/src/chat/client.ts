@@ -440,8 +440,8 @@ export class ChatSessionClient {
    * on a Session with history has no other way to get it. Everything after it
    * arrives as deltas.
    */
-  connect(): Promise<void> {
-    return this.#open(null);
+  async connect(): Promise<void> {
+    await this.#open(null);
   }
 
   /**
@@ -536,9 +536,23 @@ export class ChatSessionClient {
   recover(): Promise<boolean> {
     const slice = this.#slice();
     if (slice === undefined) return Promise.resolve(false);
-    const live = (slice.projection?.liveExecutor ?? null) !== null;
-    if (live && !this.#streamAlive) void this.connect();
-    return live ? this.reconcile() : this.retryAttach();
+    if ((slice.projection?.liveExecutor ?? null) === null) return this.retryAttach();
+    return this.#streamAlive ? this.reconcile() : this.#reopenThenReconcile();
+  }
+
+  /**
+   * The reopen, and only then the reconcile that depends on it.
+   *
+   * Ordered rather than raced, because the two settle the same latch and the
+   * reconcile is the louder writer: a reopen that failed fast would latch the
+   * honest `#lost` band and a reconcile succeeding after it would clear that
+   * band, restoring the exact frozen-transcript-behind-a-healthy-face this
+   * Retry exists to prevent. A reopen that fails ends the recovery instead,
+   * leaving the band it just wrote to say so.
+   */
+  async #reopenThenReconcile(): Promise<boolean> {
+    if (!(await this.#open(null))) return false;
+    return this.reconcile();
   }
 
   /**
@@ -699,7 +713,13 @@ export class ChatSessionClient {
 
   /* ------------------------------------------------------------- the stream */
 
-  async #open(cursor: string | null): Promise<void> {
+  /**
+   * Opens the stream, reporting whether THIS call established it — the signal
+   * `#reopenThenReconcile` needs to know a recovery is worth continuing. A
+   * superseded generation reports false too: it established nothing for the
+   * caller that asked, whatever the open that overtook it goes on to do.
+   */
+  async #open(cursor: string | null): Promise<boolean> {
     const generation = (this.#generation += 1);
     this.#subscription?.unsubscribe();
     this.#subscription = null;
@@ -708,7 +728,7 @@ export class ChatSessionClient {
       let afterSequence = this.#slice()?.transcript.throughSequence ?? 0;
       if (cursor === null) {
         const snapshot = await this.#rpc.session.snapshot.query({ sessionId: this.sessionId });
-        if (this.#stale(generation)) return;
+        if (this.#stale(generation)) return false;
         this.#writes().applyStream(this.sessionId, readFrames(snapshot.frames), []);
         this.#writes().setProjection(this.sessionId, snapshot.projection);
         afterSequence = snapshot.throughSequence;
@@ -737,10 +757,12 @@ export class ChatSessionClient {
           },
         },
       );
+      return true;
     } catch (failure) {
-      if (this.#stale(generation)) return;
+      if (this.#stale(generation)) return false;
       this.#streamAlive = false;
       this.#lost(failure);
+      return false;
     }
   }
 

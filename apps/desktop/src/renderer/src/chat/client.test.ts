@@ -1034,6 +1034,36 @@ describe("recover", () => {
     expect(rpc.streams.at(-1)!.unsubscribed).toBe(false);
   });
 
+  it("stops when the reopen fails, so nothing clears the band behind it (VC-97)", async () => {
+    // The reopen and the reconcile settle the same latch, and the reconcile is
+    // the louder writer. Raced, a fast-failing reopen would latch the honest
+    // `Lost the Session stream` band and a reconcile landing after it would
+    // clear that band with no stream behind it — a Retry reporting success
+    // onto a silently frozen transcript, which is the whole defect. Ordered,
+    // the failed reopen ends the recovery and its band stands.
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    const streamsAtLoss = rpc.streams.length;
+    rpc.snapshotError = new Error("snapshot unavailable");
+
+    await expect(client.recover()).resolves.toBe(false);
+    await settle();
+
+    // Never issued: a reconcile the recovery cannot stand behind is one whose
+    // success would only hide the failure the band names.
+    expect(rpc.reconciles).toHaveLength(0);
+    expect(rpc.streams.length).toBe(streamsAtLoss);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    expect(slice()!.lifecycle).toBe("error");
+  });
+
   it("does not churn a healthy stream on recover", async () => {
     const { client, rpc, slice } = await adopted((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
