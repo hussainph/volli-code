@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  chatTabId,
-  chatTabStatus,
-  parseChatTabId,
-  resolveChatRelaunch,
-} from "./ticket-chat-tab";
+import { chatTabId, chatTabStatus, parseChatTabId, resolveChatRelaunch } from "./ticket-chat-tab";
 
 describe("chat tab identity", () => {
   it("round-trips a Session id through its prefixed tab id", () => {

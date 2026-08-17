@@ -110,23 +110,22 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       return;
     }
     let current = true;
-    void Promise.all(
-      projects.map((project) => window.api.sessions.list({ projectId: project.id })),
-    ).then((results) => {
-      if (!current) return;
-      const failed = results.find((result) => !result.ok);
-      if (failed !== undefined && !failed.ok) {
-        toastError(`Couldn't load sessions: ${failed.error}`);
-        return;
-      }
-      setChatSessions(
-        results.flatMap((result) =>
-          result.ok
-            ? result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : []))
-            : [],
-        ),
-      );
-    })
+    void Promise.all(projects.map((project) => window.api.sessions.list({ projectId: project.id })))
+      .then((results) => {
+        if (!current) return;
+        const failed = results.find((result) => !result.ok);
+        if (failed !== undefined && !failed.ok) {
+          toastError(`Couldn't load sessions: ${failed.error}`);
+          return;
+        }
+        setChatSessions(
+          results.flatMap((result) =>
+            result.ok
+              ? result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : []))
+              : [],
+          ),
+        );
+      })
       .catch((error: unknown) => {
         if (current) {
           const message = error instanceof Error ? error.message : String(error);
@@ -225,7 +224,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     <ChatCircleIcon aria-hidden className={PALETTE_ROW_ICON} />
                   ) : (
                     <TerminalWindowIcon aria-hidden className={PALETTE_ROW_ICON} />
-                  )
+                  )}
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-ui font-medium">{item.title}</span>
                     <span className="truncate text-label text-muted-foreground">{context}</span>
