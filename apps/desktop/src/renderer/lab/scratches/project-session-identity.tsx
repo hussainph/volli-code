@@ -1,58 +1,62 @@
 /**
- * PROTOTYPE — VC-55. Project-session identity: what a Home chat says about
- * itself, and how loudly.
+ * PROTOTYPE — VC-55, pass 2. What an empty chat should DRAW instead of telling
+ * you where you are.
  *
- * THE QUESTIONS, one per axis in the floating bar. They are independent on
- * purpose: the ticket bundles them as one change, and the first thing worth
- * learning is whether any of them can carry the load alone.
+ * THE TURN THIS PASS TAKES. Pass 1 answered "which session is this?" with words
+ * — chips that named the venue, a line of prose under them. The owner's ruling
+ * killed both: prose explaining obvious UI is lazy design, and a row of nouns is
+ * redundant with the sidebar that already names the same things.
  *
- *  1. IDENTITY — a project session works in the MAIN CHECKOUT; a ticket session
- *     works in a throwaway worktree. "Safe to let it run" vs "it is editing my
- *     working tree." How little decoration makes that land? `none` is today.
- *  2. INFO — where does the durable answer to "which directory is this
- *     touching" live? A rail with ticket parity (⌥⌘B), a always-on venue bar
- *     that costs no toggle, or a rail whose headline is the working tree's
- *     dirty state rather than its path.
- *  3. EMPTY — today's bare mark, scope chips, or chips plus purpose controls.
- *     Note the standing rule this is arguing with: CLAUDE.md's "let controls
- *     talk", and chat-plane.tsx's "a mark, and nothing else".
+ * The replacement is INDIRECT: draw data that only makes sense at this session's
+ * scope, and let the shape of it carry the identity. A project session opens on
+ * a FIELD of many things — every session the project has ever run, the whole
+ * board's shape. A ticket session opens on ONE thing's progress — this ticket's
+ * column, this worktree's diff. Many-vs-one is a silhouette you read before you
+ * read anything, and unlike a label it stays useful after you have learnt it.
+ * Nobody is told "this is a project session"; the drawing is only true of one.
  *
- * VIEW `both` is the acceptance test for "distinguishable at a glance": the two
- * surfaces side by side, same window, same instant. Judge the identity axis
- * there and nowhere else — anything reads distinct when it is the only thing
- * on screen.
+ * WHAT IS DELIBERATELY GONE (all owner rulings, pass 1):
+ *   - The purpose sentence, and "Your working tree — not isolated." The dirty
+ *     count is drawn now; a sentence about it was the lazy version.
+ *   - `material` on the identity axis — it did nothing legible.
+ *   - The prototype rail on the TICKET surface. Ticket-rail changes are a
+ *     non-goal; only the project surface gets a new rail here.
+ *   - "Touched" as a label. It is "Mentioned" now, and the word is load-bearing
+ *     — see MENTIONS below.
  *
- * Fixtures are frozen strings; nothing here reads git, and the working-tree
- * counts are invented. The lab has no main-process half (CLAUDE.md), so the
- * live-branch problem this prototype exists to raise — a project session's
- * branch is whatever the user has checked out, and it moves under the
- * session — can only be SHOWN here, never demonstrated.
+ * PARKED, NOT REJECTED: the icon-driven intent chips ("Shape an idea", "File
+ * tickets"). They read well and they belong with Automations in 0.1.2, not in a
+ * release whose job is telling two session kinds apart.
+ *
+ * MENTIONS is a real feature this prototype is only DRAWING, not implementing:
+ * `@VC-22` in a chat message becomes a backlink chip in the feed and pulls that
+ * ticket into the rail's Mentioned column. Both halves need parsing, storage and
+ * a prompt instruction telling the agent to use the `@vc-nn` form for external
+ * tickets — none of which is in this file. `View → Feed` draws the chip so the
+ * chip can be judged; the plumbing is a separate ticket.
+ *
+ * Fixtures are frozen. The board counts are this repo's real ones so the bars
+ * have honest proportions; the session states are generated deterministically.
+ * The lab has no main-process half (CLAUDE.md), so nothing here reads git.
  */
 import * as React from "react";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CompassIcon } from "@phosphor-icons/react/dist/csr/Compass";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { PathIcon } from "@phosphor-icons/react/dist/csr/Path";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { StackIcon } from "@phosphor-icons/react/dist/csr/Stack";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
 import { cn } from "@renderer/lib/utils";
 
 export const title = "Project session · identity, info, empty chat";
-export const note = "Three independent axes over a Home chat and a ticket chat — VC-55";
+export const note = "Scope-matched data as the identity — VC-55 pass 2";
 export const viewport = "window" as const;
 
 // ---------------------------------------------------------------------------
@@ -60,13 +64,12 @@ export const viewport = "window" as const;
 
 const PROJECT = {
   name: "volli-code",
-  /** The main checkout. A project session runs HERE — the user's working tree. */
   path: "~/Desktop/code/volli-code",
-  /** Live, and it moves: whatever the user has checked out right now. */
   branch: "main",
-  dirtyFiles: 3,
   model: "Claude Opus 4.6",
   effort: "High",
+  /** Uncommitted in the MAIN CHECKOUT — the user's own tree. */
+  dirty: { modified: 2, added: 1, untracked: 3 },
 } as const;
 
 const TICKET = {
@@ -74,415 +77,488 @@ const TICKET = {
   title: "Auto-title v2: model-generated titles",
   branch: "volli/VC-81-auto-title-model-generated-titles",
   worktree: "~/.volli/worktrees/volli-code-f3732f45/VC-81-auto-title…",
-  dirtyFiles: 7,
+  column: "Doing",
+  diff: { added: 214, removed: 63, files: 7 },
 } as const;
 
-/** "Cheap context" per the ticket — tickets this session already touched. */
-const RECENT = [
-  { id: "VC-54", title: "Home taxonomy: board becomes a tabbed Home", state: "Todo" },
-  { id: "VC-75", title: "Active-session discoverability", state: "Backlog" },
-  { id: "VC-81", title: "Auto-title v2", state: "Doing" },
+/** This repo's real board, so the bars are honestly proportioned. */
+const BOARD = [
+  { column: "Backlog", count: 46 },
+  { column: "Todo", count: 7 },
+  { column: "Doing", count: 1 },
+  { column: "Needs Review", count: 0 },
+  { column: "Done", count: 24 },
 ] as const;
+
+type SessionState = "done" | "active" | "waiting" | "error";
+
+/**
+ * Deterministic, so the field looks the same every reload and two screenshots
+ * are comparable. Pure — no module-level side effects (see `scratch.ts`).
+ */
+function sessionField(count: number, seed: number): readonly SessionState[] {
+  const out: SessionState[] = [];
+  let x = seed;
+  for (let index = 0; index < count; index += 1) {
+    x = (x * 1103515245 + 12345) % 2147483648;
+    const roll = x / 2147483648;
+    out.push(roll > 0.94 ? "waiting" : roll > 0.9 ? "error" : roll > 0.82 ? "active" : "done");
+  }
+  return out;
+}
+
+const PROJECT_SESSIONS = sessionField(147, 7);
+const TICKET_SESSIONS: readonly SessionState[] = ["done", "done", "done", "active"];
+
+/** Tickets this session has mentioned as `@vc-nn`. Nothing is fetched for it. */
+const MENTIONED = [
+  { id: "VC-54", title: "Home taxonomy: board becomes a tabbed Home", column: "Todo" },
+  { id: "VC-75", title: "Active-session discoverability", column: "Backlog" },
+  { id: "VC-42", title: "UX audit of every user surface", column: "Done" },
+] as const;
+
+const STATE_TONE: Record<SessionState, string> = {
+  done: "bg-muted-foreground/30",
+  active: "bg-positive",
+  waiting: "bg-attention",
+  error: "bg-destructive",
+};
 
 // ---------------------------------------------------------------------------
 // Axes
 
-type Identity = "none" | "glyph" | "tint" | "material";
-type Info = "none" | "rail" | "venue-bar" | "worktree-rail";
-type Empty = "mark" | "chips" | "purpose";
-type View = "home" | "ticket" | "both";
+type Identity = "none" | "glyph" | "tint";
+type Info = "none" | "rail" | "venue-bar";
+type Empty = "mark" | "field" | "pulse" | "tree";
+type View = "home" | "ticket" | "both" | "feed";
 
 const IDENTITY_LABELS: Record<Identity, string> = {
   none: "None (today)",
   glyph: "Glyph",
   tint: "Glyph + tint",
-  material: "Glyph + material",
 };
 
 const INFO_LABELS: Record<Info, string> = {
   none: "None (today)",
-  rail: "Rail (⌥⌘B parity)",
-  "venue-bar": "Venue bar",
-  "worktree-rail": "Working-tree rail",
+  rail: "Rail (⌥⌘B) — project only",
+  "venue-bar": "Venue bar — project only",
 };
 
 const EMPTY_LABELS: Record<Empty, string> = {
   mark: "Mark (today)",
-  chips: "Scope chips",
-  purpose: "Chips + purpose",
+  field: "Session field",
+  pulse: "Board pulse",
+  tree: "Working tree",
 };
 
 const VIEW_LABELS: Record<View, string> = {
   home: "Home",
   ticket: "Ticket",
   both: "Both (at-a-glance test)",
+  feed: "Feed (backlink chips)",
 };
 
 // ---------------------------------------------------------------------------
-// Small shared parts
+// Shared parts
 
-/** A scope chip. One fact, one glyph, no sentence. */
-function Chip({
-  icon: Icon,
-  children,
-  tone = "quiet",
-  title: hover,
-}: {
-  icon?: React.ComponentType<{ className?: string; weight?: "bold" }>;
-  children: React.ReactNode;
-  tone?: "quiet" | "accent" | "warn";
-  title?: string;
-}) {
+/**
+ * The scope caption. Demoted on purpose: pass 1 made these the hero and they
+ * read as a redundant restatement of the sidebar. One quiet mono line under a
+ * drawing is the most they have ever been worth.
+ */
+function ScopeCaption({ project }: { project: boolean }) {
   return (
-    <span
-      title={hover}
-      className={cn(
-        "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2 text-ui",
-        tone === "quiet" && "border-border bg-card text-muted-foreground",
-        tone === "accent" && "border-primary/30 bg-primary/10 text-primary-text",
-        // `text-attention`, NOT `-foreground`: the foreground token is the ink
-        // for a SOLID attention fill (white in light mode), so on a /10 wash it
-        // vanishes. The mid-tone is the one that reads on a wash.
-        tone === "warn" && "border-attention/30 bg-attention/10 text-attention",
-      )}
-    >
-      {Icon ? <Icon weight="bold" className="size-3" /> : null}
-      {children}
-    </span>
-  );
-}
-
-/** A rail block: uppercase label, then rows. Mirrors the ticket rail's grammar. */
-function RailBlock({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2 px-4 py-4">
-      <h3 className="text-label uppercase text-muted-foreground">{label}</h3>
-      {children}
-    </section>
-  );
-}
-
-/** One `label → value` line inside a rail block. */
-function RailRow({
-  icon: Icon,
-  label,
-  value,
-  mono,
-  title: hover,
-}: {
-  icon?: React.ComponentType<{ className?: string; weight?: "bold" }>;
-  label: string;
-  value: React.ReactNode;
-  mono?: boolean;
-  title?: string;
-}) {
-  return (
-    <div className="flex min-w-0 items-center justify-between gap-2" title={hover}>
-      <span className="flex shrink-0 items-center gap-1 text-ui text-muted-foreground">
-        {Icon ? <Icon weight="bold" className="size-3" /> : null}
-        {label}
+    <div className="flex flex-wrap items-center justify-center gap-2 font-mono text-ui text-muted-foreground">
+      <span className="flex items-center gap-1">
+        <FolderOpenIcon
+          weight="bold"
+          className="size-3"
+          aria-label={project ? "Main checkout" : "Worktree"}
+        />
+        {project ? PROJECT.path : TICKET.worktree}
       </span>
-      <span className={cn("min-w-0 truncate text-ui text-foreground", mono && "font-mono")}>
-        {value}
+      <span className="flex items-center gap-1">
+        <GitBranchIcon weight="bold" className="size-3" aria-label="Branch" />
+        {project ? PROJECT.branch : TICKET.branch}
       </span>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Identity — what the tab and the surface wear
-
-/**
- * The identity treatment, resolved once and read by the tab, the surface and
- * the empty state, so the three can never disagree about how loud this is.
- */
-function identityStyle(identity: Identity, project: boolean) {
-  if (!project || identity === "none") {
-    return { glyph: ChatCircleIcon, tab: "", surface: "", accent: false };
-  }
-  return {
-    glyph: CompassIcon,
-    tab:
-      identity === "tint" ? "text-primary-text" : identity === "material" ? "text-foreground" : "",
-    surface:
-      identity === "tint"
-        ? // A hairline of accent along the plane's top edge — the whole
-          // decoration, and it never touches the transcript's own ink.
-          "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary/30"
-        : identity === "material"
-          ? // A material shift instead of a color: the plane sits on the rail's
-            // own darker canvas rather than the card's background.
-            "bg-gradient-to-b from-accent/30 to-transparent to-[120px]"
-          : "",
-    accent: identity === "tint",
-  };
+/** A backlink chip — what `@VC-54` becomes in the feed and in the rail. */
+function MentionChip({ id, column }: { id: string; column?: string }) {
+  return (
+    <button
+      type="button"
+      title={column ? `${id} · ${column}` : id}
+      className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-card px-2 align-baseline font-mono text-ui text-foreground transition-colors hover:border-primary/40 hover:text-primary-text"
+    >
+      <TicketIcon weight="bold" className="size-3 text-muted-foreground" />
+      {id}
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Empty chat
+// The four empty-state drawings
+//
+// Each draws differently per scope, and the DIFFERENCE is the point: a field vs
+// a handful, a whole board vs one column, a whole checkout vs one diff.
 
-function EmptyChat({
-  variant,
-  project,
-  identity,
-}: {
-  variant: Empty;
-  project: boolean;
-  identity: Identity;
-}) {
-  const style = identityStyle(identity, project);
-  const Glyph = style.glyph;
+/** Today. Kept only so the others have something to beat. */
+function MarkEmpty() {
+  return (
+    <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-raised">
+      <CodeIcon className="size-5 text-muted-foreground" />
+    </div>
+  );
+}
 
-  if (variant === "mark") {
-    // Today, verbatim from chat-plane.tsx — the control arm.
-    return (
-      <div className={cn(EMPTY_PAGE, "min-h-80")}>
-        <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-raised">
-          <CodeIcon className="size-5 text-muted-foreground" />
+/**
+ * SESSION FIELD — every session in scope, one cell each.
+ *
+ * The project field is dense and the ticket field is four cells in the same
+ * geometry, so the two are unmistakable from across the room without either one
+ * naming itself. Toned by state, which makes it a live read rather than a
+ * decoration: a row of amber is work waiting on you.
+ */
+function SessionFieldEmpty({ project }: { project: boolean }) {
+  const cells = project ? PROJECT_SESSIONS : TICKET_SESSIONS;
+  const waiting = cells.filter((state) => state === "waiting").length;
+  const active = cells.filter((state) => state === "active").length;
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div
+        className="grid w-80 grid-cols-[repeat(21,minmax(0,1fr))] gap-1"
+        role="img"
+        aria-label={`${cells.length} sessions in scope`}
+      >
+        {cells.map((state, index) => (
+          <span
+            key={index}
+            className={cn("aspect-square rounded-full", STATE_TONE[state])}
+            title={state}
+          />
+        ))}
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-title text-foreground">{cells.length}</span>
+        <span className="text-ui text-muted-foreground">
+          {project ? "sessions in this project" : `sessions on ${TICKET.id}`}
+        </span>
+      </div>
+      {active + waiting > 0 ? (
+        <div className="flex items-center gap-4 text-ui text-muted-foreground">
+          {active > 0 ? (
+            <span className="flex items-center gap-1">
+              <StatusDot state="working" />
+              {active} running
+            </span>
+          ) : null}
+          {waiting > 0 ? (
+            <span className="flex items-center gap-1">
+              <StatusDot state="waiting" />
+              {waiting} waiting on you
+            </span>
+          ) : null}
         </div>
+      ) : null}
+      <ScopeCaption project={project} />
+    </div>
+  );
+}
+
+/**
+ * BOARD PULSE — the same five columns, drawn two ways.
+ *
+ * A project session gets the board's whole distribution as bars: it is looking
+ * at all of them. A ticket session gets the identical five as a track with one
+ * segment lit: it is one of them, and which one is the single most useful fact
+ * about it. Same vocabulary, opposite reading.
+ */
+function BoardPulseEmpty({ project }: { project: boolean }) {
+  const peak = Math.max(...BOARD.map((entry) => entry.count));
+
+  if (project) {
+    return (
+      <div className="flex flex-col items-center gap-4">
+        <div className="flex h-24 w-80 items-end gap-2" role="img" aria-label="Board distribution">
+          {BOARD.map((entry) => (
+            <div key={entry.column} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+              <span className="text-ui text-muted-foreground">{entry.count}</span>
+              <span
+                className={cn(
+                  "w-full rounded-md",
+                  entry.count === 0 ? "bg-border" : "bg-primary/30",
+                )}
+                style={{ height: `${Math.max(2, (entry.count / peak) * 68)}px` }}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex w-80 gap-2">
+          {BOARD.map((entry) => (
+            <span
+              key={entry.column}
+              className="min-w-0 flex-1 truncate text-center text-label uppercase text-muted-foreground"
+            >
+              {entry.column}
+            </span>
+          ))}
+        </div>
+        <ScopeCaption project={project} />
       </div>
     );
   }
 
   return (
-    <div className={cn(EMPTY_PAGE, "min-h-80 gap-4")}>
+    <div className="flex flex-col items-center gap-4">
       <div
-        className={cn(
-          "flex size-10 items-center justify-center rounded-xl border bg-card shadow-raised",
-          style.accent ? "border-primary/30" : "border-border",
-        )}
+        className="flex w-80 gap-1"
+        role="img"
+        aria-label={`${TICKET.id} is in ${TICKET.column}`}
       >
-        <Glyph
-          className={cn("size-5", style.accent ? "text-primary-text" : "text-muted-foreground")}
-        />
-      </div>
-
-      {/* The chips ARE the sentence. Scope reads left to right the way a path
-          does: what repo, what branch, what directory. */}
-      <div className="flex flex-wrap items-center justify-center gap-1">
-        <Chip icon={StackIcon}>{PROJECT.name}</Chip>
-        <Chip icon={GitBranchIcon}>{project ? PROJECT.branch : TICKET.branch}</Chip>
-        {project ? (
-          <Chip icon={FolderOpenIcon} tone="accent" title={PROJECT.path}>
-            Main checkout
-          </Chip>
-        ) : (
-          <Chip icon={FolderOpenIcon} title={TICKET.worktree}>
-            Worktree
-          </Chip>
-        )}
-      </div>
-
-      {variant === "purpose" ? (
-        // Controls, not prose: each is a real affordance that would prefill the
-        // composer. The one line of text below them is the whole copy budget.
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex flex-wrap items-center justify-center gap-1">
-            {project ? (
-              <>
-                <Button variant="outline" size="sm">
-                  <PathIcon className="size-3.5" />
-                  Shape an idea
-                </Button>
-                <Button variant="outline" size="sm">
-                  <PlusIcon className="size-3.5" />
-                  File tickets
-                </Button>
-                <Button variant="outline" size="sm">
-                  <ListChecksIcon className="size-3.5" />
-                  Drive a ticket
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button variant="outline" size="sm">
-                  <CodeIcon className="size-3.5" />
-                  Implement
-                </Button>
-                <Button variant="outline" size="sm">
-                  <GitPullRequestIcon className="size-3.5" />
-                  Open a PR
-                </Button>
-              </>
+        {BOARD.map((entry) => (
+          <span
+            key={entry.column}
+            className={cn(
+              "h-1.5 min-w-0 flex-1 rounded-full",
+              entry.column === TICKET.column ? "bg-primary" : "bg-border",
             )}
-          </div>
-          <p className="max-w-80 text-ui text-muted-foreground">
-            {project
-              ? "Orchestrates from the main checkout. It does not write code here."
-              : "Runs isolated in this ticket's worktree."}
-          </p>
+          />
+        ))}
+      </div>
+      <div className="flex w-80 gap-1">
+        {BOARD.map((entry) => (
+          <span
+            key={entry.column}
+            className={cn(
+              "min-w-0 flex-1 truncate text-center text-label uppercase",
+              entry.column === TICKET.column ? "text-primary-text" : "text-muted-foreground",
+            )}
+          >
+            {entry.column}
+          </span>
+        ))}
+      </div>
+      <div className="flex max-w-80 flex-col items-center gap-1">
+        <span className="font-mono text-ui text-muted-foreground">{TICKET.id}</span>
+        <span className="text-heading text-foreground">{TICKET.title}</span>
+      </div>
+      <ScopeCaption project={project} />
+    </div>
+  );
+}
+
+/**
+ * WORKING TREE — the dirty count, drawn.
+ *
+ * This is the replacement for the sentence "Your working tree — not isolated."
+ * A project session's tree is the user's own, so its changes are drawn as loose
+ * ticks with no diff total: they are not this session's work and summing them
+ * would imply they were. A ticket worktree's diff IS the session's work, so it
+ * gets the proportional +/− bar.
+ */
+function WorkingTreeEmpty({ project }: { project: boolean }) {
+  if (project) {
+    const { modified, added, untracked } = PROJECT.dirty;
+    const total = modified + added + untracked;
+    const ticks = [
+      ...Array.from({ length: modified }, () => "bg-attention"),
+      ...Array.from({ length: added }, () => "bg-positive"),
+      ...Array.from({ length: untracked }, () => "bg-muted-foreground/40"),
+    ];
+    return (
+      <div className="flex flex-col items-center gap-4">
+        <div
+          className="flex h-12 w-80 items-end justify-center gap-1"
+          role="img"
+          aria-label={`${total} uncommitted files`}
+        >
+          {ticks.map((tone, index) => (
+            <span key={index} className={cn("h-full w-2 rounded-full", tone)} />
+          ))}
         </div>
-      ) : null}
+        <div className="flex items-baseline gap-2">
+          <span className="text-title text-foreground">{total}</span>
+          <span className="text-ui text-muted-foreground">uncommitted here</span>
+        </div>
+        <div className="flex items-center gap-4 text-ui text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-attention" />
+            {modified} modified
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-positive" />
+            {added} added
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-muted-foreground/40" />
+            {untracked} untracked
+          </span>
+        </div>
+        <ScopeCaption project={project} />
+      </div>
+    );
+  }
+
+  const { added, removed, files } = TICKET.diff;
+  const span = added + removed;
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div
+        className="flex h-3 w-80 overflow-hidden rounded-full"
+        role="img"
+        aria-label={`${added} added, ${removed} removed`}
+      >
+        <span className="bg-positive" style={{ width: `${(added / span) * 100}%` }} />
+        <span className="bg-destructive" style={{ width: `${(removed / span) * 100}%` }} />
+      </div>
+      <div className="flex items-baseline gap-4">
+        <span className="text-title text-positive">+{added}</span>
+        <span className="text-title text-destructive">−{removed}</span>
+      </div>
+      <span className="text-ui text-muted-foreground">{files} files in this worktree</span>
+      <ScopeCaption project={project} />
+    </div>
+  );
+}
+
+function EmptyChat({ variant, project }: { variant: Empty; project: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 px-gutter py-8 text-center">
+      {variant === "mark" ? <MarkEmpty /> : null}
+      {variant === "field" ? <SessionFieldEmpty project={project} /> : null}
+      {variant === "pulse" ? <BoardPulseEmpty project={project} /> : null}
+      {variant === "tree" ? <WorkingTreeEmpty project={project} /> : null}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Info surfaces
+// Info surfaces — PROJECT ONLY. The ticket rail is a non-goal.
 
-/** The always-on strip. No toggle, no page, no parity — one line under the tabs. */
-function VenueBar({ project }: { project: boolean }) {
+function VenueBar() {
+  const { modified, added, untracked } = PROJECT.dirty;
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-2">
-      {project ? (
-        <>
-          <Chip icon={FolderOpenIcon} tone="accent" title={PROJECT.path}>
-            Main checkout
-          </Chip>
-          <Chip icon={GitBranchIcon}>{PROJECT.branch}</Chip>
-          {PROJECT.dirtyFiles > 0 ? (
-            <Chip icon={WarningIcon} tone="warn">
-              {PROJECT.dirtyFiles} uncommitted
-            </Chip>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <Chip icon={FolderOpenIcon} title={TICKET.worktree}>
-            Worktree
-          </Chip>
-          <Chip icon={GitBranchIcon}>{TICKET.branch}</Chip>
-        </>
-      )}
-      <span className="ml-auto flex items-center gap-1 text-ui text-muted-foreground">
+    <div className="flex shrink-0 items-center gap-4 border-b border-border px-4 py-2 font-mono text-ui text-muted-foreground">
+      <span className="flex items-center gap-1">
+        <FolderOpenIcon weight="bold" className="size-3" />
+        {PROJECT.path}
+      </span>
+      <span className="flex items-center gap-1">
+        <GitBranchIcon weight="bold" className="size-3" />
+        {PROJECT.branch}
+      </span>
+      <span className="flex items-center gap-1 text-attention">
+        <span className="size-2 rounded-full bg-attention" />
+        {modified + added + untracked}
+      </span>
+      <span className="ml-auto">
         {PROJECT.model} · {PROJECT.effort}
       </span>
     </div>
   );
 }
 
-/** The rail. `emphasis` decides which question its first block answers. */
-function InfoRail({ emphasis, project }: { emphasis: "venue" | "worktree"; project: boolean }) {
-  const dirty = project ? PROJECT.dirtyFiles : TICKET.dirtyFiles;
-
-  const venueBlock = (
-    <RailBlock label="Venue">
-      <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
-        <RailRow
-          icon={FolderOpenIcon}
-          label={project ? "Main checkout" : "Worktree"}
-          value={project ? PROJECT.path : TICKET.worktree}
-          mono
-          title={project ? PROJECT.path : TICKET.worktree}
-        />
-        <RailRow
-          icon={GitBranchIcon}
-          label="Branch"
-          value={project ? PROJECT.branch : TICKET.branch}
-          mono
-          title={
-            project
-              ? "Live: whatever the main checkout has checked out right now."
-              : "Pinned to this ticket."
-          }
-        />
-        {project ? (
-          // The stake, spelled where it is decided rather than in a doc: this
-          // is the user's own tree, and a session running here is not isolated.
-          <p className="text-ui text-attention">Your working tree — not isolated.</p>
-        ) : null}
-      </div>
-    </RailBlock>
-  );
-
-  const worktreeBlock = (
-    <RailBlock label={project ? "Working tree" : "Changes"}>
-      <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
-        <div className="flex items-center justify-between gap-2">
-          <span
-            className={cn(
-              "flex items-center gap-1 text-ui",
-              dirty > 0 ? "text-attention" : "text-muted-foreground",
-            )}
-          >
-            {dirty > 0 ? <WarningIcon weight="bold" className="size-3" /> : null}
-            {dirty > 0 ? `${dirty} uncommitted files` : "Clean"}
-          </span>
-          <Button variant="ghost" size="xs">
-            Review
-            <ArrowRightIcon className="size-3" />
-          </Button>
-        </div>
-        <RailRow
-          icon={FolderOpenIcon}
-          label={project ? "Main checkout" : "Worktree"}
-          value={project ? PROJECT.path : TICKET.worktree}
-          mono
-        />
-        <RailRow
-          icon={GitBranchIcon}
-          label="Branch"
-          value={project ? PROJECT.branch : TICKET.branch}
-          mono
-        />
-      </div>
-    </RailBlock>
-  );
-
+function InfoRail() {
+  const { modified, added, untracked } = PROJECT.dirty;
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-sidebar">
-      {emphasis === "worktree" ? (
-        <>
-          {worktreeBlock}
-          <RailBlock label="Session">
-            <div className="flex flex-col gap-2">
-              <RailRow icon={CompassIcon} label="Kind" value={project ? "Project" : "Ticket"} />
-              <RailRow label="Model" value={PROJECT.model} />
-              <RailRow label="Effort" value={PROJECT.effort} />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-ui text-muted-foreground">Activity</span>
-                <span className="flex items-center gap-1 text-ui text-foreground">
-                  <StatusDot state="ready" />
-                  Ready
-                </span>
-              </div>
-            </div>
-          </RailBlock>
-        </>
-      ) : (
-        <>
-          {venueBlock}
-          <RailBlock label="Session">
-            <div className="flex flex-col gap-2">
-              <RailRow icon={CompassIcon} label="Kind" value={project ? "Project" : "Ticket"} />
-              <RailRow label="Model" value={PROJECT.model} />
-              <RailRow label="Effort" value={PROJECT.effort} />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-ui text-muted-foreground">Activity</span>
-                <span className="flex items-center gap-1 text-ui text-foreground">
-                  <StatusDot state="ready" />
-                  Ready
-                </span>
-              </div>
-            </div>
-          </RailBlock>
-        </>
-      )}
+      <section className="flex flex-col gap-2 px-4 py-4">
+        <h3 className="text-label uppercase text-muted-foreground">Venue</h3>
+        <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
+          <p className="truncate font-mono text-ui text-foreground" title={PROJECT.path}>
+            {PROJECT.path}
+          </p>
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1 font-mono text-ui text-muted-foreground">
+              <GitBranchIcon weight="bold" className="size-3" />
+              {PROJECT.branch}
+            </span>
+            <span className="flex items-center gap-1 text-ui text-attention">
+              <span className="size-2 rounded-full bg-attention" />
+              {modified + added + untracked}
+            </span>
+          </div>
+        </div>
+      </section>
 
-      {/* "Cheap context where already known" — tickets this session has touched.
-          Nothing is fetched for it; if the session never mentioned one, the
-          block is absent rather than empty. */}
-      <RailBlock label="Touched">
+      <section className="flex flex-col gap-2 px-4 py-4">
+        <h3 className="text-label uppercase text-muted-foreground">Session</h3>
+        <div className="flex flex-col gap-2">
+          {[
+            ["Model", PROJECT.model],
+            ["Effort", PROJECT.effort],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between gap-2">
+              <span className="text-ui text-muted-foreground">{label}</span>
+              <span className="text-ui text-foreground">{value}</span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-ui text-muted-foreground">Activity</span>
+            <span className="flex items-center gap-1 text-ui text-foreground">
+              <StatusDot state="ready" />
+              Ready
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* MENTIONED, not "Touched": the word states the mechanism. A ticket is in
+          this list because someone wrote `@vc-nn` in the transcript — which is
+          also what makes it a backlink chip in the feed. One taxonomy, two
+          surfaces. */}
+      <section className="flex flex-col gap-2 px-4 py-4">
+        <h3 className="text-label uppercase text-muted-foreground">Mentioned</h3>
         <div className="flex flex-col gap-1">
-          {RECENT.map((row) => (
+          {MENTIONED.map((row) => (
             <button
               key={row.id}
               type="button"
               className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-accent"
             >
-              <TicketIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
               <span className="shrink-0 font-mono text-ui text-muted-foreground">{row.id}</span>
               <span className="min-w-0 truncate text-ui text-foreground">{row.title}</span>
             </button>
           ))}
         </div>
-      </RailBlock>
+      </section>
     </aside>
   );
 }
 
 // ---------------------------------------------------------------------------
-// A surface: tab strip + plane (+ optional info)
+// Feed — only here to judge the backlink chip inline in running text.
+
+function FeedPreview() {
+  return (
+    <div className="mx-auto flex max-w-content flex-col gap-6 px-gutter py-8">
+      <div className="flex flex-col gap-2">
+        <span className="text-label uppercase text-muted-foreground">You</span>
+        <p className="text-sm leading-prose text-foreground">
+          Fold <MentionChip id="VC-55" column="Todo" /> into{" "}
+          <MentionChip id="VC-54" column="Todo" /> where they overlap, and check whether the digest
+          half belongs in <MentionChip id="VC-75" column="Backlog" /> instead.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="text-label uppercase text-muted-foreground">Agent</span>
+        <p className="text-sm leading-prose text-foreground">
+          The tab-strip half of <MentionChip id="VC-55" column="Todo" /> dissolves into{" "}
+          <MentionChip id="VC-54" column="Todo" /> — after Home the two kinds never share a strip.
+          The digest is already <MentionChip id="VC-75" column="Backlog" />
+          &apos;s.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Surface
 
 function Surface({
   project,
@@ -495,12 +571,8 @@ function Surface({
   info: Info;
   empty: Empty;
 }) {
-  const style = identityStyle(identity, project);
-  const Glyph = style.glyph;
-  // Home's permanent Board tab (VC-54) vs a ticket's permanent Body tab.
-  // Capitalised binding, rendered as JSX below: a Phosphor icon is a
-  // forwardRef object, not a callable function, so `(a ? X : Y)(props)` throws
-  // at render even though it typechecks.
+  const tinted = project && identity === "tint";
+  const Glyph = project && identity !== "none" ? CompassIcon : ChatCircleIcon;
   const PermanentGlyph = project ? KanbanIcon : TicketIcon;
   const tabs = project
     ? [
@@ -513,7 +585,9 @@ function Surface({
       ];
   const activeIndex = 1;
   const stop = tabStopIndex(tabs.length, activeIndex);
-  const railOn = info === "rail" || info === "worktree-rail";
+  // Both info surfaces are project-only — the ticket workspace keeps the rail
+  // it already has, untouched.
+  const railOn = project && info === "rail";
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background">
@@ -542,7 +616,7 @@ function Surface({
             tabStop={index === stop}
             closable={!tab.permanent}
             status={index === activeIndex ? "ready" : undefined}
-            labelClassName={index === activeIndex ? style.tab : undefined}
+            labelClassName={index === activeIndex && tinted ? "text-primary-text" : undefined}
             leading={
               tab.permanent ? (
                 <PermanentGlyph weight="bold" className="size-3 shrink-0 text-muted-foreground" />
@@ -551,7 +625,7 @@ function Surface({
                   weight="bold"
                   className={cn(
                     "size-3 shrink-0",
-                    style.accent ? "text-primary-text" : "text-muted-foreground",
+                    tinted ? "text-primary-text" : "text-muted-foreground",
                   )}
                 />
               )
@@ -561,16 +635,19 @@ function Surface({
         ))}
       </TabStrip>
 
-      {info === "venue-bar" ? <VenueBar project={project} /> : null}
+      {project && info === "venue-bar" ? <VenueBar /> : null}
 
       <div className="flex min-h-0 flex-1">
-        <div className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", style.surface)}>
+        <div
+          className={cn(
+            "relative flex min-h-0 min-w-0 flex-1 flex-col",
+            tinted &&
+              "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary/30",
+          )}
+        >
           <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
-            <EmptyChat variant={empty} project={project} identity={identity} />
+            <EmptyChat variant={empty} project={project} />
           </div>
-          {/* A stand-in composer: the empty state is only honest with the thing
-              it is sitting above. Not interactive — the composer is not what
-              this prototype is asking about. */}
           <div className="shrink-0 px-4 pb-4">
             <div className="mx-auto flex max-w-content flex-col gap-2 rounded-container border border-border bg-card p-4 shadow-raised">
               <span className="text-sm text-muted-foreground">Message…</span>
@@ -582,10 +659,7 @@ function Surface({
             </div>
           </div>
         </div>
-
-        {railOn ? (
-          <InfoRail emphasis={info === "worktree-rail" ? "worktree" : "venue"} project={project} />
-        ) : null}
+        {railOn ? <InfoRail /> : null}
       </div>
     </div>
   );
@@ -624,24 +698,31 @@ function AxisPicker<T extends string>({
 }
 
 export default function ProjectSessionIdentityScratch() {
-  const [identity, setIdentity] = React.useState<Identity>("tint");
+  const [identity, setIdentity] = React.useState<Identity>("glyph");
   const [info, setInfo] = React.useState<Info>("rail");
-  const [empty, setEmpty] = React.useState<Empty>("chips");
+  const [empty, setEmpty] = React.useState<Empty>("field");
   const [view, setView] = React.useState<View>("both");
 
   return (
     <div className="flex h-svh w-full flex-col bg-rail">
       <div className="flex min-h-0 flex-1 gap-2 p-2 pb-16">
-        {view !== "ticket" ? (
-          <Surface project identity={identity} info={info} empty={empty} />
-        ) : null}
-        {view !== "home" ? (
-          <Surface project={false} identity={identity} info={info} empty={empty} />
-        ) : null}
+        {view === "feed" ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-xl border border-border bg-background">
+            <FeedPreview />
+          </div>
+        ) : (
+          <>
+            {view !== "ticket" ? (
+              <Surface project identity={identity} info={info} empty={empty} />
+            ) : null}
+            {view !== "home" ? (
+              <Surface project={false} identity={identity} info={info} empty={empty} />
+            ) : null}
+          </>
+        )}
       </div>
 
-      {/* Bottom-LEFT: the shell parks its own "← Lab" control bottom-right. */}
-      <div className="fixed bottom-3 left-3 z-[9998] flex max-w-[calc(100vw-12rem)] flex-wrap items-center gap-4 rounded-full border border-border bg-background/90 px-4 py-2 shadow-overlay backdrop-blur">
+      <div className="fixed bottom-3 left-3 z-[9998] flex max-w-[calc(100vw-14rem)] flex-wrap items-center gap-4 rounded-full border border-border bg-background/90 px-4 py-2 shadow-overlay backdrop-blur">
         <AxisPicker
           label="Identity"
           value={identity}
@@ -651,7 +732,6 @@ export default function ProjectSessionIdentityScratch() {
         <AxisPicker label="Info" value={info} options={INFO_LABELS} onChange={setInfo} />
         <AxisPicker label="Empty" value={empty} options={EMPTY_LABELS} onChange={setEmpty} />
         <AxisPicker label="View" value={view} options={VIEW_LABELS} onChange={setView} />
-        {/* Rule 5: surface the state, so a screenshot carries its own caption. */}
         <code className="font-mono text-label text-muted-foreground">
           {identity} / {info} / {empty}
         </code>
