@@ -1,0 +1,155 @@
+# Attachments (VC-50)
+
+Status: design settled, implementation in progress.
+
+One system for every file a user hands the app — a screenshot pasted into a
+chat, a PDF spec dropped on the ticket composer, a design mock referenced from
+a ticket body. Today none of that works: the only way to point the agent at
+anything is `@relative/path`, which reaches repo files and nothing else.
+
+## What exists today
+
+Three things wear the word "attachment"; only one is real.
+
+1. **Ticket attachments — backend complete, unreachable.** Migration 011
+   (`ticket_attachments`), `db/attachments-repo.ts`, `main/attachment-store.ts`
+   (bytes at `<userData>/attachments/<attachmentId>/<fileName>`),
+   `attachment-materialize.ts` → `.volli/attachments/` in the session root, and
+   `attachmentsSectionInput` composing them into the brief. Called from
+   `worktree/ensure.ts` and `pty/scope.ts`. All of it works, and **nothing can
+   create a row**: `createAttachment` has no non-test caller and there is no
+   preload surface. The table is provably empty in production, which is what
+   makes the restructure below free of data migration.
+2. **The composer paperclip is not an attachment.** `composer-file-attach.tsx`
+   ranks the repo file index and inserts `@relative/path` text.
+3. **Chat is text-only.** `onSubmit(text, intent, resources)`; `PromptResource`
+   is the skills/templates channel, not files.
+
+Two seams already exist and are load-bearing for this plan: the RPC edge
+carries an AI SDK `UIMessage` for `message.submit` (whose `parts` already admit
+`FileUIPart`), and the vendored `ai-elements/prompt-input.tsx` already
+implements drag/drop, paste, the file dialog, `maxFiles`/`maxFileSize` and an
+`AttachmentsContext` — none of it wired up.
+
+## Constraints that decided the design
+
+- **Pi takes images, not documents.** `UserMessage.content: string |
+  (TextContent | ImageContent)[]`, where `ImageContent` is `{type, data:
+  base64, mimeType}`. There is no document/PDF content block. `Model.input:
+  ("text" | "image")[]` is a per-model capability gate the catalog already
+  reports; our `ModelAccessModel` descriptor does not surface it yet.
+- **Inlining base64 into durable history is a known trap.** Claude Code writes
+  pasted images as base64 straight into its transcript JSONL — a single user
+  turn in a real local transcript held 3.6 MB across six image blocks. Because
+  the block replays on every subsequent turn, one oversized image does not fail
+  once, it corrupts the session: later text-only prompts fail and `--continue`
+  breaks (anthropics/claude-code #8202, #12167, #19631, and others). Our history
+  is re-read on every relaunch and the transcript artifact digest is frozen, so
+  we inherit this exactly if bytes go into `session_events` or the artifact.
+- **Worktrees are disposable.** `ensure.ts` prunes them and retention removes
+  them, so nothing inside `.volli/attachments/` can be authoritative.
+- **Every session has a `workspacePath`** — a ticket's worktree, or the project
+  root for a ticketless Session. So a materialization target always exists.
+- **The renderer CSP is `img-src 'self' data:`** and main already registers a
+  privileged scheme (`PACKAGED_RENDERER_SCHEME`) via
+  `registerSchemesAsPrivileged` + `protocol.handle`. Serving blobs to the
+  renderer follows that established path.
+
+## The model
+
+**Separate the bytes from the thing they are attached to.** Our current
+`ticket_attachments` owns both — ticket-keyed, id-keyed, no dedup, and
+structurally unable to be referenced from a chat message. That is precisely the
+shape Vibe Kanban shipped and then had to migrate away from
+(`20250818150000_refactor_images_to_junction_tables.sql`: content-addressed
+`images` + a `task_images` junction, "so that images can be associated with
+multiple tasks and execution processes"). Their cloud model and Linear's both
+land in the same place: a blob, plus a link row naming what it hangs off.
+
+- **`blobs`** — bytes, content-addressed. `hash` (sha256) primary key, `mime`,
+  `size_bytes`, `original_name`, `width`/`height` (images), `created_at`. Bytes
+  at `<userData>/blobs/<hash[0:2]>/<hash>`. One store for every surface: the
+  same screenshot pasted into a ticket and a chat is one blob. Dedup is not a
+  micro-optimization here — screenshots get re-pasted constantly.
+- **`blob_links`** — a thin row naming where a blob is attached: `id`,
+  `blob_hash`, exactly one of `ticket_id` / `session_id`, `label`, `created_at`.
+  Explicit nullable owners with a CHECK, rather than a generic
+  `owner_kind`/`owner_id` pair, so a reader can see the two surfaces we
+  actually have. `ticket_attachments` is replaced by this table; the `url` kind
+  keeps its own row shape (a link attachment has no blob).
+
+`Blob` is the only new noun. The chat surface needs no second one: a chat
+attachment's link *is* its transcript part.
+
+### Naming
+
+`attachment` is already taken by the runtime binding (`SessionAttachment`,
+`attachment.opened`, the durable `attachmentId` field), and those durable
+strings are frozen. Files get `blob` in code. "Attachment" stays the
+user-facing word in UI copy, where there is no ambiguity.
+
+## How a file reaches the agent
+
+One pipeline, one rule, chosen by file type rather than by surface.
+
+**Everything materializes.** On session ensure, every blob linked to the
+session (via its ticket and via the session itself) is copied into
+`.volli/attachments/` under a deterministic, collision-free name and listed in
+the brief with its label — the pipeline `attachment-materialize.ts` and
+`materializedAttachmentNames` already implement, including the self-gitignore
+(`VOLLI_GITIGNORE_CONTENT`). This is the ACP `resource_link` half: the agent
+can open it with a tool, whatever the type.
+
+**Images additionally inline.** At send time, in main, an image blob is read
+from the store and passed to Pi as `ImageContent`. Never persisted as base64 —
+the durable record holds only the reference. If the selected model's
+`Model.input` lacks `"image"`, we skip the inline and the path reference still
+stands, so an attachment degrades instead of failing.
+
+`.volli/attachments/` is therefore a **rebuildable projection**, never the
+source of truth. A pruned worktree loses nothing; the next ensure re-materializes
+from the blob store. Materialization is already skip-if-exists with deterministic
+names, so re-running is free.
+
+PDFs and other documents are file references only for now (decided). Converting
+PDF pages to images so they can be inlined is a later call, not a v1 gap.
+
+## How a file gets back to the user
+
+Blobs are served to the renderer over a registered `volli-blob:` privileged
+scheme resolving `volli-blob:<hash>` against the store, with the scheme added
+to the CSP's `img-src`. This works identically in dev and packaged, and it is
+what makes an image in a reopened chat retrievable regardless of worktree state
+— the transcript holds `volli-blob:<hash>`, the store holds the bytes, and
+neither depends on a checkout that may have been pruned.
+
+Rendering follows the type: **images render inline; every other file is an
+inline chip** (name, type, size) — in the transcript, in the ticket body, and
+in the composer.
+
+## Guardrails
+
+- **Cap on the way in, not at the API.** Oversized images are downscaled (or
+  refused) at attach time, before anything enters durable history. Every one of
+  the Claude Code corruption bugs is downstream of not doing this.
+- Surface `Model.input` through `ModelAccessModel` so the attach affordance can
+  say a model takes no images rather than failing at send.
+- Unreferenced blobs are collected when their last link goes away.
+- The `@path` picker is not superseded. It is the right answer for repo files
+  and stays exactly as it is.
+
+## Work order
+
+1. **Shared model** — `Blob`, hash/path derivation, the materialization naming
+   already in `ticket-attachment.ts` re-pointed at blobs. Pure, 100% covered.
+2. **Storage** — `blobs` + `blob_links` migration (no data migration: the old
+   table has never held a row), repo layer, content-addressed file store
+   replacing `attachment-store.ts`'s id-keyed layout.
+3. **Ingest + serve** — import from a path/bytes with hashing and the size cap;
+   the `volli-blob:` protocol and CSP entry.
+4. **Preload + ticket surfaces** — semantic commands, composer attach, ticket
+   detail list/add/remove, inline rendering in the body. Closes #94.
+5. **Chat** — wire the vendored `PromptInputAttachments`, carry `FileUIPart`
+   through `message.submit`, inline images at send, render inline/chips.
+6. **Materialization + brief** — re-point `attachment-materialize.ts` at
+   `blob_links` and include session-linked blobs, not just ticket ones.
