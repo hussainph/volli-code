@@ -212,7 +212,6 @@ export function ModelAccessSettings({
       ) : null}
       <ModelAccessAccounts
         providers={providers}
-        loading={loading}
         autoSignInProviderId={deepLinkedProviderId}
         onRecover={() => void retry()}
         onChanged={() => load(true)}

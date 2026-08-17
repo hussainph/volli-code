@@ -20,6 +20,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ComposerInteractionStack,
   InteractionCard,
+  InteractionReceiptLine,
   PendingInteractionAnnouncement,
 } from "./interaction-ui";
 
@@ -455,6 +456,98 @@ describe("the two cards as one family", () => {
     expect(optionRow(drawn(ask([askPrompt({ multiple: true })])), "main")).not.toContain(
       "bg-foreground",
     );
+  });
+});
+
+/** The foot mount: a card with the real composer standing under it. */
+function stacked(interaction: RendererSessionInteraction): string {
+  return renderToStaticMarkup(
+    <ComposerInteractionStack interaction={interaction} onResolve={() => undefined}>
+      <textarea aria-label="Answer" placeholder="Your answer" />
+    </ComposerInteractionStack>,
+  );
+}
+
+describe("the question whose answer is typed in the composer", () => {
+  it("draws no box of its own beside the composer that takes the words", () => {
+    // One box, not two. `askFieldOpen` still says this question accepts free
+    // text; what changed is where that text is typed — into the input the
+    // reader's hands are already in, four pixels below.
+    const html = stacked(ask([askPrompt({ custom: true })]));
+    expect(html).toContain('role="radio"');
+    expect(html.match(/<textarea/g)).toHaveLength(1);
+    expect(html).toContain('placeholder="Your answer"');
+  });
+
+  it("stands its own commit control down where there is nothing else to commit", () => {
+    // A question that listed nothing to choose between has its whole answer
+    // downstairs, so a button here could only ever come back with "Write an
+    // answer" at a box it does not have.
+    const html = stacked(ask([askPrompt({ options: [], custom: true })]));
+    expect(html).not.toContain('type="submit"');
+    // The two exits it keeps: refusing the question, and withdrawing it stays
+    // the caller's to offer.
+    expect(html).toContain(">Reject</button>");
+  });
+
+  it("keeps the rows that answer it, and the control a multi-select needs", () => {
+    const html = stacked(ask([askPrompt({ multiple: true, custom: true })]));
+    expect(html).toContain('role="checkbox"');
+    expect(html).toContain('type="submit"');
+  });
+
+  it("keeps its own box wherever the composer cannot answer for it", () => {
+    // A permission: its words are a note beside a verdict, and a verdict is
+    // pressed rather than typed.
+    expect(
+      renderToStaticMarkup(
+        <ComposerInteractionStack interaction={permission()} onResolve={() => undefined}>
+          <textarea aria-label="Message" />
+        </ComposerInteractionStack>,
+      ),
+    ).toContain(">Note</button>");
+    // And a request that asked more than one thing: the composer has no
+    // position in that walk, so the card keeps the box the counter belongs to.
+    const several = stacked(
+      ask([askPrompt({ custom: true }), askPrompt({ id: "prompt:1", custom: true })]),
+    );
+    expect(several).toContain("Question 1 of 2");
+    expect(several.match(/<textarea/g)).toHaveLength(2);
+  });
+
+  it("keeps its box on a card that has no composer under it", () => {
+    // The row mount. The deferral is the foot's to decide, because the foot is
+    // the only place a composer stands beside the card.
+    expect(drawn(ask([askPrompt({ custom: true })]))).toContain("<textarea");
+  });
+});
+
+describe("the receipt an answered question leaves", () => {
+  it("reads the words back, and gives them the room to be read in", () => {
+    const html = renderToStaticMarkup(
+      <InteractionReceiptLine
+        interaction={freeText()}
+        resolution={{ optionIds: [], response: "cut a patch instead" }}
+      />,
+    );
+    expect(html).toContain("You answered");
+    expect(html).toContain("cut a patch instead");
+    // The one trailer with unbounded length is the one that gives, and the
+    // whole of it stays a hover away.
+    expect(html).toContain('title="cut a patch instead"');
+    expect(html).toContain("flex-1 truncate");
+  });
+
+  it("keeps a verdict's one-word trailer at its own size", () => {
+    const html = renderToStaticMarkup(
+      <InteractionReceiptLine
+        interaction={permission()}
+        resolution={{ optionIds: ["once"], response: null }}
+      />,
+    );
+    expect(html).toContain("You allowed");
+    expect(html).toContain(">once</span>");
+    expect(html).not.toContain("flex-1 truncate");
   });
 });
 

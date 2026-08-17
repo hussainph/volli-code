@@ -1,15 +1,14 @@
-import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, readlink } from "node:fs/promises";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import { access, lstat, mkdir, readlink, rm, symlink, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import {
   buildHarnessInstallPlan,
   harnessAdapters,
-  shellSingleQuote,
+  VOLLI_PATH_PROFILE_BLOCK,
   type HarnessAdapter,
   type HarnessId,
+  type InstallAction,
 } from "@volli/shared";
 
 import {
@@ -18,9 +17,12 @@ import {
   type HarnessInstallResult,
   type HarnessUninstallResult,
 } from "./harness-install";
-import { loginShellPath, readLoginShellPath, type LoginShellDeps } from "./login-path";
-
-const execFileAsync = promisify(execFile);
+import {
+  loginShellPath,
+  readLoginShellPath,
+  resetLoginShellPathCache,
+  type LoginShellDeps,
+} from "./login-path";
 
 /**
  * The first executable named `executable` on `pathValue`, absolute — what a
@@ -82,26 +84,7 @@ export async function detectHarnesses(deps?: LoginShellDeps): Promise<HarnessId[
   return detectInstalledHarnesses(pathValue);
 }
 
-export type AgentToolsConsentStatus = "installed" | "deferred";
-
-export async function runAgentToolsConsent(input: {
-  current: AgentToolsConsentStatus | null;
-  prompt(): Promise<"install" | "defer">;
-  install(): Promise<void>;
-  persist(status: AgentToolsConsentStatus): Promise<void>;
-}): Promise<AgentToolsConsentStatus> {
-  if (input.current !== null) return input.current;
-  const choice = await input.prompt();
-  if (choice === "install") {
-    await input.install();
-    await input.persist("installed");
-    return "installed";
-  }
-  await input.persist("deferred");
-  return "deferred";
-}
-
-function managedManifestPath(home: string): string {
+export function managedManifestPath(home: string): string {
   return join(home, ".agents/skills/volli/.volli-managed.json");
 }
 
@@ -137,72 +120,189 @@ export async function uninstallAllHarnessSkills(input: {
   return uninstallHarnessPlan(plan, managedManifestPath(input.home));
 }
 
-function appleScriptString(value: string): string {
-  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+/** Where the user-space CLI link lives — the same directory every peer harness links into. */
+export function userCliLinkPath(home: string): string {
+  return join(home, ".local", "bin", "volli");
 }
+
+export const LEGACY_GLOBAL_CLI_LINK = "/usr/local/bin/volli";
+
+/** What `~/.local/bin/volli` looks like after an ensure pass. */
+export type UserCliLinkResult =
+  /** The link exists and points at this app's shim (`changed` says whether this pass wrote it). */
+  | { state: "linked"; changed: boolean }
+  /** Something that is not ours occupies the name; it was left exactly alone. */
+  | { state: "kept"; target: string | null };
 
 /**
- * The elevated shell command that links the generated shim to `/usr/local/bin`.
- * Fresh macOS (no Homebrew / Command Line Tools) ships without `/usr/local/bin`,
- * so `ln` alone fails permanently; `mkdir -p` runs first in the same elevated
- * shell so both happen under a single administrator prompt.
+ * Ensures `~/.local/bin/volli` → the generated shim — user-space, silent, no
+ * elevation anywhere. The shim path inside `userData/bin` is stable and the
+ * shim itself is regenerated every boot, so the link stays valid across
+ * updates without ever being touched again.
+ *
+ * Never clobbers: an existing symlink is repointed only when its current
+ * target is this exact shim or one of `managedTargets` (the sibling dev/
+ * packaged profile's shim — the one other file this app may claim). A foreign
+ * symlink or a regular file is kept, reported, and surfaced by the CLI pane
+ * rather than replaced.
  */
-export function globalCliLinkShellCommand(
-  shimPath: string,
-  managedReplacementTarget?: string,
-): string {
-  const quotedShimPath = shellSingleQuote(shimPath);
-  const managedReplacement =
-    managedReplacementTarget === undefined
-      ? ""
-      : `elif [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = ${shellSingleQuote(managedReplacementTarget)} ]; then /bin/ln -sfn ${quotedShimPath} /usr/local/bin/volli; `;
-  // Never clobber an unrelated command under administrator privileges. The
-  // existing link is accepted only when it already points at this exact shim;
-  // `-n` and the absence of `-f` also prevent destination symlink traversal or
-  // replacement in a check/create race. Absolute tools avoid PATH substitution.
-  return (
-    "/bin/mkdir -p /usr/local/bin && " +
-    `if [ -L /usr/local/bin/volli ] && [ "$(/usr/bin/readlink /usr/local/bin/volli)" = ${quotedShimPath} ]; then :; ` +
-    managedReplacement +
-    "elif [ -e /usr/local/bin/volli ] || [ -L /usr/local/bin/volli ]; then echo 'Refusing to replace existing /usr/local/bin/volli' >&2; exit 1; " +
-    `else /bin/ln -sn ${quotedShimPath} /usr/local/bin/volli; fi`
-  );
-}
-
-/** Uses the standard macOS administrator prompt to expose the generated shim outside Volli. */
-export async function installGlobalCliLink(
-  shimPath: string,
-  managedReplacementTarget?: string,
-): Promise<void> {
-  await execFileAsync("/usr/bin/osascript", [
-    "-e",
-    `do shell script ${appleScriptString(
-      globalCliLinkShellCommand(shimPath, managedReplacementTarget),
-    )} with administrator privileges`,
-  ]);
-}
-
-/**
- * Removes `/usr/local/bin/volli` iff it is a symlink pointing at our own shim.
- * The ownership check (`readlink`) is a cheap, non-admin syscall done first, so
- * the administrator prompt only ever appears for a link we actually created —
- * never for a same-named link the user set up for something else, nor a plain
- * file. Returns whether the link was removed.
- */
-export async function removeGlobalCliLinkIfOurs(shimPath: string): Promise<boolean> {
+export async function ensureUserCliLink(input: {
+  home: string;
+  shimPath: string;
+  managedTargets?: readonly string[];
+}): Promise<UserCliLinkResult> {
+  const linkPath = userCliLinkPath(input.home);
   let target: string;
   try {
-    target = await readlink("/usr/local/bin/volli");
+    const entry = await lstat(linkPath);
+    if (!entry.isSymbolicLink()) return { state: "kept", target: null };
+    target = await readlink(linkPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    await mkdir(dirname(linkPath), { recursive: true });
+    await symlink(input.shimPath, linkPath);
+    return { state: "linked", changed: true };
+  }
+  if (target === input.shimPath) return { state: "linked", changed: false };
+  if ((input.managedTargets ?? []).includes(target)) {
+    await rm(linkPath, { force: true });
+    await symlink(input.shimPath, linkPath);
+    return { state: "linked", changed: true };
+  }
+  return { state: "kept", target };
+}
+
+/**
+ * Removes `~/.local/bin/volli` iff it is a symlink pointing at our own shim (or
+ * a managed sibling's). Returns whether the link was removed.
+ */
+export async function removeUserCliLinkIfOurs(input: {
+  home: string;
+  shimPath: string;
+  managedTargets?: readonly string[];
+}): Promise<boolean> {
+  const linkPath = userCliLinkPath(input.home);
+  let target: string;
+  try {
+    target = await readlink(linkPath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // ENOENT: nothing there. EINVAL: exists but not a symlink → not ours.
     if (code === "ENOENT" || code === "EINVAL") return false;
     throw error;
   }
-  if (target !== shimPath) return false;
-  await execFileAsync("/usr/bin/osascript", [
-    "-e",
-    `do shell script ${appleScriptString("/bin/rm -f /usr/local/bin/volli")} with administrator privileges`,
-  ]);
+  if (target !== input.shimPath && !(input.managedTargets ?? []).includes(target)) return false;
+  await rm(linkPath, { force: true });
   return true;
+}
+
+/**
+ * Best-effort cleanup of the retired admin-elevated `/usr/local/bin/volli`
+ * link — removed only when it is a symlink pointing at our own shim (or a
+ * managed sibling's), and only when an UNPRIVILEGED unlink succeeds. That
+ * directory is normally root-owned, so on most hosts the unlink earns EACCES
+ * and the stale link survives; "kept" is the honest report for that, and the
+ * CLI pane states it rather than claiming a clean migration. No prompt, ever:
+ * an admin dialog to delete a symlink that `~/.local/bin` now shadows anyway
+ * is exactly the interruption this migration exists to remove.
+ */
+export async function cleanupLegacyGlobalCliLink(input: {
+  shimPath: string;
+  managedTargets?: readonly string[];
+  /** Test seam; the real path is {@link LEGACY_GLOBAL_CLI_LINK}. */
+  legacyLinkPath?: string;
+}): Promise<"removed" | "kept" | "absent"> {
+  const linkPath = input.legacyLinkPath ?? LEGACY_GLOBAL_CLI_LINK;
+  let target: string;
+  try {
+    target = await readlink(linkPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return "absent";
+    // EINVAL: exists but not a symlink → not ours; anything else unreadable →
+    // leave it alone. Best-effort means no failure here is worth a boot error.
+    return "kept";
+  }
+  if (target !== input.shimPath && !(input.managedTargets ?? []).includes(target)) return "kept";
+  try {
+    await unlink(linkPath);
+    return "removed";
+  } catch {
+    return "kept"; // usually EACCES — root-owned directory, no elevation by design
+  }
+}
+
+/**
+ * The managed profile fence that puts `~/.local/bin` on the login-shell PATH —
+ * zsh's `~/.zprofile`, hash-comment markers (an HTML comment is a zsh syntax
+ * error). One deliberate reversal is worth naming: the shell-init integration
+ * (`shell-init.ts`) never writes the user's dotfiles — it only reads them — and
+ * this does, because there is no other way for a plain terminal Volli never
+ * spawned to find the CLI. It rides the same managed-write machinery as every
+ * other dotfile Volli touches: hash-guarded, conflict-preserving, excisable.
+ */
+export function userBinPathActions(home: string): InstallAction[] {
+  return [
+    {
+      kind: "fenced",
+      path: join(home, ".zprofile"),
+      content: VOLLI_PATH_PROFILE_BLOCK,
+      version: 1,
+      comment: "hash",
+      managed: true,
+    },
+  ];
+}
+
+export type UserBinPathState =
+  /** `~/.local/bin` already reaches the login shell; nothing was written. */
+  | "on-path"
+  /** The managed block was written (or refreshed) into `~/.zprofile`. */
+  | "written"
+  /** The login shell could not be asked, so no dotfile was touched on a guess. */
+  | "unknown"
+  /** The user edited the managed block; their version was preserved. */
+  | "conflict";
+
+/** Whether `loginPath` already reaches `<home>/.local/bin`. */
+export function loginPathHasUserBin(loginPath: string, home: string): boolean {
+  const userBin = join(home, ".local", "bin").replace(/\/+$/, "");
+  return loginPath.split(":").some((entry) => entry.replace(/\/+$/, "") === userBin);
+}
+
+/**
+ * Appends the PATH block to `~/.zprofile` when the login shell cannot already
+ * reach `~/.local/bin`. A `null` login PATH writes nothing: "we could not ask"
+ * must not become a dotfile edit, the same stance {@link installHarnessSkills}
+ * takes for an empty adapter census.
+ *
+ * A WRITE also drops the per-launch login-PATH cache ({@link loginShellPath}).
+ * That cache was warmed before this ran — it is how `loginPath` was measured —
+ * so after the profile changes it describes a shell that no longer exists.
+ * Every later measurement (the Settings → CLI pane's Login PATH row, harness
+ * detection, doctor) re-asks a fresh login shell, which reads the block this
+ * just wrote and reports `~/.local/bin` reachable — the same answer a new
+ * terminal gives. Without the drop, the pane would call the PATH "missing" for
+ * the whole first launch, at the exact moment a plain terminal resolves
+ * `volli` fine. A conflict preserves the user's bytes and writes nothing, so
+ * the cached answer still holds and stays.
+ */
+export async function ensureUserBinOnPath(input: {
+  home: string;
+  loginPath: string | null;
+}): Promise<{ state: UserBinPathState; conflicts: HarnessInstallResult["conflicts"] }> {
+  if (input.loginPath === null) return { state: "unknown", conflicts: [] };
+  if (loginPathHasUserBin(input.loginPath, input.home)) return { state: "on-path", conflicts: [] };
+  const result = await applyHarnessInstallPlan(
+    userBinPathActions(input.home),
+    managedManifestPath(input.home),
+  );
+  if (result.conflicts.length > 0) return { state: "conflict", conflicts: result.conflicts };
+  if (result.written.length > 0) resetLoginShellPathCache();
+  return { state: "written", conflicts: [] };
+}
+
+/** Excises the managed PATH block from `~/.zprofile`; surrounding user content survives. */
+export async function removeUserBinPathBlock(home: string): Promise<HarnessUninstallResult> {
+  return uninstallHarnessPlan(userBinPathActions(home), managedManifestPath(home));
 }

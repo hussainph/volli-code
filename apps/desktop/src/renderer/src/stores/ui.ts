@@ -20,9 +20,11 @@
  * header button + the "c" hotkey) is app-wide chrome, not per-workspace
  * state, so it never follows a project into persisted storage.
  *
- * `workspaceRailHidden` — whether the Slack-style project/workspace switcher
- * is visible — persists app-wide. Hiding it returns its full width to the
- * active workspace while project keyboard shortcuts remain available.
+ * `workspaceRailHidden` — whether the Slack-style project switcher is
+ * visible — persists app-wide. (The key predates CONTEXT.md's "project"
+ * ruling and stays as wire format; the copy on the toggle says project
+ * switcher.) Hiding it returns its full width to the active workspace while
+ * project keyboard shortcuts remain available.
  *
  * `sidebarPinned` — whether the summoned sidebar panel stands in the layout
  * (⌘B / the chrome-band trigger) rather than being summoned by the pointer at
@@ -218,7 +220,7 @@ interface UiState {
   settingsSignInProviderId: string | null;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
-  /** Project/workspace switcher rail hidden? Persisted app-wide (see module doc). */
+  /** Project switcher rail hidden? Persisted app-wide (see module doc). */
   workspaceRailHidden: boolean;
   /** Sidebar panel docked rather than summoned on hover? Persisted app-wide (see module doc). */
   sidebarPinned: boolean;

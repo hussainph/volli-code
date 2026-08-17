@@ -536,8 +536,8 @@ const SESSION_START_SPEC: CommandSpec = {
   example: 'volli session start VC-12 -m "Fix the flaky auth test"',
   notes: [
     "Runs in the app: attended-only, never headless; the board does not move.",
-    "Submits a kickoff turn; -m replaces the default kickoff text.",
-    "--model/--reasoning override the app default for this session.",
+    "Submits a kickoff turn; -m replaces the default kickoff text and names the session.",
+    "--title sets a permanent title; --model/--reasoning override the app default.",
   ],
   positionalId: { label: "session start" },
   options: {
@@ -555,6 +555,12 @@ const SESSION_START_SPEC: CommandSpec = {
       group: "message",
       hidden: true,
       help: "Alias for -m.",
+    },
+    "--title": {
+      kind: "value",
+      key: "title",
+      placeholder: "<text>",
+      help: "Explicit session title.",
     },
     "--model": {
       kind: "value",
@@ -679,9 +685,9 @@ const BOARD_SPEC: CommandSpec = {
 };
 
 const SESSION_LIST_SPEC: CommandSpec = {
-  summary: "List active terminal sessions.",
+  summary: "List a project's active terminal and chat sessions.",
   example: "volli session list --ticket VC-12",
-  notes: ["Prints the short session ids used by session peek."],
+  notes: ["Prints each session's title and short id; session peek takes either type."],
   options: {
     "--project": { kind: "value", key: "project", placeholder: "<p>", help: "Filter by project." },
     "--ticket": { kind: "value", key: "ticket", placeholder: "<id>", help: "Filter by ticket." },
@@ -800,11 +806,13 @@ const WORKTREE_DIFF_SPEC: CommandSpec = {
 };
 
 const SESSION_PEEK_SPEC: CommandSpec = {
-  summary: "Peek at a session's recent terminal output.",
+  summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
   example: "volli session peek a1b2c3 --lines 60",
   notes: [
-    "Handle is a short session id from session list.",
-    "Keep peeks narrow — raw output consumes the caller's context.",
+    "Handle is a short session id from session list — terminal or chat.",
+    "A chat answers activity, last-event age, turn depth, then its transcript tail.",
+    "--lines is trailing terminal lines (60), or chat messages (12).",
+    "Keep peeks narrow — output consumes the caller's context.",
   ],
   positionalId: { label: "session peek" },
   options: {
@@ -813,7 +821,7 @@ const SESSION_PEEK_SPEC: CommandSpec = {
       key: "lines",
       parse: positiveIntValue,
       placeholder: "<n>",
-      help: "How many trailing lines to show.",
+      help: "How much trailing output to show.",
     },
   },
 };

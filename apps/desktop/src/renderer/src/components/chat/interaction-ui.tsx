@@ -70,6 +70,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import {
   askFieldOpen,
+  composerAnswerPrompt,
   describeInteractionResolution,
   emptyInteractionDraft,
   interactionAdvance,
@@ -202,6 +203,18 @@ export interface InteractionCardProps {
   onWithdraw?(): void;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
   resolving?: boolean;
+  /**
+   * The composer below this card takes the words for this question, so the card
+   * draws no box of its own.
+   *
+   * Only ever true at the foot mount, and only for a question the composer can
+   * actually answer ({@link composerAnswerPrompt}). Two boxes stacked — the
+   * card's own field and the composer four pixels under it — are two things
+   * each claiming to be where the answer goes, which is the same mistake as
+   * two cards in one slot and reads worse: they are the same control, drawn
+   * twice, one of them smaller.
+   */
+  composerAnswers?: boolean;
   ref?: React.Ref<HTMLFormElement>;
   className?: string;
 }
@@ -492,6 +505,7 @@ function QuestionCard({
   onResolve,
   onWithdraw,
   resolving,
+  composerAnswers = false,
   ref,
   className,
 }: InteractionCardProps) {
@@ -512,6 +526,15 @@ function QuestionCard({
   const step = interactionStep(interaction, draft, index);
   const refusable = needsOwnRefusal(interaction);
   const askedId = step?.question.prompt.id ?? "";
+  // The card's commit control stands down with its box, but only where there is
+  // nothing else left to commit. A question that listed options still answers
+  // on the row that is clicked; one that listed none has its whole answer typed
+  // in the composer, and a button here could then only ever come back with
+  // "Write an answer" — a live control that lies about what it does.
+  const advanceLabel =
+    composerAnswers && step?.question.prompt.options.length === 0
+      ? null
+      : (step?.advanceLabel ?? null);
 
   // Both cards in the AnimatePresence are mounted while one leaves, so the entry
   // is matched by the prompt it belongs to rather than by document order — the
@@ -630,6 +653,7 @@ function QuestionCard({
                 interaction={interaction}
                 draft={draft}
                 disabled={resolving}
+                composerAnswers={composerAnswers}
                 onBack={() => go(step.index - 1)}
                 onChoose={choose}
                 onMark={mark}
@@ -712,9 +736,9 @@ function QuestionCard({
               is the grant and a stray one is the thing to prevent; here it is a
               step in a walk, and a control that goes quietly dead says less than
               one that answers what it is waiting for. */}
-          {step?.advanceLabel ? (
+          {advanceLabel ? (
             <Button type="submit" size="sm" disabled={resolving}>
-              {step.advanceLabel}
+              {advanceLabel}
             </Button>
           ) : null}
         </div>
@@ -736,6 +760,7 @@ function QuestionStep({
   interaction,
   draft,
   disabled,
+  composerAnswers = false,
   onBack,
   onChoose,
   onMark,
@@ -746,6 +771,8 @@ function QuestionStep({
   interaction: RendererSessionInteraction;
   draft: InteractionDraft;
   disabled?: boolean;
+  /** The composer under the card is this question's answer field. */
+  composerAnswers?: boolean;
   onBack(): void;
   onChoose(option: SessionInteractionOption): void;
   onMark(option: SessionInteractionOption): void;
@@ -768,7 +795,13 @@ function QuestionStep({
   // The harness's call, not the card's: `custom` is what says a written answer
   // can be read back at all. Refusing is never gated on it — that is the
   // card's own Reject, and it stands whether or not there is a box here.
-  const fieldOpen = askFieldOpen(prompt);
+  //
+  // And where the composer below takes those same words, the box is DOWNSTAIRS
+  // rather than absent: the card would otherwise draw a second, smaller copy of
+  // the input the reader's hands are already in, and a question whose answer
+  // can be typed in two places is a question that has to be read twice before
+  // it can be answered once.
+  const fieldOpen = askFieldOpen(prompt) && !composerAnswers;
   // Roving, the radio group's own rule: the chosen row is the tab stop, and
   // where nothing is chosen yet the first one is.
   const tabbable = Math.max(
@@ -1052,6 +1085,13 @@ function OptionChip({
  * — a `/` keystroke used to slide the whole composer 206px. Cards animate
  * themselves; the surface they land on is never redrawn. A computed transform
  * other than `none` on the origin is the bug, not the effect.
+ *
+ * **Whether the card draws its own answer box is decided HERE, not passed in.**
+ * This is the one mount where a composer stands under the card, so it is the
+ * one place that can say the composer is the box — and it says it from the same
+ * function the composer's own `answering` reads ({@link composerAnswerPrompt}),
+ * so the two cannot come apart into a card that hid its field beside a box that
+ * sends the words somewhere else.
  */
 export function ComposerInteractionStack({
   interaction,
@@ -1124,6 +1164,7 @@ export function ComposerInteractionStack({
               ref={drawerRef}
               interaction={interaction}
               resolving={resolving}
+              composerAnswers={composerAnswerPrompt(interaction) !== null}
               onResolve={(submission) => onResolve(interaction.id, submission)}
               onWithdraw={onWithdraw ? () => onWithdraw(interaction.id) : undefined}
             />
@@ -1401,7 +1442,20 @@ export function InteractionReceiptLine({
       />
       <span className="shrink-0">{receipt.lead}</span>
       <code className="min-w-0 truncate font-mono text-ui text-foreground">{receipt.subject}</code>
-      {receipt.trailer ? <span className="shrink-0">{receipt.trailer}</span> : null}
+      {/* Every trailer but one is a word — `once`, `always`, a chosen label —
+          and sits at its own size. An answer is a sentence somebody typed, so
+          it is the half of this row with something to give: `flex-1` takes
+          what is left and truncates inside it, rather than two `auto` siblings
+          shrinking in proportion and clipping the question as well. The whole
+          of it stays one hover away. */}
+      {receipt.trailer ? (
+        <span
+          className={cn(receipt.verdict === "answered" ? "min-w-0 flex-1 truncate" : "shrink-0")}
+          title={receipt.verdict === "answered" ? receipt.trailer : undefined}
+        >
+          {receipt.trailer}
+        </span>
+      ) : null}
     </div>
   );
 }

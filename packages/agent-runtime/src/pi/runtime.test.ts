@@ -443,6 +443,33 @@ describe("model access", () => {
     ]);
   });
 
+  it("omits the context window for a catalog entry whose size a meter cannot divide by", async () => {
+    // Pi types the field as required, but a gateway entry can still carry 0 —
+    // and "no window" must stay distinguishable from a zero-token one.
+    const faux = fauxProvider({
+      provider: "groq",
+      models: [{ id: "windowless", contextWindow: 0 }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider({
+      ...faux.provider,
+      name: "Groq",
+      auth: { apiKey: { name: "Groq API key", resolve: async () => undefined } },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 42,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.models).toEqual([
+      expect.objectContaining({ providerId: "groq", modelId: "windowless" }),
+    ]);
+    expect("contextWindow" in access.models[0]).toBe(false);
+  });
+
   it("isolates provider authentication failures without exposing their details", async () => {
     const broken = fauxProvider({
       provider: "anthropic",
@@ -727,8 +754,13 @@ describe("model access", () => {
     const access = await runtime.inspectModelAccess({ refresh: true, signal: controller.signal });
 
     expect(refresh).toHaveBeenCalledWith({ force: true, signal: controller.signal });
-    expect(checkAuth).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
-    expect(getAvailable).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
+    // Each probe now receives a per-provider signal linked to the caller's — it
+    // also carries that probe's own timeout — rather than the caller's signal
+    // object itself. Assert a live signal is threaded here; the mid-flight
+    // "caller-abort cancels an in-flight probe" guarantee lives in
+    // model-access.test.ts, which can hold a probe open to prove it.
+    expect(checkAuth).toHaveBeenCalledWith("sign-in", { signal: expect.any(AbortSignal) });
+    expect(getAvailable).toHaveBeenCalledWith("sign-in", { signal: expect.any(AbortSignal) });
     expect(access.providers[0]).toMatchObject({
       state: "authentication-required",
       recovery: { kind: "sign-in" },

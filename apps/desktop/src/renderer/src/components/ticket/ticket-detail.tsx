@@ -32,7 +32,6 @@ import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab"
 import {
   chatTabId,
   chatTabStatus,
-  nextChatOrdinal,
   parseChatTabId,
   resolveChatRelaunch,
   CHAT_TAB_FALLBACK_LABEL,
@@ -185,7 +184,7 @@ export function TicketDetail({
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
-        chatTabStatus(state.sessions[sessionId]?.lifecycle),
+        chatTabStatus(state.sessions[sessionId]),
       ),
     ),
   );
@@ -830,8 +829,6 @@ export function TicketDetail({
   const createChat = React.useCallback(
     async (chatSkills?: readonly string[]) => {
       await bootChatSession(ticketScope(projectId, ticket.id), {
-        // The terminal path's own convention — the count that exists, plus one.
-        title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
         skills: chatSkills,
         land: (sessionId) => {
           // The ticket itself may have been deleted while the create was in
@@ -847,7 +844,7 @@ export function TicketDetail({
         },
       });
     },
-    [durableChatIds?.length, openChatIds.length, projectId, setActiveTab, ticket.id],
+    [projectId, setActiveTab, ticket.id],
   );
 
   // A rail row for a Session with no live client adopts it; one already open

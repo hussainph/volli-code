@@ -78,7 +78,7 @@ async function main() {
   let app = await launch({
     dbPath: profileDbPath,
     userDataDir,
-    extraEnv: { VOLLI_AGENT_CONSENT_CHOICE: "defer" },
+    extraEnv: {},
   });
   try {
     await assertProfileIsolated(app, userDataDir);

@@ -68,7 +68,7 @@ import { getBuiltinTheme } from "restty";
  * theme name the ghostty chain resolves (and nothing, when the chain names none
  * — Volli will not invent a name to write into a file the user owns).
  *
- * The app surface is TWO tri-states rather than one, because a workspace's
+ * The app surface is TWO tri-states rather than one, because a project's
  * gradient and its light/dark choice are two independent columns on its row
  * (migration 014) and either can be overridden alone. Both are authored by the
  * same canvas editor the global page mounts, scoped here.
@@ -128,10 +128,10 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
 }
 
 /**
- * The workspace's own theming columns (migration 014), as the theme store's
+ * The project's own theming columns (migration 014), as the theme store's
  * scope descriptor. Read off the project ROW rather than fetched: the row
  * already arrived in the bootstrap payload, and a second read path would be a
- * second answer to "what is this workspace's canvas?".
+ * second answer to "what is this project's canvas?".
  */
 function projectScope(project: Project) {
   return {
@@ -142,16 +142,16 @@ function projectScope(project: Project) {
 }
 
 /**
- * This workspace's own gradient.
+ * This project's own gradient.
  *
  * Same tri-state as every other surface on this page, and the same rule behind
- * it: **Custom** opens on the canvas the workspace is ALREADY wearing — the
+ * it: **Custom** opens on the canvas the project is ALREADY wearing — the
  * app-wide one — so the switch changes what the choice means without changing
  * what is on screen. **Inherit** clears the column rather than storing a marker,
- * so a workspace that has been reset reads exactly like one never touched.
+ * so a project that has been reset reads exactly like one never touched.
  *
  * The editor's own preview mechanism is scope-aware, so a drag here paints this
- * window and commits to this workspace's `projects` row — the global canvas is
+ * window and commits to this project's `projects` row — the global canvas is
  * never touched by it.
  */
 function ProjectAppThemeSection({ project }: { project: Project }) {
@@ -168,7 +168,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
     () => ({ kind: "project", projectId: project.id }),
     [project.id],
   );
-  // Resolved for THIS workspace — its own appearance override when it has one.
+  // Resolved for THIS project — its own appearance override when it has one.
   const resolved = resolveAppearance(appearance ?? globalAppearance, systemPrefersDark);
 
   return (
@@ -206,15 +206,15 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
 }
 
 /**
- * This workspace's light/dark choice — a second column, and a second tri-state.
+ * This project's light/dark choice — a second column, and a second tri-state.
  *
  * Separate from the canvas above because the two are genuinely independent: a
- * workspace may pin dark while inheriting the gradient, or take its own gradient
+ * project may pin dark while inheriting the gradient, or take its own gradient
  * and still follow the app-wide mode. Folding them into one control would make
  * three of those four states unreachable.
  *
  * Custom pins whatever is currently inherited, `auto` included — "follows the
- * system, in this workspace only" is a real choice and not the same as inheriting
+ * system, in this project only" is a real choice and not the same as inheriting
  * an `auto` that could later be changed app-wide.
  */
 function ProjectAppearanceModeSection({ project }: { project: Project }) {

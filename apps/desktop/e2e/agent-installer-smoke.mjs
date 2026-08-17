@@ -12,11 +12,11 @@
  *   3. A hand-edited managed file comes back as a CONFLICT — it is preserved,
  *      not overwritten — while `custom/` still stands.
  *
- * The /usr/local/bin admin symlink is env-gated off in tests (it needs an
- * osascript admin prompt no headless run can answer) via the test seam;
- * this probe exercises exactly the skill-pack pipeline, which is where install
- * idempotency lives. First install is driven by consent=install; the two
- * follow-ups take the app-update refresh path (consent already "installed").
+ * Every run takes the same path now: the background install (VC-52) is
+ * user-space and dialog-free, so all three boots are the identical
+ * hash-guarded pipeline — which is exactly what idempotency means. Smoke-kit
+ * defaults VOLLI_SKIP_AGENT_TOOLS=1 (home isolation for every other probe);
+ * this probe opts back in with "0" against its throwaway VOLLI_AGENT_HOME.
  *
  *   Run:
  *     vp run --filter @volli/desktop build
@@ -61,7 +61,12 @@ function bootWith(extraEnv) {
   return launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_AGENT_HOME: fakeHome, PATH: fakePath, ...extraEnv },
+    extraEnv: {
+      VOLLI_AGENT_HOME: fakeHome,
+      PATH: fakePath,
+      VOLLI_SKIP_AGENT_TOOLS: "0",
+      ...extraEnv,
+    },
   });
 }
 
@@ -70,8 +75,8 @@ async function mtimeMs(path) {
 }
 
 async function main() {
-  // ---- Install run: consent=install writes the pack into fakeHome ----------
-  let app = await bootWith({ VOLLI_AGENT_CONSENT_CHOICE: "install" });
+  // ---- Install run: the first boot's background install writes the pack ----
+  let app = await bootWith({});
   try {
     await assertProfileIsolated(app, userDataDir);
     const page = await app.firstWindow();
@@ -109,7 +114,7 @@ async function main() {
     };
   });
 
-  // ---- Refresh run: consent already "installed" → hash-guarded refresh ------
+  // ---- Refresh run: every boot is the same hash-guarded pipeline ------------
   app = await bootWith({});
   try {
     const page = await app.firstWindow();

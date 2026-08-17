@@ -136,12 +136,12 @@ describe("chatSessionRecord", () => {
     ).toMatchObject({ adapterId: "claude-code", live: true });
   });
 
-  it("falls back to a generic title for a Session that was never given one", () => {
+  it("calls an untitled structured Session a chat, never a generic Session", () => {
     const projection = projectionWith([]);
     expect(
       chatSessionRecord({ ...projection, session: { ...projection.session, title: null } }),
     ).toMatchObject({
-      title: "Session",
+      title: "Chat",
     });
   });
 

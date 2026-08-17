@@ -63,3 +63,15 @@ describe("a user turn that delivered a skill", () => {
     expect(html).not.toContain("Skills delivered with this message");
   });
 });
+
+describe("ChatTurn copy control", () => {
+  it.each(["user", "assistant"] as const)("renders Copy for a %s message", (role) => {
+    const html = turn({
+      id: `${role}-1`,
+      role,
+      parts: [{ type: "text", text: `${role} message` }],
+    });
+
+    expect(html).toContain('aria-label="Copy"');
+  });
+});

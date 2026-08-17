@@ -11,7 +11,7 @@ import {
   VOLLI_PLUGIN_DOC,
   VOLLI_SKILL,
 } from "./skill-content";
-import type { HarnessAdapter, InstallAction } from "./types";
+import type { FenceComment, HarnessAdapter, InstallAction } from "./types";
 
 /**
  * The adapter registry. A `ReadonlyMap` rather than a `Record<HarnessId, …>`,
@@ -39,13 +39,52 @@ export function getHarnessAdapter(id: HarnessId): HarnessAdapter | undefined {
 /** Every first-class harness adapter, for registry-driven iteration (detection, etc.). */
 export const harnessAdapters: readonly HarnessAdapter[] = [...adapters.values()];
 
+/**
+ * The begin/end markers a fenced managed block wears, per comment syntax. One
+ * table, consumed by the merge below and by the installer's body-extraction and
+ * uninstall-excision regexes (`harness-install.ts`), so the three sites that
+ * have to recognize the same block cannot drift apart.
+ */
+const FENCE_MARKERS: Record<FenceComment, { begin(version: number): string; end: string }> = {
+  html: { begin: (version) => `<!-- volli:begin v=${version} -->`, end: "<!-- volli:end -->" },
+  hash: { begin: (version) => `# volli:begin v=${version}`, end: "# volli:end" },
+};
+
+const FENCE_PATTERNS: Record<FenceComment, { block: string; body: string }> = {
+  html: {
+    block: "<!-- volli:begin v=\\d+ -->[\\s\\S]*?<!-- volli:end -->",
+    body: "<!-- volli:begin v=\\d+ -->\\r?\\n?([\\s\\S]*?)\\r?\\n?<!-- volli:end -->",
+  },
+  hash: {
+    block: "# volli:begin v=\\d+[\\s\\S]*?# volli:end",
+    body: "# volli:begin v=\\d+ *\\r?\\n?([\\s\\S]*?)\\r?\\n?# volli:end",
+  },
+};
+
+/** Matches one whole fenced block, markers included. Fresh per call — no shared state. */
+export function fencedBlockPattern(comment: FenceComment = "html"): RegExp {
+  return new RegExp(FENCE_PATTERNS[comment].block);
+}
+
+/**
+ * Matches one fenced block with the body in capture group 1, tolerating CRLF
+ * and a missing newline adjacent to either marker — a strict `\n` requirement
+ * makes the body null on Windows-edited or trailing-newline-stripped files,
+ * which fails the hash guard open (null → "write" → silent overwrite).
+ */
+export function fencedBodyPattern(comment: FenceComment = "html"): RegExp {
+  return new RegExp(FENCE_PATTERNS[comment].body);
+}
+
 export function mergeFencedSection(
   current: string,
   managedBody: string,
   version: number,
+  comment: FenceComment = "html",
 ): { content: string; changed: boolean } {
-  const block = `<!-- volli:begin v=${version} -->\n${managedBody}\n<!-- volli:end -->`;
-  const managedPattern = /<!-- volli:begin v=\d+ -->[\s\S]*?<!-- volli:end -->/;
+  const markers = FENCE_MARKERS[comment];
+  const block = `${markers.begin(version)}\n${managedBody}\n${markers.end}`;
+  const managedPattern = fencedBlockPattern(comment);
   const unmanaged = current.replace(/\n+$/, "");
   // Function-form replacement so `$$`, `$&`, `$1`, … inside the managed body are
   // inserted literally instead of being interpreted as replacement patterns.

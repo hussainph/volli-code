@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { ChatSessionLifecycle } from "@renderer/chat/client";
+
 import {
   chatTabId,
   chatTabStatus,
-  nextChatOrdinal,
   parseChatTabId,
   resolveChatRelaunch,
+  type ChatTabReading,
 } from "./ticket-chat-tab";
+
+/** A Session with nothing open on it — the ordinary reading. */
+function slice(lifecycle: ChatSessionLifecycle, asked = 0): ChatTabReading {
+  return {
+    lifecycle,
+    projection: { interactions: { active: Array.from({ length: asked }, () => ({})) } },
+  };
+}
 
 describe("chat tab identity", () => {
   it("round-trips a Session id through its prefixed tab id", () => {
@@ -25,19 +35,29 @@ describe("chat tab identity", () => {
 
 describe("chatTabStatus", () => {
   it("draws the slice's own lifecycle, and idle where there is no slice", () => {
-    expect(chatTabStatus("working")).toBe("working");
-    expect(chatTabStatus("starting")).toBe("starting");
-    expect(chatTabStatus("ready")).toBe("ready");
-    expect(chatTabStatus("error")).toBe("error");
+    expect(chatTabStatus(slice("working"))).toBe("working");
+    expect(chatTabStatus(slice("starting"))).toBe("starting");
+    expect(chatTabStatus(slice("ready"))).toBe("ready");
+    expect(chatTabStatus(slice("error"))).toBe("error");
     expect(chatTabStatus(undefined)).toBe("idle");
   });
-});
 
-describe("nextChatOrdinal", () => {
-  it("counts from whichever answer is larger", () => {
-    expect(nextChatOrdinal(0, 0)).toBe(1);
-    expect(nextChatOrdinal(3, 1)).toBe(4);
-    expect(nextChatOrdinal(0, 2)).toBe(3);
+  it("says a request is waiting on you, over the turn that is still open", () => {
+    // The bug: `ask_user` blocks INSIDE a turn, so a Session with a question up
+    // read as `working` — the one dot that tells a reader to leave it alone.
+    expect(chatTabStatus(slice("working", 1))).toBe("waiting");
+    expect(chatTabStatus(slice("ready", 2))).toBe("waiting");
+  });
+
+  it("keeps a failure louder than the question it may have stranded", () => {
+    // The plane's own precedence: with the stream gone, the request we hold is
+    // a memory, and a tab promising an answerable question over a dead
+    // transport sends someone to a card that cannot be answered.
+    expect(chatTabStatus(slice("error", 1))).toBe("error");
+  });
+
+  it("reads a Session whose first snapshot has not arrived as its lifecycle", () => {
+    expect(chatTabStatus({ lifecycle: "starting", projection: null })).toBe("starting");
   });
 });
 

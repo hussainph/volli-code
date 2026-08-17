@@ -10,9 +10,26 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("General");
     expect(html).toContain("Appearance");
     expect(html).toContain("Harness Runtimes");
+    // The CLI install is silent and background (VC-52), so its detection pane
+    // is app-wide by nature: one host, one link, one login shell.
+    expect(html).toContain("CLI");
     // Orphan cleanup is app-wide (the sweep walks every project), so it lives
     // here rather than on the per-project Configure page.
     expect(html).toContain("Worktrees");
+  });
+
+  // The pane's data arrives over the preload bridge in an effect, which never
+  // runs under renderToStaticMarkup — so what this asserts is the resting
+  // shape: both sections exist, detection opens in its checking state, and
+  // doctor has honestly not run rather than pretending a result.
+  it("can open directly on the CLI detection pane", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="cli" />);
+
+    expect(html).toContain("Command-line tool");
+    expect(html).toContain("Checking…");
+    expect(html).toContain("Doctor");
+    expect(html).toContain("Run Doctor");
+    expect(html).toContain("Not run yet.");
   });
 
   // Its app-wide scope is structural (it lives here, not on Configure) rather

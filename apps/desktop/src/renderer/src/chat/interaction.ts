@@ -534,6 +534,78 @@ export function interactionResolution(
   };
 }
 
+/* ------------------------------------------------- answering from the composer */
+
+/**
+ * The question the composer under this card answers, or null where the words
+ * typed there are an ordinary message after all.
+ *
+ * The composer is never taken away while a request is open — the card stacks
+ * above it rather than in its place — so a reader who answers by typing, which
+ * is the only thing a chat surface has ever asked of them, must not be writing
+ * into a box whose words the question cannot hear. Before this, they were:
+ * every keystroke went to the release queue, and the queue drains into an idle
+ * Session, and the Session cannot go idle until the question is answered. The
+ * words were not lost; they were unreachable, which reads the same from the
+ * chair.
+ *
+ * Three conditions, and each of them is a thing that would otherwise be
+ * invented on a reader's behalf:
+ *
+ *  - **An ask-user question, never a verdict.** A permission declares its own
+ *    refusal and every option on it is ours; choosing between them is a
+ *    deliberate press, and a verdict inferred from prose is a grant nobody
+ *    gave. Words written while a permission waits stay a message.
+ *  - **One question.** A request that asked three things is walked on the card,
+ *    with a counter saying which one is in view. The composer has no such
+ *    position, so its words could only be stamped onto a question the reader
+ *    never named.
+ *  - **Words the reply can carry.** `custom` is the harness's own statement
+ *    that free text can be read back — `ask_user`'s `allowOther`, which
+ *    defaults to true and is what the runtime writes for every question. Where
+ *    a model closed it, the listed choice is the only answer the reply has a
+ *    slot for, so the words stay a message rather than being accepted here and
+ *    dropped on the way out.
+ */
+export function composerAnswerPrompt(
+  interaction: RendererSessionInteraction,
+): SessionInteractionPrompt | null {
+  if (!isAskUserInteraction(interaction)) return null;
+  const prompts = readInteractionPrompts(interaction);
+  const only = prompts.length === 1 ? prompts[0] : undefined;
+  if (only === undefined) return null;
+  return promptTextCarrier(only) === "answer" ? only : null;
+}
+
+/**
+ * What one press of the composer sends while that question is open, or null
+ * where the words are an ordinary message.
+ *
+ * Blank text is a message rather than an answer, and the distinction costs
+ * nothing to make here: an empty submission never reaches this surface, and if
+ * one ever did, answering a question with nothing said is the shape a refusal
+ * is defined by ({@link refusalResolution}) — which is the one thing a stray
+ * keystroke must never be able to send.
+ *
+ * The submission is built rather than asked of {@link interactionSubmission},
+ * and the two agree by construction: a single prompt whose carrier is `answer`
+ * has no redirection to outrank it and is answered by the words alone, so the
+ * general path would re-decide both of those and arrive here. What it would
+ * also do is offer a `null` this function cannot produce — a branch nothing
+ * could ever exercise. Pinned by a test that compares the two.
+ */
+export function composerAnswer(
+  interaction: RendererSessionInteraction,
+  text: string,
+): InteractionSubmission | null {
+  const prompt = composerAnswerPrompt(interaction);
+  if (prompt === null || text.trim().length === 0) return null;
+  const draft = setPromptResponse(emptyInteractionDraft(interaction), prompt.id, text);
+  // The words travel on the resolution itself, which is what `answer` as a
+  // carrier means — so there is nothing left to say after it.
+  return { resolution: interactionResolution(interaction, draft), message: null };
+}
+
 /* -------------------------------------------------------------- questions */
 
 /** One question to draw, with the label a card would otherwise say twice removed. */
@@ -982,13 +1054,25 @@ export function describeInteractionResolution(
     verdict,
     lead: RECEIPT_LEADS[verdict],
     subject: interaction.title,
-    trailer: receiptTrailer(verdict, chosen),
+    trailer: receiptTrailer(verdict, chosen, resolution.response),
   };
 }
 
+/**
+ * What qualifies the verdict — and, where a question was answered, what was
+ * actually said.
+ *
+ * The words used to be missing, and that was survivable while the only place to
+ * type them was a box inside the card: the reader had just read their own
+ * sentence in the thing they pressed. It stopped being survivable when the
+ * composer became that box ({@link composerAnswerPrompt}) — every other
+ * paragraph typed there becomes a message on screen, so an answer that left
+ * nothing behind but "You answered ‹question›" reads as words that went nowhere.
+ */
 function receiptTrailer(
   verdict: InteractionReceipt["verdict"],
   chosen: readonly { label: string }[],
+  response: string | null,
 ): string | null {
   if (verdict === "allowed") return "once";
   if (verdict === "standing") return "always";
@@ -996,7 +1080,14 @@ function receiptTrailer(
   // the fallback would list back are the two this pair offered.
   if (verdict === "rejected" || verdict === "continued" || verdict === "stopped") return null;
   const labels = chosen.map((option) => option.label).filter((label) => label.length > 0);
-  return labels.length > 0 ? labels.join(", ") : null;
+  // Collapsed rather than clipped: the row truncates, and a paragraph's own
+  // newlines would otherwise set the height of a line in the transcript.
+  const said = (response ?? "").trim().replaceAll(/\s+/gu, " ");
+  const parts = [
+    ...(labels.length > 0 ? [labels.join(", ")] : []),
+    ...(said.length > 0 ? [said] : []),
+  ];
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 /**

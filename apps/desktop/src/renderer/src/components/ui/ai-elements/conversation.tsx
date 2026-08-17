@@ -5,7 +5,10 @@ import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import type { ComponentProps, ReactNode } from "react";
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef } from "react";
+import type { StickToBottomContext } from "use-stick-to-bottom";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+
+import { wheelDetachesFollowing } from "./scroll-chaining";
 
 /**
  * The render-prop form of `StickToBottom`'s children is deliberately dropped.
@@ -59,12 +62,37 @@ export type ConversationProps = Omit<ComponentProps<typeof StickToBottom>, "chil
  * prop stays open so the lab can put `smooth` back and re-run the comparison.
  */
 export const Conversation = ({ className, resize, children, ...props }: ConversationProps) => {
+  // Held by ref, not context, because this handler lives OUTSIDE the provider:
+  // it listens on the wrapper the library itself renders. `contextRef` is the
+  // library's own hand-out for exactly this position.
+  const stickContext = useRef<StickToBottomContext | null>(null);
+
+  // A wheel-up inside a nested scroller (an open bundle, a capped payload)
+  // must detach auto-follow, and the library cannot see it — its wheel
+  // handler bails on any target whose nearest scrollable ancestor is not the
+  // transcript scroller. See scroll-chaining.ts for the full argument. React
+  // registers `onWheel` passively, which is all this needs: it only observes
+  // the gesture; the browser keeps scrolling whatever it was scrolling.
+  const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const context = stickContext.current;
+    if (context === null) return;
+    const detaches = wheelDetachesFollowing<Element>({
+      deltaY: event.deltaY,
+      target: event.target instanceof Element ? event.target : null,
+      scroller: context.scrollRef.current,
+      overflowYOf: (node) => getComputedStyle(node).overflowY,
+    });
+    if (detaches) context.stopScroll();
+  }, []);
+
   return (
     <StickToBottom
       className={cn("relative flex-1 overflow-y-hidden", className)}
       initial="instant"
       resize={resize ?? "instant"}
       role="log"
+      contextRef={stickContext}
+      onWheel={handleWheel}
       {...props}
     >
       <StopFollowingBridge>{children}</StopFollowingBridge>

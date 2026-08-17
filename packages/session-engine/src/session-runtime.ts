@@ -15,7 +15,6 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
-  TranscriptReference,
   UnstampedCommandReceipt,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -38,6 +37,7 @@ import {
   sessionRootThreadId,
 } from "./observation-translation";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
+import { transcriptReferenceFor } from "./transcript-tail";
 import {
   applyTranscriptDelta,
   type TranscriptDelta,
@@ -2775,18 +2775,6 @@ function receiptIdentity(receipt: DeliveryReceipt): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function transcriptReferenceFor(event: SessionEvent): TranscriptReference | null {
-  if (event.payload.kind === "transcript.referenced") return event.payload.reference;
-  if (
-    event.payload.kind === "command.recorded" &&
-    (event.payload.command.intent.kind === "message.submit" ||
-      event.payload.command.intent.kind === "interaction.resolve")
-  ) {
-    return event.payload.command.intent.reference;
-  }
-  return null;
 }
 
 function stableJson(value: unknown): string {

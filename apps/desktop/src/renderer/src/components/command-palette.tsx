@@ -1,18 +1,24 @@
 import * as React from "react";
+import { useShallow } from "zustand/react/shallow";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
+import type { ChatSessionRecord } from "@volli/shared";
 
 import {
   buildCommandPaletteItems,
   type CommandPaletteItems,
 } from "@renderer/components/command-palette-model";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { MENU_LABEL_CMDK, MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
@@ -44,12 +50,24 @@ const PALETTE_ROW = `flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 
-/** Universal ⌘K destination picker for every ticket and every open session. */
+/** Universal ⌘K destination picker for tickets, open terminals, and durable chats. */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const projects = useProjectsStore((state) => state.projects);
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
   const ticketsByProject = useBoardStore((state) => state.ticketsByProject);
+  const planningChangeVersion = useBoardStore((state) => state.lastPlanningChange.version);
   const sessionsByOwner = useSessionsStore((state) => state.byOwner);
+  const residentChatTitles = useChatSessionsStore(
+    useShallow((state) => {
+      const titles: Record<string, string> = {};
+      for (const [sessionId, slice] of Object.entries(state.sessions)) {
+        const title = slice.projection?.session.title;
+        if (title !== null && title !== undefined) titles[sessionId] = title;
+      }
+      return titles;
+    }),
+  );
+  const [chatSessions, setChatSessions] = React.useState<readonly ChatSessionRecord[]>([]);
   const [query, setQuery] = React.useState("");
 
   // Closed and invisible: every board/session mutation would otherwise
@@ -59,14 +77,65 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const items = React.useMemo(
     () =>
       open
-        ? buildCommandPaletteItems(projects, ticketsByProject, sessionsByOwner, selectedProjectId)
+        ? buildCommandPaletteItems(
+            projects,
+            ticketsByProject,
+            sessionsByOwner,
+            selectedProjectId,
+            chatSessions,
+            residentChatTitles,
+          )
         : EMPTY_COMMAND_PALETTE_ITEMS,
-    [open, projects, ticketsByProject, sessionsByOwner, selectedProjectId],
+    [
+      open,
+      projects,
+      ticketsByProject,
+      sessionsByOwner,
+      selectedProjectId,
+      chatSessions,
+      residentChatTitles,
+    ],
   );
 
   React.useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
+
+  // The palette is a global destination surface, so it reads durable chat rows
+  // for every tracked project while open. Resident titles overlay those rows in
+  // the model, making a just-auto-titled tab searchable before a later refresh.
+  React.useEffect(() => {
+    if (!open) {
+      setChatSessions([]);
+      return;
+    }
+    let current = true;
+    void Promise.all(projects.map((project) => window.api.sessions.list({ projectId: project.id })))
+      .then((results) => {
+        if (!current) return;
+        const failed = results.find((result) => !result.ok);
+        if (failed !== undefined && !failed.ok) {
+          toastError(`Couldn't load sessions: ${failed.error}`);
+          return;
+        }
+        setChatSessions(
+          results.flatMap((result) =>
+            result.ok
+              ? result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : []))
+              : [],
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          const message = error instanceof Error ? error.message : String(error);
+          toastError(`Couldn't load sessions: ${message}`);
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [open, planningChangeVersion, projects]);
 
   const finishNavigation = React.useCallback(() => {
     useUiStore.getState().setSettingsOpen(false);
@@ -122,7 +191,24 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   keywords={[item.title, context, item.projectName]}
                   onSelect={() => {
                     useProjectsStore.getState().select(item.projectId);
-                    if (item.scope.kind === "ticket") {
+                    if (item.sessionKind === "chat") {
+                      const chat = useChatSessionsStore.getState();
+                      chat.adoptChatSession(item.sessionId);
+                      if (item.scope.kind === "ticket") {
+                        chat.openChatTab(item.scope.ticketId, item.sessionId);
+                        useWorkspaceStore
+                          .getState()
+                          .openTicketWorkspace(item.projectId, item.scope.ticketId, {
+                            tabId: chatTabId(item.sessionId),
+                          });
+                      } else {
+                        chat.openChatTab(item.projectId, item.sessionId);
+                        useWorkspaceStore.getState().setNav(item.projectId, "sessions");
+                        useWorkspaceStore
+                          .getState()
+                          .setSessionsActiveTab(item.projectId, chatTabId(item.sessionId));
+                      }
+                    } else if (item.scope.kind === "ticket") {
                       useWorkspaceStore
                         .getState()
                         .openTicketSession(item.projectId, item.scope.ticketId, item.sessionId);
@@ -134,7 +220,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   }}
                   className={PALETTE_ROW}
                 >
-                  <TerminalWindowIcon aria-hidden className={PALETTE_ROW_ICON} />
+                  {item.sessionKind === "chat" ? (
+                    <ChatCircleIcon aria-hidden className={PALETTE_ROW_ICON} />
+                  ) : (
+                    <TerminalWindowIcon aria-hidden className={PALETTE_ROW_ICON} />
+                  )}
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-ui font-medium">{item.title}</span>
                     <span className="truncate text-label text-muted-foreground">{context}</span>

@@ -184,6 +184,13 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("abcdef12  ticket  running  Work\n");
+    expect(
+      renderCliSuccess(
+        "session.list",
+        { sessions: [{ id: "fedcba98", kind: "chat", ticket: "VC-52", title: "Validate VC-52" }] },
+        options,
+      ),
+    ).toBe("fedcba98  chat  VC-52  Validate VC-52\n");
     expect(renderCliSuccess("ticket.events", { events: [{ kind: "created" }] }, options)).toBe(
       '{"kind":"created"}\n',
     );
@@ -499,6 +506,83 @@ describe("renderCliSuccess", () => {
         "appVersion  -\n" +
         "degraded  true\n",
     );
+  });
+
+  it("renders a chat peek as an activity line over a one-line-per-message tail", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "working",
+          waitingOn: null,
+          lastActivityAgeMs: 12_000,
+          turns: 7,
+          turnDepth: 3,
+          messages: 41,
+          unreadable: 0,
+          transcript: [
+            { ageMs: 5_400_000, role: "user", text: "Ship the CLI", tools: [] },
+            { ageMs: 240_000, role: "assistant", text: "", tools: ["bash", "read_file"] },
+            { ageMs: 12_000, role: "assistant", text: "Tests pass.", tools: ["edit_file"] },
+          ],
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "abcdef12  working  last 12s  turn 7 depth 3\n" +
+        "1h  user  Ship the CLI\n" +
+        "4m  assistant  [bash read_file]\n" +
+        "12s  assistant  [edit_file] Tests pass.\n",
+    );
+  });
+
+  it("names what a chat peek is waiting on, and what it could not read", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "waiting",
+          waitingOn: "permission",
+          lastActivityAgeMs: -1,
+          turns: null,
+          turnDepth: undefined,
+          unreadable: 2,
+          transcript: [
+            "not a record",
+            { ageMs: "unknown", role: "assistant", text: 12, tools: ["bash", 7] },
+            // A message that said nothing and called nothing keeps its row:
+            // the caller learns a turn happened, not that it was empty.
+            { ageMs: 0, role: "user" },
+          ],
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "abcdef12  waiting on permission  last -  turn - depth -  2 unreadable\n" +
+        "-  assistant  [bash]\n" +
+        "0s  user\n",
+    );
+  });
+
+  it("renders an empty chat tail as the activity line alone", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "idle",
+          waitingOn: null,
+          lastActivityAgeMs: 0,
+          turns: 0,
+          turnDepth: 0,
+          unreadable: 0,
+          transcript: [],
+        },
+        { json: false },
+      ),
+    ).toBe("abcdef12  idle  last 0s  turn 0 depth 0\n");
   });
 
   it("covers every usage exit-code spelling", () => {

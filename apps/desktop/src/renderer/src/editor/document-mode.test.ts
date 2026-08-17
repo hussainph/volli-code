@@ -33,6 +33,15 @@ describe("documentModeOptions", () => {
     expect(options.suggestOnTriggerCharacters).toBe(true);
   });
 
+  it("lets the wheel chain to the scrolling column instead of eating it", () => {
+    // The host is auto-height, so this editor never scrolls internally. Monaco's
+    // default `alwaysConsumeMouseWheel: true` still cancels every wheel event
+    // over it, freezing the outer ticket-body / markdown column under the
+    // cursor. VC-32 pins this to `false` so the surface scrolls like prose.
+    const options = documentModeOptions({});
+    expect(options.scrollbar?.alwaysConsumeMouseWheel).toBe(false);
+  });
+
   it("passes a placeholder through and omits it when there is none", () => {
     expect(documentModeOptions({ placeholder: "Add description…" }).placeholder).toBe(
       "Add description…",

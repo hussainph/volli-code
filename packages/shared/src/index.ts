@@ -32,6 +32,7 @@ export * from "./errors";
 export * from "./terminal";
 export * from "./ghostty-config";
 export * from "./session";
+export * from "./session-title";
 export * from "./session-ledger";
 export * from "./session-event-codec";
 export * from "./session-rpc-wire";

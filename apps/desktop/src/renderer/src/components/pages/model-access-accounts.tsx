@@ -78,13 +78,11 @@ const COPY_FEEDBACK_MS = 1200;
 
 export function ModelAccessAccounts({
   providers,
-  loading,
   autoSignInProviderId,
   onRecover,
   onChanged,
 }: {
   providers: readonly ModelAccessProvider[];
-  loading: boolean;
   /**
    * A provider a blocker sent the user here to sign in to (VC-53). The matching
    * row presses its own offered action on arrival — starting its one sign-in
@@ -106,7 +104,6 @@ export function ModelAccessAccounts({
         <ProviderAccount
           key={provider.id}
           provider={provider}
-          loading={loading}
           onArrival={deepLinkedAction(provider, autoSignInProviderId)}
           onRecover={onRecover}
           onChanged={onChanged}
@@ -118,13 +115,11 @@ export function ModelAccessAccounts({
 
 function ProviderAccount({
   provider,
-  loading,
   onArrival,
   onRecover,
   onChanged,
 }: {
   provider: ModelAccessProvider;
-  loading: boolean;
   /** What a deep-linked arrival presses here, or `none` on an ordinary visit. */
   onArrival: DeepLinkedAction;
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
@@ -150,7 +145,12 @@ function ProviderAccount({
     [],
   );
 
-  const busy = loading || starting || signingOut;
+  // A global snapshot reload does not gate this row. The sign-in methods it
+  // needs are already in the rendered snapshot, so greying every row for the
+  // whole inspection — which can hang on a single provider — was the bug. Only
+  // this row's own in-flight work, starting a sign-in or signing out, disables
+  // its actions; sign-out and cancel are unchanged.
+  const busy = starting || signingOut;
 
   // The deep-linked sign-in, honored once and only once.
   //

@@ -30,6 +30,17 @@ export interface PiModelAccessSource {
   credentials: PiModelAccess["credentials"] | null;
 }
 
+/**
+ * How long one provider's probe may run before the snapshot gives up on it.
+ *
+ * Long enough for a real OAuth-refresh round-trip, short enough that one wedged
+ * provider cannot strand the page. A provider that trips this is reported
+ * `unavailable` with a `retry` recovery a person clears in one click, so a false
+ * negative here is cheap where a hang is not — and sign-in no longer waits on
+ * the snapshot at all (see `model-access-accounts.tsx`).
+ */
+export const PROBE_TIMEOUT_MS = 5_000;
+
 /** Maps Pi-owned auth and catalog state into Volli's secret-free Model Access vocabulary. */
 export async function inspectPiModelAccess(
   source: PiModelAccessSource,
@@ -58,16 +69,21 @@ export async function inspectPiModelAccess(
 
   const providers: ModelAccessProvider[] = [];
   const catalog: ModelAccessModel[] = [];
-  for (const provider of models.getProviders()) {
+  // Concurrent, not sequential. The old loop awaited one provider's probe
+  // before starting the next, so wall time was the sum of ~40 probes and one
+  // hung provider held the whole snapshot open forever. Every probe now runs at
+  // once and is bounded by its own timeout, so the inspection costs the slowest
+  // single probe plus overhead rather than their sum — see {@link probeProvider}.
+  const probed = await Promise.all(
+    models.getProviders().map(async (provider) => ({
+      provider,
+      probe: await probeProvider(models, provider.id, input.signal, PROBE_TIMEOUT_MS),
+    })),
+  );
+  input.signal?.throwIfAborted();
+  for (const { provider, probe } of probed) {
+    const { auth, available, probeFailed } = probe;
     const refreshError = refreshErrors.get(provider.id);
-    const [authResult, availableResult] = await Promise.allSettled([
-      models.checkAuth(provider.id, input.signal ? { signal: input.signal } : undefined),
-      models.getAvailable(provider.id, input.signal ? { signal: input.signal } : undefined),
-    ]);
-    input.signal?.throwIfAborted();
-    const auth = authResult.status === "fulfilled" ? authResult.value : undefined;
-    const available = availableResult.status === "fulfilled" ? availableResult.value : [];
-    const probeFailed = authResult.status === "rejected" || availableResult.status === "rejected";
     const availableKeys = new Set(available.map(modelKey));
     const known = models.getModels(provider.id);
     const providerState: ModelAccessState =
@@ -125,6 +141,76 @@ export async function inspectPiModelAccess(
 
   input.signal?.throwIfAborted();
   return { observedAt: now(), providers, models: catalog };
+}
+
+/** What one provider's probe yielded, however it ended. */
+interface ProbeResult {
+  auth: Awaited<ReturnType<Models["checkAuth"]>>;
+  available: Awaited<ReturnType<Models["getAvailable"]>>;
+  /**
+   * True when a call rejected or the probe timed out. Both are the same "cannot
+   * tell" a null store already is, and every one of them reads as `unavailable`.
+   */
+  probeFailed: boolean;
+}
+
+/**
+ * One provider's auth and availability, bounded so a hung provider cannot hold
+ * the whole snapshot open.
+ *
+ * `checkAuth` and `getAvailable` can each reach the network — an OAuth refresh —
+ * and a provider that never answers would otherwise park the inspection on its
+ * one slot. The pair is therefore raced against a timeout: if it has not settled
+ * within `timeoutMs`, the provider is reported `unavailable`, the same direction
+ * a rejected probe takes, and the rest of the snapshot proceeds without it. The
+ * bound holds even when a call ignores its signal, because the race resolves on
+ * the timer rather than on the call. The timer deliberately does not abort an
+ * in-flight credential refresh: OAuth servers can rotate a refresh token before
+ * its replacement has been persisted locally. Caller cancellation is still
+ * relayed to the pair while this inspection is live.
+ *
+ * Nothing here surfaces an error: a rejection is collapsed to `probeFailed`, so
+ * no provider response text — a token echoed in a message, a refused key — can
+ * reach the snapshot or a message built from it.
+ */
+async function probeProvider(
+  models: Models,
+  providerId: string,
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<ProbeResult> {
+  callerSignal?.throwIfAborted();
+  const controller = new AbortController();
+  const abortForCaller = (): void => controller.abort(callerSignal?.reason);
+  callerSignal?.addEventListener("abort", abortForCaller, { once: true });
+  const timedOut = Promise.withResolvers<"timeout">();
+  const timer = setTimeout(() => {
+    // Stop awaiting the probe but do not interrupt an OAuth refresh. It may
+    // have already rotated its credential server-side and still need to write
+    // the replacement locally; the race itself provides the inspection bound.
+    timedOut.resolve("timeout");
+  }, timeoutMs);
+  try {
+    const settled = await Promise.race([
+      // `allSettled` never rejects, so the losing branch of this race cannot
+      // become an unhandled rejection when the timer wins and it settles later.
+      Promise.allSettled([
+        models.checkAuth(providerId, { signal: controller.signal }),
+        models.getAvailable(providerId, { signal: controller.signal }),
+      ]),
+      timedOut.promise,
+    ]);
+    if (settled === "timeout") return { auth: undefined, available: [], probeFailed: true };
+    const [authResult, availableResult] = settled;
+    return {
+      auth: authResult.status === "fulfilled" ? authResult.value : undefined,
+      available: availableResult.status === "fulfilled" ? availableResult.value : [],
+      probeFailed: authResult.status === "rejected" || availableResult.status === "rejected",
+    };
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", abortForCaller);
+  }
 }
 
 function refreshRecovery(error: Error): ModelAccessRecovery {
