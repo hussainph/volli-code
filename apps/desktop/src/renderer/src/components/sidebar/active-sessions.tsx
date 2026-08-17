@@ -1,13 +1,6 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import {
-  errorMessage,
-  type ChatSessionRecord,
-  type LatestSessionSignal,
-  type Project,
-  type SessionRecord,
-  type Ticket,
-} from "@volli/shared";
+import { errorMessage, type LatestSessionSignal, type Project, type Ticket } from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
@@ -33,26 +26,16 @@ import { nextAgeChangeAt } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import {
+  EMPTY_PROJECT_SESSION_ROWS,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
-
-/**
- * How often the durable listing is re-read while this section is on screen.
- *
- * Chat activity changes in MAIN — a turn starting, a question being asked —
- * and there is no push channel for it: `onHarnessChange` announces a terminal's
- * harness and nothing else, and the fetch below is keyed on which Sessions are
- * live, which does not move when a live chat merely changes what it is doing.
- * So a chat row's word would sit stale until something else happened to
- * refetch. Ten seconds is chosen against the reader, not the data: it is
- * roughly how long a glance at the sidebar can be wrong before the wrongness
- * is what you notice. Replace it with a subscription the moment main grows one.
- */
-const CHAT_ACTIVITY_REFRESH_MS = 10_000;
 
 /** Re-indexes the batched durable Session projection for the pure listing model. */
 function indexSignalsByTicket(
@@ -118,8 +101,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const sessionsActiveTab = useWorkspaceStore(
     (state) => state.byProject[project.id]?.sessionsActiveTab ?? null,
   );
-  const [records, setRecords] = React.useState<SessionRecord[]>([]);
-  const [chatSessions, setChatSessions] = React.useState<ChatSessionRecord[]>([]);
+  // The project's Session rows, shared with the board's active-session
+  // indicator and fed by `volli:session-activity` rather than by a timer —
+  // see `stores/project-sessions.ts`. This component used to own both the
+  // fetch and a ten-second poll on top of it; what it owns now is when the
+  // BASELINE is read, which is still its call because it is the surface that
+  // knows a project has come on screen.
+  const projectRows =
+    useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
+  const records = projectRows.terminal;
+  const chatSessions = projectRows.chat;
+  const refreshProjectSessions = useProjectSessionsStore((state) => state.refresh);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
     {},
   );
@@ -202,28 +194,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [tickets],
   );
 
-  const sessionsFetch = useLatestAsync();
+  // The BASELINE read, and only that. A window that has just opened has missed
+  // every push that came before it, so the listing is read once per project and
+  // `volli:session-activity` carries it from there — which is why this no longer
+  // re-fires on `liveSignature`. A Session coming up IS a durable fact, so the
+  // channel announces it; refetching on the same trigger would just race the push
+  // to say the same thing. `refreshTick` survives for the one thing the channel
+  // genuinely cannot see: rows that changed while this project was off screen
+  // because its ticket left the board.
   React.useEffect(() => {
-    const token = sessionsFetch.claim();
-    window.api.sessions
-      .list({ projectId: project.id })
-      .then((result) => {
-        if (!sessionsFetch.isCurrent(token)) return;
-        if (!result.ok) {
-          toastError(`Couldn't load active sessions: ${result.error}`);
-          return;
-        }
-        setRecords(result.sessions.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])));
-        setChatSessions(
-          result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
-        );
-      })
-      .catch((error: unknown) => {
-        if (sessionsFetch.isCurrent(token))
-          toastError(`Couldn't load active sessions: ${errorMessage(error)}`);
-      });
-    return () => sessionsFetch.invalidate();
-  }, [project.id, liveSignature, refreshTick, sessionsFetch]);
+    void refreshProjectSessions(project.id);
+  }, [project.id, refreshTick, refreshProjectSessions]);
 
   // Two of the Previous band's cleanup rules need to know when a ticket entered
   // its CURRENT column, and neither guesses without it — a ticket missing here
@@ -250,25 +231,9 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       });
     return () => statusFetch.invalidate();
   }, [project.id, liveSignature, refreshTick, statusFetch]);
-
-  // A session's harness can change without its PTYs changing at all — quitting
-  // opencode and starting claude in the same shell is one terminal, one live
-  // pane, one signature. The refetch above is keyed on `liveSignature`, so it
-  // never fires for that switch; patch the record the announce names instead,
-  // or the row keeps naming the harness the session was launched with.
-  React.useEffect(
-    () =>
-      window.api.sessions.onHarnessChange((notice) => {
-        setRecords((current) =>
-          current.map((record) =>
-            record.id === notice.sessionId
-              ? { ...record, activeHarnessId: notice.harnessId }
-              : record,
-          ),
-        );
-      }),
-    [],
-  );
+  /* `liveSignature` still keys the ticket-history read above: a Session coming
+     up is usually a ticket about to move columns, and that history has no push
+     channel of its own. It no longer keys the SESSION listing — that is pushed. */
 
   const signalsFetch = useLatestAsync();
   const loadAttentionSignals = React.useCallback(() => {
@@ -320,12 +285,13 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     loadAttentionSignals();
   }, [needsReviewIds, planningChange, loadAttentionSignals]);
 
-  // See CHAT_ACTIVITY_REFRESH_MS: main has no push channel for chat activity,
-  // and this section is render-hidden rather than unmounted across nav
-  // switches, so `visible` is what stops it polling behind another page — and
-  // what triggers an immediate re-read on return, so coming back from Files
-  // never shows minutes-stale activity for up to another poll interval. The ref
-  // starts true so the mount fetch is not doubled.
+  // There is no poll here any more — `volli:session-activity` pushes a Session's
+  // row the moment its history moves, whether this section is on screen or not,
+  // so nothing goes stale behind another page and nothing has to be caught up on
+  // return. What survives is ONE re-read when the section comes back into view,
+  // for the facts the Session channel genuinely cannot announce: the two Previous
+  // cleanup rules read a ticket's column history, which moves on the board rather
+  // than in the ledger. The ref starts true so the mount fetch is not doubled.
   const wasVisible = React.useRef(true);
   React.useEffect(() => {
     if (!visible) {
@@ -334,11 +300,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     }
     if (!wasVisible.current) setRefreshTick((tick) => tick + 1);
     wasVisible.current = true;
-    const timer = window.setInterval(
-      () => setRefreshTick((tick) => tick + 1),
-      CHAT_ACTIVITY_REFRESH_MS,
-    );
-    return () => window.clearInterval(timer);
   }, [visible]);
 
   // The sidebar's durable read catches chats started outside this renderer.

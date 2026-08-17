@@ -13,14 +13,7 @@ import {
   validateUniquePrefix,
 } from "@volli/shared";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import type {
-  Label,
-  Project,
-  SessionListingRow,
-  SessionProjection,
-  Ticket,
-  TicketStatus,
-} from "@volli/shared";
+import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -97,11 +90,7 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import {
-  chatSessionRecord,
-  createDesktopSessionEngine,
-  terminalSessionRecord,
-} from "./session-control";
+import { createDesktopSessionEngine, sessionListingRows } from "./session-control";
 import {
   getTicketRow,
   listAllTickets,
@@ -223,25 +212,14 @@ function busyRefusal(site: BusyWorktreeSite): string {
     : "A terminal is still running in this worktree. Close it first.";
 }
 
-/**
- * The renderer's Session listing: a discriminated row per Session, so a
- * structured-only Session is visible instead of silently dropping out.
- *
- * PRECEDENCE: a Session that has ever opened a terminal attachment renders as
- * its terminal row, byte-for-byte what `terminalSessionRecord` always
- * returned; only an attachment-less or structured-only Session renders as a
- * chat row. The CLI socket (`agent-commands.ts`) applies the same precedence
- * to its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify,
- * peek, the hooks) stays terminal-only on purpose and never reaches here.
+/*
+ * The renderer's Session listing rows are built by `session-control/listing-row.ts`,
+ * which is also what the `volli:session-activity` push uses — the fetch and the
+ * push must produce the identical row or a Session changes appearance the moment
+ * it moves. The CLI socket (`agent-commands.ts`) applies the same precedence to
+ * its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify, peek,
+ * the hooks) stays terminal-only on purpose and never reaches here.
  */
-function sessionListingRows(sessions: readonly SessionProjection[]): SessionListingRow[] {
-  return sessions.map((session): SessionListingRow => {
-    const terminal = terminalSessionRecord(session);
-    return terminal !== null
-      ? { kind: "terminal", record: terminal }
-      : { kind: "chat", record: chatSessionRecord(session) };
-  });
-}
 
 // ---- registration --------------------------------------------------------
 

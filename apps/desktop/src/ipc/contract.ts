@@ -1087,6 +1087,13 @@ export type VolliIpcEvent =
   // whose action opens that session's chat tab — and does nothing else: the
   // app must never navigate or steal focus because a start landed.
   | "volli:session-started"
+  // One Session's listing row, re-derived because its durable history moved —
+  // see {@link SessionActivityNotice}. This is the PUSH channel that replaced
+  // the ten-second `volli:session-list` poll every Session listing used to
+  // run: a turn opening, a question being asked, an attachment closing and a
+  // retitle all reach the sidebar and the board on the same frame main learns
+  // them, instead of within ten seconds of it.
+  | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
   // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
@@ -1274,6 +1281,34 @@ export interface SessionStartedNotice {
   actorTicket: string | null;
   /** Epoch ms the start was ingested (main's clock). */
   at: number;
+}
+
+/**
+ * Main→renderer: one Session's listing row, re-derived after its durable
+ * history moved.
+ *
+ * It carries the WHOLE {@link SessionListingRow} rather than a compact
+ * activity delta, and that is the point. Every renderer listing already holds
+ * exactly these rows (`volli:session-list` returns them), so applying a notice
+ * is an upsert keyed by Session id and never a second vocabulary that has to
+ * be kept in step with the fetched one. A Session that has just been created
+ * arrives complete, so a listing learns about it without refetching anything;
+ * a retitle and a turn boundary travel the same way, so there is one channel to
+ * reason about rather than one per fact.
+ *
+ * `projectId` rides at the top level even though both record shapes carry it,
+ * because a window filters on it before it looks inside: a listing scoped to
+ * one project must be able to drop another project's notice without
+ * discriminating the union first.
+ *
+ * Broadcast to every window, like every other Session notice — a Session's rows
+ * are visible wherever its project is open.
+ */
+export interface SessionActivityNotice {
+  projectId: string;
+  /** The ticket this Session drives, or `null` for a project-scoped scratch Session. */
+  ticketId: string | null;
+  row: SessionListingRow;
 }
 
 /**
