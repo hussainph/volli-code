@@ -62,17 +62,20 @@ Free-text search isn't in this header. It's part of the command palette
 
 ## What moves a ticket
 
-Three things move tickets, and they don't have equal authority.
+Two things move tickets, and they don't have equal authority.
 
 **You.** Drag a card, or run
-[`volli ticket move`](/reference/cli/#volli-ticket-move) yourself.
-
-**A terminal companion.** Calling `volli session done` or
-`volli session blocked` from a linked ticket terminal reports its outcome to
-the board.
+[`volli ticket move`](/reference/cli/#volli-ticket-move) yourself. Agents use
+the same command — a move is always an explicit act, whoever makes it.
 
 **System lifecycle handling.** Volli can react to a terminal session that
 exited, stalled, or was interrupted.
+
+Session signals are not on this list on purpose. `volli session blocked`
+raises attention on the exact session that called it, with the agent's
+`--reason` as the words you see — it flags, it never moves. `volli session
+done` records the session's outcome in its own ledger and nothing more: an
+agent may not declare its own ticket ready for review.
 
 <Aside type="note">
   Lifecycle handling only de-escalates. It never advances work or deletes a
@@ -85,8 +88,8 @@ If you move a ticket while its agent is still finishing, your move stands. A
 lifecycle event that arrives afterward won't undo it.
 
 For example: pull a ticket out of Doing because the agent is going the wrong
-way, and the agent's own "I'm done" signal landing a second later won't drag
-the ticket into Needs Review behind you.
+way, and a stale "session ended" de-escalation landing a second later won't
+shuffle the ticket again behind you.
 
 ## The ticket context menu
 

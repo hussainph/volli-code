@@ -260,7 +260,7 @@ async function main() {
           },
         );
         // The first delivered message names the Session (`chat/client.ts`'s
-        // `#autoTitle`), so the "Chat 1" captured at creation is no longer
+        // `#autoTitle`), so the neutral `Chat` fallback captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
         // is called.
         chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);

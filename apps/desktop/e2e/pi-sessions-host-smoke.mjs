@@ -85,9 +85,8 @@ const PROJECT = { id: "pi-sessions-host-project", name: "Pi Sessions Host", pref
 const ORPHAN_PROMPT = "Say hi before this ticket is deleted.";
 // The concluded-business chat never sends a message (its attach fails before
 // the composer could deliver one, which is the whole point — see the module
-// doc comment), so it keeps the tab strip's own default label:
-// `nextChatOrdinal` (ticket-chat-tab.ts) starts each ticket's own chats at 1.
-const DEFAULT_CHAT_TITLE = "Chat 1";
+// doc comment), so it keeps the tab strip's neutral fallback label.
+const DEFAULT_CHAT_TITLE = "Chat";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-sessions-host-smoke-");
 const fakeHome = join(scratch, "home");

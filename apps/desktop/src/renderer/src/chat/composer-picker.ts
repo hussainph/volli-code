@@ -353,10 +353,11 @@ export function applyPickerRow(input: {
         ? // Always staged, never expanded at pick — twice deliberate. A skill
           // body is a document, and pasting fifteen kilobytes into the box the
           // reader is typing in is not "showing the prompt you are about to
-          // send", it is losing the draft under it. And the words after the
-          // name are the user's own ask, which `skillInvocationText` carries
-          // over the block at submit — so the caret parks after the space,
-          // exactly like a command that still wants its arguments.
+          // send", it is losing the draft under it. And the reference IS what
+          // gets sent: at submit the text keeps `/name` and its arguments as
+          // typed, while the body rides beside the message as its own resource
+          // part (`expandCommandInvocation`) — so the caret parks after the
+          // space, exactly like a command that still wants its arguments.
           spaced(`/${row.skill.name}`)
         : spaced(
             refInsertion({

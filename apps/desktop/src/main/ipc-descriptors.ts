@@ -24,6 +24,7 @@ import {
 } from "@volli/shared";
 
 import type {
+  CliIpcChannel,
   DataIpcChannel,
   FileIpcChannel,
   HarnessIpcChannel,
@@ -801,6 +802,25 @@ export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescrip
 
 /** Every channel the harness-trust surface owns, derived — never hand-synced. */
 export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcChannel[];
+
+// ---- CLI install-detection descriptor table --------------------------------
+// The Settings → CLI surface (VC-52): a status read with no arguments, and a
+// doctor run whose one flag says whether main should repair before probing.
+
+export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:cli-status": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:cli-doctor": {
+    guard: (args): args is IpcArgs<"volli:cli-doctor"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["fix"] === "boolean",
+    invalidError: "Invalid doctor request",
+  },
+};
+// No CLI_CHANNELS sibling to HARNESS_CHANNELS: that list exists to register
+// degraded-db handlers, and the CLI surface is deliberately db-free — a
+// derived list nothing consumes would be dead weight kept alive by its test.
 
 // ---- model-access sign-in descriptor table --------------------------------
 // The one request surface an argument can be a credential on, so the guards

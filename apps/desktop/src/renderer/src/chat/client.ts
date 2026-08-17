@@ -19,7 +19,7 @@
  * requirements for.
  */
 import type { SessionStreamOverlay } from "@volli/session-engine";
-import { errorMessage } from "@volli/shared";
+import { autoTitleFromMessage, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   ModelSelection,
   SessionInteractionResolution,
@@ -28,7 +28,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { autoTitleFromMessage, isDefaultChatTitle, renameChatSession } from "@renderer/chat/rename";
+import { isUntitledChatSession, renameChatSession } from "@renderer/chat/rename";
 import { nextRelease, type QueuedMessage } from "@renderer/chat/session-model";
 import {
   movesProjection,
@@ -554,10 +554,19 @@ export class ChatSessionClient {
     const body = message.text.trim();
     if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
     try {
+      // The message-scoped resource channel (VC-49): each skill body the text's
+      // `/slug` references resolved to travels as its own typed part BESIDE the
+      // text, never spliced into it — the durable artifact records both halves,
+      // the transcript renders the text verbatim with a chip per resource, and
+      // the adapter appends the delimited RESOURCE blocks after the text when
+      // it composes the delivered prompt.
       const wireMessage = {
         id: message.id,
         role: "user" as const,
-        parts: [{ type: "text" as const, text: body }],
+        parts: [
+          { type: "text" as const, text: body },
+          ...(message.resources ?? []).map(skillResourcePart),
+        ],
       };
       const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
       const delivered = await this.#rpc.session.command.mutate({
@@ -866,13 +875,12 @@ export class ChatSessionClient {
 
   /**
    * Retitles this Session from a just-delivered message, if nothing has named
-   * it yet. A null projection has no title to read and skips; a title a
-   * person (or an earlier delivery) already gave it is left alone — the
-   * default predicate is the only guard this needs.
+   * it yet. A non-null title was explicitly set by a person, including one
+   * that happens to read `Chat 1`, so automatic naming never replaces it.
    */
   #autoTitle(body: string): void {
     const title = this.#slice()?.projection?.session.title ?? null;
-    if (title === null || !isDefaultChatTitle(title)) return;
+    if (!isUntitledChatSession(title)) return;
     // `body` is `submit`'s own trimmed, non-empty text — at least one visible
     // line survives it, so `autoTitleFromMessage` can never read null here.
     void renameChatSession(this.sessionId, autoTitleFromMessage(body)!);

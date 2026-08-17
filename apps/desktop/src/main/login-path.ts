@@ -204,7 +204,14 @@ export function loginShellPath(deps: LoginShellDeps = processDeps()): Promise<st
   return attempt;
 }
 
-/** Test seam: drops the per-launch cache so the next call resolves again. */
+/**
+ * Drops the per-launch cache so the next call resolves against a fresh shell.
+ * Called by tests, and by `ensureUserBinOnPath` (agent-tools.ts) the moment it
+ * writes the PATH block into `~/.zprofile` — the cached answer was measured
+ * against the profile as it was BEFORE that write, and holding it would leave
+ * every later reader (the Settings → CLI pane's Login PATH row above all)
+ * describing a shell that no longer exists.
+ */
 export function resetLoginShellPathCache(): void {
   cached = undefined;
 }

@@ -5,7 +5,9 @@ description: Coordinates Volli planning, tickets, and terminal sessions through 
 
 # Volli
 
-You are working in a Volli-tracked project / Volli terminal session (the \`VOLLI_TICKET\`/\`VOLLI_SESSION\` env vars are present). From here on, use the bundled \`volli\` CLI as your planning interface: tickets, board moves, comments, and session signals go through it, not through ad-hoc notes.
+This skill applies ONLY inside a Volli session. Check the environment first: at least one of \`VOLLI_SESSION\`, \`VOLLI_TICKET\`, or \`VOLLI_SOCKET\` must be set. If none of them are, this machine merely has Volli installed — do not run \`volli\` commands, do not launch the Volli app, and continue your task without this skill.
+
+Inside a Volli session, use the bundled \`volli\` CLI as your planning interface: tickets, board moves, comments, and session signals go through it, not through ad-hoc notes.
 
 The CLI is self-documenting — it is the authoritative reference, not this skill:
 
@@ -37,13 +39,14 @@ Inspect state before mutating it: read the board and the target ticket first, so
 
 - \`volli board\` for the column overview; \`volli ticket show <id>\` for one ticket.
 - Add \`--json\` to anything you intend to parse; the plain output is for reading.
-- Keep \`volli session peek\` narrow — raw terminal output consumes your context.
+- \`volli session peek\` reads any id \`session list\` prints: a terminal's output, or a chat's activity and transcript tail. Keep it narrow — output consumes your context.
 
 ## Comment vs move vs signal
 
-- Comment (\`volli ticket comment\`) to record findings or hand off context.
-- Move (\`volli ticket move\`) only for a deliberate, real status change.
-- Signal (\`volli session done\` / \`volli session blocked\`) to report your own session's outcome; use exact body edits so a stale read fails instead of clobbering.
+- Comment (\`volli ticket comment\`) to record findings or hand off context; use exact body edits so a stale read fails instead of clobbering.
+- Move (\`volli ticket move\`) only for a deliberate, real status change. Signals never move the board: when the ticket is ready, the move is its own explicit step.
+- Signal \`volli session blocked\` when you are stuck and need a person — the \`--reason\` is exactly what they see.
+- Signal \`volli session done\` to record that your session finished; it lands in the session ledger only, so pair it with the comment and move that actually hand the work over.
 
 Surface every CLI error; never continue silently after a failed mutation.
 `;
@@ -56,7 +59,7 @@ export const VOLLI_ORCHESTRATION = `# Volli orchestration
 4. Do not opt out of worktree isolation unless instructed.
 5. Do not chain-spawn work merely because a ticket entered Doing.
 6. Use exact body edits for existing prose so stale reads fail instead of clobbering changes.
-7. Keep session peeks narrow; raw terminal output consumes the caller's context.
+7. Peek a session (terminal or chat) to learn whether it is alive, what it is doing, and when it last moved; keep peeks narrow, because their output consumes the caller's context.
 `;
 
 /**
@@ -202,7 +205,29 @@ A manifest that does not validate is reported field by field, each error naming 
 `;
 
 /** The slash-command doc for a harness that reads commands but no skills. */
-export const VOLLI_COMMAND_DOC = `You are in a Volli terminal session. Run \`volli identify\`, then use the bundled \`volli\` CLI as your planning interface. It is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. Follow the volli skill (when installed) for norms.
+export const VOLLI_COMMAND_DOC = `Applies only inside a Volli session: if neither \`VOLLI_SESSION\` nor \`VOLLI_SOCKET\` is set in your environment, you are not running under Volli — ignore this command and never run \`volli\`. Inside a Volli session, run \`volli identify\`, then use the bundled \`volli\` CLI as your planning interface. It is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. Follow the volli skill (when installed) for norms.
 `;
 
-export const VOLLI_FENCED_INSTRUCTIONS = `You are in a Volli-tracked project / terminal session. Use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
+/**
+ * The fenced block for a GLOBAL instructions file (`~/.codex/AGENTS.md`,
+ * `~/AGENTS.md`) — read by every session that harness ever runs, almost all of
+ * them outside Volli. The self-gate on the Volli env vars is therefore the
+ * first sentence, not a footnote: without it, a Codex session in an unrelated
+ * repo dutifully runs `volli identify`, fails, retries `volli app launch`, and
+ * burns its context on a tool that was never part of its task (VC-42 audit
+ * F18). The content gates itself because the file cannot be conditionally
+ * present — it is global by the harness's own design.
+ */
+export const VOLLI_FENCED_INSTRUCTIONS = `These instructions apply ONLY when the \`VOLLI_SESSION\` or \`VOLLI_SOCKET\` environment variable is set — that is what marks a session started by Volli. If neither is set, you are not working under Volli: skip this block entirely, do not run \`volli\` commands, and do not launch the Volli app.
+
+Inside a Volli session, use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
+
+/**
+ * The body of the managed block Volli appends to the user's zsh login profile
+ * when `~/.local/bin` is not already on the login-shell PATH — the same
+ * convention every peer harness follows (`~/.local/bin/claude`, `codex`,
+ * `cursor-agent`). `$HOME` is deliberately unexpanded: the profile is the
+ * user's file and the line should read as one they could have written.
+ */
+export const VOLLI_PATH_PROFILE_BLOCK = `# Keeps ~/.local/bin (where the volli CLI is linked) on the login PATH.
+export PATH="$HOME/.local/bin:$PATH"`;

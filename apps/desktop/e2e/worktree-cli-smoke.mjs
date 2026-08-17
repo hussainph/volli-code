@@ -106,7 +106,6 @@ async function main() {
     userDataDir,
     extraEnv: {
       VOLLI_WORKTREE_HOME_DIR: fakeHome,
-      VOLLI_AGENT_CONSENT_CHOICE: "defer",
       ...harnessEnv(harness),
     },
   });

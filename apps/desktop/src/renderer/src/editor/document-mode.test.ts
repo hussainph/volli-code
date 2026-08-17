@@ -33,6 +33,15 @@ describe("documentModeOptions", () => {
     expect(options.suggestOnTriggerCharacters).toBe(true);
   });
 
+  it("lets the wheel chain to the scrolling column instead of eating it", () => {
+    // The host is auto-height, so this editor never scrolls internally. Monaco's
+    // default `alwaysConsumeMouseWheel: true` still cancels every wheel event
+    // over it, freezing the outer ticket-body / markdown column under the
+    // cursor. VC-32 pins this to `false` so the surface scrolls like prose.
+    const options = documentModeOptions({});
+    expect(options.scrollbar?.alwaysConsumeMouseWheel).toBe(false);
+  });
+
   it("passes a placeholder through and omits it when there is none", () => {
     expect(documentModeOptions({ placeholder: "Add description…" }).placeholder).toBe(
       "Add description…",
@@ -63,6 +72,24 @@ describe("document-mode.css surface", () => {
     // The catalog theme's `#282c34` and friends enter as hex; nothing on this
     // surface may be one (`#` also catches a stray id selector in the block).
     expect(surface).not.toContain("#");
+  });
+
+  it("keeps every block's box paint on the whole-line element alone", () => {
+    // A line class reaches BOTH the whole-line element and every glyph span in
+    // the line (document-decorations.ts). A box property left on the bare class
+    // is therefore painted again per span — the blockquote's rule in front of
+    // each run of text, the fence's ground over the selection wash. Only the
+    // whole-line element carries `volli-md-box`, so that is where they belong.
+    // Ends at the image rules: a view zone is the app's own DOM, not a line
+    // decoration, so it has no whole-line element to hang a radius off.
+    const blocks = css.slice(css.indexOf("/* --- blocks"), css.indexOf("/* Images live in"));
+    const boxProperty =
+      /\b(background|border(-top|-bottom|-left|-right)?(-left|-right)?-?(radius|width|color)?)\s*:/;
+    for (const rule of blocks.split("}")) {
+      const [selector, body = ""] = rule.split("{");
+      if (!boxProperty.test(body)) continue;
+      expect(selector).toContain(".volli-md-box");
+    }
   });
 
   it("resets catalog token colours above the decoration rules that tie with it", () => {

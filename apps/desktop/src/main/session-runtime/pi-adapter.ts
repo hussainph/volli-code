@@ -73,12 +73,14 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
+  appendPromptResources,
   askChoice,
   askOffer,
   askInteractionId,
   askUserInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
+  readSkillResources,
   type AgentRuntime,
   type DeliveryOutcome,
   type ModelSelection,
@@ -141,8 +143,12 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
   fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
 };
 
-/** The coding tools this slice loads — with no gate and no sandbox, the only bound. */
-const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
+/**
+ * The coding tools this slice loads — with no gate and no sandbox, the only
+ * bound. Exported for the `prompt.baseline` diagnostic, which must price the
+ * authority layer over the same tool list a real attach names.
+ */
+export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
@@ -215,7 +221,8 @@ export interface PiAdapterOptions {
    * Injectable execution environment factory. Defaults to Pi's own
    * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
    * onto a Session's `PATH`, so `volli` resolves inside a structured turn's
-   * shell tool with or without the consented `/usr/local/bin` symlink.
+   * shell tool whether or not the background install's `~/.local/bin/volli`
+   * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
@@ -989,7 +996,17 @@ class PiBinding implements BindingHandle {
   }
 }
 
-/** Pi takes one string; a `UIMessage` may carry several text parts. */
+/**
+ * Pi takes one string; a `UIMessage` may carry several text parts — and,
+ * since VC-49, skill resource parts. This is where the two halves of such a
+ * message become the delivered prompt: the user's text first and verbatim
+ * (its `/skill` reference intact, mid-sentence included), then each skill
+ * body as its own delimited RESOURCE block, adjacent to the text and never
+ * spliced into it.
+ */
 function messageText(message: UIMessage): string {
-  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n\n");
+  return appendPromptResources(text, readSkillResources(message.parts));
 }

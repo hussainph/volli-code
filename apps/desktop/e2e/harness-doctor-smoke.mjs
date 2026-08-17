@@ -37,7 +37,7 @@ async function main() {
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_SKIP_CLOSE_CONFIRM: "1", VOLLI_AGENT_CONSENT_CHOICE: "defer" },
+    extraEnv: { VOLLI_SKIP_CLOSE_CONFIRM: "1" },
   });
   try {
     const page = await app.firstWindow();

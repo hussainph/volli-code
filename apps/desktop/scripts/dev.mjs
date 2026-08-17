@@ -5,6 +5,12 @@ import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RENDERER_DEV_URL } from "./dev-constants.mjs";
+import { assertSupportedNode } from "./check-node-version.mjs";
+
+// Before anything spawns: an unsupported Node here means wrong-ABI native
+// modules downstream, which surfaces as a dead database and a greyed-out
+// Sign in button (VC-76). Refuse loudly at the door instead.
+assertSupportedNode();
 
 const scriptDir = NodePath.dirname(fileURLToPath(import.meta.url));
 const desktopDir = NodePath.resolve(scriptDir, "..");

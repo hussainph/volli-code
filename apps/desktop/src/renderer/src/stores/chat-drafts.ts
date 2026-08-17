@@ -30,6 +30,7 @@
  * eviction into, so the cap is what keeps an abandoned draft from lingering
  * indefinitely — it just isn't named as the *reason* a draft goes away.
  */
+import { isPromptResource, type PromptResource } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -62,7 +63,21 @@ export type HeldMessageState = "sending" | "queued" | "unsent";
 export interface HeldMessage {
   id: string;
   text: string;
+  /**
+   * The skill bodies resolved for this message at submit (VC-49). Persisted
+   * with the words because they are part of the same intent: a held message
+   * re-sent after a relaunch must deliver what its `/skill` reference
+   * resolved to when it was written, not lose the body silently.
+   */
+  resources?: readonly PromptResource[];
   state: HeldMessageState;
+}
+
+/** What crosses into this store when a message leaves the box. */
+export interface HeldMessageInput {
+  id: string;
+  text: string;
+  resources?: readonly PromptResource[];
 }
 
 export interface ChatDraft {
@@ -89,7 +104,7 @@ interface ChatDraftsState {
    * must NOT do is forget it: the copy moves to {@link ChatDraft.held} and
    * stays there until delivery is somebody else's durable problem.
    */
-  holdMessage(sessionId: string, message: { id: string; text: string }): void;
+  holdMessage(sessionId: string, message: HeldMessageInput): void;
   /**
    * Starts an explicit steer from the displayed strip in one durable write.
    *
@@ -99,11 +114,7 @@ interface ChatDraftsState {
    * current composer text stays where it is because every row already left the
    * box earlier.
    */
-  beginQueuedSteer(
-    sessionId: string,
-    visible: readonly { id: string; text: string }[],
-    targetId: string,
-  ): void;
+  beginQueuedSteer(sessionId: string, visible: readonly HeldMessageInput[], targetId: string): void;
   /**
    * Re-states where a held message stands. Update-only: a Session closed while
    * its message was in flight has no draft left to write, and minting one would
@@ -136,6 +147,17 @@ function isHeldMessage(value: unknown): value is { id: string; text: string } {
 }
 
 /**
+ * A hydrated held message's resources, or nothing. Read defensively like the
+ * rest of the blob: a malformed entry drops the resources rather than the
+ * message — the words are the person's, the resources are re-derivable.
+ */
+function readHeldResources(value: unknown): readonly PromptResource[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const resources = value.filter(isPromptResource).map(({ name, text }) => ({ name, text }));
+  return resources.length > 0 ? resources : undefined;
+}
+
+/**
  * A hydrated draft's held messages, every one of them read back as `unsent`.
  *
  * The stored `state` is deliberately not trusted: it describes this renderer's
@@ -145,9 +167,18 @@ function isHeldMessage(value: unknown): value is { id: string; text: string } {
  */
 function readHeldMessages(value: unknown): HeldMessage[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) =>
-    isHeldMessage(entry) ? [{ id: entry.id, text: entry.text, state: "unsent" as const }] : [],
-  );
+  return value.flatMap((entry) => {
+    if (!isHeldMessage(entry)) return [];
+    const resources = readHeldResources((entry as Record<string, unknown>).resources);
+    return [
+      {
+        id: entry.id,
+        text: entry.text,
+        ...(resources === undefined ? {} : { resources }),
+        state: "unsent" as const,
+      },
+    ];
+  });
 }
 
 /** True for a hydrated draft entry with the fields this store actually reads. */

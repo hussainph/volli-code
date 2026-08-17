@@ -1,4 +1,4 @@
-import { displayTicketId, type Project, type Ticket } from "@volli/shared";
+import { displayTicketId, type ChatSessionRecord, type Project, type Ticket } from "@volli/shared";
 
 import type { SessionContainer, SessionScope } from "@renderer/stores/sessions";
 
@@ -17,6 +17,7 @@ export interface CommandPaletteSessionItem {
   projectId: string;
   projectName: string;
   sessionId: string;
+  sessionKind: "terminal" | "chat";
   title: string;
   scope: SessionScope;
   ticketDisplayId: string | null;
@@ -29,16 +30,17 @@ export interface CommandPaletteItems {
 }
 
 /**
- * Builds the universal command surface from the authoritative planning and
- * live-session stores. Only open terminal tabs are session destinations: a
- * closed durable record cannot be focused until resume exists, so presenting
- * it as navigable would be dishonest.
+ * Builds the universal command surface from planning state, open terminal
+ * tabs, and durable chat rows. Terminal history is not a destination until
+ * resume exists; a durable chat is directly reopenable and belongs here.
  */
 export function buildCommandPaletteItems(
   projects: readonly Project[],
   ticketsByProject: Readonly<Record<string, readonly Ticket[] | undefined>>,
   sessionsByOwner: Readonly<Record<string, SessionContainer | undefined>>,
   selectedProjectId: string | null,
+  chatSessions: readonly ChatSessionRecord[] = [],
+  residentChatTitles: Readonly<Record<string, string>> = {},
 ): CommandPaletteItems {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const ticketById = new Map<string, { ticket: Ticket; project: Project }>();
@@ -82,6 +84,7 @@ export function buildCommandPaletteItems(
         projectId: project.id,
         projectName: project.name,
         sessionId: tab.sessionId,
+        sessionKind: "terminal",
         title: tab.title,
         scope: tab.scope,
         ticketDisplayId:
@@ -92,6 +95,32 @@ export function buildCommandPaletteItems(
       });
     }
   }
+  for (const record of chatSessions) {
+    const project = projectById.get(record.projectId);
+    if (project === undefined) continue;
+    const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);
+    // A chat whose ticket disappeared has no ticket workspace to open. The
+    // scratch case is valid because `ticketId` is deliberately null there.
+    if (record.ticketId !== null && linked === undefined) continue;
+    sessions.push({
+      kind: "session",
+      projectId: project.id,
+      projectName: project.name,
+      sessionId: record.sessionId,
+      sessionKind: "chat",
+      title: residentChatTitles[record.sessionId] ?? record.title,
+      scope:
+        record.ticketId === null
+          ? { kind: "scratch", projectId: project.id }
+          : { kind: "ticket", projectId: project.id, ticketId: record.ticketId },
+      ticketDisplayId:
+        linked === undefined
+          ? null
+          : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
+      ticketTitle: linked?.ticket.title ?? null,
+    });
+  }
+
   sessions.sort(
     (a, b) =>
       currentProjectFirst(a.projectId) - currentProjectFirst(b.projectId) ||

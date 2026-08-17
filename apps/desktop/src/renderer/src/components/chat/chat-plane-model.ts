@@ -148,6 +148,27 @@ export function resolvingWith(
  */
 export type MessageRoute = "send" | "hold";
 
+/* ---------------------------------------------------------------- copying */
+
+/**
+ * The raw prose a feed row presents, in the order the reader sees it.
+ *
+ * A turn can contain several messages and a message can contain several text
+ * parts. The feed separates each part with its normal prose beat, so the copied
+ * form uses a blank line rather than welding those boundaries together. Tool and
+ * reasoning parts intentionally stay out: they have their own inline controls
+ * and are not message text.
+ */
+export function messageCopyText(messages: readonly UIMessage[]): string | null {
+  const text: string[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "text" && part.text.length > 0) text.push(part.text);
+    }
+  }
+  return text.length > 0 ? text.join("\n\n") : null;
+}
+
 export function messageRoute(intent: ComposerIntent, deliverable: boolean): MessageRoute {
   return intent !== "queue" && deliverable ? "send" : "hold";
 }
@@ -326,7 +347,14 @@ export async function steerQueuedMessage(
   if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
     return "stale";
   }
-  const message = held === undefined ? queued : { id: held.id, text: held.text };
+  const message: QueuedMessage | undefined =
+    held === undefined
+      ? queued
+      : {
+          id: held.id,
+          text: held.text,
+          ...(held.resources === undefined ? {} : { resources: held.resources }),
+        };
   if (message === undefined) return "stale";
   // A click cannot improve a queue while the Session cannot steer. In
   // particular, never manufacture a release-queue copy for a held-only row:
@@ -379,7 +407,13 @@ export function heldStrip(
     // target back into the strip and invite a second click.
     drawn.add(entry.id);
     if (entry.state === "sending" || durableMessageIds.has(entry.id)) continue;
-    rows.push({ id: entry.id, text: entry.text });
+    rows.push({
+      id: entry.id,
+      text: entry.text,
+      // The row is also what `beginQueuedSteer` persists back, so the skill
+      // resources riding the held copy must survive the round trip (VC-49).
+      ...(entry.resources === undefined ? {} : { resources: entry.resources }),
+    });
   }
   for (const entry of queue)
     if (!drawn.has(entry.id) && !durableMessageIds.has(entry.id)) rows.push(entry);
@@ -756,9 +790,12 @@ export function sameInteractionId(left: SessionInteraction, right: SessionIntera
  *
  * {@link heldStrip} builds a fresh row for every held message on every call, so
  * two runs over unchanged records answer with different objects saying the same
- * two things. A queued row IS its id and its text: nothing else about it is
- * drawn, and the id is stable across the whole of its life.
+ * two things. A queued row IS its id and its text — nothing else about it is
+ * drawn — plus the resource list it would deliver, compared by identity because
+ * the strip reuses the stored array rather than minting one per frame, and a
+ * held row whose resources genuinely changed must not keep answering for the
+ * old ones through a stale identity.
  */
 export function sameQueuedMessage(left: QueuedMessage, right: QueuedMessage): boolean {
-  return left.id === right.id && left.text === right.text;
+  return left.id === right.id && left.text === right.text && left.resources === right.resources;
 }

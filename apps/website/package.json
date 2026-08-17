@@ -8,7 +8,9 @@
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build",
     "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-code --branch main",
-    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
+    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
     "@astrojs/react": "^6.0.2",
@@ -23,6 +25,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "typescript": "6.0.3",
+    "vite-plus": "catalog:",
     "wrangler": "4.121.0"
   }
 }

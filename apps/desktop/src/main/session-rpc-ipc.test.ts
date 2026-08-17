@@ -43,7 +43,10 @@ import {
   type SessionRpcIpcResponse,
 } from "@volli/shared";
 
-import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import {
+  registerDegradedSessionRpcIpcHandlers,
+  registerSessionRpcIpcHandlers,
+} from "./session-rpc-ipc";
 
 interface FakeSender {
   readonly id: number;
@@ -645,6 +648,35 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     expect(calls).toEqual([["attach", { operationId: "retry-1", sessionId: "session-1" }]]);
     await registration.close();
+  });
+});
+
+// The degraded bridge (VC-76): a boot whose database never opened claims the
+// channel and answers with the recorded reason, instead of letting the
+// renderer's invoke reject with Electron's nameless "No handler registered".
+describe("registerDegradedSessionRpcIpcHandlers", () => {
+  it("answers every request with the reason the runtime is down", async () => {
+    const reason =
+      "The local database failed to open: better-sqlite3 was built for a different Node ABI.";
+    registerDegradedSessionRpcIpcHandlers(reason);
+
+    await expect(
+      invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "session-1" } }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INTERNAL_SERVER_ERROR", message: reason },
+    });
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.inspect", input: {} }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INTERNAL_SERVER_ERROR", message: reason },
+    });
+  });
+
+  it("claims the cancel channel as an inert listener — nothing to stop, nothing to throw", () => {
+    registerDegradedSessionRpcIpcHandlers("db is down");
+    expect(() => cancel({ sender: sender() }, "subscription-1")).not.toThrow();
   });
 });
 

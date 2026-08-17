@@ -48,7 +48,7 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  * Four sections, and the first two are separate on purpose. The canvas is a
  * gradient; the appearance is light, dark or follow-the-system; the per-mode
  * dials in the engine exist precisely so ONE canvas renders correctly in BOTH
- * modes. They are also scoped independently — a workspace can override either
+ * modes. They are also scoped independently — a project can override either
  * alone — so a single "App theme" section owning both would be the one shape
  * that cannot express what is stored.
  *
@@ -141,12 +141,12 @@ const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
  * The app-wide canvas.
  *
  * Reads `globalCanvas` rather than whatever is on screen, and that distinction
- * is the page's one subtlety: a workspace can override the canvas, so the window
+ * is the page's one subtlety: a project can override the canvas, so the window
  * you are looking at while you edit may not be the one this section owns. The
  * note below says so instead of letting an edit look like it failed.
  *
  * The mode it renders the pad and the contrast report at is the GLOBAL scope's
- * own resolution too — the same reason. A workspace pinned to light must not
+ * own resolution too — the same reason. A project pinned to light must not
  * make this section describe a light canvas the app-wide setting never asked for.
  */
 function AppThemeSection() {
@@ -159,12 +159,24 @@ function AppThemeSection() {
   return (
     <SettingsSection title="App theme" icon={PaletteIcon}>
       <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
-      {shadowed ? (
-        <p data-testid="appearance-canvas-shadowed" className="pt-2">
-          <ThemeOriginPill emphasized={false}>Workspace override</ThemeOriginPill>
-        </p>
-      ) : null}
+      {shadowed ? <CanvasShadowedNote /> : null}
     </SettingsSection>
+  );
+}
+
+/**
+ * The note {@link AppThemeSection} shows while a project's canvas shadows the
+ * global one. Exported for its copy: "Project" is CONTEXT.md's one user-facing
+ * word for a rail entry (the VC-57 ruling), this pill is where "Workspace"
+ * kept sneaking back in, and the suite cannot install an override to make the
+ * conditional render it (`renderToStaticMarkup` reads a store's INITIAL
+ * state), so the note itself is the testable surface.
+ */
+export function CanvasShadowedNote() {
+  return (
+    <p data-testid="appearance-canvas-shadowed" className="pt-2">
+      <ThemeOriginPill emphasized={false}>Project override</ThemeOriginPill>
+    </p>
   );
 }
 
@@ -174,7 +186,7 @@ function AppThemeSection() {
  *
  * The canvas does not name a mode: the per-mode dials exist precisely so ONE
  * authored gradient renders correctly in both, and the two are scoped
- * independently (a workspace may override either alone). A mode control living
+ * independently (a project may override either alone). A mode control living
  * inside the canvas editor would quietly claim the opposite.
  */
 function AppearanceModeSection() {
