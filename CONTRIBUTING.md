@@ -4,7 +4,7 @@ Volli Code is a local-first macOS workspace for Tickets, Sessions, worktrees, an
 
 ## Prerequisites
 
-Use macOS, Node.js `^24.13.0`, and pnpm `11.10.0`. Install dependencies from the repository root:
+Use macOS, Node.js `^24.13.0`, and pnpm `11.10.0`. A `.nvmrc` carries the pin (`nvm use`), and the range is enforced rather than advisory: `pnpm install` hard-fails outside it (`engineStrict` in `pnpm-workspace.yaml`), and the desktop dev/start scripts preflight the running Node before anything spawns — an unsupported Node builds native modules (better-sqlite3, node-pty) against the wrong ABI, which surfaces later as a dead database and a greyed-out sign-in. Install dependencies from the repository root:
 
 ```bash
 pnpm install
