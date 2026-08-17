@@ -4,7 +4,13 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { AgentRequest, AgentResponse, DoctorCheck, HarnessId } from "@volli/shared";
+import type {
+  AgentRequest,
+  AgentResponse,
+  DoctorCheck,
+  HarnessId,
+  ModelAccessSnapshot,
+} from "@volli/shared";
 import type {
   HarnessEventNotice,
   SessionHarnessNotice,
@@ -33,6 +39,7 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
+import { writeDefaultModelSelection } from "./session-runtime/model-access-preferences";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
 import type { SessionEngine } from "@volli/session-engine";
@@ -3339,6 +3346,223 @@ describe("composeProjectBrief", () => {
   it("is deterministic for one project", () => {
     const project = { path: "/code/volli" };
     expect(composeProjectBrief({ project })).toBe(composeProjectBrief({ project }));
+  });
+});
+
+describe("model.list", () => {
+  /**
+   * The door under test with the seam faked out: `model.list` owns the bounded
+   * read, the signed-in filter, and the default report; the snapshot itself is
+   * `inspectPiModelAccess`'s contract, tested beside it in agent-runtime.
+   */
+  function modelListHarness(
+    overrides: {
+      snapshot?: ModelAccessSnapshot;
+      inspect?: AgentCommandServiceOptions["inspectModelAccess"];
+      withoutSeam?: boolean;
+      timeoutMs?: number;
+    } = {},
+  ) {
+    ctx = openTestDb();
+    const snapshot: ModelAccessSnapshot = overrides.snapshot ?? {
+      observedAt: 900,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state: "available",
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: true,
+        },
+        {
+          id: "openai-codex",
+          label: "OpenAI Codex",
+          state: "authentication-required",
+          accountLabel: null,
+          billingSource: "unknown",
+          recovery: { kind: "sign-in" },
+          signIn: [],
+          hasStoredCredential: false,
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus-5",
+          label: "Claude Opus 5",
+          state: "available",
+          reasoningLevels: ["low", "medium", "high"],
+        },
+        {
+          providerId: "anthropic",
+          modelId: "claude-legacy",
+          label: "Claude Legacy",
+          state: "unavailable",
+          reasoningLevels: ["off"],
+        },
+        {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-terra",
+          label: "Terra",
+          state: "authentication-required",
+          reasoningLevels: ["medium", "high", "xhigh"],
+        },
+      ],
+    };
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      ...(overrides.withoutSeam
+        ? {}
+        : { inspectModelAccess: overrides.inspect ?? (async () => snapshot) }),
+      ...(overrides.timeoutMs !== undefined ? { modelAccessTimeoutMs: overrides.timeoutMs } : {}),
+    });
+    const execute = (args: Record<string, unknown> = {}) =>
+      service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: {} } });
+    return { execute };
+  }
+
+  it("lists the signed-in slice by default, with copyable ids and an honest omission count", async () => {
+    const harness = modelListHarness();
+
+    const response = await harness.execute();
+
+    expect(response).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        observedAt: 900,
+        default: null,
+        providers: [
+          {
+            id: "anthropic",
+            label: "Anthropic",
+            state: "available",
+            models: [
+              {
+                model: "anthropic/claude-opus-5",
+                label: "Claude Opus 5",
+                state: "available",
+                reasoning: ["low", "medium", "high"],
+              },
+            ],
+            // claude-legacy is unavailable, so the default view withholds it
+            // — and says so, the same honesty the provider rollup has.
+            omittedModels: 1,
+          },
+        ],
+        omittedProviders: 1,
+      },
+    });
+  });
+
+  it("never leaks credential-adjacent snapshot fields, filtered or not", async () => {
+    const harness = modelListHarness();
+
+    for (const args of [{}, { all: true }]) {
+      const rendered = JSON.stringify(await harness.execute(args));
+      // The provider rows drop everything but identity/state/catalog — the
+      // credential-adjacent fields (stored-credential flags, billing, sign-in
+      // methods) stay behind the app's own surfaces.
+      expect(rendered).not.toContain("hasStoredCredential");
+      expect(rendered).not.toContain("billingSource");
+      expect(rendered).not.toContain("signIn");
+      expect(rendered).not.toContain("accountLabel");
+    }
+  });
+
+  it("shows the whole registered catalog behind --all", async () => {
+    const harness = modelListHarness();
+
+    const response = await harness.execute({ all: true });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        omittedProviders: 0,
+        providers: [
+          {
+            id: "anthropic",
+            omittedModels: 0,
+            models: [
+              { model: "anthropic/claude-opus-5" },
+              { model: "anthropic/claude-legacy", state: "unavailable" },
+            ],
+          },
+          {
+            id: "openai-codex",
+            state: "authentication-required",
+            omittedModels: 0,
+            models: [
+              {
+                model: "openai-codex/gpt-5.6-terra",
+                state: "authentication-required",
+                reasoning: ["medium", "high", "xhigh"],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("reports the configured app default alongside the catalog", async () => {
+    const harness = modelListHarness();
+    writeDefaultModelSelection(
+      ctx.db,
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
+      500,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { default: { model: "anthropic/claude-opus-5", reasoning: "medium" } },
+    });
+  });
+
+  it("answers APP_UNREACHABLE when the Pi runtime never came up this launch", async () => {
+    const harness = modelListHarness({ withoutSeam: true });
+    expect(await harness.execute()).toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE" },
+    });
+  });
+
+  it("bounds a hung provider probe: aborts the inspect and answers TIMEOUT (VC-61 direction)", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const harness = modelListHarness({
+      timeoutMs: 20,
+      // A probe that ignores its signal entirely — the race, not the abort, is
+      // what must keep the verb from hanging.
+      inspect: ({ signal }) => {
+        observedSignal = signal;
+        return new Promise<never>(() => {});
+      },
+    });
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("names an inspect that fails outright before the bound", async () => {
+    const harness = modelListHarness({
+      inspect: async () => {
+        throw new Error("provider store unreadable");
+      },
+    });
+
+    expect(await harness.execute()).toMatchObject({
+      ok: false,
+      error: { code: "MUTATION_FAILED", message: "provider store unreadable" },
+    });
   });
 });
 
