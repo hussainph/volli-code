@@ -12,8 +12,9 @@
  *
  * THE DESIGN, in one paragraph so the feel-check knows what it is checking: a
  * hairline wave rides the pill's free bottom band, clipped at the same seam as
- * the wash, and its AMPLITUDE is the value — flat at the bottom of the range,
- * full wave at `max`. It is a redundant channel on purpose (the seam and the
+ * the wash, and its AMPLITUDE is the value — absent at the lowest stop (the
+ * empty share clips it away), standing taller stop by stop to full wave at
+ * `max`. It is a redundant channel on purpose (the seam and the
  * grip already carry the value), so it is quieter than the comb (`/40` against
  * `/50`) and it does not drift: the only motion is the amplitude changing, and
  * only because the value changed. Ignite's rejection is the precedent — a
@@ -23,9 +24,12 @@
  *
  *  1. **Drag from `off`/`minimal` to `max` slowly.** The wave should stand up
  *     under the seam as it sweeps — one substance getting agitated, never a
- *     second object arriving.
- *  2. **Descenders.** `High` at the right, `Effort` at the left: the wave must
- *     never touch a glyph at any stop.
+ *     second object arriving. The second stop is the real floor of the ramp
+ *     (index 0 is clipped away with its empty share) — judge whether it
+ *     separates from the third.
+ *  2. **Descenders.** The wave's peaks reach ~3px into the tail of the
+ *     labels' line box — descender space. Watch the `g` in `High` and
+ *     `Extra high` at the stops where the seam has crossed them.
  *  3. **Seven stops** (`opus-4.6`): adjacent stops should still differ — the
  *     amplitude ramp is linear for the same reason the mix's is.
  *  4. **Reduced motion**: the wave still STANDS (it is state, not motion); only

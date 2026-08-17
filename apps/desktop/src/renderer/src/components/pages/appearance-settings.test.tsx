@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { AppearanceSettings } from "./appearance-settings";
+import { AppearanceSettings, CanvasShadowedNote } from "./appearance-settings";
 
 describe("Settings → Appearance", () => {
   it("mounts the canvas editor in the App theme slot the placeholder held open", () => {
@@ -25,6 +25,19 @@ describe("Settings → Appearance", () => {
     // The only stop is the primary, so `−` has nothing it is allowed to take.
     expect(html).toContain('aria-label="Remove a colour"');
     expect(html).not.toContain('data-testid="canvas-stop-orb-1"');
+  });
+
+  it("pins the shadow pill to the ruled word — Project override, never Workspace", () => {
+    // CONTEXT.md's VC-57 ruling: "project" is the one user-facing word for a
+    // rail entry, and this pill is where "workspace" kept sneaking back in.
+    // The note renders in the page only while a project override shadows the
+    // global canvas — state a static render cannot install (it reads the
+    // store's INITIAL state) — so the exported note is rendered directly.
+    const html = renderToStaticMarkup(<CanvasShadowedNote />);
+
+    expect(html).toContain('data-testid="appearance-canvas-shadowed"');
+    expect(html).toContain("Project override");
+    expect(html).not.toContain("Workspace");
   });
 
   it("gives light/dark/auto its own section, scoped separately from the canvas", () => {

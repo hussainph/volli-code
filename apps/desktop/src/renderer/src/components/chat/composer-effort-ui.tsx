@@ -43,9 +43,11 @@
  * further. A SQUIGGLE rides the same share (VC-57, the Arc-lineage wave the
  * vibrancy pass was always headed for): a hairline wave along the pill's free
  * bottom band, clipped at the same seam, whose amplitude stands with the value
- * — flat at the bottom of the range, at full wave by `max` — so the filled
- * substance is not merely warmer toward the top but visibly more agitated. How far that can go is not a taste decision: both labels sit ON the
- * wash, and the alpha ceiling is whatever holds them at AA in the appearance
+ * — the lowest stop's empty share clips it away entirely, and each stop up
+ * from there stands taller until full wave at `max` — so the filled substance
+ * is not merely warmer toward the top but visibly more agitated. How far that
+ * can go is not a taste decision: both labels sit ON the wash, and the alpha
+ * ceiling is whatever holds them at AA in the appearance
  * that binds (`chat/composer-effort.ts` carries the measurements). Which is why
  * the part of the idea that runs UNBOUNDED is outside the pill — an ember halo
  * thrown onto the popover behind it, squared against the ramp so it is absent
@@ -441,7 +443,7 @@ function EffortSlider({
 
             DERIVED FROM LIVE TOKENS, NEVER AUTHORED. Both ends of the mix are
             variables — the accent the canvas engine derived for this scope and
-            the pill's own unfilled colour — so a workspace that reseeds its
+            the pill's own unfilled colour — so a project that reseeds its
             accent reseeds this ramp with it, and the floor is the control's own
             groove rather than a colour someone picked to sit near it. A
             hand-mixed hex here would be the one colour in the app the theme does
@@ -480,11 +482,15 @@ function EffortSlider({
         {/* THE SQUIGGLE — the magnitude, drawn as agitation rather than only as
             reach and warmth.
 
-            IT LIVES IN THE BOTTOM BAND, the ≈5px the pill has spare under the
-            labels' descenders, for the comb's own reason mirrored: the text's
-            line box owns the middle of the pill, the comb owns the top edge,
-            and a wave through either would read as a rendering fault. Down
-            here it underlines the filled share without touching a glyph.
+            IT LIVES IN THE BOTTOM BAND, for the comb's own reason mirrored:
+            the text's line box owns the middle 20px of the 28px pill (y 4–24),
+            the comb owns the top edge, and a wave through either would read
+            as a rendering fault. The box below (`bottom-0.5 h-1.5`) spans
+            y 20–26, so the peaks ride y 21–25 — the top of that travel sits
+            ~3px inside the line box's tail, which is descender space: only a
+            glyph like the `g` in "High" dips there, and a hairline at `/40`
+            under a descender is the human feel-check's first watch item, not
+            a collision the geometry rules out.
 
             IT IS CLIPPED AT THE SEAM, by the same inset the wash uses and on
             the same clock, so the wave and the wash are one substance seen

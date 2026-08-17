@@ -21,9 +21,10 @@
  * state, so it never follows a project into persisted storage.
  *
  * `workspaceRailHidden` — whether the Slack-style project switcher is
- * visible — persists app-wide. (The key predates CONTEXT.md's "project" ruling
- * and stays as wire format; the copy on the toggle says project switcher.) Hiding it returns its full width to the
- * active workspace while project keyboard shortcuts remain available.
+ * visible — persists app-wide. (The key predates CONTEXT.md's "project"
+ * ruling and stays as wire format; the copy on the toggle says project
+ * switcher.) Hiding it returns its full width to the active workspace while
+ * project keyboard shortcuts remain available.
  *
  * `sidebarPinned` — whether the summoned sidebar panel stands in the layout
  * (⌘B / the chrome-band trigger) rather than being summoned by the pointer at

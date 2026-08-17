@@ -333,9 +333,11 @@ export const EFFORT_SQUIGGLE_WAVELENGTH = 12;
 /**
  * The wave's peak, in px from its centreline, at full effort.
  *
- * 2px inside the ≈5px band the pill has spare under its labels' descenders:
- * enough travel that the flattening ramp below is legible across seven stops,
- * small enough that the wave never touches a glyph.
+ * 2px around a centreline at y≈23 of the 28px pill, so the peaks span
+ * y 21–25 — the top ~3px of that travel sits inside the tail of the labels'
+ * line box (y 4–24), which is descender territory rather than clear air.
+ * Enough travel that the flattening ramp below is legible across seven stops,
+ * low enough that only a descender (the `g` in "High") can meet it.
  */
 export const EFFORT_SQUIGGLE_AMPLITUDE = 2;
 
@@ -366,7 +368,12 @@ export function effortSquigglePath(width: number, wavelength: number, amplitude:
 }
 
 /**
- * How much of the wave's amplitude is standing at a given stop: 0 flat, 1 full.
+ * How much of the wave's amplitude is standing at a given stop: 0 flat, 1
+ * full. The 0 is never SEEN, though — the drawer clips the wave at the wash's
+ * seam, and at the lowest stop the filled share is 0% wide, so the flat wave
+ * is clipped away with it. The observable ramp starts at the second stop, at
+ * `1/(stops-1)` of the amplitude; index 0 reads as no wave, which is the same
+ * statement.
  *
  * LINEAR, like the mix and the chroma and unlike the halo's square, because it
  * is the same kind of channel they are: read by comparison between neighbour

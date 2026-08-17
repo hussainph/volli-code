@@ -159,12 +159,24 @@ function AppThemeSection() {
   return (
     <SettingsSection title="App theme" icon={PaletteIcon}>
       <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
-      {shadowed ? (
-        <p data-testid="appearance-canvas-shadowed" className="pt-2">
-          <ThemeOriginPill emphasized={false}>Project override</ThemeOriginPill>
-        </p>
-      ) : null}
+      {shadowed ? <CanvasShadowedNote /> : null}
     </SettingsSection>
+  );
+}
+
+/**
+ * The note {@link AppThemeSection} shows while a project's canvas shadows the
+ * global one. Exported for its copy: "Project" is CONTEXT.md's one user-facing
+ * word for a rail entry (the VC-57 ruling), this pill is where "Workspace"
+ * kept sneaking back in, and the suite cannot install an override to make the
+ * conditional render it (`renderToStaticMarkup` reads a store's INITIAL
+ * state), so the note itself is the testable surface.
+ */
+export function CanvasShadowedNote() {
+  return (
+    <p data-testid="appearance-canvas-shadowed" className="pt-2">
+      <ThemeOriginPill emphasized={false}>Project override</ThemeOriginPill>
+    </p>
   );
 }
 

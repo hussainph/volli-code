@@ -19,8 +19,8 @@
  *   • Except the trigger, which is carved OUT of that suppression. The
  *     chrome-band SidebarTrigger is the one patch of band where a resting
  *     pointer can only mean the sidebar, so dwelling on it summons the panel
- *     the same way the strip does (VC-57, Linear's recoverability rule: an
- *     unpinned sidebar is never a dead end). Its dwell is longer —
+ *     the same way the strip does (VC-57's recoverability rule: an unpinned
+ *     sidebar is never a dead end). Its dwell is longer —
  *     {@link TRIGGER_ENTER_DELAY_MS} — because the travel it has to reject is
  *     different: a pointer crossing the band toward the traffic lights clears
  *     the ≈28px button in well under 100ms, where the strip's travel problem
@@ -64,9 +64,12 @@
  */
 import * as React from "react";
 
+import { edgeRegion, type Point } from "./edge-region";
+
 /** Continuous residence in the strip before the panel is summoned. */
 export const ENTER_DELAY_MS = 20;
-/** Continuous residence on the chrome-band trigger before the panel is summoned — see the header. */
+/** Continuous residence on the chrome-band trigger before the panel is
+ * summoned — see the header. */
 export const TRIGGER_ENTER_DELAY_MS = 250;
 /** How long an exited pointer has to come back before the panel withdraws. */
 export const EXIT_GRACE_MS = 375;
@@ -74,9 +77,6 @@ export const EXIT_GRACE_MS = 375;
 const BAND_COOLDOWN_MS = 250;
 /** Long enough for a pressed row to show it took the click, short enough to feel decided. */
 const NAV_CLOSE_MS = 140;
-/** The grace corridor around an open panel, in viewport px. */
-const SAFE_PAD_X = 32;
-const SAFE_PAD_Y = 16;
 
 /** Drawer tier, fast end — this opens far more often than a modal does. */
 export const OPEN_MS = 200;
@@ -94,57 +94,12 @@ export const ZONE_TOP_DEAD_BAND = 24;
 
 type Phase = "closed" | "arming" | "open" | "closing";
 
-export interface Point {
-  x: number;
-  y: number;
-}
-
 /**
  * The chrome-band sidebar trigger, found inside the band by the slot the
  * sidebar primitive already stamps on it — no ref has to be threaded through
  * `ChromeBar`, whose element `AppShell` deliberately holds at one identity.
  */
 const TRIGGER_SELECTOR = '[data-slot="sidebar-trigger"]';
-
-function within(rect: DOMRect | null, point: Point, padX = 0, padY = 0): boolean {
-  if (rect === null) return false;
-  return (
-    point.x >= rect.left - padX &&
-    point.x <= rect.right + padX &&
-    point.y >= rect.top - padY &&
-    point.y <= rect.bottom + padY
-  );
-}
-
-/** Which rule owns a pointer sample. The order IS the precedence. */
-export type EdgeRegion = "trigger" | "band" | "safe" | "zone" | "outside";
-
-export interface EdgeRects {
-  /** The chrome band — the whole 36px row. */
-  band: DOMRect | null;
-  /** The sidebar trigger inside it, carved out of the band's suppression. */
-  trigger: DOMRect | null;
-  /** The arming strip. */
-  zone: DOMRect | null;
-  /** The panel's rect while it is VISIBLE, or null — the caller resolves visibility. */
-  panel: DOMRect | null;
-}
-
-/**
- * The geometry half of `evaluate`, pure so the precedence — the part VC-57
- * changed — is pinned by tests that need no DOM. Trigger before band is the
- * whole carve-out: a sample on the trigger is inside the band too, and
- * classifying it as "band" is what used to make hovering the sidebar's own
- * control CLOSE the sidebar. "Safe" before "zone" keeps the grace corridor's
- * answer when an open panel overlaps the strip.
- */
-export function edgeRegion(point: Point, rects: EdgeRects): EdgeRegion {
-  if (within(rects.trigger, point)) return "trigger";
-  if (within(rects.band, point)) return "band";
-  if (within(rects.panel, point, SAFE_PAD_X, SAFE_PAD_Y)) return "safe";
-  if (within(rects.zone, point)) return "zone";
-  return "outside";
-}
 
 /**
  * Whether `node` is inside a portalled overlay rather than the page under it.
@@ -326,6 +281,13 @@ export function useEdgeReveal({
     // the latch exists for.
     triggerHoldRef.current = true;
 
+    // Resolved once per (re-)enable rather than per sample: `AppShell` holds
+    // the band at one element identity for exactly this reason, and a
+    // `querySelector` inside `evaluate` would be a per-rAF DOM query for an
+    // answer that cannot change while the effect lives. The RECT is still read
+    // live each sample — layout moves, the element does not.
+    const triggerEl = bandRef.current?.querySelector(TRIGGER_SELECTOR) ?? null;
+
     function evaluate(point: Point): void {
       // A drag is a pointer-down interval. Nothing arms, nothing closes, and the
       // pane cannot appear under a card you are carrying or a grip you are
@@ -336,7 +298,7 @@ export function useEdgeReveal({
       const visible = phaseRef.current === "open" || phaseRef.current === "closing";
       const region = edgeRegion(point, {
         band: bandRef.current?.getBoundingClientRect() ?? null,
-        trigger: bandRef.current?.querySelector(TRIGGER_SELECTOR)?.getBoundingClientRect() ?? null,
+        trigger: triggerEl?.getBoundingClientRect() ?? null,
         zone: zoneRef.current?.getBoundingClientRect() ?? null,
         panel: visible ? (panelRef.current?.getBoundingClientRect() ?? null) : null,
       });
@@ -499,6 +461,11 @@ export function useEdgeReveal({
       // point inside the window, and the pointer is no longer in one.
       pendingPoint = null;
       insideRef.current = false;
+      // Leaving the window IS the "left once" the post-unpin latch waits for.
+      // Without this line, unpin → menu bar → straight back down onto the
+      // trigger kept the latch armed — a small dead end in the feature whose
+      // whole point is that an unpinned sidebar never has one.
+      triggerHoldRef.current = false;
       // Leaving by the window's own edge is leaving. The grace corridor exists
       // so overshooting a nav row does not dismiss the panel, and it does that
       // job just as well here — the pointer has {@link EXIT_GRACE_MS} to come

@@ -219,7 +219,7 @@ The opaque, permanent record identity of a ticket (a UUID). Never shown to users
 _Avoid_: using `"VC-12"`-style strings as identity
 
 **Display ID**:
-The workspace-unique human handle `<PREFIX>-<n>` (for example `VC-12`), used by the UI, branches, and `volli` CLI. It is derived presentation, never record identity.
+The project-unique human handle `<PREFIX>-<n>` (for example `VC-12`), used by the UI, branches, and `volli` CLI. It is derived presentation, never record identity.
 _Avoid_: id, ticket id (when meaning the handle)
 
 **Label**:

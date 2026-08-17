@@ -1,14 +1,15 @@
 /**
  * The pointer-intent GEOMETRY, which is the half of the edge reveal that runs
- * without a DOM. The suite pins the precedence order in {@link edgeRegion} —
- * above all the VC-57 carve-out: the chrome-band trigger summons where the
- * band around it suppresses. The timers, phases, and listeners stay in the
+ * without a DOM — extracted to `edge-region.ts` so it sits under the coverage
+ * gate. The suite pins the precedence order in {@link edgeRegion} — above all
+ * the VC-57 carve-out: the chrome-band trigger summons where the band around
+ * it suppresses. The timers, phases, and listeners stay in `edge-reveal.ts`'s
  * hook and are exercised by agent-driven UI runs, like the rest of the app's
  * view glue (this suite runs on `environment: "node"`, no DOM).
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { edgeRegion, type EdgeRects, type Point } from "./edge-reveal";
+import { edgeRegion, type EdgeRects, type Point } from "./edge-region";
 
 /** A rect the classifier can hit-test, from the numbers a layout would give. */
 function rect(left: number, top: number, width: number, height: number): DOMRect {

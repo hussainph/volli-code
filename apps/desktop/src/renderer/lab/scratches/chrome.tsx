@@ -435,8 +435,8 @@ export default function ChromeScratch() {
           }
         />
         <Toggle
-          label="Workspace rail hidden"
-          hint="Presses the leftmost toggle — the rail's own visibility"
+          label="Project switcher hidden"
+          hint="Presses the leftmost toggle — the switcher rail's own visibility"
           checked={workspaceRailHidden}
           onChange={(next) => useUiStore.getState().setWorkspaceRailHidden(next)}
         />
