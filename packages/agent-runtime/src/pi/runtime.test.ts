@@ -727,8 +727,13 @@ describe("model access", () => {
     const access = await runtime.inspectModelAccess({ refresh: true, signal: controller.signal });
 
     expect(refresh).toHaveBeenCalledWith({ force: true, signal: controller.signal });
-    expect(checkAuth).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
-    expect(getAvailable).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
+    // Each probe now receives a per-provider signal linked to the caller's — it
+    // also carries that probe's own timeout — rather than the caller's signal
+    // object itself. Assert a live signal is threaded here; the mid-flight
+    // "caller-abort cancels an in-flight probe" guarantee lives in
+    // model-access.test.ts, which can hold a probe open to prove it.
+    expect(checkAuth).toHaveBeenCalledWith("sign-in", { signal: expect.any(AbortSignal) });
+    expect(getAvailable).toHaveBeenCalledWith("sign-in", { signal: expect.any(AbortSignal) });
     expect(access.providers[0]).toMatchObject({
       state: "authentication-required",
       recovery: { kind: "sign-in" },
