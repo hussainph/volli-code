@@ -643,6 +643,62 @@ const MULTI_SELECT_ASK = ask("ask-many", "What should I update along the way?", 
 ]);
 
 /**
+ * The one that has to be minimised to be got past (VC-84).
+ *
+ * Five stacked options with real descriptions and a box under them — more than
+ * `ask_user`'s own guidance asks for, which is exactly why it is here: the tool
+ * description says two to five and one or two sentences, and a model that
+ * ignores it produces a card taller than the pane it is drawn in. This is the
+ * only fixture that reaches that height, so it is the only one that shows the
+ * minimise control doing anything, and the only one that would regress it.
+ *
+ * Judge it stacked on the composer, not alone: the card and the composer
+ * together are what the transcript has to clear, and the point of the control
+ * is how much of the feed comes back when the card stands down.
+ */
+const TALL_ASK = ask("ask-tall", "How should the cutover run?", [
+  {
+    id: "prompt:0",
+    label: "How should the cutover run, given the release train is already cut?",
+    detail: null,
+    options: [
+      {
+        id: "question:0:YmlnLWJhbmc",
+        label: "Big bang",
+        description:
+          "Take the whole table in one transaction during the quiet window. Fastest by far, and the only shape with no period where two readers disagree — but a failure halfway is a restore, not a retry.",
+      },
+      {
+        id: "question:0:Y2h1bmtlZA",
+        label: "Chunked",
+        description:
+          "Ten thousand rows at a time behind a cursor, resumable from wherever it stopped. Every chunk is its own transaction, so the tail can be paused for a deploy and picked up after it.",
+      },
+      {
+        id: "question:0:ZHVhbC13cml0ZQ",
+        label: "Dual write",
+        description:
+          "Write both shapes for a release, backfill underneath, then drop the old column once the read path has moved. Slowest to finish and the easiest to abandon safely.",
+      },
+      {
+        id: "question:0:c2hhZG93LXJlYWQ",
+        label: "Shadow read",
+        description:
+          "Migrate into a copy, serve reads from it behind a flag, and compare the two for a day before the swap. Costs the disk twice over and buys a real answer about correctness.",
+      },
+      {
+        id: "question:0:bm90LW5vdw",
+        label: "Not this release",
+        description:
+          "Ship the feature on the old shape and schedule the migration on its own. Nothing about the cutover is urgent; it is only convenient to do it now.",
+      },
+    ],
+    multiple: false,
+    custom: true,
+  },
+]);
+
+/**
  * The walk, and two switches inside it. Question two's descriptions are long
  * enough that trailing them after the title would wrap, so its rows stack — and
  * it declares `custom`, so the box is there beside them where question one, which
@@ -710,6 +766,7 @@ const ASKS = [
   { name: "single", interaction: SINGLE_SELECT_ASK },
   { name: "multi", interaction: MULTI_SELECT_ASK },
   { name: "stepped", interaction: STEPPED_ASK },
+  { name: "tall", interaction: TALL_ASK },
 ] as const;
 
 // Signed-in models only, because that is the whole of what the pill is ever
