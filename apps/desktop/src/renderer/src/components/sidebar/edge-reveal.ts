@@ -16,6 +16,19 @@
  *     {@link ZONE_TOP_DEAD_BAND} px below the band, and any sample inside the
  *     band disarms it and starts a cooldown, which also covers the trip back
  *     down.
+ *   • Except the trigger, which is carved OUT of that suppression. The
+ *     chrome-band SidebarTrigger is the one patch of band where a resting
+ *     pointer can only mean the sidebar, so dwelling on it summons the panel
+ *     the same way the strip does (VC-57, Linear's recoverability rule: an
+ *     unpinned sidebar is never a dead end). Its dwell is longer —
+ *     {@link TRIGGER_ENTER_DELAY_MS} — because the travel it has to reject is
+ *     different: a pointer crossing the band toward the traffic lights clears
+ *     the ≈28px button in well under 100ms, where the strip's travel problem
+ *     was vertical and already answered by the band itself. It still lands
+ *     before the 500ms tooltip, so the peek is the first thing hovering says.
+ *     Pressing the trigger PINS — that path is the primitive's own toggle —
+ *     and an unpin taken while hovering it latches the summon off until the
+ *     pointer has left once, so "put it away" is not answered with a peek.
  *   • Pointer-down means never. There is no global "a drag is happening" signal
  *     in this renderer — the board and rail dnd-kit contexts each keep a local
  *     `useState`, the hand-rolled pointer-capture drags keep refs — but none is
@@ -53,6 +66,8 @@ import * as React from "react";
 
 /** Continuous residence in the strip before the panel is summoned. */
 export const ENTER_DELAY_MS = 20;
+/** Continuous residence on the chrome-band trigger before the panel is summoned — see the header. */
+export const TRIGGER_ENTER_DELAY_MS = 250;
 /** How long an exited pointer has to come back before the panel withdraws. */
 export const EXIT_GRACE_MS = 375;
 /** Dead time after the pointer leaves the chrome band — see the header. */
@@ -79,10 +94,17 @@ export const ZONE_TOP_DEAD_BAND = 24;
 
 type Phase = "closed" | "arming" | "open" | "closing";
 
-interface Point {
+export interface Point {
   x: number;
   y: number;
 }
+
+/**
+ * The chrome-band sidebar trigger, found inside the band by the slot the
+ * sidebar primitive already stamps on it — no ref has to be threaded through
+ * `ChromeBar`, whose element `AppShell` deliberately holds at one identity.
+ */
+const TRIGGER_SELECTOR = '[data-slot="sidebar-trigger"]';
 
 function within(rect: DOMRect | null, point: Point, padX = 0, padY = 0): boolean {
   if (rect === null) return false;
@@ -92,6 +114,36 @@ function within(rect: DOMRect | null, point: Point, padX = 0, padY = 0): boolean
     point.y >= rect.top - padY &&
     point.y <= rect.bottom + padY
   );
+}
+
+/** Which rule owns a pointer sample. The order IS the precedence. */
+export type EdgeRegion = "trigger" | "band" | "safe" | "zone" | "outside";
+
+export interface EdgeRects {
+  /** The chrome band — the whole 36px row. */
+  band: DOMRect | null;
+  /** The sidebar trigger inside it, carved out of the band's suppression. */
+  trigger: DOMRect | null;
+  /** The arming strip. */
+  zone: DOMRect | null;
+  /** The panel's rect while it is VISIBLE, or null — the caller resolves visibility. */
+  panel: DOMRect | null;
+}
+
+/**
+ * The geometry half of `evaluate`, pure so the precedence — the part VC-57
+ * changed — is pinned by tests that need no DOM. Trigger before band is the
+ * whole carve-out: a sample on the trigger is inside the band too, and
+ * classifying it as "band" is what used to make hovering the sidebar's own
+ * control CLOSE the sidebar. "Safe" before "zone" keeps the grace corridor's
+ * answer when an open panel overlaps the strip.
+ */
+export function edgeRegion(point: Point, rects: EdgeRects): EdgeRegion {
+  if (within(rects.trigger, point)) return "trigger";
+  if (within(rects.band, point)) return "band";
+  if (within(rects.panel, point, SAFE_PAD_X, SAFE_PAD_Y)) return "safe";
+  if (within(rects.zone, point)) return "zone";
+  return "outside";
 }
 
 /**
@@ -219,6 +271,11 @@ export function useEdgeReveal({
   const focusWithinRef = React.useRef(false);
   const insideRef = React.useRef(false);
   const bandLeftAtRef = React.useRef(0);
+  // The post-unpin latch: while true, dwelling on the trigger summons nothing.
+  // Armed whenever the hook (re-)enables and released by the first sample that
+  // is not on the trigger — so unpinning via the trigger does not answer "put
+  // it away" with a peek from the pointer that never moved.
+  const triggerHoldRef = React.useRef(false);
 
   const clearTimer = React.useCallback(() => {
     if (timerRef.current === null) return;
@@ -263,6 +320,11 @@ export function useEdgeReveal({
 
   React.useEffect(() => {
     if (!enabled) return;
+    // Arm the post-unpin latch on every (re-)enable. At mount the pointer is
+    // almost never on the trigger and the first sample anywhere else clears
+    // it; after an unpin it is exactly where the pointer is, which is the case
+    // the latch exists for.
+    triggerHoldRef.current = true;
 
     function evaluate(point: Point): void {
       // A drag is a pointer-down interval. Nothing arms, nothing closes, and the
@@ -272,9 +334,32 @@ export function useEdgeReveal({
       if (pointerDownRef.current) return;
 
       const visible = phaseRef.current === "open" || phaseRef.current === "closing";
-      const bandRect = bandRef.current?.getBoundingClientRect() ?? null;
+      const region = edgeRegion(point, {
+        band: bandRef.current?.getBoundingClientRect() ?? null,
+        trigger: bandRef.current?.querySelector(TRIGGER_SELECTOR)?.getBoundingClientRect() ?? null,
+        zone: zoneRef.current?.getBoundingClientRect() ?? null,
+        panel: visible ? (panelRef.current?.getBoundingClientRect() ?? null) : null,
+      });
 
-      if (within(bandRect, point)) {
+      if (region === "trigger") {
+        if (triggerHoldRef.current) return;
+        insideRef.current = true;
+        if (visible) {
+          // Same repair as the safe corridor's: coming back has to cancel the
+          // grace clock as well as the intent.
+          if (phaseRef.current === "closing") openNow();
+          return;
+        }
+        if (phaseRef.current === "arming") return;
+        enter("arming");
+        clearTimer();
+        timerRef.current = window.setTimeout(openNow, TRIGGER_ENTER_DELAY_MS);
+        return;
+      }
+      // Any sample off the trigger releases the post-unpin latch.
+      triggerHoldRef.current = false;
+
+      if (region === "band") {
         bandLeftAtRef.current = performance.now();
         insideRef.current = false;
         if (phaseRef.current === "arming") closeNow();
@@ -282,10 +367,8 @@ export function useEdgeReveal({
         return;
       }
 
-      const inZone = within(zoneRef.current?.getBoundingClientRect() ?? null, point);
-      const inSafe =
-        visible &&
-        within(panelRef.current?.getBoundingClientRect() ?? null, point, SAFE_PAD_X, SAFE_PAD_Y);
+      const inZone = region === "zone";
+      const inSafe = region === "safe";
       insideRef.current = inZone || inSafe;
 
       if (inSafe) {
@@ -375,9 +458,15 @@ export function useEdgeReveal({
       if (inPortalledOverlay(event.target)) return;
       const insidePanel =
         event.target instanceof Node && panelRef.current?.contains(event.target) === true;
+      // A press on the chrome trigger is about to PIN the peeked panel — the
+      // primitive's own toggle fires on click. Closing on its pointer-down
+      // would send the panel out and straight back in across one press, a
+      // direction flip with no gesture behind it.
+      const onTrigger =
+        event.target instanceof Element && event.target.closest(TRIGGER_SELECTOR) !== null;
       // Pressing anywhere else is the start of doing something else. No grace
       // period for that — the pane is in the way by definition.
-      if (!insidePanel) closeNow();
+      if (!insidePanel && !onTrigger) closeNow();
     }
 
     function handleUp(event: PointerEvent): void {
