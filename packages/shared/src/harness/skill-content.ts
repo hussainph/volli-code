@@ -5,7 +5,9 @@ description: Coordinates Volli planning, tickets, and terminal sessions through 
 
 # Volli
 
-You are working in a Volli-tracked project / Volli terminal session (the \`VOLLI_TICKET\`/\`VOLLI_SESSION\` env vars are present). From here on, use the bundled \`volli\` CLI as your planning interface: tickets, board moves, comments, and session signals go through it, not through ad-hoc notes.
+This skill applies ONLY inside a Volli session. Check the environment first: at least one of \`VOLLI_SESSION\`, \`VOLLI_TICKET\`, or \`VOLLI_SOCKET\` must be set. If none of them are, this machine merely has Volli installed — do not run \`volli\` commands, do not launch the Volli app, and continue your task without this skill.
+
+Inside a Volli session, use the bundled \`volli\` CLI as your planning interface: tickets, board moves, comments, and session signals go through it, not through ad-hoc notes.
 
 The CLI is self-documenting — it is the authoritative reference, not this skill:
 
@@ -202,7 +204,29 @@ A manifest that does not validate is reported field by field, each error naming 
 `;
 
 /** The slash-command doc for a harness that reads commands but no skills. */
-export const VOLLI_COMMAND_DOC = `You are in a Volli terminal session. Run \`volli identify\`, then use the bundled \`volli\` CLI as your planning interface. It is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. Follow the volli skill (when installed) for norms.
+export const VOLLI_COMMAND_DOC = `Applies only inside a Volli session: if neither \`VOLLI_SESSION\` nor \`VOLLI_SOCKET\` is set in your environment, you are not running under Volli — ignore this command and never run \`volli\`. Inside a Volli session, run \`volli identify\`, then use the bundled \`volli\` CLI as your planning interface. It is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. Follow the volli skill (when installed) for norms.
 `;
 
-export const VOLLI_FENCED_INSTRUCTIONS = `You are in a Volli-tracked project / terminal session. Use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
+/**
+ * The fenced block for a GLOBAL instructions file (`~/.codex/AGENTS.md`,
+ * `~/AGENTS.md`) — read by every session that harness ever runs, almost all of
+ * them outside Volli. The self-gate on the Volli env vars is therefore the
+ * first sentence, not a footnote: without it, a Codex session in an unrelated
+ * repo dutifully runs `volli identify`, fails, retries `volli app launch`, and
+ * burns its context on a tool that was never part of its task (VC-42 audit
+ * F18). The content gates itself because the file cannot be conditionally
+ * present — it is global by the harness's own design.
+ */
+export const VOLLI_FENCED_INSTRUCTIONS = `These instructions apply ONLY when the \`VOLLI_SESSION\` or \`VOLLI_SOCKET\` environment variable is set — that is what marks a session started by Volli. If neither is set, you are not working under Volli: skip this block entirely, do not run \`volli\` commands, and do not launch the Volli app.
+
+Inside a Volli session, use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
+
+/**
+ * The body of the managed block Volli appends to the user's zsh login profile
+ * when `~/.local/bin` is not already on the login-shell PATH — the same
+ * convention every peer harness follows (`~/.local/bin/claude`, `codex`,
+ * `cursor-agent`). `$HOME` is deliberately unexpanded: the profile is the
+ * user's file and the line should read as one they could have written.
+ */
+export const VOLLI_PATH_PROFILE_BLOCK = `# Keeps ~/.local/bin (where the volli CLI is linked) on the login PATH.
+export PATH="$HOME/.local/bin:$PATH"`;

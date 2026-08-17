@@ -257,7 +257,7 @@ function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorC
       title,
       "fail",
       "`volli` resolves to nothing — agents cannot reach the planner",
-      "Install the CLI from the File menu.",
+      "Launch the Volli app (it installs the CLI in the background), then open a new terminal.",
     );
   }
   if (observation.volliPath === facts.shimPath) return ok(id, title, facts.shimPath);
@@ -266,7 +266,7 @@ function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorC
     title,
     "warn",
     `resolves to ${observation.volliPath}, which is not this app's shim (${facts.shimPath})`,
-    "Another Volli install owns the link. Reinstall the CLI from the File menu.",
+    "Another Volli install owns the link. Launch the app you want owning it, or remove ~/.local/bin/volli and relaunch this one.",
   );
 }
 

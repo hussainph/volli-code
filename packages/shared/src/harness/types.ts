@@ -11,10 +11,26 @@
  */
 import type { FirstClassHarnessId, HarnessId } from "../ticket";
 
+/**
+ * How a fenced managed block comments its markers. `html` is the default and
+ * what every instructions file (Markdown) uses; `hash` exists because a fenced
+ * block can now land in a shell profile, where `<!-- volli:begin v=1 -->` is a
+ * syntax error the user's login shell would print on every boot.
+ */
+export type FenceComment = "html" | "hash";
+
 export type InstallAction =
   | { kind: "write"; path: string; content: string; managed: true }
   | { kind: "symlink"; path: string; target: string; managed: true }
-  | { kind: "fenced"; path: string; content: string; version: number; managed: true };
+  | {
+      kind: "fenced";
+      path: string;
+      content: string;
+      version: number;
+      managed: true;
+      /** Marker comment syntax; absent means `html` (the Markdown-file default). */
+      comment?: FenceComment;
+    };
 
 /**
  * The involuntary signals Volli understands. Harness-native event names never

@@ -8,7 +8,9 @@ export function genericHarnessActions(instructionsPath: string): InstallAction[]
       kind: "fenced",
       path: instructionsPath,
       content: VOLLI_FENCED_INSTRUCTIONS,
-      version: 1,
+      // v2: the block now gates itself on the Volli env vars, so a session the
+      // harness starts OUTSIDE Volli reads it and stands down (VC-42 F18).
+      version: 2,
       managed: true,
     },
   ];
