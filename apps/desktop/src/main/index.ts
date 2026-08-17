@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   diffManagedContent,
+  displayTicketId,
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
@@ -591,9 +592,28 @@ app.whenReady().then(async () => {
           // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
           // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
           // directory (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath) => {
+          executionEnvFactory: async (workspacePath, identity) => {
             await loginPathBootstrap.apply();
-            return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+            // The Session's own name rides beside the PATH recovery:
+            // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
+            // exactly as `agentSessionEnv` exports them into a spawned PTY —
+            // what lets `volli session done`/`blocked` resolve their context
+            // and makes socket writes attribute to the Session (VC-51). The
+            // display id is looked up per attachment, so a Ticket renamed by a
+            // prefix change is right on the next attach.
+            const ticket =
+              identity.ticketId === null ? null : getTicket(dbHandle.db, identity.ticketId);
+            const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+            return piExecutionEnv(workspacePath, {
+              pathPrefixes: [runtimePaths.binDir],
+              identity: {
+                sessionId: identity.sessionId,
+                ticketDisplayId:
+                  ticket && ticketProject
+                    ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+                    : null,
+              },
+            });
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is

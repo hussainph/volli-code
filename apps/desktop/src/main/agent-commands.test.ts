@@ -1298,8 +1298,9 @@ describe("agent command service", () => {
       args: {},
       ctx: { cwd: "/repo/volli", env: {} },
     });
-    // `identify` and `session peek` address that same snapshot, so a Session
-    // absent from it must be unaddressable rather than half-resolved.
+    // Identity resolution is engine-backed (VC-51): a structured Session
+    // exports VOLLI_SESSION too, so `identify` answers for it even though the
+    // addressable terminal snapshot (peek/resume/rename) never contains it.
     const identify = await service.execute({
       v: 1,
       cmd: "identify",
@@ -1323,9 +1324,16 @@ describe("agent command service", () => {
       },
     });
     expect(JSON.stringify(sessions)).not.toContain(structured.session.id);
-    // `identify` and `session peek` still address terminals only — a chat has
-    // no PTY to peek and exports no VOLLI_SESSION of its own.
-    expect(identify).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    // A ticketless structured Session identifies against its project root: it
+    // has no PTY cwd and no worktree, and that is the directory it runs in.
+    expect(identify).toMatchObject({
+      ok: true,
+      data: {
+        session: structured.session.id.slice(0, 8),
+        ticket: null,
+        worktreePath: "/repo/volli",
+      },
+    });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
@@ -1608,6 +1616,102 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  it("accepts a lifecycle signal from a structured session with no terminal attachment (VC-51)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    // A structured (chat) Session: created through the engine, never given a
+    // terminal attachment — exactly what `volli session start` produces.
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const sessionId = created.session.id;
+    const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+      onMutation: (change) => mutations.push(change),
+    });
+
+    const done = await service.execute({
+      v: 1,
+      cmd: "session.done",
+      args: { reason: "Implementation finished" },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+    });
+
+    expect(done).toMatchObject({
+      ok: true,
+      data: { signal: "done", reason: "Implementation finished", recorded: true },
+    });
+    expect((await sessionEngine.getSession({ sessionId }))?.signal).toMatchObject({
+      signal: "done",
+      reason: "Implementation finished",
+    });
+    expect(mutations).toEqual([
+      { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
+    ]);
+  });
+
+  it("attributes a socket write from a structured session to the session, not the user (VC-51)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+    });
+
+    const comment = await service.execute({
+      v: 1,
+      cmd: "ticket.comment",
+      args: { id: "VC-1", message: "Findings recorded." },
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+    const identified = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/outside", env: { session: created.session.id } },
+    });
+
+    // Before VC-51 this failed SESSION_NOT_FOUND against the terminal-only
+    // snapshot, and a chat session's comment attributed as "user" with no
+    // session at all.
+    expect(comment).toMatchObject({
+      ok: true,
+      data: { comment: { actor: "session" } },
+    });
+    expect(
+      (comment as { data: { comment: { session: string | null } } }).data.comment.session,
+    ).not.toBeNull();
+    expect(identified).toMatchObject({
+      ok: true,
+      data: { ticket: "VC-1", project: { prefix: "VC" } },
+    });
   });
 
   describe("session.link (issue #78)", () => {

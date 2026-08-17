@@ -81,6 +81,73 @@ describe("piExecutionEnv", () => {
     }
   });
 
+  // VC-51: the identity option is what lets `volli session done` /
+  // `session blocked` resolve their context inside a structured Session's
+  // shell, and what makes socket writes attribute to the Session — the same
+  // contract a Volli-spawned PTY gets from `agentSessionEnv`.
+  it("tells a command which Volli session and ticket it runs for", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      identity: { sessionId: "session-uuid-1", ticketDisplayId: "VC-51" },
+    });
+    try {
+      await expect(env.exec("printenv VOLLI_SESSION; printenv VOLLI_TICKET")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "session-uuid-1\nVC-51\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("omits VOLLI_TICKET for a ticketless session rather than inventing one", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      identity: { sessionId: "session-uuid-1", ticketDisplayId: null },
+    });
+    try {
+      await expect(env.exec("printenv VOLLI_TICKET; printenv VOLLI_SESSION")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "session-uuid-1\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("never carries the host's own VOLLI_SESSION into an unidentified environment", async () => {
+    // Identity is host-minted per Session, not an inherited variable: a
+    // `VOLLI_SESSION` sitting in main's own environment names the wrong
+    // session for every attachment but one, so it must not leak through.
+    const restore = hostVariables({ VOLLI_SESSION: "host-session", VOLLI_TICKET: "VC-0" });
+    const env = await piExecutionEnv(workspace());
+    try {
+      await expect(
+        env.exec("printenv VOLLI_SESSION; printenv VOLLI_TICKET; echo done"),
+      ).resolves.toEqual({
+        ok: true,
+        value: { stdout: "done\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      restore();
+      await env.cleanup();
+    }
+  });
+
+  it("still lets a tool call's own env override the identity, like any variable", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      identity: { sessionId: "session-uuid-1", ticketDisplayId: "VC-51" },
+    });
+    try {
+      await expect(
+        env.exec("printenv VOLLI_SESSION", { env: { VOLLI_SESSION: "caller-says" } }),
+      ).resolves.toEqual({
+        ok: true,
+        value: { stdout: "caller-says\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   // A Finder/Dock launch of main inherits launchd's bare PATH
   // (/usr/bin:/bin:/usr/sbin:/sbin), which has never had `volli`'s own shim
   // dir on it. `pathPrefixes` is how a caller — main, handing in the CLI's

@@ -433,16 +433,30 @@ function finalizeContext(
 }
 
 /**
+ * The identity `VOLLI_SESSION` names — enough to attribute a write and resolve
+ * a project or ticket, and deliberately nothing about how the Session runs.
+ * Resolved against the Session Engine itself, so a structured (chat) Session
+ * answers exactly like a PTY one (VC-51); `terminalSessionRecord` stays the
+ * door to terminal facts (cwd, harness, exit), which identity never carries.
+ */
+interface EnvSessionIdentity {
+  id: string;
+  projectId: string;
+  ticketId: string | null;
+}
+
+/**
  * Resolves the project for a read/create request along the context ladder, doing
  * work proportional to the request: an explicit `--project` or a Volli session
  * env resolves from project metadata alone (no ticket/session scan). Only the
  * env-ticket and cwd rungs build the ticket index (display ids + worktree
- * paths); sessions are never scanned here — `VOLLI_SESSION` is resolved directly.
+ * paths); sessions are never scanned here — `VOLLI_SESSION` arrives already
+ * resolved as {@link EnvSessionIdentity}.
  */
 function projectForCreate(
   db: Database.Database,
   projects: readonly Project[],
-  sessions: readonly SessionRecord[],
+  envSession: EnvSessionIdentity | null,
   request: AgentRequest,
 ): ProjectResolution {
   const selector = request.args["project"];
@@ -464,16 +478,15 @@ function projectForCreate(
       }),
     );
   }
-  const envSession = request.ctx.env.session;
-  if (envSession !== undefined) {
-    const session = sessions.find((candidate) => candidate.id === envSession);
-    if (!session) {
+  const envSessionId = request.ctx.env.session;
+  if (envSessionId !== undefined) {
+    if (!envSession) {
       return {
         ok: false,
-        response: failure("SESSION_NOT_FOUND", `No session matches ${envSession}`),
+        response: failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}`),
       };
     }
-    const project = projects.find(({ id }) => id === session.projectId);
+    const project = projects.find(({ id }) => id === envSession.projectId);
     return project
       ? { ok: true, project }
       : {
@@ -625,7 +638,7 @@ function ticketForDisplayId(
 function resolveWorktreeTicket(
   db: Database.Database,
   projects: readonly Project[],
-  sessions: readonly SessionRecord[],
+  envSession: EnvSessionIdentity | null,
   request: AgentRequest,
 ): { ok: true; ticket: Ticket; project: Project } | { ok: false; response: AgentResponse } {
   if (request.args["id"] !== undefined) {
@@ -663,11 +676,21 @@ function resolveWorktreeTicket(
       displayId: ticketDisplayById.get(ticket.id)!,
       projectId: ticket.projectId,
     })),
-    sessions: sessions.map((session) => ({
-      id: session.id,
-      projectId: session.projectId,
-      ticketDisplayId: session.ticketId ? (ticketDisplayById.get(session.ticketId) ?? null) : null,
-    })),
+    // The ladder only ever looks `VOLLI_SESSION` up by exact id, so the one
+    // resolved identity is the whole session index it needs — and it covers a
+    // structured Session no terminal snapshot would contain.
+    sessions:
+      envSession === null
+        ? []
+        : [
+            {
+              id: envSession.id,
+              projectId: envSession.projectId,
+              ticketDisplayId: envSession.ticketId
+                ? (ticketDisplayById.get(envSession.ticketId) ?? null)
+                : null,
+            },
+          ],
   });
   if (ladder.ok && ladder.context.ticketDisplayId !== null) {
     return ticketForDisplayId(db, projects, ladder.context.ticketDisplayId, {
@@ -769,15 +792,14 @@ function publicEvent(
 
 function requestActor(
   request: AgentRequest,
-  sessions: readonly SessionRecord[],
+  envSession: EnvSessionIdentity | null,
 ): { ok: true; actor: TicketEventActor } | { ok: false; response: AgentResponse } {
   const sessionId = request.ctx.env.session;
   if (!sessionId) return { ok: true, actor: { kind: "user" } };
-  const session = sessions.find((candidate) => candidate.id === sessionId);
-  return session
+  return envSession
     ? {
         ok: true,
-        actor: { kind: "session", sessionId: session.id, ticketId: session.ticketId },
+        actor: { kind: "session", sessionId: envSession.id, ticketId: envSession.ticketId },
       }
     : {
         ok: false,
@@ -1099,10 +1121,11 @@ export function createAgentCommandService(
       // merely to find it. Other commands retain the established list snapshot
       // until their own command-specific resolution is made lazy.
       // Stays terminal-only, unlike the renderer's discriminated, chat-aware
-      // listing (`data-ipc.ts`'s `sessions.list`/`listForTicket`): every verb
-      // below (identify, rename, resume, hooks) is about a PTY the CLI's own
-      // wrapper is running inside, so a structured-only Session has nothing
-      // here to answer to and dropping it is correct, not a compatibility gap.
+      // listing (`data-ipc.ts`'s `sessions.list`/`listForTicket`): the verbs
+      // this list serves (list, peek, resume, rename) are about a PTY, so a
+      // structured-only Session has nothing here to answer to and dropping it
+      // is correct, not a compatibility gap. Identity questions — who is
+      // `VOLLI_SESSION` — are answered by `envSession` below instead.
       const sessions =
         request.cmd === "hook" ||
         request.cmd === "model.list" ||
@@ -1120,26 +1143,54 @@ export function createAgentCommandService(
             ).flatMap((projections) =>
               projections.flatMap((projection) => terminalSessionRecord(projection) ?? []),
             );
+      // The `VOLLI_SESSION` identity rung, resolved against the Session Engine
+      // rather than the terminal-only snapshot above: a structured (chat)
+      // Session exports `VOLLI_SESSION` too (VC-51), and it has no terminal
+      // attachment for `terminalSessionRecord` to answer with. The verbs that
+      // need terminal FACTS on top of identity (hook, session.link,
+      // session.harness) still resolve their own terminal record and are
+      // skipped here so the hook hot path pays for one lookup, not two.
+      const envSessionId = request.ctx.env.session;
+      let envSession: EnvSessionIdentity | null = null;
+      if (
+        envSessionId !== undefined &&
+        request.cmd !== "hook" &&
+        request.cmd !== "session.link" &&
+        request.cmd !== "session.harness"
+      ) {
+        const projection = await sessionEngine.getSession({ sessionId: envSessionId });
+        if (projection !== null) {
+          envSession = {
+            id: projection.session.id,
+            projectId: projection.session.projectId,
+            ticketId: projection.session.ticketId,
+          };
+        }
+      }
       if (request.cmd === "identify") {
-        const sessionId = request.ctx.env.session;
-        if (sessionId) {
-          const session = sessions.find((candidate) => candidate.id === sessionId);
-          if (!session) {
-            return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        if (envSessionId) {
+          if (!envSession) {
+            return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
           }
-          const project = projects.find(({ id }) => id === session.projectId);
+          const project = projects.find(({ id }) => id === envSession.projectId);
           if (!project) {
             return failure("PROJECT_NOT_FOUND", "The session's project no longer exists.");
           }
-          const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
+          const ticket = envSession.ticketId
+            ? getTicket(options.db, envSession.ticketId)
+            : undefined;
+          // A PTY session's directory is its terminal's cwd; a structured
+          // Session has no PTY, so its workspace is the ticket worktree — or
+          // the project root a ticketless Session was pointed at.
+          const terminal = sessions.find((candidate) => candidate.id === envSessionId);
           return {
             v: 1,
             ok: true,
             data: {
               project: { name: project.name, prefix: project.ticketPrefix, path: project.path },
               ticket: ticket ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null,
-              session: shortSessionId(session.id),
-              worktreePath: session.cwd,
+              session: shortSessionId(envSession.id),
+              worktreePath: terminal?.cwd ?? ticket?.worktreePath ?? project.path,
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
             },
@@ -1152,7 +1203,7 @@ export function createAgentCommandService(
         if (ticket && !ticket.ok) return ticket.response;
         const resolved = ticket?.ok
           ? { ok: true as const, project: ticket.project }
-          : projectForCreate(options.db, projects, sessions, request);
+          : projectForCreate(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         return {
           v: 1,
@@ -1174,7 +1225,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "board") {
-        const resolved = projectForCreate(options.db, projects, sessions, request);
+        const resolved = projectForCreate(options.db, projects, envSession, request);
         return resolved.ok
           ? { v: 1, ok: true, data: boardData(options.db, resolved.project) }
           : resolved.response;
@@ -1195,7 +1246,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "label.list") {
-        const resolved = projectForCreate(options.db, projects, sessions, request);
+        const resolved = projectForCreate(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         const projectTickets = listTicketsByProject(options.db, resolved.project.id);
         const labels = listAllLabels(options.db)
@@ -1295,7 +1346,7 @@ export function createAgentCommandService(
         // let the ticket's project win over what the caller explicitly asked
         // for. When both are present and disagree, refuse and name both.
         if (request.args["project"] !== undefined && ticketResolution?.ok) {
-          const selected = projectForCreate(options.db, projects, sessions, request);
+          const selected = projectForCreate(options.db, projects, envSession, request);
           if (!selected.ok) return selected.response;
           if (selected.project.id !== ticketResolution.project.id) {
             return failure(
@@ -1306,7 +1357,7 @@ export function createAgentCommandService(
         }
         const resolvedProject = ticketResolution?.ok
           ? ticketResolution.project
-          : projectForCreate(options.db, projects, sessions, request);
+          : projectForCreate(options.db, projects, envSession, request);
         if (!("id" in resolvedProject)) {
           if (!resolvedProject.ok) return resolvedProject.response;
         }
@@ -1398,7 +1449,7 @@ export function createAgentCommandService(
         }
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const message = request.args["message"];
         const model = request.args["model"];
@@ -1511,16 +1562,20 @@ export function createAgentCommandService(
         return { v: 1, ok: true, data: { notified: true } };
       }
       if (request.cmd === "session.done" || request.cmd === "session.blocked") {
-        const sessionId = request.ctx.env.session;
-        if (!sessionId) {
+        if (!envSessionId) {
           return failure(
             "CONTEXT_REQUIRED",
             "session done and blocked require VOLLI_SESSION context.",
           );
         }
-        const projection = await sessionEngine.getSession({ sessionId });
-        const session = projection === null ? null : terminalSessionRecord(projection);
-        if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
+        // Identity is the whole requirement: a structured (chat) Session
+        // signals through the same door a PTY session does, and neither needs
+        // a terminal attachment for it (VC-51). Deliberately no cwd fallback —
+        // one ticket worktree hosts any number of sessions, so a directory can
+        // never say which one is signalling.
+        if (!envSession) {
+          return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
+        }
         const reasonValue = request.args["reason"];
         if (reasonValue !== undefined && typeof reasonValue !== "string") {
           return failure("INVALID_REQUEST", "The lifecycle reason must be text.");
@@ -1529,8 +1584,11 @@ export function createAgentCommandService(
         const signal = request.cmd === "session.done" ? "done" : "blocked";
         const submitted = await sessionEngine.submit({
           commandId: newId(),
-          sessionId: session.id,
+          sessionId: envSession.id,
           intent: { kind: "session.signal", signal, reason },
+          // `adapter`/`terminal` predates structured callers; kept as-is so a
+          // replayed ledger reads one vocabulary. Nothing routes or renders on
+          // this source today (`session.signal` routes to no adapter).
           provenance: {
             source: { kind: "adapter", id: "terminal", detail: null },
             venue: { id: "local", kind: "local" },
@@ -1540,15 +1598,15 @@ export function createAgentCommandService(
           return failure("MUTATION_FAILED", "The Session signal was not durably completed.");
         }
         options.onMutation?.({
-          ...(session.ticketId === null ? {} : { ticketId: session.ticketId }),
-          projectId: session.projectId,
+          ...(envSession.ticketId === null ? {} : { ticketId: envSession.ticketId }),
+          projectId: envSession.projectId,
           kind: "session",
         });
         return {
           v: 1,
           ok: true,
           data: {
-            session: shortSessionId(session.id),
+            session: shortSessionId(envSession.id),
             signal,
             reason,
             recorded: true,
@@ -1937,7 +1995,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "ticket.list") {
-        const resolved = projectForCreate(options.db, projects, sessions, request);
+        const resolved = projectForCreate(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         const status = request.args["status"];
         const priority = request.args["priority"];
@@ -2029,7 +2087,7 @@ export function createAgentCommandService(
             attachments: listAttachments(options.db, resolved.ticket.id),
           });
         } else {
-          const resolved = projectForCreate(options.db, projects, sessions, request);
+          const resolved = projectForCreate(options.db, projects, envSession, request);
           if (!resolved.ok) return resolved.response;
           role = "project";
           project = resolved.project;
@@ -2065,7 +2123,7 @@ export function createAgentCommandService(
         // Context resolution (which ticket the agent means) stays this door's
         // concern; the git compose + the no-worktree / stamped-but-deleted
         // discrimination live behind the ticketId-in read verb (CONCEPT #42).
-        const resolved = resolveWorktreeTicket(options.db, projects, sessions, request);
+        const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         const read = readWorktreeStatus(
           { db: options.db, git, worktreeExists },
@@ -2100,7 +2158,7 @@ export function createAgentCommandService(
         }
       }
       if (request.cmd === "worktree.diff") {
-        const resolved = resolveWorktreeTicket(options.db, projects, sessions, request);
+        const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
         if (!resolved.ok) return resolved.response;
         // Merge-base ("what the PR would contain") is the default; --working-tree
         // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
@@ -2152,7 +2210,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.update") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const title = request.args["title"];
         const priority = request.args["priority"];
@@ -2233,7 +2291,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.archive") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         try {
           const archivedAt = now();
@@ -2264,7 +2322,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.move") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const to = request.args["to"];
         if (!isTicketStatus(to)) {
@@ -2348,7 +2406,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.comment") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const message = request.args["message"];
         if (typeof message !== "string" || message.trim().length === 0) {
@@ -2402,7 +2460,7 @@ export function createAgentCommandService(
       if (request.cmd !== "ticket.create") {
         return failure("UNSUPPORTED_COMMAND", `Unsupported command ${request.cmd}`);
       }
-      const resolved = projectForCreate(options.db, projects, sessions, request);
+      const resolved = projectForCreate(options.db, projects, envSession, request);
       if (!resolved.ok) return resolved.response;
       const createPriorityError = invalidPriorityResponse(request.args["priority"]);
       if (createPriorityError) return createPriorityError;
@@ -2427,7 +2485,7 @@ export function createAgentCommandService(
 
       try {
         const createdAt = now();
-        const actor = requestActor(request, sessions);
+        const actor = requestActor(request, envSession);
         if (!actor.ok) return actor.response;
         const ticket = createTicketCommand(
           options.db,
