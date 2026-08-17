@@ -22,6 +22,7 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   HiddenModelRef,
   ModelAccessModel,
@@ -170,6 +171,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     resolveInteraction,
     selectModel,
     submit,
+    dismissError,
   } = controller;
   const session = controller.session;
 
@@ -620,8 +622,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      // The transport latch is the surface's own state; retiring it is the
+      // reader's call, not a recovery (VC-97).
+      dismiss: () => dismissError(),
     }),
-    [liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -967,6 +972,21 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           onClick={blocker.secondaryAction.act}
         >
           {blocker.secondaryAction.label}
+        </Button>
+      ) : null}
+      {/* The one row that reports this surface's own latch — Retry stays for
+          the recovery, and this retires the row when the reader has read it.
+          An icon, not a labeled button: it competes with nothing, and the row's
+          words are the retry's business, not its. */}
+      {blocker.dismiss ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0"
+          aria-label={blocker.dismiss.label}
+          onClick={blocker.dismiss.act}
+        >
+          <XIcon aria-hidden className="size-3" />
         </Button>
       ) : null}
     </div>
