@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -11,6 +12,7 @@ import type {
   HarnessId,
   ModelAccessSnapshot,
 } from "@volli/shared";
+import type { UIMessage } from "ai";
 import type {
   HarnessEventNotice,
   SessionHarnessNotice,
@@ -33,6 +35,7 @@ import { recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import {
+  CHAT_PEEK_ENTRIES,
   composeProjectBrief,
   createAgentCommandService as createAgentCommandServiceBase,
   DEFAULT_KICKOFF_MESSAGE,
@@ -42,7 +45,14 @@ import { createDesktopSessionEngine } from "./session-control";
 import { writeDefaultModelSelection } from "./session-runtime/model-access-preferences";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
+
+/** The transcript store the chat-peek tests read through, as main's file store would. */
+const artifacts = createInMemoryTranscriptArtifactStore();
+
+/** When the Nth transcript message of a peeked chat session happened. */
+const messageAt = (index: number): number => 10_000 + index * 1_000;
 
 /** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
@@ -1300,7 +1310,8 @@ describe("agent command service", () => {
     });
     // Identity resolution is engine-backed (VC-51): a structured Session
     // exports VOLLI_SESSION too, so `identify` answers for it even though the
-    // addressable terminal snapshot (peek/resume/rename) never contains it.
+    // terminal snapshot (resume/rename) never contains it. (`session peek`
+    // reads BOTH halves — VC-79 — and is exercised on its own below.)
     const identify = await service.execute({
       v: 1,
       cmd: "identify",
@@ -1426,6 +1437,265 @@ describe("agent command service", () => {
     expect(observed).toEqual([{ sessionId, lines: 2 }]);
     expect(notified).toEqual({ v: 1, ok: true, data: { notified: true } });
     expect(notifications).toEqual([{ title: "Agent", message: "Needs input" }]);
+  });
+
+  // VC-79. The orchestration paradigm runs on chat Sessions, and a peek that
+  // answered only for terminals left a long-running one indistinguishable from
+  // a hung one: its only liveness signal was the eventual ticket comment.
+  describe("session.peek over a chat session", () => {
+    const PROVENANCE = {
+      source: { kind: "adapter" as const, id: "pi", detail: null },
+      venue: { id: "local" as const, kind: "local" as const },
+    };
+    const PEEK_AT = 100_000;
+
+    /**
+     * A structured Session with an open Pi attachment, one started turn, and
+     * whatever transcript the caller asked for — the shape a chat has while an
+     * agent is working in it.
+     */
+    async function chatSession(input: { messages: readonly UIMessage[] }): Promise<{
+      service: ReturnType<typeof createAgentCommandService>;
+      sessionEngine: SessionEngine;
+      sessionId: string;
+      shortId: string;
+    }> {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+      const created = await sessionEngine.createSession({
+        commandId: "chat-create",
+        projectId: "project-one",
+        ticketId: null,
+        title: "Review VC-53",
+        provenance: PROVENANCE,
+      });
+      const sessionId = created.session.id;
+      await sessionEngine.observe({
+        id: "chat-attach",
+        kind: "attachment.opened",
+        sessionId,
+        occurredAt: 1_000,
+        provenance: PROVENANCE,
+        attachment: {
+          id: "attachment-1",
+          sessionId,
+          adapterId: "pi",
+          venue: { id: "local", kind: "local" },
+          continuity: "fresh",
+          native: { id: "pi-1", detail: null },
+        },
+      });
+      await sessionEngine.observe({
+        id: "chat-turn",
+        kind: "turn.started",
+        sessionId,
+        attachmentId: "attachment-1",
+        occurredAt: 2_000,
+        provenance: PROVENANCE,
+        turnId: "turn-1",
+      });
+      for (const [index, message] of input.messages.entries()) {
+        await sessionEngine.observe({
+          id: `chat-transcript-${index}`,
+          kind: "transcript.referenced",
+          sessionId,
+          attachmentId: "attachment-1",
+          occurredAt: messageAt(index),
+          provenance: PROVENANCE,
+          turnId: "turn-1",
+          reference: await artifacts.write({
+            version: 1,
+            threadId: "thread-1",
+            branchId: "branch-1",
+            attemptId: "attempt-1",
+            turnId: "turn-1",
+            message,
+          }),
+        });
+      }
+      return {
+        sessionEngine,
+        sessionId,
+        shortId: sessionId.slice(0, 8),
+        service: createAgentCommandService({
+          db: ctx.db,
+          appVersion: "1.2.3",
+          now: () => PEEK_AT,
+          sessionEngine,
+          readTranscriptArtifact: (reference) => artifacts.read(reference),
+        }),
+      };
+    }
+
+    it("answers what it is doing, when it last moved, and its transcript tail", async () => {
+      const { service, sessionId, shortId } = await chatSession({
+        messages: [
+          { id: "m1", role: "user", parts: [{ type: "text", text: "Review VC-53" }] },
+          {
+            id: "m2",
+            role: "assistant",
+            parts: [
+              {
+                type: "dynamic-tool",
+                toolName: "volli.activity",
+                toolCallId: "call-1",
+                state: "output-available",
+                input: {},
+                output: {},
+                toolMetadata: {
+                  [ACTIVITY_METADATA_KEY]: {
+                    kind: "run-command",
+                    nativeToolName: "bash",
+                    subject: { label: "pnpm test", path: null, lineRange: null },
+                    outcome: null,
+                    startedAt: null,
+                    endedAt: null,
+                  },
+                },
+              },
+            ],
+          },
+          {
+            id: "m3",
+            role: "assistant",
+            parts: [
+              { type: "reasoning", text: "weighing the options", state: "done" },
+              { type: "text", text: "Gates are green.", state: "done" },
+            ],
+          },
+        ],
+      });
+
+      const peek = await service.execute({
+        v: 1,
+        cmd: "session.peek",
+        args: { id: shortId, lines: 2 },
+        ctx: { cwd: "/repo/volli", env: {} },
+      });
+
+      expect(peek).toMatchObject({
+        ok: true,
+        data: {
+          session: shortId,
+          // An open turn under a live attachment: the agent is working, which
+          // is the same word the app's own sidebar row uses.
+          status: "working",
+          waitingOn: null,
+          turns: 1,
+          turnDepth: 3,
+          messages: 3,
+          unreadable: 0,
+          transcript: [
+            { role: "assistant", text: "", tools: ["bash"] },
+            // Reasoning stays out of a peek; the words and the tools are what
+            // answer "what is it doing".
+            { role: "assistant", text: "Gates are green.", tools: [] },
+          ],
+        },
+      });
+      if (!peek.ok) throw new Error("expected a peek");
+      const data = peek.data as { lastActivityAgeMs: number; transcript: { ageMs: number }[] };
+      // Ages against the caller's own clock are the liveness signal, and the
+      // last thing that happened here is the newest message.
+      expect(data.lastActivityAgeMs).toBe(PEEK_AT - messageAt(2));
+      expect(data.transcript.map((entry) => entry.ageMs)).toEqual([
+        PEEK_AT - messageAt(1),
+        PEEK_AT - messageAt(2),
+      ]);
+      // Short ids are the only public handles, on this half of the verb too.
+      expect(JSON.stringify(peek)).not.toContain(sessionId);
+    });
+
+    it("caps an unasked tail and names what a human is blocking", async () => {
+      const { service, sessionEngine, sessionId, shortId } = await chatSession({
+        messages: Array.from({ length: 14 }, (_, index) => ({
+          id: `m${index}`,
+          role: "assistant" as const,
+          parts: [{ type: "text" as const, text: `line ${index}` }],
+        })),
+      });
+      await sessionEngine.observe({
+        id: "chat-attention",
+        kind: "attention.raised",
+        sessionId,
+        attachmentId: "attachment-1",
+        occurredAt: 30_000,
+        provenance: PROVENANCE,
+        attention: {
+          id: "attention-1",
+          kind: "permission_required",
+          attachmentId: "attachment-1",
+          detail: null,
+          diagnostic: null,
+        },
+      });
+
+      const peek = await service.execute({
+        v: 1,
+        cmd: "session.peek",
+        args: { id: shortId },
+        ctx: { cwd: "/repo/volli", env: {} },
+      });
+
+      expect(peek).toMatchObject({
+        ok: true,
+        // Waiting outranks working: a peek that said "working" would hide the
+        // one thing the caller could act on.
+        data: {
+          status: "waiting",
+          waitingOn: "permission",
+          messages: 14,
+          turnDepth: 14,
+          lastActivityAgeMs: PEEK_AT - 30_000,
+        },
+      });
+      if (!peek.ok) throw new Error("expected a peek");
+      const { transcript } = peek.data as { transcript: { text: string }[] };
+      // Cheap by default: the last CHAT_PEEK_ENTRIES messages, no more.
+      expect(transcript).toHaveLength(CHAT_PEEK_ENTRIES);
+      expect(transcript.at(0)?.text).toBe("line 2");
+      expect(transcript.at(-1)?.text).toBe("line 13");
+    });
+
+    it("refuses an unknown handle and answers counts alone with no artifact store", async () => {
+      const { shortId, sessionId } = await chatSession({
+        messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] }],
+      });
+      const storeless = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        sessionEngine: createDesktopSessionEngine(ctx.db),
+      });
+      const peek = async (id: unknown) =>
+        storeless.execute({
+          v: 1,
+          cmd: "session.peek",
+          args: { id },
+          ctx: { cwd: "/repo/volli", env: {} },
+        });
+
+      // A handle nothing answers to, a full UUID, and a malformed one: the
+      // structured half refuses exactly the way the terminal half does.
+      expect(await peek("nosuchid")).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_NOT_FOUND" },
+      });
+      expect(await peek(sessionId)).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_NOT_FOUND" },
+      });
+      expect(await peek(7)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      // No store to read: the activity counts are still true, and nothing is
+      // reported as unreadable, because nothing looked.
+      expect(await peek(shortId)).toMatchObject({
+        ok: true,
+        data: { messages: 1, unreadable: 0, transcript: [] },
+      });
+    });
   });
 
   it("records lifecycle signals in the Session ledger without changing planner history", async () => {

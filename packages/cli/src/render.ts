@@ -164,6 +164,52 @@ function countCell(value: unknown): string {
   return value === null || value === undefined ? "-" : terminalSafeInline(value);
 }
 
+/**
+ * An elapsed span at the precision a peek is read at: seconds while something
+ * is happening, minutes while it is thinking, hours once it has stopped. The
+ * caller is deciding whether to look closer, not measuring anything.
+ */
+function ageText(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "-";
+  const seconds = Math.floor(value / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
+/**
+ * A chat Session's peek: one activity line, then one line per transcript
+ * message. The activity line leads because it answers the question the command
+ * was run to ask — alive, doing what, since when — and the tail below it is
+ * evidence, kept to a line each so a peek costs the caller a screen, not a
+ * conversation.
+ */
+function renderChatPeek(data: Record<string, unknown>, transcript: readonly unknown[]): string {
+  const waitingOn = data["waitingOn"];
+  const unreadable = data["unreadable"];
+  const header = [
+    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${
+      typeof waitingOn === "string" ? ` on ${terminalSafeInline(waitingOn)}` : ""
+    }`,
+    `last ${ageText(data["lastActivityAgeMs"])}`,
+    `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
+    ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
+  ].join("  ");
+  return [header, ...transcript.filter(isRecord).map(transcriptLine)].join("\n");
+}
+
+/** One transcript message: how long ago, who, which tools, what it said. */
+function transcriptLine(entry: Record<string, unknown>): string {
+  const tools = Array.isArray(entry["tools"])
+    ? entry["tools"].filter((tool): tool is string => typeof tool === "string")
+    : [];
+  const text = typeof entry["text"] === "string" ? entry["text"] : "";
+  const said = `${tools.length > 0 ? `[${tools.map(terminalSafeInline).join(" ")}]` : ""}${
+    tools.length > 0 && text.length > 0 ? " " : ""
+  }${terminalSafeInline(text)}`;
+  return `${ageText(entry["ageMs"])}  ${terminalSafeInline(entry["role"])}${said.length > 0 ? `  ${said}` : ""}`;
+}
+
 /** The worktree.status snapshot: branch→base, worktree path, dirty/sequencer/sync. */
 function renderWorktreeStatus(data: Record<string, unknown>): string {
   const branch = typeof data["branch"] === "string" ? data["branch"] : "(detached)";
@@ -337,6 +383,10 @@ function renderStableLines(command: string, data: unknown): string | null {
   }
   if (command === "session.peek") {
     if (typeof data["session"] !== "string" || typeof data["status"] !== "string") return null;
+    // A chat peek is told apart by what it carries, not by a `kind` word: the
+    // terminal reply is a status line plus raw output and stays byte-for-byte
+    // what it always was, while a chat's is an activity line plus a transcript.
+    if (Array.isArray(data["transcript"])) return renderChatPeek(data, data["transcript"]);
     const output = typeof data["output"] === "string" ? data["output"] : "";
     return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
   }

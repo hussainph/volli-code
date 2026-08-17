@@ -37,7 +37,7 @@ Inspect state before mutating it: read the board and the target ticket first, so
 
 - \`volli board\` for the column overview; \`volli ticket show <id>\` for one ticket.
 - Add \`--json\` to anything you intend to parse; the plain output is for reading.
-- Keep \`volli session peek\` narrow — raw terminal output consumes your context.
+- \`volli session peek\` reads any id \`session list\` prints: a terminal's output, or a chat's activity and transcript tail. Keep it narrow — output consumes your context.
 
 ## Comment vs move vs signal
 
@@ -57,7 +57,7 @@ export const VOLLI_ORCHESTRATION = `# Volli orchestration
 4. Do not opt out of worktree isolation unless instructed.
 5. Do not chain-spawn work merely because a ticket entered Doing.
 6. Use exact body edits for existing prose so stale reads fail instead of clobbering changes.
-7. Keep session peeks narrow; raw terminal output consumes the caller's context.
+7. Peek a session (terminal or chat) to learn whether it is alive, what it is doing, and when it last moved; keep peeks narrow, because their output consumes the caller's context.
 `;
 
 /**

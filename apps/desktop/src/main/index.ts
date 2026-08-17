@@ -56,7 +56,7 @@ import { getTicket } from "./db/tickets-repo";
 import { listAttachments } from "./db/attachments-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { createDesktopSessionEngine } from "./session-control";
-import { createDesktopSessionRuntime } from "./session-runtime";
+import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
 import { describeDbOpenFailure } from "./db-open-failure";
@@ -693,13 +693,19 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  // One store for the launch: the runtime writes and replays through it, and
+  // `session peek` reads a chat Session's transcript tail through it straight
+  // off the ledger, without a runtime in the middle (VC-79).
+  const transcriptDirectory = join(app.getPath("userData"), "session-transcripts");
+  const transcriptArtifacts = createFileTranscriptArtifactStore(transcriptDirectory);
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
-          transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
+          transcriptDirectory,
           executor: piRuntimeHost.adapter,
           sessionEngine,
+          artifacts: transcriptArtifacts,
         })
       : null;
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
@@ -1492,6 +1498,9 @@ app.whenReady().then(async () => {
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
+          // The chat half of the same verb (VC-79): a peek at a structured
+          // Session renders its transcript tail from these artifacts.
+          readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
           notify: (title, message) => new Notification({ title, body: message }).show(),
           // The product Session start route (VC-13): the same facade the
           // renderer's `sessions.create` RPC rides — no parallel creation
