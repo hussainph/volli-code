@@ -902,16 +902,17 @@ export const ChatTurn = React.memo(function ChatTurn({
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
         {skillChips.length > 0 ? (
-          <div className="flex flex-wrap gap-1 pt-2">
+          // The same vocabulary as the attach-time receipt above: a skill name
+          // is a mono outline Badge behind a book icon, wherever it appears.
+          <div
+            className="flex flex-wrap items-center gap-1.5 pt-2 text-ui text-muted-foreground"
+            aria-label="Skills delivered with this message"
+          >
+            <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
             {skillChips.map((name) => (
-              <span
-                key={name}
-                title="Skill delivered with this message"
-                className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
-              >
-                <BookOpenIcon className="size-3" aria-hidden />
+              <Badge key={name} variant="outline" className="font-mono">
                 {name}
-              </span>
+              </Badge>
             ))}
           </div>
         ) : null}

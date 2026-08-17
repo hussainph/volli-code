@@ -1110,6 +1110,27 @@ describe("steerQueuedMessage", () => {
     expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
   });
 
+  // The other half of the strip's VC-49 round trip: `heldStrip` keeps a held
+  // row's skill resources, and this pins that a steer's rebuilt submit row
+  // carries them too — a `/skill` message queued behind a live turn delivers
+  // what it resolved to at ⏎, not bare text.
+  it("hands a held row's skill resources to submit when steered", async () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    const state = steerHarness({
+      held: [{ ...heldMessage("q1", "/logos go", "unsent"), resources }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "/logos go", resources });
+        expect(delivery).toBe("steer");
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+
+    expect(state.held()).toEqual([]);
+    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
+  });
+
   it("restores a refused queue-only row between its original neighbors", async () => {
     const state = steerHarness({
       queue: [

@@ -215,6 +215,12 @@ export const SessionComposer = React.memo(function SessionComposer({
     onSubmit(expanded.text, intent, expanded.resources);
   };
 
+  // Pulling a row back into the box deliberately drops its resolved skill
+  // resources: only text can live in a textarea, and the text still holds
+  // `/slug`, so `send` re-resolves it at the next ⏎. That recovery holds only
+  // while a skill of that name is still installed — rename or remove it between
+  // edit and re-submit and the reference goes out plain, exactly as if the user
+  // had typed it fresh against today's skills directory.
   const editQueued = (id: string) => {
     const taken = takeQueued(queued, id);
     if (!taken) return;
