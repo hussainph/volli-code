@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  abandonAcceptedUpdateInstall,
+  beginAcceptedUpdateInstall,
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitAlreadyRefused,
@@ -9,6 +11,7 @@ import {
   registerAcceptedQuitCoordinator,
   refuseQuit,
   unsavedDocumentNames,
+  updateInstallQuitInFlight,
 } from "./quit-gate";
 import { registerAgentSocketWillQuit } from "./agent-socket";
 
@@ -93,6 +96,24 @@ describe("quitConfirmDetail", () => {
     expect(quitConfirmDetail(names)).toBe(
       "6 files have unsaved changes (a.py, b.py, c.py, d.py, and 2 more). Quitting will discard them.",
     );
+  });
+});
+
+describe("update-install quit latch (VC-59)", () => {
+  afterEach(() => {
+    abandonAcceptedUpdateInstall();
+  });
+
+  it("is down until the install dialog's confirm raises it", () => {
+    expect(updateInstallQuitInFlight()).toBe(false);
+    beginAcceptedUpdateInstall();
+    expect(updateInstallQuitInFlight()).toBe(true);
+  });
+
+  it("abandon lowers it again — a failed quitAndInstall must not leave a plain ⌘Q gateless", () => {
+    beginAcceptedUpdateInstall();
+    abandonAcceptedUpdateInstall();
+    expect(updateInstallQuitInFlight()).toBe(false);
   });
 });
 

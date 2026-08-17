@@ -43,7 +43,10 @@ import {
   type SessionRpcIpcResponse,
 } from "@volli/shared";
 
-import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import {
+  registerDegradedSessionRpcIpcHandlers,
+  registerSessionRpcIpcHandlers,
+} from "./session-rpc-ipc";
 
 interface FakeSender {
   readonly id: number;
@@ -582,103 +585,24 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
-  it("routes product-owned Ticket Session start over IPC", async () => {
+  it("routes the create-only Session start over IPC, answering identity alone", async () => {
+    // VC-16's optimistic open: this is the fast half of a chat start, and what
+    // makes it fast is that it answers a Session id and nothing about an
+    // executor — the attach that materializes the worktree is its own route.
+    // One procedure for both Roles: the nullable ticketId IS the Role.
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
-      startTicketSession: async (input) => {
-        calls.push(input);
-        return {
-          sessionId: "session-1",
-          state: "ready",
-          receipt: null,
-          throughSequence: 6,
-        };
-      },
-    });
-    const input = {
-      operationId: "operation-1",
-      projectId: "project-1",
-      ticketId: "ticket-1",
-      title: "VC-1",
-    };
-
-    await expect(invoke(sender(), { procedure: "ticketSessions.start", input })).resolves.toEqual({
-      ok: true,
-      data: { sessionId: "session-1", state: "ready", receipt: null, throughSequence: 6 },
-    });
-    expect(calls).toEqual([input]);
-    await registration.close();
-  });
-
-  it("routes product-owned reattach and temporary project starts over IPC", async () => {
-    const fixture = runtimeFixture();
-    const calls: unknown[] = [];
-    const answer = {
-      sessionId: "session-1",
-      state: "ready" as const,
-      receipt: null,
-      throughSequence: 6,
-    };
-    const registration = registerSessionRpcIpcHandlers({
-      runtime: fixture.runtime,
-      attachTicketSession: async (input) => {
-        calls.push(["ticket.attach", input]);
-        return answer;
-      },
-      startProjectSession: async (input) => {
-        calls.push(["project.start", input]);
-        return answer;
-      },
-      attachProjectSession: async (input) => {
-        calls.push(["project.attach", input]);
-        return answer;
-      },
-    });
-
-    await invoke(sender(), {
-      procedure: "ticketSessions.attach",
-      input: { operationId: "ticket-retry", sessionId: "session-1" },
-    });
-    await invoke(sender(), {
-      procedure: "projectSessions.start",
-      input: { operationId: "project-start", projectId: "project-1", title: "Scratch" },
-    });
-    await invoke(sender(), {
-      procedure: "projectSessions.attach",
-      input: { operationId: "project-retry", sessionId: "session-2" },
-    });
-
-    expect(calls).toEqual([
-      ["ticket.attach", { operationId: "ticket-retry", sessionId: "session-1" }],
-      ["project.start", { operationId: "project-start", projectId: "project-1", title: "Scratch" }],
-      ["project.attach", { operationId: "project-retry", sessionId: "session-2" }],
-    ]);
-    await registration.close();
-  });
-
-  it("routes the create-only Session starts over IPC, answering identity alone", async () => {
-    // VC-16's optimistic open: these two are the fast half of a chat start, and
-    // what makes them fast is that they answer a Session id and nothing about
-    // an executor — the attach that materializes the worktree is its own route.
-    const fixture = runtimeFixture();
-    const calls: unknown[] = [];
-    const registration = registerSessionRpcIpcHandlers({
-      runtime: fixture.runtime,
-      createTicketSession: async (input) => {
-        calls.push(["ticket.create", input]);
-        return { sessionId: "session-1" };
-      },
-      createProjectSession: async (input) => {
-        calls.push(["project.create", input]);
-        return { sessionId: "session-2" };
+      createSession: async (input) => {
+        calls.push(["create", input]);
+        return { sessionId: input.ticketId === null ? "session-2" : "session-1" };
       },
     });
 
     await expect(
       invoke(sender(), {
-        procedure: "ticketSessions.create",
+        procedure: "sessions.create",
         input: {
           operationId: "ticket-create",
           projectId: "project-1",
@@ -689,14 +613,19 @@ describe("registerSessionRpcIpcHandlers", () => {
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-1" } });
     await expect(
       invoke(sender(), {
-        procedure: "projectSessions.create",
-        input: { operationId: "project-create", projectId: "project-1", title: "Scratch" },
+        procedure: "sessions.create",
+        input: {
+          operationId: "project-create",
+          projectId: "project-1",
+          ticketId: null,
+          title: "Scratch",
+        },
       }),
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-2" } });
 
     expect(calls).toEqual([
       [
-        "ticket.create",
+        "create",
         {
           operationId: "ticket-create",
           projectId: "project-1",
@@ -705,11 +634,64 @@ describe("registerSessionRpcIpcHandlers", () => {
         },
       ],
       [
-        "project.create",
-        { operationId: "project-create", projectId: "project-1", title: "Scratch" },
+        "create",
+        { operationId: "project-create", projectId: "project-1", ticketId: null, title: "Scratch" },
       ],
     ]);
     await registration.close();
+  });
+
+  it("routes the one Session reattach over IPC — no Role in the request", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      attachSession: async (input) => {
+        calls.push(["attach", input]);
+        return { sessionId: "session-1", state: "ready", receipt: null, throughSequence: 6 };
+      },
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "sessions.attach",
+        input: { operationId: "retry-1", sessionId: "session-1" },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { sessionId: "session-1", state: "ready", receipt: null, throughSequence: 6 },
+    });
+    expect(calls).toEqual([["attach", { operationId: "retry-1", sessionId: "session-1" }]]);
+    await registration.close();
+  });
+});
+
+// The degraded bridge (VC-76): a boot whose database never opened claims the
+// channel and answers with the recorded reason, instead of letting the
+// renderer's invoke reject with Electron's nameless "No handler registered".
+describe("registerDegradedSessionRpcIpcHandlers", () => {
+  it("answers every request with the reason the runtime is down", async () => {
+    const reason =
+      "The local database failed to open: better-sqlite3 was built for a different Node ABI.";
+    registerDegradedSessionRpcIpcHandlers(reason);
+
+    await expect(
+      invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "session-1" } }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INTERNAL_SERVER_ERROR", message: reason },
+    });
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.inspect", input: {} }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INTERNAL_SERVER_ERROR", message: reason },
+    });
+  });
+
+  it("claims the cancel channel as an inert listener — nothing to stop, nothing to throw", () => {
+    registerDegradedSessionRpcIpcHandlers("db is down");
+    expect(() => cancel({ sender: sender() }, "subscription-1")).not.toThrow();
   });
 });
 

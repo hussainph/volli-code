@@ -73,12 +73,14 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
+  appendPromptResources,
   askChoice,
   askOffer,
   askInteractionId,
   askUserInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
+  readSkillResources,
   type AgentRuntime,
   type DeliveryOutcome,
   type ModelSelection,
@@ -98,7 +100,7 @@ import {
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
+import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /**
  * The one adapter id. Pi is the structured product's single target executor.
@@ -141,8 +143,12 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
   fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
 };
 
-/** The coding tools this slice loads — with no gate and no sandbox, the only bound. */
-const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
+/**
+ * The coding tools this slice loads — with no gate and no sandbox, the only
+ * bound. Exported for the `prompt.baseline` diagnostic, which must price the
+ * authority layer over the same tool list a real attach names.
+ */
+export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
@@ -989,7 +995,17 @@ class PiBinding implements BindingHandle {
   }
 }
 
-/** Pi takes one string; a `UIMessage` may carry several text parts. */
+/**
+ * Pi takes one string; a `UIMessage` may carry several text parts — and,
+ * since VC-49, skill resource parts. This is where the two halves of such a
+ * message become the delivered prompt: the user's text first and verbatim
+ * (its `/skill` reference intact, mid-sentence included), then each skill
+ * body as its own delimited RESOURCE block, adjacent to the text and never
+ * spliced into it.
+ */
 function messageText(message: UIMessage): string {
-  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n\n");
+  return appendPromptResources(text, readSkillResources(message.parts));
 }

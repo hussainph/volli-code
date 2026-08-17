@@ -11,6 +11,7 @@ import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
 import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
+import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
 import {
@@ -26,6 +27,7 @@ import { useTicketDialogs } from "@renderer/components/board/ticket-dialog-host"
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
@@ -34,7 +36,11 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
+import { withLabelToggled } from "@renderer/components/ticket/label-picker-model";
 import { latestResumableSession } from "@renderer/components/ticket/session-history";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
 import {
   launchAdapter,
@@ -64,8 +70,56 @@ const PRIORITY_ICON = {
 } as const;
 
 /**
- * The non-destructive ticket context menu (Move to · Priority), shared by the
- * board's cards and the list view's rows so both surfaces stay in lockstep.
+ * The Labels submenu's rows: the project's label vocabulary as check items,
+ * ticked for the labels this ticket carries, each toggle writing the whole set
+ * back through `setLabels` (the same store action the rail's editor uses).
+ *
+ * A menu has no field, so this offers the vocabulary and nothing else —
+ * inventing a label is the picker's job, in the rail or in the composer, where
+ * a typed name can be checked against the names that already exist. Offering
+ * only what the project HAS is the same guarantee from the other side.
+ *
+ * Its own component because it reads the project's whole ticket slice, and
+ * every card on the board holds one of these menus: rendered inside the
+ * submenu's content, that subscription exists only while the submenu is open.
+ */
+function TicketLabelItems({ ticket, projectId }: { ticket: Ticket; projectId: string }) {
+  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
+  const vocabulary = useLabelVocabulary(projectId);
+
+  if (vocabulary.length === 0) return <div className={EMPTY_INLINE}>No labels</div>;
+
+  return (
+    <>
+      {vocabulary.map((name) => (
+        <ContextMenuCheckboxItem
+          key={name}
+          checked={ticket.labels.includes(name)}
+          // Multi-select: labelling a ticket `bug` + `docs` is one gesture, so
+          // a tick must not dismiss the menu it was ticked in.
+          onSelect={(event) => event.preventDefault()}
+          onCheckedChange={() =>
+            void useBoardStore
+              .getState()
+              .setLabels(ticket.id, withLabelToggled(ticket.labels, name))
+          }
+        >
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: resolveLabelColor(projectLabels, name) }}
+          />
+          {name}
+        </ContextMenuCheckboxItem>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The non-destructive ticket context menu (Move to · Priority · Labels), shared
+ * by the board's cards and the list view's rows so both surfaces stay in
+ * lockstep.
  * `children` is the trigger target rendered `asChild` — the card body or list
  * row supplies its own layout and this wraps it with the menu.
  *
@@ -170,6 +224,12 @@ export function TicketContextMenu({
                 ) : null}
               </ContextMenuItem>
             ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger icon={TagIcon}>Labels</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <TicketLabelItems ticket={ticket} projectId={projectId} />
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSeparator />

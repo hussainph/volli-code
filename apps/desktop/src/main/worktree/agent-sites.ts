@@ -93,6 +93,30 @@ export async function agentTurnOpenWithin(
 }
 
 /**
+ * How many Sessions have a turn open right now, anywhere — the whole plane,
+ * not one directory. The install dialog (VC-59) names this count before
+ * promising a restart, so it applies {@link agentTurnOpenWithin}'s exact
+ * busy rule to every binding: a turn is busy, an idle attachment is not, and
+ * an unreadable Session is reported and counted as "no" (fail-open) rather
+ * than blocking the one action — an update — that might fix it.
+ */
+export async function countOpenAgentTurns(
+  runtime: Pick<AgentSiteRuntime, "openNativeBindings" | "projection">,
+  onUnreadable: (sessionId: string, error: unknown) => void,
+): Promise<number> {
+  let open = 0;
+  for (const binding of runtime.openNativeBindings()) {
+    try {
+      const { projection } = await runtime.projection({ sessionId: binding.sessionId });
+      if (projection.turnActive) open += 1;
+    } catch (error) {
+      onUnreadable(binding.sessionId, error);
+    }
+  }
+  return open;
+}
+
+/**
  * Ends every binding rooted at `directory`, for a checkout that is about to
  * stop existing.
  *

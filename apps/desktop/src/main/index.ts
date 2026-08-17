@@ -18,6 +18,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   diffManagedContent,
+  displayTicketId,
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
@@ -35,6 +36,8 @@ import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/share
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { ManagedConflict } from "./harness-install";
 import {
+  abandonAcceptedUpdateInstall,
+  beginAcceptedUpdateInstall,
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitAlreadyRefused,
@@ -43,6 +46,7 @@ import {
   registerAcceptedQuitCoordinator,
   refuseQuit,
   unsavedDocumentNames,
+  updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
@@ -56,15 +60,15 @@ import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import { describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
-import { createTicketSessions } from "./session-runtime/ticket-sessions";
-import { createProjectSessions } from "./session-runtime/project-sessions";
 import {
+  createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
-} from "./session-runtime/structured-sessions";
+} from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
   assertDefaultModelAvailable,
@@ -73,7 +77,10 @@ import {
   writeHiddenModels,
   writeModelAccessDefault,
 } from "./session-runtime/model-access-preferences";
-import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import {
+  registerDegradedSessionRpcIpcHandlers,
+  registerSessionRpcIpcHandlers,
+} from "./session-rpc-ipc";
 import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
@@ -93,9 +100,15 @@ import {
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
+  broadcastUpdateState,
 } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
-import { agentTurnOpenWithin, releaseAgentSites as releaseWorktreeAgentSites } from "./worktree";
+import { registerUpdateIpcHandlers } from "./update-ipc";
+import {
+  agentTurnOpenWithin,
+  countOpenAgentTurns,
+  releaseAgentSites as releaseWorktreeAgentSites,
+} from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
@@ -347,6 +360,13 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   let closeConfirmed = false;
   mainWindow.on("close", (event) => {
     if (closeConfirmed) return;
+    // An accepted update install (VC-59): its dialog already named the unsaved
+    // drafts and busy terminals this close destroys, and Electron's native
+    // quitAndInstall closes every window BEFORE before-quit fires — a confirm
+    // here would be the second prompt the one-dialog decision forbids, and a
+    // Cancel would leave Squirrel already instructed to relaunch over a still-
+    // running app.
+    if (updateInstallQuitInFlight()) return;
     // Unsaved editor drafts are asked about FIRST and separately from the busy
     // terminals: closing the window destroys the renderer holding those drafts
     // exactly as finally as quitting does, and unlike a killed shell there is
@@ -531,7 +551,11 @@ app.whenReady().then(async () => {
     mkdirSync(dirname(dbPath), { recursive: true });
     dbHandle = { ok: true, db: openVolliDb(dbPath) };
   } catch (error) {
-    dbHandle = { ok: false, error: errorMessage(error) };
+    // The recorded reason is what every degraded handler answers with, so it
+    // is classified here, once: a native-ABI failure names the Node
+    // incompatibility and the fix instead of a bare NODE_MODULE_VERSION
+    // number (VC-76).
+    dbHandle = { ok: false, error: describeDbOpenFailure(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
@@ -579,9 +603,28 @@ app.whenReady().then(async () => {
           // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
           // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
           // directory (`harness-runtime.ts`).
-          executionEnvFactory: async (workspacePath) => {
+          executionEnvFactory: async (workspacePath, identity) => {
             await loginPathBootstrap.apply();
-            return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+            // The Session's own name rides beside the PATH recovery:
+            // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
+            // exactly as `agentSessionEnv` exports them into a spawned PTY —
+            // what lets `volli session done`/`blocked` resolve their context
+            // and makes socket writes attribute to the Session (VC-51). The
+            // display id is looked up per attachment, so a Ticket renamed by a
+            // prefix change is right on the next attach.
+            const ticket =
+              identity.ticketId === null ? null : getTicket(dbHandle.db, identity.ticketId);
+            const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+            return piExecutionEnv(workspacePath, {
+              pathPrefixes: [runtimePaths.binDir],
+              identity: {
+                sessionId: identity.sessionId,
+                ticketDisplayId:
+                  ticket && ticketProject
+                    ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+                    : null,
+              },
+            });
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -740,20 +783,26 @@ app.whenReady().then(async () => {
           },
         }
       : null;
-  const ticketSessions =
+  const sessions =
     sessionRuntime !== null &&
     piRuntimeHost !== null &&
     sessionDb !== null &&
     sessionSkills !== null
-      ? createTicketSessions({
+      ? createSessions({
           runtime: sessionRuntime,
-          // The Ticket purpose — the execution default — falling back to the
-          // global one when no explicit ticket choice exists (VC-53).
-          readDefaultModel: () => resolveDefaultModel(readModelAccessDefaults(sessionDb), "ticket"),
+          // Role in, purpose out (VC-53): a Ticket Session resolves the
+          // execution default, a project chat the orchestration one, and each
+          // inherits the project default when it holds no explicit choice of
+          // its own — stated by `resolveDefaultModel`, never substituted.
+          readDefaultModel: (role) =>
+            resolveDefaultModel(
+              readModelAccessDefaults(sessionDb),
+              role === "ticket" ? "ticket" : "global",
+            ),
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
-          readBornTicketless: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
+          readModelSelection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
@@ -772,22 +821,6 @@ app.whenReady().then(async () => {
               actor,
             );
           },
-        })
-      : null;
-  const projectSessions =
-    sessionRuntime !== null &&
-    piRuntimeHost !== null &&
-    sessionDb !== null &&
-    sessionSkills !== null
-      ? createProjectSessions({
-          runtime: sessionRuntime,
-          // The global purpose: orchestration — Home/project chats (VC-53).
-          readDefaultModel: () => resolveDefaultModel(readModelAccessDefaults(sessionDb), "global"),
-          readBornTicketless: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
-          readModelSelection: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
-          skills: sessionSkills,
         })
       : null;
   const sessionRpc =
@@ -817,13 +850,21 @@ app.whenReady().then(async () => {
                   writeHiddenModels(sessionDb, hidden, Date.now());
                 }
               : undefined,
-          startTicketSession: ticketSessions?.start,
-          createTicketSession: ticketSessions?.create,
-          attachTicketSession: ticketSessions?.attach,
-          startProjectSession: projectSessions?.start,
-          createProjectSession: projectSessions?.create,
-          attachProjectSession: projectSessions?.attach,
+          createSession: sessions?.create,
+          attachSession: sessions?.attach,
         });
+  // No runtime, no bridge — but the channels are still claimed, answering
+  // every request with the reason the runtime is down (in practice: the
+  // database open recorded above, Node-ABI classification included). Left
+  // unregistered, the renderer's Model Access page would toast Electron's
+  // nameless "No handler registered" instead of the actual problem (VC-76).
+  if (sessionRuntime === null) {
+    registerDegradedSessionRpcIpcHandlers(
+      dbHandle.ok
+        ? "The agent runtime is unavailable."
+        : `The local database failed to open: ${dbHandle.error}`,
+    );
+  }
   // Signing in is a Model Access task, not a Session one, so it gets its own
   // surface rather than a Session RPC namespace — see the contract in
   // `@volli/shared`'s VolliModelAccessIpcContract for why a channel that can
@@ -832,6 +873,13 @@ app.whenReady().then(async () => {
     piModelAccess === null
       ? null
       : new ModelAccessSignInService({ pi: piSignIn(piModelAccess.models) }),
+    // When the runtime is down because the database never opened, the sign-in
+    // surface must answer with the recorded (already-classified) reason — a
+    // Node-ABI failure names the incompatibility, not a generic "unavailable"
+    // (VC-76).
+    dbHandle.ok
+      ? undefined
+      : `Sign-in is unavailable — the local database failed to open: ${dbHandle.error}`,
   );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
@@ -1191,6 +1239,10 @@ app.whenReady().then(async () => {
   // teardown until this gate and the terminal gate have recorded their verdict.
   app.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
+    // An accepted update install already carried the unsaved-drafts warning in
+    // its own dialog (VC-59's one-prompt decision) — asking again here would
+    // stack a second modal on an answer the user has given.
+    if (updateInstallQuitInFlight()) return;
     const names = unsavedDocumentNames();
     const step = planUnsavedQuit({
       names,
@@ -1248,12 +1300,38 @@ app.whenReady().then(async () => {
   // Wired OUTSIDE the dbHandle.ok block: a broken db must not also strand
   // the install on a stale build (an update may well be what fixes it), so
   // that case just falls back to the default prerelease policy (off).
-  startAutoUpdate({
+  const autoUpdate = startAutoUpdate({
     isPackaged: app.isPackaged,
     updater: autoUpdater,
     allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
+    currentVersion: app.getVersion(),
     notify: (title, body) => new Notification({ title, body }).show(),
     log: (line) => console.info(line),
+    onStateChange: broadcastUpdateState,
+    // The double-notify guard: with a window open the sidebar badge/dialog
+    // owns the "downloaded" announcement; the native notification only speaks
+    // when no window is left to show it (macOS keeps the app alive).
+    hasUpdateSurface: () =>
+      BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+  });
+  // The sidebar's door onto that updater (VC-59) — same guarded invoke
+  // surface as everything else, and like startAutoUpdate itself deliberately
+  // OUTSIDE dbHandle.ok: the update UI must survive exactly the broken-db
+  // case the updater was built to survive. The live-work readers answer from
+  // what exists this launch — no session runtime truthfully means no open
+  // agent turns.
+  registerUpdateIpcHandlers({
+    update: autoUpdate,
+    busyCommands: () => ptyManager.busySessions().map((busy) => busy.process),
+    openAgentTurns: () =>
+      sessionRuntime === null
+        ? Promise.resolve(0)
+        : countOpenAgentTurns(sessionRuntime, (sessionId, error) => {
+            console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+          }),
+    unsavedDrafts: unsavedDocumentNames,
+    beginInstall: beginAcceptedUpdateInstall,
+    abandonInstall: abandonAcceptedUpdateInstall,
   });
 
   let shimPath = join(runtimePaths.binDir, "volli");
@@ -1437,11 +1515,27 @@ app.whenReady().then(async () => {
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
-          // The product Ticket Session start route (VC-13): the same facade the
-          // renderer's `ticketSessions.start` RPC rides — no parallel creation
+          // The product Session start route (VC-13): the same facade the
+          // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
-          ...(ticketSessions !== null ? { ticketSessions } : {}),
+          ...(sessions !== null ? { sessions } : {}),
+          // Model discovery (VC-78): `model list` reads the same Model Access
+          // snapshot every other surface does — never a parallel provider
+          // probe, never raw provider files. The door bounds the read itself
+          // (abort + race), so a hung probe cannot hang the CLI verb.
+          ...(piRuntimeHost !== null
+            ? {
+                inspectModelAccess: (input: { signal: AbortSignal }) =>
+                  piRuntimeHost.inspectModelAccess(input),
+              }
+            : {}),
+          // `prompt baseline` (VC-66) prices the index through the SAME port a
+          // real start records it through — nothing injected, so the answer is
+          // the fresh-session default. Absent with the runtime, same as above.
+          ...(sessionSkills !== null
+            ? { skillsIndex: (projectId: string) => sessionSkills.index(projectId, []) }
+            : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.

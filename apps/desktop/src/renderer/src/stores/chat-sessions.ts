@@ -219,7 +219,6 @@ export function createChatSessionsStore(
             const attached = await edge.attachSession({
               operationId: edge.newCommandId(),
               sessionId,
-              bornTicketless: input.ticketId === null,
             });
             const refusal = rejectedReceipt(attached);
             // A ticketed refusal is reported by durable Ticket Attention on the

@@ -18,7 +18,7 @@
  */
 import type { SessionExecutionVenue, SessionObservation } from "@volli/shared";
 
-import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
+import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /** Exactly what the sweep reads of an attachment; a full projection satisfies it. */
 export interface BootRecoveryAttachment {

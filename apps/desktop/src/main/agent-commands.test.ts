@@ -4,14 +4,19 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { AgentRequest, AgentResponse, DoctorCheck, HarnessId } from "@volli/shared";
+import type {
+  AgentRequest,
+  AgentResponse,
+  DoctorCheck,
+  HarnessId,
+  ModelAccessSnapshot,
+} from "@volli/shared";
 import type {
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionStartedNotice,
 } from "../ipc/contract";
-import type { TicketSessionStartInput } from "./session-runtime/ticket-sessions";
-import { StructuredSessionsError } from "./session-runtime/structured-sessions";
+import { StructuredSessionsError, type SessionStartInput } from "./session-runtime/sessions";
 
 import { createAttachment } from "./db/attachments-repo";
 import { listHarnessChannels } from "./db/harness-channel-repo";
@@ -34,6 +39,7 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
+import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
 import type { SessionEngine } from "@volli/session-engine";
@@ -1292,8 +1298,9 @@ describe("agent command service", () => {
       args: {},
       ctx: { cwd: "/repo/volli", env: {} },
     });
-    // `identify` and `session peek` address that same snapshot, so a Session
-    // absent from it must be unaddressable rather than half-resolved.
+    // Identity resolution is engine-backed (VC-51): a structured Session
+    // exports VOLLI_SESSION too, so `identify` answers for it even though the
+    // addressable terminal snapshot (peek/resume/rename) never contains it.
     const identify = await service.execute({
       v: 1,
       cmd: "identify",
@@ -1317,9 +1324,16 @@ describe("agent command service", () => {
       },
     });
     expect(JSON.stringify(sessions)).not.toContain(structured.session.id);
-    // `identify` and `session peek` still address terminals only — a chat has
-    // no PTY to peek and exports no VOLLI_SESSION of its own.
-    expect(identify).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    // A ticketless structured Session identifies against its project root: it
+    // has no PTY cwd and no worktree, and that is the directory it runs in.
+    expect(identify).toMatchObject({
+      ok: true,
+      data: {
+        session: structured.session.id.slice(0, 8),
+        ticket: null,
+        worktreePath: "/repo/volli",
+      },
+    });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
@@ -1602,6 +1616,102 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  it("accepts a lifecycle signal from a structured session with no terminal attachment (VC-51)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    // A structured (chat) Session: created through the engine, never given a
+    // terminal attachment — exactly what `volli session start` produces.
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const sessionId = created.session.id;
+    const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+      onMutation: (change) => mutations.push(change),
+    });
+
+    const done = await service.execute({
+      v: 1,
+      cmd: "session.done",
+      args: { reason: "Implementation finished" },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+    });
+
+    expect(done).toMatchObject({
+      ok: true,
+      data: { signal: "done", reason: "Implementation finished", recorded: true },
+    });
+    expect((await sessionEngine.getSession({ sessionId }))?.signal).toMatchObject({
+      signal: "done",
+      reason: "Implementation finished",
+    });
+    expect(mutations).toEqual([
+      { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
+    ]);
+  });
+
+  it("attributes a socket write from a structured session to the session, not the user (VC-51)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+    });
+
+    const comment = await service.execute({
+      v: 1,
+      cmd: "ticket.comment",
+      args: { id: "VC-1", message: "Findings recorded." },
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+    const identified = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/outside", env: { session: created.session.id } },
+    });
+
+    // Before VC-51 this failed SESSION_NOT_FOUND against the terminal-only
+    // snapshot, and a chat session's comment attributed as "user" with no
+    // session at all.
+    expect(comment).toMatchObject({
+      ok: true,
+      data: { comment: { actor: "session" } },
+    });
+    expect(
+      (comment as { data: { comment: { session: string | null } } }).data.comment.session,
+    ).not.toBeNull();
+    expect(identified).toMatchObject({
+      ok: true,
+      data: { ticket: "VC-1", project: { prefix: "VC" } },
+    });
   });
 
   describe("session.link (issue #78)", () => {
@@ -3191,6 +3301,143 @@ describe("doctor", () => {
   });
 });
 
+describe("prompt.baseline", () => {
+  const INDEX_RESOURCE = {
+    name: "skills index",
+    text: "- svg (.agents/skills/svg/SKILL.md): draws vectors",
+  };
+
+  function baselineService(
+    options: Partial<AgentCommandServiceOptions> = {},
+  ): (args: Record<string, unknown>) => Promise<AgentResponse> {
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      skillsIndex: async () => INDEX_RESOURCE,
+      ...options,
+    });
+    return (args) =>
+      service.execute({
+        v: 1,
+        cmd: "prompt.baseline",
+        args,
+        ctx: { cwd: "/outside", env: {} },
+      });
+  }
+
+  it("refuses without the index port rather than pricing a prompt it knows is incomplete", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0" });
+    const response = await service.execute({
+      v: 1,
+      cmd: "prompt.baseline",
+      args: { project: "/repo/volli" },
+      ctx: { cwd: "/outside", env: {} },
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
+  });
+
+  it("prices a fresh project chat: every composed layer, the index, the Brief, and an honest total", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Volli Code", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const asked: string[] = [];
+    const response = await baselineService({
+      skillsIndex: async (projectId) => {
+        asked.push(projectId);
+        return INDEX_RESOURCE;
+      },
+    })({ project: "/repo/volli" });
+
+    expect(asked).toEqual(["p1"]);
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error("expected success");
+    const data = response.data as Record<string, unknown>;
+    expect(data["project"]).toEqual({ name: "Volli Code", prefix: "VC" });
+    expect(data["role"]).toBe("project");
+    expect(data["workspace"]).toBe("/repo/volli");
+    expect(data["charsPerToken"]).toBe(4);
+    const sections = data["sections"] as { id: string; chars: number; tokens: number }[];
+    expect(sections.map((section) => section.id)).toEqual([
+      "operating",
+      "role",
+      "authority",
+      "workspace",
+      "resources-header",
+      "resource:skills index",
+      "brief",
+    ]);
+    for (const section of sections) {
+      expect(section.chars).toBeGreaterThan(0);
+      expect(section.tokens).toBe(Math.ceil(section.chars / 4));
+    }
+    const system = data["system"] as { chars: number; tokens: number };
+    const brief = data["brief"] as { chars: number; tokens: number };
+    const total = data["total"] as { chars: number; tokens: number };
+    expect(total.chars).toBe(system.chars + brief.chars);
+    expect(total.tokens).toBe(system.tokens + brief.tokens);
+    // The Brief priced is the project Brief a real ticketless start composes.
+    expect(brief.chars).toBeGreaterThan(
+      composeProjectBrief({ project: { path: "/repo/volli" } }).length,
+    );
+    expect(data["excluded"]).toBe(
+      "tool definitions, the user's first message, and provider overhead",
+    );
+  });
+
+  it("a null index is a real, smaller baseline — no resources section at all", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    const response = await baselineService({ skillsIndex: async () => null })({
+      project: "/repo/volli",
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error("expected success");
+    const sections = (response.data as Record<string, unknown>)["sections"] as { id: string }[];
+    expect(sections.map((section) => section.id)).toEqual([
+      "operating",
+      "role",
+      "authority",
+      "workspace",
+      "brief",
+    ]);
+  });
+
+  it("--ticket prices a Ticket Session in its stamped worktree, Brief included", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t1",
+        ticketNumber: 12,
+        title: "Ship CLI",
+        worktreePath: "/worktrees/VC-12-ship-cli",
+        branch: "volli/VC-12-ship-cli",
+      }),
+    );
+    const response = await baselineService()({ ticket: "VC-12" });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error("expected success");
+    const data = response.data as Record<string, unknown>;
+    expect(data["role"]).toBe("ticket");
+    expect(data["workspace"]).toBe("/worktrees/VC-12-ship-cli");
+    const sections = (data["sections"] as { id: string }[]).map((section) => section.id);
+    expect(sections).toContain("resource:skills index");
+    expect(sections).toContain("brief");
+  });
+
+  it("refuses an unknown ticket the way every ticket verb does", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    const response = await baselineService()({ ticket: "VC-99" });
+    expect(response).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
+  });
+});
+
 describe("composeProjectBrief", () => {
   it("names the ticketless Session, its project root, and the one CLI instruction", () => {
     expect(composeProjectBrief({ project: { path: "/code/volli" } })).toMatchInlineSnapshot(`
@@ -3203,6 +3450,253 @@ describe("composeProjectBrief", () => {
   it("is deterministic for one project", () => {
     const project = { path: "/code/volli" };
     expect(composeProjectBrief({ project })).toBe(composeProjectBrief({ project }));
+  });
+});
+
+describe("model.list", () => {
+  /**
+   * The door under test with the seam faked out: `model.list` owns the bounded
+   * read, the signed-in filter, and the default report; the snapshot itself is
+   * `inspectPiModelAccess`'s contract, tested beside it in agent-runtime.
+   */
+  function modelListHarness(
+    overrides: {
+      snapshot?: ModelAccessSnapshot;
+      inspect?: AgentCommandServiceOptions["inspectModelAccess"];
+      withoutSeam?: boolean;
+      timeoutMs?: number;
+    } = {},
+  ) {
+    ctx = openTestDb();
+    const snapshot: ModelAccessSnapshot = overrides.snapshot ?? {
+      observedAt: 900,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state: "available",
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: true,
+        },
+        {
+          id: "openai-codex",
+          label: "OpenAI Codex",
+          state: "authentication-required",
+          accountLabel: null,
+          billingSource: "unknown",
+          recovery: { kind: "sign-in" },
+          signIn: [],
+          hasStoredCredential: false,
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus-5",
+          label: "Claude Opus 5",
+          state: "available",
+          reasoningLevels: ["low", "medium", "high"],
+        },
+        {
+          providerId: "anthropic",
+          modelId: "claude-legacy",
+          label: "Claude Legacy",
+          state: "unavailable",
+          reasoningLevels: ["off"],
+        },
+        {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-terra",
+          label: "Terra",
+          state: "authentication-required",
+          reasoningLevels: ["medium", "high", "xhigh"],
+        },
+      ],
+    };
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      ...(overrides.withoutSeam
+        ? {}
+        : { inspectModelAccess: overrides.inspect ?? (async () => snapshot) }),
+      ...(overrides.timeoutMs !== undefined ? { modelAccessTimeoutMs: overrides.timeoutMs } : {}),
+    });
+    const execute = (args: Record<string, unknown> = {}) =>
+      service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: {} } });
+    return { execute };
+  }
+
+  it("lists the signed-in slice by default, with copyable ids and an honest omission count", async () => {
+    const harness = modelListHarness();
+
+    const response = await harness.execute();
+
+    expect(response).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        observedAt: 900,
+        default: null,
+        providers: [
+          {
+            id: "anthropic",
+            label: "Anthropic",
+            state: "available",
+            models: [
+              {
+                model: "anthropic/claude-opus-5",
+                label: "Claude Opus 5",
+                state: "available",
+                reasoning: ["low", "medium", "high"],
+              },
+            ],
+            // claude-legacy is unavailable, so the default view withholds it
+            // — and says so, the same honesty the provider rollup has.
+            omittedModels: 1,
+          },
+        ],
+        omittedProviders: 1,
+      },
+    });
+  });
+
+  it("never leaks credential-adjacent snapshot fields, filtered or not", async () => {
+    const harness = modelListHarness();
+
+    for (const args of [{}, { all: true }]) {
+      const rendered = JSON.stringify(await harness.execute(args));
+      // The provider rows drop everything but identity/state/catalog — the
+      // credential-adjacent fields (stored-credential flags, billing, sign-in
+      // methods) stay behind the app's own surfaces.
+      expect(rendered).not.toContain("hasStoredCredential");
+      expect(rendered).not.toContain("billingSource");
+      expect(rendered).not.toContain("signIn");
+      expect(rendered).not.toContain("accountLabel");
+    }
+  });
+
+  it("shows the whole registered catalog behind --all", async () => {
+    const harness = modelListHarness();
+
+    const response = await harness.execute({ all: true });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        omittedProviders: 0,
+        providers: [
+          {
+            id: "anthropic",
+            omittedModels: 0,
+            models: [
+              { model: "anthropic/claude-opus-5" },
+              { model: "anthropic/claude-legacy", state: "unavailable" },
+            ],
+          },
+          {
+            id: "openai-codex",
+            state: "authentication-required",
+            omittedModels: 0,
+            models: [
+              {
+                model: "openai-codex/gpt-5.6-terra",
+                state: "authentication-required",
+                reasoning: ["medium", "high", "xhigh"],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("reports the configured app default alongside the catalog", async () => {
+    // Only the project default is configured, and `session start` starts a
+    // Ticket Session — so what it reports is the ticket purpose resolving to
+    // the project default it inherits (VC-53), not a second stored value.
+    const harness = modelListHarness();
+    writeModelAccessDefault(
+      ctx.db,
+      "global",
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
+      500,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { default: { model: "anthropic/claude-opus-5", reasoning: "medium" } },
+    });
+  });
+
+  it("reports the Ticket default once one is chosen, not the project default", async () => {
+    // `volli session start` is a Ticket Session, so the model it will run is
+    // the execution default — reporting the orchestration one would name a
+    // model this command is never going to use.
+    const harness = modelListHarness();
+    writeModelAccessDefault(
+      ctx.db,
+      "global",
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
+      500,
+    );
+    writeModelAccessDefault(
+      ctx.db,
+      "ticket",
+      { providerId: "openai-codex", modelId: "gpt-5.6-terra", reasoningLevel: "high" },
+      501,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { default: { model: "openai-codex/gpt-5.6-terra", reasoning: "high" } },
+    });
+  });
+
+  it("answers APP_UNREACHABLE when the Pi runtime never came up this launch", async () => {
+    const harness = modelListHarness({ withoutSeam: true });
+    expect(await harness.execute()).toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE" },
+    });
+  });
+
+  it("bounds a hung provider probe: aborts the inspect and answers TIMEOUT (VC-61 direction)", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const harness = modelListHarness({
+      timeoutMs: 20,
+      // A probe that ignores its signal entirely — the race, not the abort, is
+      // what must keep the verb from hanging.
+      inspect: ({ signal }) => {
+        observedSignal = signal;
+        return new Promise<never>(() => {});
+      },
+    });
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("names an inspect that fails outright before the bound", async () => {
+    const harness = modelListHarness({
+      inspect: async () => {
+        throw new Error("provider store unreadable");
+      },
+    });
+
+    expect(await harness.execute()).toMatchObject({
+      ok: false,
+      error: { code: "MUTATION_FAILED", message: "provider store unreadable" },
+    });
   });
 });
 
@@ -3235,7 +3729,7 @@ describe("session.start", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
     );
-    const startInputs: TicketSessionStartInput[] = [];
+    const startInputs: SessionStartInput[] = [];
     const kickoffs: { sessionId: string; text: string }[] = [];
     const mutations: unknown[] = [];
     const notices: SessionStartedNotice[] = [];
@@ -3248,8 +3742,8 @@ describe("session.start", () => {
       ...(overrides.withoutFacade
         ? {}
         : {
-            ticketSessions: {
-              start: async (input: TicketSessionStartInput) => {
+            sessions: {
+              start: async (input: SessionStartInput) => {
                 startInputs.push(input);
                 if (overrides.startError !== undefined) throw overrides.startError;
                 return {
@@ -3469,7 +3963,7 @@ describe("session.start", () => {
         appVersion: "1.2.3",
         now: () => 1_000,
         newId: () => "generated-1",
-        ticketSessions: {
+        sessions: {
           start: async () => ({
             sessionId: startedSessionId,
             state: "ready" as const,

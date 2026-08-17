@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { UpdateUiState } from "../ipc/contract";
 import {
   readAllowPrerelease,
   startAutoUpdate,
@@ -20,6 +21,7 @@ class FakeUpdater implements AutoUpdaterLike {
   autoInstallOnAppQuit = false;
   allowPrerelease = false;
   checks = 0;
+  installs = 0;
   failNextCheckWith: unknown = null;
   private readonly listeners = new Map<string, Listener[]>();
 
@@ -44,12 +46,20 @@ class FakeUpdater implements AutoUpdaterLike {
     }
     return Promise.resolve(null);
   }
+
+  quitAndInstall(): void {
+    this.installs += 1;
+  }
 }
 
 interface Harness {
   updater: FakeUpdater;
   logs: string[];
   notifications: { title: string; body: string }[];
+  /** Every state the module announced through `onStateChange`, in order. */
+  stateChanges: UpdateUiState[];
+  /** What `hasUpdateSurface()` answers — flip it to simulate windows opening/closing. */
+  surface: { present: boolean };
   start(overrides?: {
     isPackaged?: boolean;
     allowPrerelease?: boolean;
@@ -60,17 +70,24 @@ function makeHarness(): Harness {
   const updater = new FakeUpdater();
   const logs: string[] = [];
   const notifications: { title: string; body: string }[] = [];
+  const stateChanges: UpdateUiState[] = [];
+  const surface = { present: false };
   return {
     updater,
     logs,
     notifications,
+    stateChanges,
+    surface,
     start: (overrides = {}) =>
       startAutoUpdate({
         isPackaged: overrides.isPackaged ?? true,
         updater,
         allowPrerelease: overrides.allowPrerelease ?? false,
+        currentVersion: "0.1.0",
         notify: (title, body) => notifications.push({ title, body }),
         log: (line) => logs.push(line),
+        onStateChange: (state) => stateChanges.push(state),
+        hasUpdateSurface: () => surface.present,
       }),
   };
 }
@@ -121,6 +138,22 @@ describe("startAutoUpdate", () => {
     expect(harness.logs).toEqual(["[updater] dev run — auto-update disabled"]);
     expect(harness.updater.checks).toBe(0);
     expect(harness.updater.autoDownload).toBe(false);
+    handle.stop();
+  });
+
+  it("in dev the handle is inert but truthful: unsupported state, no-op commands", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+
+    const handle = harness.start({ isPackaged: false });
+    expect(handle.state()).toMatchObject({ supported: false, phase: "idle" });
+
+    await handle.checkNow();
+    handle.quitAndInstall();
+
+    expect(harness.updater.checks).toBe(0);
+    expect(harness.updater.installs).toBe(0);
+    expect(harness.stateChanges).toEqual([]);
     handle.stop();
   });
 
@@ -216,6 +249,161 @@ describe("startAutoUpdate", () => {
       "[updater] up to date (latest: 0.1.0)",
       "[updater] error: feed unreachable",
     ]);
+    handle.stop();
+  });
+
+  it("checkNow responds immediately and settles back to idle when the check produces nothing", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    // FakeUpdater resolves null — electron-updater's "updater inactive" answer,
+    // which emits no event at all. `checking` must not hang on it.
+    const settled = handle.checkNow();
+    expect(handle.state().phase).toBe("checking");
+    await settled;
+
+    expect(handle.state().phase).toBe("idle");
+    expect(harness.updater.checks).toBe(1);
+    expect(harness.stateChanges.map((state) => state.phase)).toEqual(["checking", "idle"]);
+    handle.stop();
+  });
+
+  it("checkNow lands a rejected check in the error state", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    harness.updater.failNextCheckWith = new Error("HttpError: 404 latest-mac.yml");
+    await handle.checkNow();
+
+    expect(handle.state()).toMatchObject({
+      phase: "error",
+      error: "HttpError: 404 latest-mac.yml",
+    });
+    expect(harness.logs).toContain("[updater] check failed: HttpError: 404 latest-mac.yml");
+    handle.stop();
+  });
+
+  it("a later successful check clears the error state", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+    expect(handle.state().phase).toBe("error");
+
+    await handle.checkNow();
+    expect(handle.state()).toMatchObject({ phase: "idle", error: null });
+    handle.stop();
+  });
+
+  it("quitAndInstall hands the staged update to the updater", () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    handle.quitAndInstall();
+
+    expect(harness.updater.installs).toBe(1);
+    handle.stop();
+  });
+
+  it("stays silent when a window is showing the badge — without burning the version's one notification", () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    // A window is open: the sidebar badge/dialog owns the announcement.
+    harness.surface.present = true;
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    expect(harness.notifications).toEqual([]);
+    expect(handle.state().phase).toBe("downloaded");
+
+    // Every window has since closed (macOS keeps the app alive): the native
+    // notification is the only voice left, and the version wasn't burned above.
+    harness.surface.present = false;
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    expect(harness.notifications).toEqual([
+      {
+        title: "Update ready",
+        body: "Volli Code 0.2.0 has been downloaded and will install when you quit.",
+      },
+    ]);
+    handle.stop();
+  });
+
+  it("tracks the check→download→ready lifecycle as user-facing state, announcing every transition", () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    expect(handle.state()).toEqual({
+      supported: true,
+      phase: "idle",
+      currentVersion: "0.1.0",
+      targetVersion: null,
+      percent: null,
+      error: null,
+    });
+
+    harness.updater.emit("checking-for-update");
+    expect(handle.state().phase).toBe("checking");
+
+    harness.updater.emit("update-available", { version: "0.2.0" });
+    expect(handle.state()).toMatchObject({
+      phase: "downloading",
+      targetVersion: "0.2.0",
+      percent: 0,
+    });
+
+    harness.updater.emit("download-progress", { percent: 42.5 });
+    expect(handle.state()).toMatchObject({ phase: "downloading", percent: 42.5 });
+
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    expect(handle.state()).toMatchObject({
+      phase: "downloaded",
+      targetVersion: "0.2.0",
+      percent: null,
+    });
+
+    expect(harness.stateChanges.map((state) => state.phase)).toEqual([
+      "checking",
+      "downloading",
+      "downloading",
+      "downloaded",
+    ]);
+    handle.stop();
+  });
+
+  it("a staged download is never demoted by a re-check — checking and errors keep the badge", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    expect(handle.state().phase).toBe("downloaded");
+
+    // The 4h schedule keeps checking after a download. Neither the check's
+    // start nor its failure (offline laptop, feed briefly gone) may hide the
+    // staged install: the badge is the "never invisible" guarantee, and
+    // `volli:update-install` gates on phase === "downloaded".
+    harness.updater.emit("checking-for-update");
+    expect(handle.state().phase).toBe("downloaded");
+
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+    expect(handle.state().phase).toBe("downloaded");
+    expect(harness.logs).toContain("[updater] check failed: offline");
+
+    harness.updater.emit("error", new Error("feed unreachable"));
+    expect(handle.state().phase).toBe("downloaded");
+
+    // A real outcome still moves the state: a newer version beginning to
+    // download supersedes the staged one.
+    harness.updater.emit("update-available", { version: "0.3.0" });
+    expect(handle.state()).toMatchObject({ phase: "downloading", targetVersion: "0.3.0" });
     handle.stop();
   });
 

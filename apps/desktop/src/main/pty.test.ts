@@ -95,7 +95,7 @@ vi.mock("./worktree-runtime", () => ({
 }));
 
 import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
-import { refuseQuit } from "./quit-gate";
+import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
 import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { attachmentsRoot, importAttachmentFile } from "./attachment-store";
@@ -1091,6 +1091,30 @@ describe("before-quit gate", () => {
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(appQuit).not.toHaveBeenCalled();
     expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * VC-59: the explicit install dialog already carried the busy-terminal
+   * warning, so a quit it accepted must not re-ask here — exactly once means
+   * exactly once. Standing down is NOT skipping teardown: the PTYs still die
+   * in the same pass, or Squirrel would relaunch over orphaned shells.
+   */
+  it("kills busy sessions without a dialog when an accepted update install is driving the quit", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const { pty } = await createSession();
+    pty.process = "claude";
+
+    beginAcceptedUpdateInstall();
+    try {
+      const event = makeQuitEvent();
+      appHandlers.get("before-quit")?.(event);
+
+      expect(showMessageBoxSync).not.toHaveBeenCalled();
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    } finally {
+      abandonAcceptedUpdateInstall();
+    }
   });
 });
 

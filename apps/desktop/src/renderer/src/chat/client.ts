@@ -19,7 +19,7 @@
  * requirements for.
  */
 import type { SessionStreamOverlay } from "@volli/session-engine";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   ModelSelection,
   SessionInteractionResolution,
@@ -343,11 +343,7 @@ export interface ChatSessionTransport {
     /** Skill slugs to inject at attach time. Absent means none. */
     skills?: readonly string[];
   }): Promise<{ sessionId: string }>;
-  attachSession(input: {
-    operationId: string;
-    sessionId: string;
-    bornTicketless: boolean;
-  }): Promise<ProductSessionResult>;
+  attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
 
 export interface ChatSessionClientDeps extends ChatSessionTransport {
@@ -363,31 +359,22 @@ export function browserChatTransport(): ChatSessionTransport {
     rpc,
     scheduler: racingFlushScheduler(window),
     newCommandId: () => crypto.randomUUID(),
+    // One procedure per verb: the nullable ticketId IS the Role on create,
+    // and an attach needs no Role at all — the server owns the Session's
+    // durable state, so nothing here re-derives what it already knows.
     createSession: (input) =>
-      input.ticketId === null
-        ? rpc.projectSessions.create.mutate({
-            operationId: input.operationId,
-            projectId: input.projectId,
-            title: input.title,
-            ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
-          })
-        : rpc.ticketSessions.create.mutate({
-            operationId: input.operationId,
-            projectId: input.projectId,
-            ticketId: input.ticketId,
-            title: input.title,
-            ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
-          }),
+      rpc.sessions.create.mutate({
+        operationId: input.operationId,
+        projectId: input.projectId,
+        ticketId: input.ticketId,
+        title: input.title,
+        ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
+      }),
     attachSession: (input) =>
-      input.bornTicketless
-        ? rpc.projectSessions.attach.mutate({
-            operationId: input.operationId,
-            sessionId: input.sessionId,
-          })
-        : rpc.ticketSessions.attach.mutate({
-            operationId: input.operationId,
-            sessionId: input.sessionId,
-          }),
+      rpc.sessions.attach.mutate({
+        operationId: input.operationId,
+        sessionId: input.sessionId,
+      }),
   };
 }
 
@@ -507,7 +494,6 @@ export class ChatSessionClient {
       const attached = await this.#attachSession({
         operationId: this.#newCommandId(),
         sessionId: this.sessionId,
-        bornTicketless: slice.projection.bornTicketless,
       });
       const refusal = rejectedReceipt(attached);
       const failure =
@@ -568,10 +554,19 @@ export class ChatSessionClient {
     const body = message.text.trim();
     if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
     try {
+      // The message-scoped resource channel (VC-49): each skill body the text's
+      // `/slug` references resolved to travels as its own typed part BESIDE the
+      // text, never spliced into it — the durable artifact records both halves,
+      // the transcript renders the text verbatim with a chip per resource, and
+      // the adapter appends the delimited RESOURCE blocks after the text when
+      // it composes the delivered prompt.
       const wireMessage = {
         id: message.id,
         role: "user" as const,
-        parts: [{ type: "text" as const, text: body }],
+        parts: [
+          { type: "text" as const, text: body },
+          ...(message.resources ?? []).map(skillResourcePart),
+        ],
       };
       const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
       const delivered = await this.#rpc.session.command.mutate({

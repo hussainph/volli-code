@@ -5,10 +5,9 @@ import {
   createSessionRouter,
   RpcDiagnosticLog,
   sanitizeDiagnosticText,
-  type ProjectSessionStartInput,
   type SessionAttachInput,
+  type SessionCreateInput,
   type SessionCreateResult,
-  type TicketSessionStartInput,
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
 import type {
@@ -114,12 +113,9 @@ export interface RegisterSessionRpcIpcOptions {
   ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
   readHiddenModels?: () => readonly HiddenModelRef[];
   writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
-  startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
-  createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
-  attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
-  startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
-  createProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionCreateResult>;
-  attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
+  createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
+  attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics?: RpcDiagnosticLog;
 }
 
@@ -170,12 +166,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           writeModelAccessDefault: options.writeModelAccessDefault,
           readHiddenModels: options.readHiddenModels,
           writeHiddenModels: options.writeHiddenModels,
-          startTicketSession: options.startTicketSession,
-          createTicketSession: options.createTicketSession,
-          attachTicketSession: options.attachTicketSession,
-          startProjectSession: options.startProjectSession,
-          createProjectSession: options.createProjectSession,
-          attachProjectSession: options.attachProjectSession,
+          createSession: options.createSession,
+          attachSession: options.attachSession,
           diagnostics,
           transport: "electron-ipc",
         });
@@ -202,7 +194,6 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
       {
         runtime: options.runtime,
         inspectModelAccess: options.inspectModelAccess,
-        startTicketSession: options.startTicketSession,
         diagnostics,
         transport: "electron-ipc",
       },
@@ -306,18 +297,10 @@ async function callProcedure(
       return caller.modelAccess.hiddenModels();
     case "modelAccess.setHiddenModels":
       return caller.modelAccess.setHiddenModels(request.input as never);
-    case "ticketSessions.start":
-      return caller.ticketSessions.start(request.input as never);
-    case "ticketSessions.create":
-      return caller.ticketSessions.create(request.input as never);
-    case "ticketSessions.attach":
-      return caller.ticketSessions.attach(request.input as never);
-    case "projectSessions.start":
-      return caller.projectSessions.start(request.input as never);
-    case "projectSessions.create":
-      return caller.projectSessions.create(request.input as never);
-    case "projectSessions.attach":
-      return caller.projectSessions.attach(request.input as never);
+    case "sessions.create":
+      return caller.sessions.create(request.input as never);
+    case "sessions.attach":
+      return caller.sessions.attach(request.input as never);
     case "session.snapshot":
       return caller.session.snapshot(request.input as never);
     case "session.projection":
@@ -334,6 +317,35 @@ async function callProcedure(
       return exhaustive;
     }
   }
+}
+
+/**
+ * The degraded path (VC-76): when the Session runtime never came up — in
+ * practice, when the database failed to open — the bridge's channels are
+ * still claimed, and every request answers `{ ok: false }` carrying the
+ * recorded reason. Left unregistered, the renderer's invoke rejects with
+ * Electron's own "No handler registered for 'volli:session-rpc-request'" —
+ * technically loud, but nameless: it says a channel is missing where the
+ * actual problem is a dead database, quite possibly a Node-ABI mismatch
+ * behind it. The Model Access settings page surfaces exactly this message in
+ * its "Couldn't load models" toast, so the reason must be the real one.
+ *
+ * `INTERNAL_SERVER_ERROR` because that is also what the renderer link maps an
+ * unrecognized failure to — the reason rides in the message either way.
+ */
+export function registerDegradedSessionRpcIpcHandlers(reason: string): void {
+  ipcMain.handle(
+    SESSION_RPC_IPC_CHANNEL,
+    // Async like the live handler, so a caller sees one settled-promise shape
+    // on this channel regardless of which registration claimed it.
+    async (): Promise<SessionRpcIpcResponse> => ({
+      ok: false,
+      error: { code: "INTERNAL_SERVER_ERROR", message: reason },
+    }),
+  );
+  // Claimed for symmetry with the live registration: a cancel is fire-and-
+  // forget (`ipcMain.on`), and with no subscriptions there is nothing to stop.
+  ipcMain.on(SESSION_RPC_CANCEL_CHANNEL, () => {});
 }
 
 function isRequest(value: unknown): value is SessionRpcIpcRequest {

@@ -919,67 +919,28 @@ describe("Session tRPC router", () => {
     expect(writes).toEqual([[{ providerId: "openai", modelId: "gpt-5.6-luna" }]]);
   });
 
-  it("starts a Ticket Session without accepting runtime identity", async () => {
+  it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
-      startTicketSession: async (input) => {
-        calls.push(input);
-        return {
-          sessionId: "session-1",
-          state: "ready" as const,
-          receipt: null,
-          throughSequence: 6,
-        };
+      createSession: async (input) => {
+        calls.push(["create", input]);
+        return { sessionId: input.ticketId === null ? "session-2" : "session-1" };
       },
       diagnostics: new RpcDiagnosticLog(),
     });
 
-    const started = await caller.ticketSessions.start({
+    const ticket = await caller.sessions.create({
       operationId: "operation-1",
       projectId: "project-1",
       ticketId: "ticket-1",
       title: "VC-1",
     });
-
-    expect(started).toMatchObject({ sessionId: "session-1", state: "ready" });
-    expect(calls).toEqual([
-      {
-        operationId: "operation-1",
-        projectId: "project-1",
-        ticketId: "ticket-1",
-        title: "VC-1",
-      },
-    ]);
-    expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
-  });
-
-  it("mints Ticket and project Sessions without attaching — the optimistic-open route", async () => {
-    const fixture = runtimeFixture();
-    const calls: unknown[] = [];
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      createTicketSession: async (input) => {
-        calls.push(["ticket.create", input]);
-        return { sessionId: "session-1" };
-      },
-      createProjectSession: async (input) => {
-        calls.push(["project.create", input]);
-        return { sessionId: "session-2" };
-      },
-      diagnostics: new RpcDiagnosticLog(),
-    });
-
-    const ticket = await caller.ticketSessions.create({
-      operationId: "operation-1",
-      projectId: "project-1",
-      ticketId: "ticket-1",
-      title: "VC-1",
-    });
-    const project = await caller.projectSessions.create({
+    const project = await caller.sessions.create({
       operationId: "operation-2",
       projectId: "project-1",
+      ticketId: null,
       title: "Scratch",
     });
 
@@ -987,10 +948,13 @@ describe("Session tRPC router", () => {
     expect(project).toEqual({ sessionId: "session-2" });
     expect(calls).toEqual([
       [
-        "ticket.create",
+        "create",
         { operationId: "operation-1", projectId: "project-1", ticketId: "ticket-1", title: "VC-1" },
       ],
-      ["project.create", { operationId: "operation-2", projectId: "project-1", title: "Scratch" }],
+      [
+        "create",
+        { operationId: "operation-2", projectId: "project-1", ticketId: null, title: "Scratch" },
+      ],
     ]);
     expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
 
@@ -1000,63 +964,42 @@ describe("Session tRPC router", () => {
       diagnostics: new RpcDiagnosticLog(),
     });
     await expect(
-      bare.ticketSessions.create({
+      bare.sessions.create({
         operationId: "op",
         projectId: "project-1",
         ticketId: "ticket-1",
         title: null,
       }),
-    ).rejects.toThrow("Ticket Sessions are unavailable");
-    await expect(
-      bare.projectSessions.create({ operationId: "op", projectId: "project-1", title: null }),
-    ).rejects.toThrow("Project Sessions are unavailable");
+    ).rejects.toThrow("Sessions are unavailable");
   });
 
-  it("carries skill slugs to BOTH start and create, and refuses one the grammar cannot spell", async () => {
+  it("carries skill slugs on create, and refuses one the grammar cannot spell", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
-      startTicketSession: async (input) => {
-        calls.push(input);
-        return {
-          sessionId: "session-1",
-          state: "ready" as const,
-          receipt: null,
-          throughSequence: 6,
-        };
-      },
-      createTicketSession: async (input) => {
+      createSession: async (input) => {
         calls.push(input);
         return { sessionId: "session-1" };
       },
       diagnostics: new RpcDiagnosticLog(),
     });
 
-    await caller.ticketSessions.start({
+    // The optimistic-open route is the one that MINTS the Session, so it is
+    // the one that carries them — `attach` composes from the record, never
+    // the input.
+    await caller.sessions.create({
       operationId: "operation-1",
       projectId: "project-1",
       ticketId: "ticket-1",
       title: "VC-1",
       skills: ["svg-logo-designer"],
     });
-    // The optimistic-open route is the one that MINTS the Session, so it has
-    // to carry them too — `attach` composes from the record, never the input.
-    await caller.ticketSessions.create({
-      operationId: "operation-2",
-      projectId: "project-1",
-      ticketId: "ticket-1",
-      title: "VC-1",
-      skills: ["svg-logo-designer"],
-    });
-    expect(calls).toEqual([
-      expect.objectContaining({ skills: ["svg-logo-designer"] }),
-      expect.objectContaining({ skills: ["svg-logo-designer"] }),
-    ]);
+    expect(calls).toEqual([expect.objectContaining({ skills: ["svg-logo-designer"] })]);
 
     await expect(
-      caller.ticketSessions.start({
-        operationId: "operation-3",
+      caller.sessions.create({
+        operationId: "operation-2",
         projectId: "project-1",
         ticketId: "ticket-1",
         title: "VC-1",
@@ -1089,7 +1032,7 @@ describe("Session tRPC router", () => {
     expect(fixture.calls.command).toEqual([]);
   });
 
-  it("reattaches Ticket and temporary project Sessions without runtime identity", async () => {
+  it("reattaches an existing Session with no Role in the request and no runtime identity out", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const answer = {
@@ -1100,36 +1043,19 @@ describe("Session tRPC router", () => {
     };
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
-      attachTicketSession: async (input) => {
-        calls.push(["ticket.attach", input]);
-        return answer;
-      },
-      startProjectSession: async (input) => {
-        calls.push(["project.start", input]);
-        return answer;
-      },
-      attachProjectSession: async (input) => {
-        calls.push(["project.attach", input]);
+      attachSession: async (input) => {
+        calls.push(["attach", input]);
         return answer;
       },
       diagnostics: new RpcDiagnosticLog(),
     });
 
-    await caller.ticketSessions.attach({ operationId: "ticket-retry", sessionId: "session-1" });
-    await caller.projectSessions.start({
-      operationId: "project-start",
-      projectId: "project-1",
-      title: "Scratch",
-    });
-    await caller.projectSessions.attach({
-      operationId: "project-retry",
-      sessionId: "session-2",
-    });
+    await caller.sessions.attach({ operationId: "retry-1", sessionId: "session-1" });
+    await caller.sessions.attach({ operationId: "retry-2", sessionId: "session-2" });
 
     expect(calls).toEqual([
-      ["ticket.attach", { operationId: "ticket-retry", sessionId: "session-1" }],
-      ["project.start", { operationId: "project-start", projectId: "project-1", title: "Scratch" }],
-      ["project.attach", { operationId: "project-retry", sessionId: "session-2" }],
+      ["attach", { operationId: "retry-1", sessionId: "session-1" }],
+      ["attach", { operationId: "retry-2", sessionId: "session-2" }],
     ]);
     expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi|opencode/i);
   });
@@ -1142,26 +1068,16 @@ describe("Session tRPC router", () => {
     });
 
     await expect(
-      caller.ticketSessions.start({
-        operationId: "ticket-start",
+      caller.sessions.create({
+        operationId: "session-create",
         projectId: "project-1",
         ticketId: "ticket-1",
         title: null,
       }),
-    ).rejects.toThrow("Ticket Sessions are unavailable");
+    ).rejects.toThrow("Sessions are unavailable");
     await expect(
-      caller.ticketSessions.attach({ operationId: "ticket-attach", sessionId: "session-1" }),
-    ).rejects.toThrow("Ticket Sessions are unavailable");
-    await expect(
-      caller.projectSessions.start({
-        operationId: "project-start",
-        projectId: "project-1",
-        title: null,
-      }),
-    ).rejects.toThrow("Project Sessions are unavailable");
-    await expect(
-      caller.projectSessions.attach({ operationId: "project-attach", sessionId: "session-1" }),
-    ).rejects.toThrow("Project Sessions are unavailable");
+      caller.sessions.attach({ operationId: "session-attach", sessionId: "session-1" }),
+    ).rejects.toThrow("Sessions are unavailable");
     await expect(caller.modelAccess.inspect({})).rejects.toThrow("Model Access is unavailable");
     await expect(caller.modelAccess.defaults()).rejects.toThrow(
       "Model Access preferences are unavailable",
@@ -1189,22 +1105,13 @@ describe("Session tRPC router", () => {
 
     const calls = [
       () =>
-        caller.ticketSessions.start({
-          operationId: "operation-ticket",
+        caller.sessions.create({
+          operationId: "operation-create",
           projectId: "project-1",
           ticketId: "ticket-1",
           title: null,
         }),
-      () =>
-        caller.ticketSessions.attach({ operationId: "operation-ticket-attach", sessionId: "s1" }),
-      () =>
-        caller.projectSessions.start({
-          operationId: "operation-project",
-          projectId: "project-1",
-          title: null,
-        }),
-      () =>
-        caller.projectSessions.attach({ operationId: "operation-project-attach", sessionId: "s1" }),
+      () => caller.sessions.attach({ operationId: "operation-attach", sessionId: "s1" }),
       () => caller.modelAccess.inspect({}),
       () => caller.modelAccess.defaults(),
       () =>

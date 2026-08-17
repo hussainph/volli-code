@@ -33,6 +33,7 @@ import {
   type RuntimeFailure,
   type SettledMessageObservation,
   type AttentionObservation,
+  type RuntimeSessionIdentity,
   type SessionRuntimeSpec,
   type TurnObservation,
 } from "@volli/shared";
@@ -99,8 +100,16 @@ export interface PiRuntimeHostOptions {
    * Injectable so deterministic Node runtime tests can script it, and so a
    * caller that wants a narrower environment than the default can supply one —
    * `ScopedExecutionEnv` is exactly that and is still built and tested for it.
+   *
+   * Called with the Session's own identity beside the workspace, so a host can
+   * export who is running — main maps it to `VOLLI_SESSION`/`VOLLI_TICKET` via
+   * `piExecutionEnv`'s `identity` option (VC-51). The default factory sets
+   * neither: only a host knows a Ticket's display id.
    */
-  executionEnvFactory?: (workspacePath: string) => Promise<ExecutionEnv>;
+  executionEnvFactory?: (
+    workspacePath: string,
+    identity: RuntimeSessionIdentity,
+  ) => Promise<ExecutionEnv>;
   /**
    * The wait before an auto-retried attempt, by zero-based attempt number.
    * Injectable so deterministic tests need not spend the real backoff.
@@ -114,7 +123,10 @@ interface PiRuntimeHost {
   models: Models;
   credentials: CredentialStore | null;
   now: () => number;
-  executionEnvFactory: (workspacePath: string) => Promise<ExecutionEnv>;
+  executionEnvFactory: (
+    workspacePath: string,
+    identity: RuntimeSessionIdentity,
+  ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
 }
 
@@ -147,7 +159,11 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     models: access.models,
     credentials: access.credentials,
     now: options.now ?? Date.now,
-    executionEnvFactory: options.executionEnvFactory ?? piExecutionEnv,
+    // Wrapped rather than passed by reference: `piExecutionEnv`'s second
+    // parameter is its options bag, and handing it the identity positionally
+    // would silently misread it.
+    executionEnvFactory:
+      options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
   };
   return {
@@ -585,7 +601,7 @@ async function attachSession(
     // prove: an attachment that hands Pi its own environment cannot fail for
     // want of `sandbox-exec`, and a caller who injects a contained environment
     // gets one that is fail-closed at its own `exec`.
-    toolEnv = await host.executionEnvFactory(spec.workspacePath);
+    toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
     const ownedToolEnv = toolEnv;
     const tools = createPiTools(spec.tools, ownedToolEnv);
     // Offered only to a Session with somewhere to send the question, for the

@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { promptResourceBlock } from "./prompt-resource";
 import type { PromptTemplate } from "./prompt-template";
 import {
   globalSkillsDir,
   isSkillName,
   isUserInvokeOnly,
+  SKILL_RESOURCE_PART_TYPE,
   SKILL_USER_INVOKE_ONLY_KEY,
   mergeSkills,
   projectSkillsDir,
-  skillInvocationText,
+  readSkillResources,
   skillPromptResource,
+  skillResourcePart,
   skillRootDir,
   skillsIndexResource,
   SKILLS_INDEX_RESOURCE_NAME,
@@ -133,24 +134,53 @@ describe("skillPromptResource", () => {
   });
 });
 
-describe("skillInvocationText", () => {
-  it("is the delimited block alone when the invocation carried no words", () => {
-    const reference = skill();
-    expect(skillInvocationText(reference, "")).toBe(
-      promptResourceBlock(skillPromptResource(reference)),
-    );
+describe("skillResourcePart", () => {
+  it("wraps a resolved resource as the message part that carries it", () => {
+    const resource = skillPromptResource(skill());
+    expect(skillResourcePart(resource)).toEqual({
+      type: SKILL_RESOURCE_PART_TYPE,
+      data: { name: resource.name, text: resource.text },
+    });
   });
 
-  it("keeps the line's remaining words after the block instead of swallowing them", () => {
-    const reference = skill();
-    expect(skillInvocationText(reference, "make me a wordmark")).toBe(
-      `${promptResourceBlock(skillPromptResource(reference))}\n\nmake me a wordmark`,
-    );
+  it("keeps the body's placeholders verbatim — no argument substitution, ever", () => {
+    const resource = skillPromptResource(skill({ body: "run `awk '{print $1}'` on $@" }));
+    expect(skillResourcePart(resource).data.text).toContain("awk '{print $1}'` on $@");
+  });
+});
+
+describe("readSkillResources", () => {
+  it("round-trips what skillResourcePart wrote, in part order", () => {
+    const first = skillPromptResource(skill({ name: "alpha" }));
+    const second = skillPromptResource(skill({ name: "beta" }));
+    const parts = [
+      { type: "text", text: "can you tell me what /alpha does?" },
+      skillResourcePart(first),
+      skillResourcePart(second),
+    ];
+    expect(readSkillResources(parts)).toEqual([first, second]);
   });
 
-  it("never substitutes placeholders inside the body", () => {
-    const reference = skill({ body: "run `awk '{print $1}'` on $@" });
-    expect(skillInvocationText(reference, "arg")).toContain("awk '{print $1}'` on $@");
+  it("ignores every part that is not a skill resource", () => {
+    expect(
+      readSkillResources([
+        { type: "text", text: "prose" },
+        { type: "data-interaction-resolution", data: { optionIds: [] } },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("drops a malformed part rather than delivering a half-read block", () => {
+    expect(
+      readSkillResources([
+        null,
+        "not a part",
+        { type: SKILL_RESOURCE_PART_TYPE },
+        { type: SKILL_RESOURCE_PART_TYPE, data: null },
+        { type: SKILL_RESOURCE_PART_TYPE, data: { name: "no-text" } },
+        { type: SKILL_RESOURCE_PART_TYPE, data: { name: 7, text: "typed wrong" } },
+      ]),
+    ).toEqual([]);
   });
 });
 

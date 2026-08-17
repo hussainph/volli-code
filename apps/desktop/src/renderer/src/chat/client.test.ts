@@ -229,8 +229,7 @@ class FakeRpc implements ChatSessionRpc {
   readonly cancels: { sessionId: string; interactionId: string }[] = [];
   readonly reconciles: { sessionId: string; attachmentId: string }[] = [];
   readonly streams: FakeStream[] = [];
-  readonly attaches: Array<{ operationId: string; sessionId: string; bornTicketless: boolean }> =
-    [];
+  readonly attaches: Array<{ operationId: string; sessionId: string }> = [];
   projectionQueries = 0;
 
   snapshotFrames: readonly unknown[] = [];
@@ -540,21 +539,23 @@ describe("browserChatTransport", () => {
     await transport.attachSession({
       operationId: "project-retry",
       sessionId: "session-1",
-      bornTicketless: true,
     });
     await transport.attachSession({
       operationId: "ticket-retry",
       sessionId: "session-2",
-      bornTicketless: false,
     });
+    // One procedure per verb, whatever the Role: the nullable ticketId rides
+    // the create input, and the attach carries no Role at all.
     expect(procedures).toEqual([
-      "projectSessions.create",
-      "ticketSessions.create",
-      "projectSessions.create",
-      "ticketSessions.create",
-      "projectSessions.attach",
-      "ticketSessions.attach",
+      "sessions.create",
+      "sessions.create",
+      "sessions.create",
+      "sessions.create",
+      "sessions.attach",
+      "sessions.attach",
     ]);
+    expect(inputs[0]).toMatchObject({ ticketId: null });
+    expect(inputs[1]).toMatchObject({ ticketId: "ticket-1" });
     expect(inputs[0]).not.toHaveProperty("skills");
     expect(inputs[1]).not.toHaveProperty("skills");
     expect(inputs[2]).toMatchObject({ skills: ["svg-logo-designer"] });
@@ -937,27 +938,13 @@ describe("retryAttach", () => {
 
     await expect(client.retryAttach()).resolves.toBe(true);
 
-    expect(rpc.attaches).toEqual([
-      { operationId: expect.any(String), sessionId, bornTicketless: true },
-    ]);
+    expect(rpc.attaches).toEqual([{ operationId: expect.any(String), sessionId }]);
     expect(rpc.commands).toEqual([]);
     expect(rpc.streams).toHaveLength(2);
     expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("routes recovery from durable Session birth rather than executor identity", async () => {
-    const { client, rpc } = await adopted((fake) => {
-      fake.snapshotProjection = { ...projectionFor(null), bornTicketless: false };
-    });
-
-    await expect(client.retryAttach()).resolves.toBe(true);
-
-    expect(rpc.attaches).toEqual([
-      { operationId: expect.any(String), sessionId: expect.any(String), bornTicketless: false },
-    ]);
-  });
-
-  it("does not guess a runtime route before durable Session origin is known", async () => {
+  it("waits for the durable Session state before another attachment attempt", async () => {
     const { client, rpc } = await adopted((fake) => {
       fake.snapshotError = new Error("snapshot unavailable");
     });
@@ -1133,6 +1120,36 @@ describe("submit", () => {
       "kind",
       "message",
     ]);
+  });
+
+  it("sends a skill resource as its own part beside the intact text (VC-49)", async () => {
+    const { client, rpc } = await ready();
+    const resource = { name: "hussain-sol", text: "# The skill body" };
+
+    await expect(
+      client.submit(
+        {
+          id: "queued-1",
+          text: "can you tell me what /hussain-sol does?",
+          resources: [resource],
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    // The text part is the user's words exactly as typed — the reference is
+    // never rewritten into the body — and the body rides as a typed data part.
+    expect(rpc.submissions()[0]!.command).toMatchObject({
+      kind: "message.submit",
+      message: {
+        id: "queued-1",
+        role: "user",
+        parts: [
+          { type: "text", text: "can you tell me what /hussain-sol does?" },
+          { type: "data-skill-resource", data: resource },
+        ],
+      },
+    });
   });
 
   it("replays one ambiguous delivery with the same message and command identity", async () => {

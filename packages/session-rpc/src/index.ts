@@ -69,10 +69,11 @@ function isRendererStreamOverlay(
   return "kind" in emission;
 }
 
-export interface TicketSessionStartInput {
+export interface SessionCreateInput {
   operationId: string;
   projectId: string;
-  ticketId: string;
+  /** The Role: a Ticket Session when set, a project Session when null. */
+  ticketId: string | null;
   title: string | null;
   /**
    * Skill slugs to inject at attach time as system-prompt RESOURCE sections.
@@ -84,14 +85,6 @@ export interface TicketSessionStartInput {
 export interface SessionAttachInput {
   operationId: string;
   sessionId: string;
-}
-
-export interface ProjectSessionStartInput {
-  operationId: string;
-  projectId: string;
-  title: string | null;
-  /** See {@link TicketSessionStartInput.skills}. */
-  skills?: readonly string[];
 }
 
 /** A create-only start's answer: durable identity, nothing about an executor. */
@@ -113,13 +106,9 @@ export interface SessionRouterContext {
   ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
   readHiddenModels?: () => readonly HiddenModelRef[];
   writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
-  startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
-  /** Create-only (no attach): the optimistic chat-open route — see the facades. */
-  createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
-  attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
-  startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
-  createProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionCreateResult>;
-  attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
+  createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
+  attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
 }
@@ -546,29 +535,16 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
 /** Creates the reusable Session API used by both Electron IPC and Lab HTTP/SSE adapters. */
 export function createSessionRouter() {
   return t.router({
-    ticketSessions: t.router({
-      start: instrumentedProcedure
-        .input(
-          z.object({
-            operationId: nonEmptyString,
-            projectId: nonEmptyString,
-            ticketId: nonEmptyString,
-            title: nullableString,
-            skills: skillSlugs,
-          }),
-        )
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.startTicketSession) {
-            unavailable("Ticket Sessions are unavailable on this transport");
-          }
-          return ctx.startTicketSession(input);
-        }),
+    sessions: t.router({
       create: instrumentedProcedure
         .input(
           z.object({
             operationId: nonEmptyString,
             projectId: nonEmptyString,
-            ticketId: nonEmptyString,
+            // The Role, stated once: a Ticket Session when set, a project
+            // Session when null — the same nullable field `session.create`
+            // records durably.
+            ticketId: nonEmptyString.nullable(),
             title: nullableString,
             // The optimistic-open path mints the Session, so it is the path
             // that has to carry the skills: `attach` composes the prompt from
@@ -577,59 +553,18 @@ export function createSessionRouter() {
           }),
         )
         .mutation(async ({ ctx, input }) => {
-          if (!ctx.createTicketSession) {
-            unavailable("Ticket Sessions are unavailable on this transport");
+          if (!ctx.createSession) {
+            unavailable("Sessions are unavailable on this transport");
           }
-          return ctx.createTicketSession(input);
+          return ctx.createSession(input);
         }),
       attach: instrumentedProcedure
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
         .mutation(async ({ ctx, input }) => {
-          if (!ctx.attachTicketSession) {
-            unavailable("Ticket Sessions are unavailable on this transport");
+          if (!ctx.attachSession) {
+            unavailable("Sessions are unavailable on this transport");
           }
-          return ctx.attachTicketSession(input);
-        }),
-    }),
-    projectSessions: t.router({
-      start: instrumentedProcedure
-        .input(
-          z.object({
-            operationId: nonEmptyString,
-            projectId: nonEmptyString,
-            title: nullableString,
-            skills: skillSlugs,
-          }),
-        )
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.startProjectSession) {
-            unavailable("Project Sessions are unavailable on this transport");
-          }
-          return ctx.startProjectSession(input);
-        }),
-      create: instrumentedProcedure
-        .input(
-          z.object({
-            operationId: nonEmptyString,
-            projectId: nonEmptyString,
-            title: nullableString,
-            /** See `ticketSessions.create`. */
-            skills: skillSlugs,
-          }),
-        )
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.createProjectSession) {
-            unavailable("Project Sessions are unavailable on this transport");
-          }
-          return ctx.createProjectSession(input);
-        }),
-      attach: instrumentedProcedure
-        .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.attachProjectSession) {
-            unavailable("Project Sessions are unavailable on this transport");
-          }
-          return ctx.attachProjectSession(input);
+          return ctx.attachSession(input);
         }),
     }),
     modelAccess: t.router({

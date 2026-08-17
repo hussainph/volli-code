@@ -61,6 +61,16 @@ describe("StatusDot", () => {
     expect(halo("setup")).toBe(false);
   });
 
+  it("lets the live turn breathe, and nothing else", () => {
+    // Motion is the channel a glance reads. A haloed dot is the same amount of
+    // ink as a resting one, which is why a running Session was hard to find in
+    // a strip of tabs — and why `setup`, which is busy too, deliberately stays
+    // still: a band where several kinds of busy all move has no signal left.
+    const breathes = (state: StatusDotState) => classesFor(state).includes("status-dot-live");
+    expect(breathes("working")).toBe(true);
+    expect(EVERY_STATE.filter(breathes)).toEqual(["working"]);
+  });
+
   it("reserves the attention tone for the one state asking for a person", () => {
     // `waiting` is declared by a harness hook, never inferred — it is the only
     // state that means "an agent is blocked on you". Nothing else may borrow it,

@@ -841,6 +841,79 @@ export interface VolliSystemIpcContract {
   "volli:ghostty-config-get": { args: []; result: GhosttyConfigResult };
 }
 
+// ---- self-update UI (VC-59, atop VC-24's silent updater) -------------------
+
+/**
+ * Where the updater is in its check→download→install lifecycle, as the
+ * renderer's download icon renders it. `idle` covers both "never checked" and
+ * "checked, up to date" — either way there is nothing to show or do beyond
+ * offering a manual check.
+ */
+export type UpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
+
+/**
+ * The updater's whole user-facing state (VC-59): one snapshot the renderer
+ * can render truthfully at any moment, pushed on every transition over
+ * `volli:update-state` and readable on demand via `volli:update-state-get`.
+ */
+export interface UpdateUiState {
+  /**
+   * False on a dev run (`!app.isPackaged`, matching the updater's own dev
+   * guard) — the renderer hides the whole update surface: `pnpm start` has no
+   * app-update.yml and nothing meaningful to install.
+   */
+  supported: boolean;
+  phase: UpdatePhase;
+  /** The running build's version — the "from" of any update on offer. */
+  currentVersion: string;
+  /** The version being downloaded / ready to install; null when none is known. */
+  targetVersion: string | null;
+  /** Download progress 0–100 while `downloading`; null otherwise. */
+  percent: number | null;
+  /** The last failure's message while `error`; null otherwise. */
+  error: string | null;
+}
+
+export type UpdateStateResult = Result<{ state: UpdateUiState }>;
+
+/**
+ * What the explicit-install dialog counts before it may promise a restart
+ * (`volli:update-live-work`): the dialog is the ONE prompt on the install path
+ * — the native gates behind it stand down — so it must carry the whole warning
+ * itself. Three surfaces, counted and named separately, because collapsing
+ * them into one "live sessions" number would mean something different here
+ * than in the confirms this dialog replaces.
+ */
+export type UpdateLiveWorkResult = Result<{
+  /** The foreground process of each busy PTY (`ptyManager.busySessions()`) — the same input both native gates read. */
+  busyCommands: string[];
+  /** Open structured agent Sessions — turns open right now, a plane that outlives any one PTY. */
+  openAgentSessions: number;
+  /** Display names of editor tabs holding unsaved drafts — the one thing a restart destroys unrecoverably. */
+  unsavedDrafts: string[];
+}>;
+
+/**
+ * The self-update door (VC-59): how the sidebar's download icon drives the
+ * VC-24 updater. Deliberately NOT session-rpc: that edge requires a live
+ * SessionRuntime, which is null exactly when the db is broken — and a broken
+ * db must not strand the install on a stale build (an update may be what
+ * fixes it). These channels ride the same guarded invoke surface the
+ * retention watch uses.
+ */
+export interface VolliUpdateIpcContract {
+  /** The updater's current snapshot — what a freshly-opened renderer primes its store from. */
+  "volli:update-state-get": { args: []; result: UpdateStateResult };
+  /** Fire-and-forget explicit check (the idle icon's click); outcomes arrive as `volli:update-state` pushes. */
+  "volli:update-check": { args: []; result: Result };
+  /** The confirmed install: raises the quit latch, then `quitAndInstall()` — refused unless a download is staged. */
+  "volli:update-install": { args: []; result: Result };
+  /** The live work the install dialog must name before promising a restart. */
+  "volli:update-live-work": { args: []; result: UpdateLiveWorkResult };
+}
+
+export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
+
 /**
  * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
  * channel carrying every routed procedure, because the router — not this
@@ -889,7 +962,8 @@ export interface VolliInvokeContract
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
     VolliSessionRpcIpcContract,
-    VolliSystemIpcContract {}
+    VolliSystemIpcContract,
+    VolliUpdateIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
 export type IpcResult<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["result"];
@@ -963,6 +1037,12 @@ export type VolliIpcEvent =
   // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
   | "volli:session-rpc-event"
+  // The updater's user-facing state changed (VC-59) — one full {@link
+  // UpdateUiState} snapshot per transition, fanned out from broadcast.ts so
+  // the sidebar icon in every window renders the same truth. The renderer
+  // still primes itself with `volli:update-state-get` on boot: a download
+  // that finished before this window existed must still light the badge.
+  | "volli:update-state"
   // Everything main has to say about one in-app provider sign-in — see
   // {@link ModelAccessSignInUpdate}. ONE channel for prompts, withdrawals,
   // events and the verdict, because the order across those kinds is the
