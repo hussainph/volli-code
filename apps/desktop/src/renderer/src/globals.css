@@ -674,6 +674,98 @@
   }
 }
 
+/* THE RUNNING MARK — the orbs the chat pane wears while a turn is live
+ * (`ui/thinking-orbs.tsx`), and the ONE motion in this file that outlives the
+ * gesture that started it. Everything else here sweeps a title for a moment or
+ * crossfades a theme; this runs for as long as an agent is thinking, which is
+ * the whole reason its cost is decided in CSS rather than in a component.
+ *
+ * `transform` and `opacity` only, so the loop lives on the compositor and the
+ * streamed answer keeps the main thread to itself. A `width`/`margin` bounce —
+ * the shape most typing indicators ship — would relayout the row it sits in on
+ * every one of those frames, beside a transcript already relaying out for real
+ * reasons.
+ *
+ * 1.4s per orb at 160ms apart is the wave every messaging surface converged on;
+ * shorter reads as urgency (a spinner's job, and a spinner is what a single
+ * in-flight CALL wears) and longer stops reading as motion at all. `ease-in-out`
+ * is the CSS keyword rather than one of the app's strong curves on purpose: the
+ * strong ones exist to make a discrete transition feel decisive at its start,
+ * and there is no start here — a loop wants to be symmetric at both ends of
+ * every breath.
+ *
+ * `scale(0.72)` rather than a fade alone, and never toward zero: the orbs stay
+ * three visible objects through the trough, so the mark keeps its shape while
+ * the wave travels along it.
+ *
+ * Reduced motion parks them at a plain middle weight instead of dropping them
+ * (which is what the two sweeps above do, because a frozen highlight mid-word
+ * reads as a bug). Three static orbs do not: they are still the mark, and they
+ * are still the only thing on screen saying the turn is live — the caller
+ * unmounts them the instant it is not, so stillness here says nothing false. */
+@keyframes thinking-orb {
+  0%,
+  70%,
+  100% {
+    opacity: 0.32;
+    transform: scale(0.72);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.thinking-orb {
+  animation: thinking-orb 1.4s ease-in-out infinite;
+}
+
+.thinking-orb:nth-child(2) {
+  animation-delay: 160ms;
+}
+
+.thinking-orb:nth-child(3) {
+  animation-delay: 320ms;
+}
+
+/* The same fact in the one mark every LISTING draws a Session with — the tab
+ * strip, the ticket rail's roster, the sidebar's Active band
+ * (`ui/status-dot.tsx`). `working` is the only state that breathes, which is
+ * the same restraint the halo already shows: a resting Session must not
+ * compete with a running one for the eye.
+ *
+ * `opacity` on the dot rather than a second ring, so the halo dims WITH the
+ * fill and the mark breathes as one object. A sonar ping was the obvious
+ * alternative and is the wrong loudness — a band holding twenty Sessions would
+ * have twenty expanding rings in it.
+ *
+ * 2.4s, twice the transcript's own wave: this is a mark read in passing on a
+ * list, not the thing a reader is watching. It does not contradict the note on
+ * the title sweep above — that rule refuses a SPINNER on a sidebar row, and it
+ * refuses it for asking for attention a label has not earned. A slow breath
+ * asks for none; it is the difference between a row that is alive and a row
+ * that is shouting. */
+@keyframes status-dot-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.status-dot-live {
+  animation: status-dot-breathe 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-orb {
+    animation: none;
+    opacity: 0.55;
+  }
+
+  .status-dot-live {
+    animation: none;
+  }
+}
+
 /* ELEVATION — the lift overlays and the shadow set.
  *
  * Two tiers, applied outward from the gradient: tier 1 is the chrome band and

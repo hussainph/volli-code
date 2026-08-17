@@ -301,6 +301,35 @@ async function callProcedure(
   }
 }
 
+/**
+ * The degraded path (VC-76): when the Session runtime never came up — in
+ * practice, when the database failed to open — the bridge's channels are
+ * still claimed, and every request answers `{ ok: false }` carrying the
+ * recorded reason. Left unregistered, the renderer's invoke rejects with
+ * Electron's own "No handler registered for 'volli:session-rpc-request'" —
+ * technically loud, but nameless: it says a channel is missing where the
+ * actual problem is a dead database, quite possibly a Node-ABI mismatch
+ * behind it. The Model Access settings page surfaces exactly this message in
+ * its "Couldn't load models" toast, so the reason must be the real one.
+ *
+ * `INTERNAL_SERVER_ERROR` because that is also what the renderer link maps an
+ * unrecognized failure to — the reason rides in the message either way.
+ */
+export function registerDegradedSessionRpcIpcHandlers(reason: string): void {
+  ipcMain.handle(
+    SESSION_RPC_IPC_CHANNEL,
+    // Async like the live handler, so a caller sees one settled-promise shape
+    // on this channel regardless of which registration claimed it.
+    async (): Promise<SessionRpcIpcResponse> => ({
+      ok: false,
+      error: { code: "INTERNAL_SERVER_ERROR", message: reason },
+    }),
+  );
+  // Claimed for symmetry with the live registration: a cancel is fire-and-
+  // forget (`ipcMain.on`), and with no subscriptions there is nothing to stop.
+  ipcMain.on(SESSION_RPC_CANCEL_CHANNEL, () => {});
+}
+
 function isRequest(value: unknown): value is SessionRpcIpcRequest {
   if (!isRecord(value) || !("procedure" in value) || !("input" in value)) return false;
   return (

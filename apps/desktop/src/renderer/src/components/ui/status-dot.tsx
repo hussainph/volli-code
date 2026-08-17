@@ -95,6 +95,23 @@ const STATUS_DOT_TONE: Record<StatusDotState, string> = {
 /** 6px in a row of text, 8px on a tab. The two the app already draws. */
 const STATUS_DOT_SIZE = { sm: "size-1.5", md: "size-2" } as const;
 
+/**
+ * The one state that MOVES, and it is decided here for the same reason the
+ * colours are: a live turn was a static dot with a halo, which is the same
+ * amount of ink as a resting one and told a reader scanning a strip of tabs
+ * nothing they could catch without stopping. Motion is the channel a glance
+ * actually reads.
+ *
+ * It rides `working` alone. `setup` is work too, and deliberately still: it is
+ * a worktree script rather than an agent, it ends on its own, and a band where
+ * several kinds of busy all breathe is a band with no signal left in it.
+ *
+ * The breath itself — what it costs, how slow, and why it is not a ping — is
+ * `globals.css`, beside the transcript's own running mark. The two are one
+ * decision seen from two distances.
+ */
+const STATUS_DOT_LIVE = "status-dot-live";
+
 export interface StatusDotProps extends React.ComponentProps<"span"> {
   state: StatusDotState;
   size?: keyof typeof STATUS_DOT_SIZE;
@@ -115,6 +132,7 @@ export function StatusDot({ state, size = "sm", className, ...props }: StatusDot
         "shrink-0 rounded-full",
         STATUS_DOT_SIZE[size],
         STATUS_DOT_TONE[state],
+        state === "working" && STATUS_DOT_LIVE,
         className,
       )}
       {...props}

@@ -5,6 +5,7 @@ import {
   type HostedSessionRuntime,
   type NativeHarnessAdapter,
   type SessionEngine,
+  type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import { createDesktopSessionEngine } from "../session-control";
 import { createDesktopSessionLocationResolver } from "./location";
@@ -15,6 +16,14 @@ export interface DesktopSessionRuntimeOptions {
   transcriptDirectory: string;
   executor: NativeHarnessAdapter;
   sessionEngine?: SessionEngine;
+  /**
+   * The one artifact store for this launch. Passed in when another reader needs
+   * the same store — `session peek`'s chat transcript tail reads it straight
+   * from the ledger, outside the runtime — so one directory never grows two
+   * store objects with two mkdir races. Defaults to the file store this
+   * composition would have built for itself.
+   */
+  artifacts?: TranscriptArtifactStore;
   now?: () => number;
   nextId?: () => string;
 }
@@ -28,7 +37,7 @@ export function createDesktopSessionRuntime(
   return createSessionRuntime({
     engine: options.sessionEngine ?? createDesktopSessionEngine(options.db, { now, nextId }),
     executor: options.executor,
-    artifacts: createFileTranscriptArtifactStore(options.transcriptDirectory),
+    artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createDesktopSessionLocationResolver(options.db),
     clock: { now },
     ids: { next: () => nextId() },

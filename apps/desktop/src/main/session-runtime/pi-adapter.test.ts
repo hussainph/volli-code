@@ -9,6 +9,8 @@ import type {
 import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
 import {
   errorMessage,
+  promptResourceBlock,
+  skillResourcePart,
   type AgentRuntime,
   type DeliveryOutcome,
   type ModelAccessSnapshot,
@@ -655,6 +657,61 @@ describe("Pi native adapter dispatch", () => {
       acceptedAt: 1000,
       native: binding.native,
     });
+  });
+
+  it("appends a skill resource part as a delimited block AFTER the intact text (VC-49)", async () => {
+    const { binding, runtime } = await attached();
+    const resource = { name: "hussain-sol", text: "Skill directory: x/\n\n# The skill body" };
+
+    await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-1",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: {
+        id: "message-1",
+        role: "user",
+        parts: [
+          // The repro: a mid-sentence skill reference. The sentence must reach
+          // Pi exactly as typed, with the body adjacent — never spliced in.
+          { type: "text", text: "can you tell me what /hussain-sol does?" },
+          skillResourcePart(resource),
+        ],
+      },
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(runtime.submissions).toEqual([
+      `can you tell me what /hussain-sol does?\n\n${promptResourceBlock(resource)}`,
+    ]);
+  });
+
+  it("drops a malformed skill resource part rather than delivering half a block", async () => {
+    const { binding, runtime } = await attached();
+
+    await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-1",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: {
+        id: "message-1",
+        role: "user",
+        parts: [
+          { type: "text", text: "just the words" },
+          { type: "data-skill-resource", data: { name: "broken" } } as never,
+        ],
+      },
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(runtime.submissions).toEqual(["just the words"]);
   });
 
   it("joins every text part a message carries", async () => {

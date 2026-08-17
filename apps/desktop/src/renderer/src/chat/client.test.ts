@@ -1122,6 +1122,36 @@ describe("submit", () => {
     ]);
   });
 
+  it("sends a skill resource as its own part beside the intact text (VC-49)", async () => {
+    const { client, rpc } = await ready();
+    const resource = { name: "hussain-sol", text: "# The skill body" };
+
+    await expect(
+      client.submit(
+        {
+          id: "queued-1",
+          text: "can you tell me what /hussain-sol does?",
+          resources: [resource],
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    // The text part is the user's words exactly as typed — the reference is
+    // never rewritten into the body — and the body rides as a typed data part.
+    expect(rpc.submissions()[0]!.command).toMatchObject({
+      kind: "message.submit",
+      message: {
+        id: "queued-1",
+        role: "user",
+        parts: [
+          { type: "text", text: "can you tell me what /hussain-sol does?" },
+          { type: "data-skill-resource", data: resource },
+        ],
+      },
+    });
+  });
+
   it("replays one ambiguous delivery with the same message and command identity", async () => {
     let attempts = 0;
     const { client, rpc } = await ready((fake) => {

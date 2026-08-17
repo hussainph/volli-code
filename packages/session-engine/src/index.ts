@@ -7,6 +7,7 @@ export * from "./native-adapter";
 export { sessionMainBranchId, sessionRootThreadId } from "./observation-translation";
 export * from "./transcript-artifacts";
 export * from "./transcript-overlay";
+export * from "./transcript-tail";
 export * from "./session-runtime";
 export { REASONING_LEVELS } from "@volli/shared";
 export type {

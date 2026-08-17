@@ -330,6 +330,14 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "label.list", args: { project: "VC" }, json: false },
     });
+    expect(parseCliArgs(["model", "list"])).toEqual({
+      ok: true,
+      invocation: { command: "model.list", args: {}, json: false },
+    });
+    expect(parseCliArgs(["model", "list", "--all", "--json"])).toEqual({
+      ok: true,
+      invocation: { command: "model.list", args: { all: true }, json: true },
+    });
     expect(parseCliArgs(["session", "list", "--project", "VC", "--ticket", "VC-12"])).toEqual({
       ok: true,
       invocation: {
@@ -640,6 +648,33 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "worktree.diff", args: { workingTree: true }, json: false },
     });
+  });
+});
+
+describe("prompt baseline", () => {
+  it("parses bare, along the context ladder", () => {
+    expect(parseCliArgs(["prompt", "baseline"])).toEqual({
+      ok: true,
+      invocation: { command: "prompt.baseline", args: {}, json: false },
+    });
+  });
+
+  it("carries --ticket and --project selectors", () => {
+    expect(parseCliArgs(["prompt", "baseline", "--ticket", "VC-12", "--project", "volli"])).toEqual(
+      {
+        ok: true,
+        invocation: {
+          command: "prompt.baseline",
+          args: { ticket: "VC-12", project: "volli" },
+          json: false,
+        },
+      },
+    );
+  });
+
+  it("rejects a bare `prompt` as an unknown command", () => {
+    const parsed = parseCliArgs(["prompt"]);
+    expect(parsed.ok).toBe(false);
   });
 });
 
