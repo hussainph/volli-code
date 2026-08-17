@@ -1,43 +1,44 @@
 /**
- * PROTOTYPE — VC-55, pass 2. What an empty chat should DRAW instead of telling
- * you where you are.
+ * PROTOTYPE — VC-55, pass 3. The empty chat as a scope-matched instrument.
  *
- * THE TURN THIS PASS TAKES. Pass 1 answered "which session is this?" with words
- * — chips that named the venue, a line of prose under them. The owner's ruling
- * killed both: prose explaining obvious UI is lazy design, and a row of nouns is
- * redundant with the sidebar that already names the same things.
+ * THE MODEL THIS PASS SETTLES ON, and the reason the axes are shaped the way
+ * they are: the empty-state visual is a CHOICE, but not a free one. Each visual
+ * is only legible at one scope, so the menu a surface offers is itself the
+ * identity signal — a Home chat can draw the streak or the board, a ticket chat
+ * cannot, and that asymmetry is the thing the user eventually internalises.
+ * The two pickers in the bar are deliberately shaped like the Settings control
+ * this would become: one default per scope, chosen from that scope's legal set.
  *
- * The replacement is INDIRECT: draw data that only makes sense at this session's
- * scope, and let the shape of it carry the identity. A project session opens on
- * a FIELD of many things — every session the project has ever run, the whole
- * board's shape. A ticket session opens on ONE thing's progress — this ticket's
- * column, this worktree's diff. Many-vs-one is a silhouette you read before you
- * read anything, and unlike a label it stays useful after you have learnt it.
- * Nobody is told "this is a project session"; the drawing is only true of one.
+ *   Home    → Streak · Board · Venue
+ *   Ticket  → Venue        (default)
  *
- * WHAT IS DELIBERATELY GONE (all owner rulings, pass 1):
- *   - The purpose sentence, and "Your working tree — not isolated." The dirty
- *     count is drawn now; a sentence about it was the lazy version.
- *   - `material` on the identity axis — it did nothing legible.
- *   - The prototype rail on the TICKET surface. Ticket-rail changes are a
- *     non-goal; only the project surface gets a new rail here.
- *   - "Touched" as a label. It is "Mentioned" now, and the word is load-bearing
- *     — see MENTIONS below.
+ * WHAT MOVED SINCE PASS 2 (all owner notes):
+ *   1. The session FIELD is gone. It grew without bound and said nothing on a
+ *      ticket. Replaced by STREAK — a GitHub-style per-day matrix of every
+ *      session run in Volli, project and ticket alike. It is a fixed 26-week
+ *      window, so it cannot grow; and it is deliberately NOT offered on a
+ *      ticket, where a cross-project achievement read is nonsense.
+ *   2. BOARD keeps its bars but they are no longer flat: each column takes a
+ *      hue fanned off the LIVE canvas primary (`--primary`, read at render and
+ *      rotated in OKLCH), so the chart is themed rather than painted. Hover
+ *      names the column and its count. Home only.
+ *   3. VENUE is the merged one, and the only visual both scopes offer. The
+ *      uncommitted ticks stack directly over the +/− bar so one object answers
+ *      "what is loose here" and "what has this branch done" together.
  *
- * PARKED, NOT REJECTED: the icon-driven intent chips ("Shape an idea", "File
- * tickets"). They read well and they belong with Automations in 0.1.2, not in a
- * release whose job is telling two session kinds apart.
+ * VENUE IS KEYED ON THE VENUE, NOT THE SESSION KIND. A ticket that runs in the
+ * main checkout (no worktree — see VC-96) draws main's tree and no branch bar,
+ * because there is no branch to diff. That is the whole reason this visual can
+ * serve both scopes: it describes the DIRECTORY, which is the fact VC-55 exists
+ * to surface.
  *
- * MENTIONS is a real feature this prototype is only DRAWING, not implementing:
- * `@VC-22` in a chat message becomes a backlink chip in the feed and pulls that
- * ticket into the rail's Mentioned column. Both halves need parsing, storage and
- * a prompt instruction telling the agent to use the `@vc-nn` form for external
- * tickets — none of which is in this file. `View → Feed` draws the chip so the
- * chip can be judged; the plumbing is a separate ticket.
+ * DITHER-KIT is wired as a second drawing of the Board bars (`Board · dither`)
+ * so the aesthetic can be judged against the cost. Read the note on
+ * {@link DITHER_COLOR} before adopting it — its palette is seven fixed sRGB
+ * triples, which is the one thing this repo's generated-canvas theming forbids.
  *
- * Fixtures are frozen. The board counts are this repo's real ones so the bars
- * have honest proportions; the session states are generated deterministically.
- * The lab has no main-process half (CLAUDE.md), so nothing here reads git.
+ * Fixtures are frozen; the board counts are this repo's real ones. The lab has
+ * no main-process half (CLAUDE.md), so nothing here reads git or the ledger.
  */
 import * as React from "react";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -49,37 +50,57 @@ import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import { hexToOklch, lerp, oklchToHex } from "@volli/shared";
 
+import { BarChart } from "@renderer/components/dither-kit/bar-chart";
+import { Bar } from "@renderer/components/dither-kit/bar";
+import { Tooltip as DitherTooltip } from "@renderer/components/dither-kit/tooltip";
+import { XAxis } from "@renderer/components/dither-kit/x-axis";
 import { Button } from "@renderer/components/ui/button";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
 export const title = "Project session · identity, info, empty chat";
-export const note = "Scope-matched data as the identity — VC-55 pass 2";
+export const note = "Streak / Board / Venue — the scope decides the menu (VC-55 pass 3)";
 export const viewport = "window" as const;
 
 // ---------------------------------------------------------------------------
-// Fixtures
+// Venue — the thing every visual is really about
 
-const PROJECT = {
-  name: "volli-code",
+interface Venue {
+  kind: "main-checkout" | "worktree";
+  path: string;
+  branch: string;
+  /** Loose in this directory right now. */
+  dirty: { modified: number; added: number; untracked: number };
+  /** What this branch has done vs its base. `null` when there is no base to diff. */
+  diff: { added: number; removed: number; files: number; base: string } | null;
+}
+
+const MAIN_CHECKOUT: Venue = {
+  kind: "main-checkout",
   path: "~/Desktop/code/volli-code",
   branch: "main",
-  model: "Claude Opus 4.6",
-  effort: "High",
-  /** Uncommitted in the MAIN CHECKOUT — the user's own tree. */
   dirty: { modified: 2, added: 1, untracked: 3 },
-} as const;
+  diff: null,
+};
 
-const TICKET = {
-  id: "VC-81",
-  title: "Auto-title v2: model-generated titles",
+const TICKET_WORKTREE: Venue = {
+  kind: "worktree",
+  path: "~/.volli/worktrees/volli-code-f3732f45/VC-81-auto-title…",
   branch: "volli/VC-81-auto-title-model-generated-titles",
-  worktree: "~/.volli/worktrees/volli-code-f3732f45/VC-81-auto-title…",
-  column: "Doing",
-  diff: { added: 214, removed: 63, files: 7 },
-} as const;
+  dirty: { modified: 4, added: 2, untracked: 1 },
+  diff: { added: 214, removed: 63, files: 7, base: "main" },
+};
+
+const SESSION_MODEL = { model: "Claude Opus 4.6", effort: "High" } as const;
 
 /** This repo's real board, so the bars are honestly proportioned. */
 const BOARD = [
@@ -90,79 +111,177 @@ const BOARD = [
   { column: "Done", count: 24 },
 ] as const;
 
-type SessionState = "done" | "active" | "waiting" | "error";
+const MENTIONED = [
+  { id: "VC-54", title: "Home taxonomy: board becomes a tabbed Home" },
+  { id: "VC-75", title: "Active-session discoverability" },
+  { id: "VC-42", title: "UX audit of every user surface" },
+] as const;
 
-/** Each cell carries its own id so the grid never keys on an array index. */
-interface SessionCell {
+// ---------------------------------------------------------------------------
+// Streak fixture — sessions per day, across the whole install
+
+const STREAK_WEEKS = 26;
+
+interface StreakDay {
   id: string;
-  state: SessionState;
+  count: number;
+  /** Days back from today, for the tooltip's date. */
+  ago: number;
 }
 
-/**
- * Deterministic, so the field looks the same every reload and two screenshots
- * are comparable. Pure — no module-level side effects (see `scratch.ts`).
- */
-function sessionField(prefix: string, count: number, seed: number): readonly SessionCell[] {
-  const out: SessionCell[] = [];
-  let x = seed;
-  for (let index = 0; index < count; index += 1) {
+/** Deterministic, with a believable weekday/weekend rhythm and a ramp-up. */
+function streakDays(): readonly StreakDay[] {
+  const out: StreakDay[] = [];
+  const total = STREAK_WEEKS * 7;
+  let x = 20260817;
+  for (let index = 0; index < total; index += 1) {
     x = (x * 1103515245 + 12345) % 2147483648;
     const roll = x / 2147483648;
+    const weekday = index % 7;
+    const weekend = weekday === 0 || weekday === 6;
+    // Volli got used more as it got built — the recent end is denser.
+    const ramp = index / total;
+    const lift = roll * (weekend ? 0.35 : 1) * (0.25 + ramp);
+    const ago = total - 1 - index;
+    // The last few days are never empty: you are reading this IN a session, so
+    // a fixture that shows "0-day streak" is lying about its own premise.
+    const floor = ago <= 4 ? 2 : 0;
     out.push({
-      id: `${prefix}-${index}`,
-      state: roll > 0.94 ? "waiting" : roll > 0.9 ? "error" : roll > 0.82 ? "active" : "done",
+      id: `d${index}`,
+      ago,
+      count: Math.max(
+        floor,
+        lift > 0.62 ? 9 : lift > 0.44 ? 5 : lift > 0.26 ? 2 : lift > 0.12 ? 1 : 0,
+      ),
     });
   }
   return out;
 }
 
-const PROJECT_SESSIONS = sessionField("p", 147, 7);
-const TICKET_SESSIONS: readonly SessionCell[] = [
-  { id: "t-0", state: "done" },
-  { id: "t-1", state: "done" },
-  { id: "t-2", state: "done" },
-  { id: "t-3", state: "active" },
-];
+const STREAK = streakDays();
 
-/** Tickets this session has mentioned as `@vc-nn`. Nothing is fetched for it. */
-const MENTIONED = [
-  { id: "VC-54", title: "Home taxonomy: board becomes a tabbed Home", column: "Todo" },
-  { id: "VC-75", title: "Active-session discoverability", column: "Backlog" },
-  { id: "VC-42", title: "UX audit of every user surface", column: "Done" },
-] as const;
+/** Which of the four ramp steps a day's count lands on. */
+function streakStep(count: number): number {
+  return count === 0 ? 0 : count >= 9 ? 3 : count >= 5 ? 2 : 1;
+}
 
-const STATE_TONE: Record<SessionState, string> = {
-  done: "bg-muted-foreground/30",
-  active: "bg-positive",
-  waiting: "bg-attention",
-  error: "bg-destructive",
-};
+function streakDayLabel(day: StreakDay): string {
+  const sessions =
+    day.count === 0 ? "No sessions" : `${day.count} session${day.count === 1 ? "" : "s"}`;
+  return `${sessions} · ${day.ago === 0 ? "today" : `${day.ago}d ago`}`;
+}
+
+// ---------------------------------------------------------------------------
+// Theme-derived series colour
+//
+// The app's colour tokens are GENERATED from a canvas (CLAUDE.md), so a chart
+// may not carry a palette of its own. These read `--primary` off the live
+// document and fan hues around it in OKLCH, which means the chart re-themes
+// with the window instead of fighting it.
+
+function readToken(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value.length > 0 ? value : fallback;
+}
+
+/**
+ * Ticks whenever the theme changes, so anything derived from a token recomputes.
+ *
+ * This is not optional bookkeeping — it is the whole reason a derived colour is
+ * allowed to exist. `readToken` samples the document once; without a
+ * subscription, a ramp memoised on mount keeps painting the appearance that was
+ * live when it mounted. The first version of the streak grid did exactly that
+ * and drew dark-mode colours on light paper, which read as an inverted grid
+ * (empty days heavier than busy ones) and looked like a palette bug rather than
+ * a staleness bug.
+ *
+ * Appearance is stamped as a CLASS on `documentElement` and the canvas writes
+ * its tokens there as inline custom properties (CLAUDE.md), so watching those
+ * two attributes covers both.
+ */
+function useThemeEpoch(): number {
+  const [epoch, setEpoch] = React.useState(0);
+  React.useEffect(() => {
+    const observer = new MutationObserver(() => setEpoch((value) => value + 1));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return epoch;
+}
+
+/**
+ * `count` hues fanned across ±`spread` degrees around the canvas primary,
+ * holding its lightness and chroma so the series reads as one family. Returns
+ * hex, because that is what a canvas painter and an inline style both take.
+ */
+function seriesColors(count: number, spread = 70): string[] {
+  const primary = readToken("--primary", "#d37550");
+  const { L, C, h } = hexToOklch(primary);
+  if (count === 1) return [oklchToHex(L, C, h)];
+  return Array.from({ length: count }, (_, index) => {
+    const t = index / (count - 1) - 0.5;
+    return oklchToHex(L, C, (h + t * spread + 360) % 360);
+  });
+}
+
+/**
+ * The streak ramp: four steps travelling from the BACKGROUND to the primary,
+ * in the primary's hue.
+ *
+ * Lightness has to travel, not just chroma. Draining chroma out of a mid-tone
+ * primary lands on a mid-tone grey, which on a light canvas is DARKER than the
+ * paper — so the first version drew empty days heavier than busy ones and the
+ * grid read inside out. Interpolating from the background instead is also what
+ * makes one ramp correct in both appearances: light mode ramps down from paper,
+ * dark mode ramps up from ink, and neither is special-cased.
+ */
+function streakRamp(): string[] {
+  const base = hexToOklch(readToken("--background", "#1a1210"));
+  const tip = hexToOklch(readToken("--primary", "#d37550"));
+  // Not 0: an empty day still has to be a cell you can see the grid through.
+  return [0.12, 0.42, 0.72, 1].map((t) =>
+    oklchToHex(lerp(base.L, tip.L, t), lerp(0.004, tip.C, t), tip.h),
+  );
+}
+
+/**
+ * dither-kit's `config` only accepts one of seven hard-coded colour NAMES
+ * (`components/dither-kit/palette.ts` — fixed sRGB triples). There is no
+ * arbitrary-hex path, so a dithered chart cannot take {@link seriesColors}
+ * without us rewriting that palette to derive from the canvas. `orange` is the
+ * nearest neighbour to the ember accent; it is a stand-in, not an endorsement.
+ */
+const DITHER_COLOR = "orange" as const;
 
 // ---------------------------------------------------------------------------
 // Axes
 
-type Identity = "none" | "glyph" | "tint";
+type HomeVisual = "mark" | "streak" | "board" | "board-dither" | "venue";
+type TicketVisual = "mark" | "venue";
 type Info = "none" | "rail" | "venue-bar";
-type Empty = "mark" | "field" | "pulse" | "tree";
 type View = "home" | "ticket" | "both" | "feed";
 
-const IDENTITY_LABELS: Record<Identity, string> = {
-  none: "None (today)",
-  glyph: "Glyph",
-  tint: "Glyph + tint",
+const HOME_VISUAL_LABELS: Record<HomeVisual, string> = {
+  mark: "Mark (today)",
+  streak: "Streak",
+  board: "Board",
+  "board-dither": "Board · dither-kit",
+  venue: "Venue",
+};
+
+const TICKET_VISUAL_LABELS: Record<TicketVisual, string> = {
+  mark: "Mark (today)",
+  venue: "Venue",
 };
 
 const INFO_LABELS: Record<Info, string> = {
   none: "None (today)",
-  rail: "Rail (⌥⌘B) — project only",
-  "venue-bar": "Venue bar — project only",
-};
-
-const EMPTY_LABELS: Record<Empty, string> = {
-  mark: "Mark (today)",
-  field: "Session field",
-  pulse: "Board pulse",
-  tree: "Working tree",
+  rail: "Rail (⌥⌘B) — Home only",
+  "venue-bar": "Venue bar — Home only",
 };
 
 const VIEW_LABELS: Record<View, string> = {
@@ -175,36 +294,25 @@ const VIEW_LABELS: Record<View, string> = {
 // ---------------------------------------------------------------------------
 // Shared parts
 
-/**
- * The scope caption. Demoted on purpose: pass 1 made these the hero and they
- * read as a redundant restatement of the sidebar. One quiet mono line under a
- * drawing is the most they have ever been worth.
- */
-function ScopeCaption({ project }: { project: boolean }) {
+function ScopeCaption({ venue }: { venue: Venue }) {
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 font-mono text-ui text-muted-foreground">
-      <span className="flex items-center gap-1">
-        <FolderOpenIcon
-          weight="bold"
-          className="size-3"
-          aria-label={project ? "Main checkout" : "Worktree"}
-        />
-        {project ? PROJECT.path : TICKET.worktree}
+      <span className="flex items-center gap-1" title={venue.path}>
+        <FolderOpenIcon weight="bold" className="size-3" aria-label="Directory" />
+        {venue.path}
       </span>
       <span className="flex items-center gap-1">
         <GitBranchIcon weight="bold" className="size-3" aria-label="Branch" />
-        {project ? PROJECT.branch : TICKET.branch}
+        {venue.branch}
       </span>
     </div>
   );
 }
 
-/** A backlink chip — what `@VC-54` becomes in the feed and in the rail. */
-function MentionChip({ id, column }: { id: string; column?: string }) {
+function MentionChip({ id }: { id: string }) {
   return (
     <button
       type="button"
-      title={column ? `${id} · ${column}` : id}
       className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-card px-2 align-baseline font-mono text-ui text-foreground transition-colors hover:border-primary/40 hover:text-primary-text"
     >
       <TicketIcon weight="bold" className="size-3 text-muted-foreground" />
@@ -214,13 +322,230 @@ function MentionChip({ id, column }: { id: string; column?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// The four empty-state drawings
-//
-// Each draws differently per scope, and the DIFFERENCE is the point: a field vs
-// a handful, a whole board vs one column, a whole checkout vs one diff.
+// STREAK — every session run in Volli, one cell per day. Home only.
 
-/** Today. Kept only so the others have something to beat. */
-function MarkEmpty() {
+function StreakVisual({ venue }: { venue: Venue }) {
+  // Subscribe, then derive on every render. Four colours is cheaper to compute
+  // than to memoise correctly against a subscription the linter cannot see.
+  useThemeEpoch();
+  const ramp = streakRamp();
+  const total = STREAK.reduce((sum, day) => sum + day.count, 0);
+  const active = STREAK.filter((day) => day.count > 0).length;
+
+  // Current run of consecutive days with at least one session, counting back.
+  let run = 0;
+  for (let index = STREAK.length - 1; index >= 0; index -= 1) {
+    if ((STREAK[index]?.count ?? 0) === 0) break;
+    run += 1;
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      {/* Column-major, like GitHub: each column is a week, each row a weekday. */}
+      <div
+        className="grid grid-flow-col grid-rows-7 gap-1"
+        role="img"
+        aria-label={`${total} sessions over ${STREAK_WEEKS} weeks`}
+      >
+        {/* Native `title`, not a Radix Tooltip: this grid is 182 cells, and
+            182 portalled tooltip roots is a measurable mount cost for a hover
+            hint nobody reads twice. The board bars below DO get Radix — five
+            of them, and the hover is the whole point there. */}
+        {STREAK.map((day) => (
+          <span
+            key={day.id}
+            title={streakDayLabel(day)}
+            className="size-2.5 rounded-sm"
+            style={{ backgroundColor: ramp[streakStep(day.count)] }}
+          />
+        ))}
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-title text-foreground">{total}</span>
+        <span className="text-ui text-muted-foreground">sessions in {STREAK_WEEKS} weeks</span>
+      </div>
+      <div className="flex items-center gap-4 text-ui text-muted-foreground">
+        <span>{active} active days</span>
+        {run > 0 ? <span>{run}-day streak</span> : null}
+      </div>
+      <ScopeCaption venue={venue} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BOARD — the project's column distribution. Home only.
+
+function BoardVisual({ venue }: { venue: Venue }) {
+  useThemeEpoch();
+  const colors = seriesColors(BOARD.length);
+  const peak = Math.max(...BOARD.map((entry) => entry.count));
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="flex h-24 w-80 items-end gap-2" role="img" aria-label="Board distribution">
+        {BOARD.map((entry, index) => (
+          <Tooltip key={entry.column}>
+            <TooltipTrigger asChild>
+              <div className="flex min-w-0 flex-1 cursor-default flex-col items-center gap-1">
+                <span className="text-ui text-muted-foreground">{entry.count}</span>
+                <span
+                  className="w-full rounded-md transition-opacity hover:opacity-80"
+                  style={{
+                    height: `${Math.max(3, (entry.count / peak) * 68)}px`,
+                    backgroundColor: entry.count === 0 ? undefined : colors[index],
+                    opacity: entry.count === 0 ? undefined : 0.85,
+                  }}
+                  // A zero column still needs a body to hover, and it must not
+                  // read as a tiny amount of something.
+                  data-empty={entry.count === 0 ? "true" : "false"}
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>
+              {entry.count} in {entry.column}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+      <div className="flex w-80 gap-2">
+        {BOARD.map((entry) => (
+          <span
+            key={entry.column}
+            className="min-w-0 flex-1 truncate text-center text-label uppercase text-muted-foreground"
+          >
+            {entry.column}
+          </span>
+        ))}
+      </div>
+      <ScopeCaption venue={venue} />
+    </div>
+  );
+}
+
+/** The same data through dither-kit, so the aesthetic can be judged directly. */
+function BoardDitherVisual({ venue }: { venue: Venue }) {
+  const data = React.useMemo(
+    () => BOARD.map((entry) => ({ column: entry.column, tickets: entry.count })),
+    [],
+  );
+  const config = React.useMemo(() => ({ tickets: { label: "Tickets", color: DITHER_COLOR } }), []);
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="h-32 w-80">
+        <BarChart data={data} config={config} bloom="low">
+          <XAxis dataKey="column" />
+          <DitherTooltip labelKey="column" />
+          <Bar dataKey="tickets" variant="gradient" />
+        </BarChart>
+      </div>
+      <ScopeCaption venue={venue} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// VENUE — the merged working-tree overview. Both scopes; ticket default.
+
+/**
+ * Two stacked reads of one directory:
+ *
+ *   TOP     what is loose right now — ticks, one per uncommitted file, coloured
+ *           by kind. Not summed into the diff below, because loose changes are
+ *           not yet part of what the branch has done.
+ *   BOTTOM  what this branch has done vs its base — the proportional +/− bar.
+ *
+ * A venue with no base to diff (the main checkout) draws only the top half and
+ * says so, rather than drawing an empty bar that reads as "no work".
+ */
+function VenueVisual({ venue }: { venue: Venue }) {
+  const { modified, added, untracked } = venue.dirty;
+  const loose = modified + added + untracked;
+  const ticks = [
+    ...Array.from({ length: modified }, (_, i) => ({
+      id: `m${i}`,
+      tone: "bg-attention",
+      kind: "modified",
+    })),
+    ...Array.from({ length: added }, (_, i) => ({
+      id: `a${i}`,
+      tone: "bg-positive",
+      kind: "added",
+    })),
+    ...Array.from({ length: untracked }, (_, i) => ({
+      id: `u${i}`,
+      tone: "bg-muted-foreground/40",
+      kind: "untracked",
+    })),
+  ];
+  const diff = venue.diff;
+  const span = diff === null ? 0 : diff.added + diff.removed;
+
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="flex w-80 flex-col gap-4 rounded-row border border-border bg-card p-4">
+        {/* Loose */}
+        <div className="flex flex-col gap-2">
+          <div className="flex h-10 items-end justify-center gap-1">
+            {loose === 0 ? (
+              <span className="h-1 w-full rounded-full bg-border" />
+            ) : (
+              ticks.map((tick) => (
+                <Tooltip key={tick.id}>
+                  <TooltipTrigger asChild>
+                    <span className={cn("h-full w-2 rounded-full", tick.tone)} />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" sideOffset={6}>
+                    {tick.kind}
+                  </TooltipContent>
+                </Tooltip>
+              ))
+            )}
+          </div>
+          <div className="flex items-baseline justify-center gap-2">
+            <span className="text-heading text-foreground">{loose}</span>
+            <span className="text-ui text-muted-foreground">uncommitted</span>
+          </div>
+        </div>
+
+        <div className="h-px bg-border" />
+
+        {/* Committed on this branch */}
+        {diff === null ? (
+          <div className="flex flex-col items-center gap-1">
+            <span className="text-ui text-muted-foreground">
+              on <span className="font-mono text-foreground">{venue.branch}</span>
+            </span>
+            <span className="text-ui text-muted-foreground">no branch of its own</span>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="flex h-3 overflow-hidden rounded-full">
+              <span className="bg-positive" style={{ width: `${(diff.added / span) * 100}%` }} />
+              <span
+                className="bg-destructive"
+                style={{ width: `${(diff.removed / span) * 100}%` }}
+              />
+            </div>
+            <div className="flex items-baseline justify-center gap-4">
+              <span className="text-heading text-positive">+{diff.added}</span>
+              <span className="text-heading text-destructive">−{diff.removed}</span>
+              <span className="text-ui text-muted-foreground">
+                {diff.files} files vs {diff.base}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+      <ScopeCaption venue={venue} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function MarkVisual() {
   return (
     <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-raised">
       <CodeIcon className="size-5 text-muted-foreground" />
@@ -228,273 +553,60 @@ function MarkEmpty() {
   );
 }
 
-/**
- * SESSION FIELD — every session in scope, one cell each.
- *
- * The project field is dense and the ticket field is four cells in the same
- * geometry, so the two are unmistakable from across the room without either one
- * naming itself. Toned by state, which makes it a live read rather than a
- * decoration: a row of amber is work waiting on you.
- */
-function SessionFieldEmpty({ project }: { project: boolean }) {
-  const cells = project ? PROJECT_SESSIONS : TICKET_SESSIONS;
-  const waiting = cells.filter((cell) => cell.state === "waiting").length;
-  const active = cells.filter((cell) => cell.state === "active").length;
-
-  return (
-    <div className="flex flex-col items-center gap-4">
-      <div
-        className="grid w-80 grid-cols-[repeat(21,minmax(0,1fr))] gap-1"
-        role="img"
-        aria-label={`${cells.length} sessions in scope`}
-      >
-        {cells.map((cell) => (
-          <span
-            key={cell.id}
-            className={cn("aspect-square rounded-full", STATE_TONE[cell.state])}
-            title={cell.state}
-          />
-        ))}
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className="text-title text-foreground">{cells.length}</span>
-        <span className="text-ui text-muted-foreground">
-          {project ? "sessions in this project" : `sessions on ${TICKET.id}`}
-        </span>
-      </div>
-      {active + waiting > 0 ? (
-        <div className="flex items-center gap-4 text-ui text-muted-foreground">
-          {active > 0 ? (
-            <span className="flex items-center gap-1">
-              <StatusDot state="working" />
-              {active} running
-            </span>
-          ) : null}
-          {waiting > 0 ? (
-            <span className="flex items-center gap-1">
-              <StatusDot state="waiting" />
-              {waiting} waiting on you
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-      <ScopeCaption project={project} />
-    </div>
-  );
-}
-
-/**
- * BOARD PULSE — the same five columns, drawn two ways.
- *
- * A project session gets the board's whole distribution as bars: it is looking
- * at all of them. A ticket session gets the identical five as a track with one
- * segment lit: it is one of them, and which one is the single most useful fact
- * about it. Same vocabulary, opposite reading.
- */
-function BoardPulseEmpty({ project }: { project: boolean }) {
-  const peak = Math.max(...BOARD.map((entry) => entry.count));
-
-  if (project) {
-    return (
-      <div className="flex flex-col items-center gap-4">
-        <div className="flex h-24 w-80 items-end gap-2" role="img" aria-label="Board distribution">
-          {BOARD.map((entry) => (
-            <div key={entry.column} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-              <span className="text-ui text-muted-foreground">{entry.count}</span>
-              <span
-                className={cn(
-                  "w-full rounded-md",
-                  entry.count === 0 ? "bg-border" : "bg-primary/30",
-                )}
-                style={{ height: `${Math.max(2, (entry.count / peak) * 68)}px` }}
-              />
-            </div>
-          ))}
-        </div>
-        <div className="flex w-80 gap-2">
-          {BOARD.map((entry) => (
-            <span
-              key={entry.column}
-              className="min-w-0 flex-1 truncate text-center text-label uppercase text-muted-foreground"
-            >
-              {entry.column}
-            </span>
-          ))}
-        </div>
-        <ScopeCaption project={project} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col items-center gap-4">
-      <div
-        className="flex w-80 gap-1"
-        role="img"
-        aria-label={`${TICKET.id} is in ${TICKET.column}`}
-      >
-        {BOARD.map((entry) => (
-          <span
-            key={entry.column}
-            className={cn(
-              "h-1.5 min-w-0 flex-1 rounded-full",
-              entry.column === TICKET.column ? "bg-primary" : "bg-border",
-            )}
-          />
-        ))}
-      </div>
-      <div className="flex w-80 gap-1">
-        {BOARD.map((entry) => (
-          <span
-            key={entry.column}
-            className={cn(
-              "min-w-0 flex-1 truncate text-center text-label uppercase",
-              entry.column === TICKET.column ? "text-primary-text" : "text-muted-foreground",
-            )}
-          >
-            {entry.column}
-          </span>
-        ))}
-      </div>
-      <div className="flex max-w-80 flex-col items-center gap-1">
-        <span className="font-mono text-ui text-muted-foreground">{TICKET.id}</span>
-        <span className="text-heading text-foreground">{TICKET.title}</span>
-      </div>
-      <ScopeCaption project={project} />
-    </div>
-  );
-}
-
-/**
- * WORKING TREE — the dirty count, drawn.
- *
- * This is the replacement for the sentence "Your working tree — not isolated."
- * A project session's tree is the user's own, so its changes are drawn as loose
- * ticks with no diff total: they are not this session's work and summing them
- * would imply they were. A ticket worktree's diff IS the session's work, so it
- * gets the proportional +/− bar.
- */
-function WorkingTreeEmpty({ project }: { project: boolean }) {
-  if (project) {
-    const { modified, added, untracked } = PROJECT.dirty;
-    const total = modified + added + untracked;
-    const ticks = [
-      ...Array.from({ length: modified }, (_, i) => ({ id: `m${i}`, tone: "bg-attention" })),
-      ...Array.from({ length: added }, (_, i) => ({ id: `a${i}`, tone: "bg-positive" })),
-      ...Array.from({ length: untracked }, (_, i) => ({
-        id: `u${i}`,
-        tone: "bg-muted-foreground/40",
-      })),
-    ];
-    return (
-      <div className="flex flex-col items-center gap-4">
-        <div
-          className="flex h-12 w-80 items-end justify-center gap-1"
-          role="img"
-          aria-label={`${total} uncommitted files`}
-        >
-          {ticks.map((tick) => (
-            <span key={tick.id} className={cn("h-full w-2 rounded-full", tick.tone)} />
-          ))}
-        </div>
-        <div className="flex items-baseline gap-2">
-          <span className="text-title text-foreground">{total}</span>
-          <span className="text-ui text-muted-foreground">uncommitted here</span>
-        </div>
-        <div className="flex items-center gap-4 text-ui text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <span className="size-2 rounded-full bg-attention" />
-            {modified} modified
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="size-2 rounded-full bg-positive" />
-            {added} added
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="size-2 rounded-full bg-muted-foreground/40" />
-            {untracked} untracked
-          </span>
-        </div>
-        <ScopeCaption project={project} />
-      </div>
-    );
-  }
-
-  const { added, removed, files } = TICKET.diff;
-  const span = added + removed;
-  return (
-    <div className="flex flex-col items-center gap-4">
-      <div
-        className="flex h-3 w-80 overflow-hidden rounded-full"
-        role="img"
-        aria-label={`${added} added, ${removed} removed`}
-      >
-        <span className="bg-positive" style={{ width: `${(added / span) * 100}%` }} />
-        <span className="bg-destructive" style={{ width: `${(removed / span) * 100}%` }} />
-      </div>
-      <div className="flex items-baseline gap-4">
-        <span className="text-title text-positive">+{added}</span>
-        <span className="text-title text-destructive">−{removed}</span>
-      </div>
-      <span className="text-ui text-muted-foreground">{files} files in this worktree</span>
-      <ScopeCaption project={project} />
-    </div>
-  );
-}
-
-function EmptyChat({ variant, project }: { variant: Empty; project: boolean }) {
+function EmptyChat({ visual, venue }: { visual: HomeVisual; venue: Venue }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-gutter py-8 text-center">
-      {variant === "mark" ? <MarkEmpty /> : null}
-      {variant === "field" ? <SessionFieldEmpty project={project} /> : null}
-      {variant === "pulse" ? <BoardPulseEmpty project={project} /> : null}
-      {variant === "tree" ? <WorkingTreeEmpty project={project} /> : null}
+      {visual === "mark" ? <MarkVisual /> : null}
+      {visual === "streak" ? <StreakVisual venue={venue} /> : null}
+      {visual === "board" ? <BoardVisual venue={venue} /> : null}
+      {visual === "board-dither" ? <BoardDitherVisual venue={venue} /> : null}
+      {visual === "venue" ? <VenueVisual venue={venue} /> : null}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Info surfaces — PROJECT ONLY. The ticket rail is a non-goal.
+// Info surfaces — Home only. The ticket rail is a non-goal.
 
-function VenueBar() {
-  const { modified, added, untracked } = PROJECT.dirty;
+function VenueBar({ venue }: { venue: Venue }) {
+  const { modified, added, untracked } = venue.dirty;
   return (
     <div className="flex shrink-0 items-center gap-4 border-b border-border px-4 py-2 font-mono text-ui text-muted-foreground">
       <span className="flex items-center gap-1">
         <FolderOpenIcon weight="bold" className="size-3" />
-        {PROJECT.path}
+        {venue.path}
       </span>
       <span className="flex items-center gap-1">
         <GitBranchIcon weight="bold" className="size-3" />
-        {PROJECT.branch}
+        {venue.branch}
       </span>
       <span className="flex items-center gap-1 text-attention">
         <span className="size-2 rounded-full bg-attention" />
         {modified + added + untracked}
       </span>
       <span className="ml-auto">
-        {PROJECT.model} · {PROJECT.effort}
+        {SESSION_MODEL.model} · {SESSION_MODEL.effort}
       </span>
     </div>
   );
 }
 
-function InfoRail() {
-  const { modified, added, untracked } = PROJECT.dirty;
+function InfoRail({ venue }: { venue: Venue }) {
+  const { modified, added, untracked } = venue.dirty;
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-sidebar">
       <section className="flex flex-col gap-2 px-4 py-4">
         <h3 className="text-label uppercase text-muted-foreground">Venue</h3>
         <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
-          <p className="truncate font-mono text-ui text-foreground" title={PROJECT.path}>
-            {PROJECT.path}
+          <p className="truncate font-mono text-ui text-foreground" title={venue.path}>
+            {venue.path}
           </p>
           <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1 font-mono text-ui text-muted-foreground">
-              <GitBranchIcon weight="bold" className="size-3" />
-              {PROJECT.branch}
+            <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
+              <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+              <span className="truncate">{venue.branch}</span>
             </span>
-            <span className="flex items-center gap-1 text-ui text-attention">
+            <span className="flex shrink-0 items-center gap-1 text-ui text-attention">
               <span className="size-2 rounded-full bg-attention" />
               {modified + added + untracked}
             </span>
@@ -505,15 +617,14 @@ function InfoRail() {
       <section className="flex flex-col gap-2 px-4 py-4">
         <h3 className="text-label uppercase text-muted-foreground">Session</h3>
         <div className="flex flex-col gap-2">
-          {[
-            ["Model", PROJECT.model],
-            ["Effort", PROJECT.effort],
-          ].map(([label, value]) => (
-            <div key={label} className="flex items-center justify-between gap-2">
-              <span className="text-ui text-muted-foreground">{label}</span>
-              <span className="text-ui text-foreground">{value}</span>
-            </div>
-          ))}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-ui text-muted-foreground">Model</span>
+            <span className="text-ui text-foreground">{SESSION_MODEL.model}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-ui text-muted-foreground">Effort</span>
+            <span className="text-ui text-foreground">{SESSION_MODEL.effort}</span>
+          </div>
           <div className="flex items-center justify-between gap-2">
             <span className="text-ui text-muted-foreground">Activity</span>
             <span className="flex items-center gap-1 text-ui text-foreground">
@@ -524,10 +635,9 @@ function InfoRail() {
         </div>
       </section>
 
-      {/* MENTIONED, not "Touched": the word states the mechanism. A ticket is in
-          this list because someone wrote `@vc-nn` in the transcript — which is
-          also what makes it a backlink chip in the feed. One taxonomy, two
-          surfaces. */}
+      {/* MENTIONED, not "Touched": the word states the mechanism. A ticket is
+          here because someone wrote `@vc-nn` — the same taxonomy that makes it
+          a backlink chip in the feed. One vocabulary, two surfaces. */}
       <section className="flex flex-col gap-2 px-4 py-4">
         <h3 className="text-label uppercase text-muted-foreground">Mentioned</h3>
         <div className="flex flex-col gap-1">
@@ -547,27 +657,21 @@ function InfoRail() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Feed — only here to judge the backlink chip inline in running text.
-
 function FeedPreview() {
   return (
     <div className="mx-auto flex max-w-content flex-col gap-6 px-gutter py-8">
       <div className="flex flex-col gap-2">
         <span className="text-label uppercase text-muted-foreground">You</span>
         <p className="text-sm leading-prose text-foreground">
-          Fold <MentionChip id="VC-55" column="Todo" /> into{" "}
-          <MentionChip id="VC-54" column="Todo" /> where they overlap, and check whether the digest
-          half belongs in <MentionChip id="VC-75" column="Backlog" /> instead.
+          Fold <MentionChip id="VC-55" /> into <MentionChip id="VC-54" /> where they overlap, and
+          check whether the digest half belongs in <MentionChip id="VC-75" /> instead.
         </p>
       </div>
       <div className="flex flex-col gap-2">
         <span className="text-label uppercase text-muted-foreground">Agent</span>
         <p className="text-sm leading-prose text-foreground">
-          The tab-strip half of <MentionChip id="VC-55" column="Todo" /> dissolves into{" "}
-          <MentionChip id="VC-54" column="Todo" /> — after Home the two kinds never share a strip.
-          The digest is already <MentionChip id="VC-75" column="Backlog" />
-          &apos;s.
+          The tab-strip half of <MentionChip id="VC-55" /> dissolves into <MentionChip id="VC-54" />{" "}
+          — after Home the two kinds never share a strip.
         </p>
       </div>
     </div>
@@ -577,19 +681,9 @@ function FeedPreview() {
 // ---------------------------------------------------------------------------
 // Surface
 
-function Surface({
-  project,
-  identity,
-  info,
-  empty,
-}: {
-  project: boolean;
-  identity: Identity;
-  info: Info;
-  empty: Empty;
-}) {
-  const tinted = project && identity === "tint";
-  const Glyph = project && identity !== "none" ? CompassIcon : ChatCircleIcon;
+function Surface({ project, visual, info }: { project: boolean; visual: HomeVisual; info: Info }) {
+  const venue = project ? MAIN_CHECKOUT : TICKET_WORKTREE;
+  const Glyph = project ? CompassIcon : ChatCircleIcon;
   const PermanentGlyph = project ? KanbanIcon : TicketIcon;
   const tabs = project
     ? [
@@ -602,8 +696,6 @@ function Surface({
       ];
   const activeIndex = 1;
   const stop = tabStopIndex(tabs.length, activeIndex);
-  // Both info surfaces are project-only — the ticket workspace keeps the rail
-  // it already has, untouched.
   const railOn = project && info === "rail";
 
   return (
@@ -633,18 +725,11 @@ function Surface({
             tabStop={index === stop}
             closable={!tab.permanent}
             status={index === activeIndex ? "ready" : undefined}
-            labelClassName={index === activeIndex && tinted ? "text-primary-text" : undefined}
             leading={
               tab.permanent ? (
                 <PermanentGlyph weight="bold" className="size-3 shrink-0 text-muted-foreground" />
               ) : (
-                <Glyph
-                  weight="bold"
-                  className={cn(
-                    "size-3 shrink-0",
-                    tinted ? "text-primary-text" : "text-muted-foreground",
-                  )}
-                />
+                <Glyph weight="bold" className="size-3 shrink-0 text-muted-foreground" />
               )
             }
             onActivate={() => {}}
@@ -652,31 +737,25 @@ function Surface({
         ))}
       </TabStrip>
 
-      {project && info === "venue-bar" ? <VenueBar /> : null}
+      {project && info === "venue-bar" ? <VenueBar venue={venue} /> : null}
 
       <div className="flex min-h-0 flex-1">
-        <div
-          className={cn(
-            "relative flex min-h-0 min-w-0 flex-1 flex-col",
-            tinted &&
-              "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-primary/30",
-          )}
-        >
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
-            <EmptyChat variant={empty} project={project} />
+            <EmptyChat visual={visual} venue={venue} />
           </div>
           <div className="shrink-0 px-4 pb-4">
             <div className="mx-auto flex max-w-content flex-col gap-2 rounded-container border border-border bg-card p-4 shadow-raised">
               <span className="text-sm text-muted-foreground">Message…</span>
               <div className="flex items-center gap-2 text-ui text-muted-foreground">
-                <span>{PROJECT.model}</span>
+                <span>{SESSION_MODEL.model}</span>
                 <span>·</span>
-                <span>{PROJECT.effort}</span>
+                <span>{SESSION_MODEL.effort}</span>
               </div>
             </div>
           </div>
         </div>
-        {railOn ? <InfoRail /> : null}
+        {railOn ? <InfoRail venue={venue} /> : null}
       </div>
     </div>
   );
@@ -715,44 +794,54 @@ function AxisPicker<T extends string>({
 }
 
 export default function ProjectSessionIdentityScratch() {
-  const [identity, setIdentity] = React.useState<Identity>("glyph");
-  const [info, setInfo] = React.useState<Info>("rail");
-  const [empty, setEmpty] = React.useState<Empty>("field");
+  // Two pickers, not one: this is the shape the Settings control would take —
+  // a default per scope, chosen from that scope's legal set. The ticket set
+  // being shorter is the point, not an omission.
+  const [homeVisual, setHomeVisual] = React.useState<HomeVisual>("streak");
+  const [ticketVisual, setTicketVisual] = React.useState<TicketVisual>("venue");
+  const [info, setInfo] = React.useState<Info>("venue-bar");
   const [view, setView] = React.useState<View>("both");
 
   return (
-    <div className="flex h-svh w-full flex-col bg-rail">
-      <div className="flex min-h-0 flex-1 gap-2 p-2 pb-16">
-        {view === "feed" ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-xl border border-border bg-background">
-            <FeedPreview />
-          </div>
-        ) : (
-          <>
-            {view !== "ticket" ? (
-              <Surface project identity={identity} info={info} empty={empty} />
-            ) : null}
-            {view !== "home" ? (
-              <Surface project={false} identity={identity} info={info} empty={empty} />
-            ) : null}
-          </>
-        )}
-      </div>
+    // The app shell mounts this once at its root; a scratch that uses `Tooltip`
+    // has to bring its own.
+    <TooltipProvider>
+      <div className="flex h-svh w-full flex-col bg-rail">
+        <div className="flex min-h-0 flex-1 gap-2 p-2 pb-16">
+          {view === "feed" ? (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-xl border border-border bg-background">
+              <FeedPreview />
+            </div>
+          ) : (
+            <>
+              {view !== "ticket" ? <Surface project visual={homeVisual} info={info} /> : null}
+              {view !== "home" ? (
+                <Surface project={false} visual={ticketVisual} info={info} />
+              ) : null}
+            </>
+          )}
+        </div>
 
-      <div className="fixed bottom-3 left-3 z-[9998] flex max-w-[calc(100vw-14rem)] flex-wrap items-center gap-4 rounded-full border border-border bg-background/90 px-4 py-2 shadow-overlay backdrop-blur">
-        <AxisPicker
-          label="Identity"
-          value={identity}
-          options={IDENTITY_LABELS}
-          onChange={setIdentity}
-        />
-        <AxisPicker label="Info" value={info} options={INFO_LABELS} onChange={setInfo} />
-        <AxisPicker label="Empty" value={empty} options={EMPTY_LABELS} onChange={setEmpty} />
-        <AxisPicker label="View" value={view} options={VIEW_LABELS} onChange={setView} />
-        <code className="font-mono text-label text-muted-foreground">
-          {identity} / {info} / {empty}
-        </code>
+        <div className="fixed bottom-3 left-3 z-[9998] flex max-w-[calc(100vw-14rem)] flex-wrap items-center gap-4 rounded-full border border-border bg-background/90 px-4 py-2 shadow-overlay backdrop-blur">
+          <AxisPicker
+            label="Home"
+            value={homeVisual}
+            options={HOME_VISUAL_LABELS}
+            onChange={setHomeVisual}
+          />
+          <AxisPicker
+            label="Ticket"
+            value={ticketVisual}
+            options={TICKET_VISUAL_LABELS}
+            onChange={setTicketVisual}
+          />
+          <AxisPicker label="Info" value={info} options={INFO_LABELS} onChange={setInfo} />
+          <AxisPicker label="View" value={view} options={VIEW_LABELS} onChange={setView} />
+          <code className="font-mono text-label text-muted-foreground">
+            {homeVisual} / {ticketVisual}
+          </code>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
