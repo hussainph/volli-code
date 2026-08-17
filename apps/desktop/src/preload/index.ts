@@ -52,6 +52,9 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  CliDoctorInput,
+  CliDoctorResult,
+  CliStatusResult,
   CommentCreateInput,
   CommentIdInput,
   CommentUpdateInput,
@@ -525,6 +528,16 @@ const api = {
      * has a shelf life.
      */
     registered: (): Promise<HarnessRegisteredResult> => invoke("volli:harness-registered"),
+  },
+  /**
+   * The Settings → CLI detection surface (VC-52). The install is silent and
+   * background, so this is the one place its truth can be read: link, PATH,
+   * socket, wrappers, shell chain — measured fresh per call, never cached.
+   */
+  cli: {
+    status: (): Promise<CliStatusResult> => invoke("volli:cli-status"),
+    /** A real `volli doctor` run through the user's login shell; `fix` repairs first. */
+    doctor: (input: CliDoctorInput): Promise<CliDoctorResult> => invoke("volli:cli-doctor", input),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */

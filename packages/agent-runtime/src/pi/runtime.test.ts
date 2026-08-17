@@ -443,6 +443,33 @@ describe("model access", () => {
     ]);
   });
 
+  it("omits the context window for a catalog entry whose size a meter cannot divide by", async () => {
+    // Pi types the field as required, but a gateway entry can still carry 0 —
+    // and "no window" must stay distinguishable from a zero-token one.
+    const faux = fauxProvider({
+      provider: "groq",
+      models: [{ id: "windowless", contextWindow: 0 }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider({
+      ...faux.provider,
+      name: "Groq",
+      auth: { apiKey: { name: "Groq API key", resolve: async () => undefined } },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 42,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.models).toEqual([
+      expect.objectContaining({ providerId: "groq", modelId: "windowless" }),
+    ]);
+    expect("contextWindow" in access.models[0]).toBe(false);
+  });
+
   it("isolates provider authentication failures without exposing their details", async () => {
     const broken = fauxProvider({
       provider: "anthropic",

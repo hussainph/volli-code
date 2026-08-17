@@ -221,7 +221,8 @@ export interface PiAdapterOptions {
    * Injectable execution environment factory. Defaults to Pi's own
    * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
    * onto a Session's `PATH`, so `volli` resolves inside a structured turn's
-   * shell tool with or without the consented `/usr/local/bin` symlink.
+   * shell tool whether or not the background install's `~/.local/bin/volli`
+   * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */

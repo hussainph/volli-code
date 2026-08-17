@@ -11,8 +11,8 @@
  *   3. The launcher shim `<userData>/bin/volli` is (re)generated on boot, so an
  *      agent has a `volli` to run.
  *
- * Consent is pre-answered "defer" via the test seam so no native
- * dialog sheet dangles over teardown (this probe is not about consent).
+ * The background CLI/skills install is off (smoke-kit's VOLLI_SKIP_AGENT_TOOLS
+ * default) so nothing lands in the real home (this probe is not about install).
  *
  *   Run:
  *     vp run --filter @volli/desktop build
@@ -46,7 +46,7 @@ async function main() {
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_AGENT_CONSENT_CHOICE: "defer" },
+    extraEnv: {},
   });
   const socketPath = socketPathFor(userDataDir);
   const shimPath = shimPathFor(userDataDir);

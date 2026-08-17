@@ -101,6 +101,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
+        "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/sessions/terminal-tab-state.ts",

@@ -68,7 +68,7 @@ async function main() {
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_AGENT_CONSENT_CHOICE: "defer", ZDOTDIR: zdotDir },
+    extraEnv: { ZDOTDIR: zdotDir },
   });
   // The app canonicalizes its userData path (/tmp → /private/tmp on macOS), so
   // compare env values the PTY reports against the realpath'd profile.

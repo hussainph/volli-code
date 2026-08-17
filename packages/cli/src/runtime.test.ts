@@ -180,7 +180,7 @@ describe("launchApp", () => {
           VOLLI_APP_ENTRY: "/tmp/evil-entry",
           VOLLI_DB_PATH: "/tmp/evil.db",
           VOLLI_AGENT_HOME: "/tmp/evil-home",
-          VOLLI_AGENT_CONSENT_CHOICE: "install",
+          VOLLI_SKIP_AGENT_TOOLS: "1",
           VOLLI_SKIP_CLOSE_CONFIRM: "1",
         },
       } as Parameters<typeof launchApp>[0],

@@ -165,11 +165,9 @@ async function main() {
       HOME: fakeHome,
       VOLLI_WORKTREE_HOME_DIR: worktreesRoot,
       PATH: BARE_PATH,
-      // Pre-answers the first-boot "Install the Volli CLI and agent skills?"
-      // dialog (the other CLI smokes all do this) — this run spends its one
-      // real, billed turn on the chat-mode assertion, not on a native sheet
-      // sitting unanswered over the window it drives.
-      VOLLI_AGENT_CONSENT_CHOICE: "defer",
+      // The background CLI/skills install is off by default in smoke-kit
+      // (VOLLI_SKIP_AGENT_TOOLS=1), so nothing lands in the real home and this
+      // run spends its one real, billed turn on the chat-mode assertion.
     },
   });
   const mainStdout = [];
