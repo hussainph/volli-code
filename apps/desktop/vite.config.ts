@@ -105,6 +105,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
+        "src/components/sidebar/edge-region.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
