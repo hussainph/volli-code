@@ -37,6 +37,7 @@ import {
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
+import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   gatedToolCallId,
   gatedToolCallIds,
@@ -575,9 +576,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
                     live={working && index === turns.length - 1}
                   />
                 ))}
-                {working && isAwaitingFirstOutput(messages) ? (
-                  <ReasoningLine verb="Working" meta={null} streaming />
-                ) : null}
+                {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
               </ContentColumn>
             )}
           </ConversationContent>
@@ -725,6 +724,61 @@ function composerModel(
     reasoningLevels: model.reasoningLevels,
   };
 }
+
+/* ---------------------------------------------------------------- running */
+
+/**
+ * The one thing on screen that says the turn is not over.
+ *
+ * It lives for the WHOLE turn now, not just the gap before the first token.
+ * That gap was the only moment the transcript could not speak for itself, so it
+ * was the only moment this was drawn — and every moment after it looked exactly
+ * like a finished reply: settled prose, a collapsed bundle, nothing moving. A
+ * reader could not tell a turn that had ended from one that was two tool calls
+ * from ending, which is what the first external user described as disorienting.
+ * The mark is mounted by `working` and unmounted by it, so the stop token that
+ * ends the turn is the same event that takes it off screen; there is no timer
+ * and no second source of truth to disagree with the lifecycle.
+ *
+ * TWO DRESSES, because the transcript's own voice is the better one wherever it
+ * has something to say. Before the first output there is nothing else on
+ * screen, so the mark says the word; once a bundle above it is reporting
+ * `Running 2 commands…` the word would be the same sentence twice at two
+ * indents, and the orbs alone carry the fact that neither of them has stopped.
+ *
+ * The words are said once, `sr-only`, inside the live region — so the dress
+ * swap mid-turn is silent (the orbs are `aria-hidden`) and a screen reader
+ * hears "Working" at the start of a turn rather than at every step of it.
+ *
+ * Memoized on one boolean, which is the whole of its props: this sits in the
+ * plane's own render, and the plane renders on every streamed frame of the very
+ * turn the mark is reporting. `narrated` flips once per turn.
+ */
+export const TurnRunningMark = React.memo(function TurnRunningMark({
+  narrated,
+}: {
+  /**
+   * The transcript is already reporting this turn's work, so the mark drops
+   * its own word and keeps only the orbs.
+   */
+  narrated: boolean;
+}) {
+  return (
+    <div role="status" className="flex min-w-0 flex-col">
+      <span className="sr-only">Working</span>
+      <div aria-hidden className="flex min-w-0">
+        {narrated ? (
+          // `py-1` is the row padding {@link ReasoningLine} carries, so the
+          // orbs sit on the same rhythm as the line they stand in for and the
+          // tail does not jump when the dress changes.
+          <ThinkingOrbs className="py-1 text-primary" />
+        ) : (
+          <ReasoningLine verb="Working" meta={null} streaming />
+        )}
+      </div>
+    </div>
+  );
+});
 
 /* ---------------------------------------------------------------- blocked */
 
