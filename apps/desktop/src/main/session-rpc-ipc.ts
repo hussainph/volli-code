@@ -11,7 +11,14 @@ import {
   type TicketSessionStartInput,
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
-import type { ModelAccessSnapshot, ModelSelection, SessionStartResult } from "@volli/shared";
+import type {
+  HiddenModelRef,
+  ModelAccessDefaults,
+  ModelAccessSnapshot,
+  ModelPurpose,
+  ModelSelection,
+  SessionStartResult,
+} from "@volli/shared";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -100,8 +107,13 @@ export type SessionRpcIpcCoverage = AssertNever<
 export interface RegisterSessionRpcIpcOptions {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
-  readDefaultModelSelection?: () => ModelSelection | null;
-  writeDefaultModelSelection?: (selection: ModelSelection) => void | Promise<void>;
+  readModelAccessDefaults?: () => ModelAccessDefaults;
+  writeModelAccessDefault?: (
+    purpose: ModelPurpose,
+    selection: ModelSelection | null,
+  ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
+  readHiddenModels?: () => readonly HiddenModelRef[];
+  writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
   startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
   createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
   attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -154,8 +166,10 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         const caller = router.createCaller({
           runtime: options.runtime,
           inspectModelAccess: options.inspectModelAccess,
-          readDefaultModelSelection: options.readDefaultModelSelection,
-          writeDefaultModelSelection: options.writeDefaultModelSelection,
+          readModelAccessDefaults: options.readModelAccessDefaults,
+          writeModelAccessDefault: options.writeModelAccessDefault,
+          readHiddenModels: options.readHiddenModels,
+          writeHiddenModels: options.writeHiddenModels,
           startTicketSession: options.startTicketSession,
           createTicketSession: options.createTicketSession,
           attachTicketSession: options.attachTicketSession,
@@ -284,10 +298,14 @@ async function callProcedure(
   switch (request.procedure) {
     case "modelAccess.inspect":
       return caller.modelAccess.inspect(request.input as never);
-    case "modelAccess.defaultSelection":
-      return caller.modelAccess.defaultSelection();
+    case "modelAccess.defaults":
+      return caller.modelAccess.defaults();
     case "modelAccess.setDefault":
       return caller.modelAccess.setDefault(request.input as never);
+    case "modelAccess.hiddenModels":
+      return caller.modelAccess.hiddenModels();
+    case "modelAccess.setHiddenModels":
+      return caller.modelAccess.setHiddenModels(request.input as never);
     case "ticketSessions.start":
       return caller.ticketSessions.start(request.input as never);
     case "ticketSessions.create":

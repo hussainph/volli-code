@@ -654,6 +654,38 @@ describe("Ticket Sessions", () => {
       expect(commands).toEqual([]);
     });
 
+    it("runs a model-only override at medium when no default supplies a level", async () => {
+      // The no-default + --model case: nothing configured to inherit a level
+      // from, so Volli's central "medium" is the stated policy — validated
+      // against the chosen model like any other level, never silently assumed
+      // to fit.
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const ticketSessions = createTicketSessions({
+        readBornTicketless: async () => false,
+        ticketBelongsToProject: () => true,
+        skills: NO_SKILLS,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return result(request);
+          },
+        },
+        readDefaultModel: () => null,
+        inspectModelAccess: async () => access,
+      });
+
+      const started = await ticketSessions.start({
+        ...startInput("operation-model-no-default"),
+        modelOverride: { model: { providerId: "anthropic", modelId: "claude-opus" } },
+      });
+
+      expect(started.model).toEqual({
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "medium",
+      });
+    });
+
     it("requires a default or an explicit model before honoring a reasoning-only override", async () => {
       const commands: SessionRuntimeCommandRequest[] = [];
       const ticketSessions = createTicketSessions({

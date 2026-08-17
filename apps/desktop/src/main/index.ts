@@ -23,6 +23,7 @@ import {
   harnessAdapters,
   globalSkillsDir,
   projectSkillsDir,
+  resolveDefaultModel,
   resolveShell,
   skillPromptResource,
   skillsIndexResource,
@@ -67,8 +68,10 @@ import {
 import { loadSkills } from "./skills";
 import {
   assertDefaultModelAvailable,
-  readDefaultModelSelection,
-  writeDefaultModelSelection,
+  readHiddenModels,
+  readModelAccessDefaults,
+  writeHiddenModels,
+  writeModelAccessDefault,
 } from "./session-runtime/model-access-preferences";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
 import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
@@ -744,7 +747,9 @@ app.whenReady().then(async () => {
     sessionSkills !== null
       ? createTicketSessions({
           runtime: sessionRuntime,
-          readDefaultModel: () => readDefaultModelSelection(sessionDb),
+          // The Ticket purpose — the execution default — falling back to the
+          // global one when no explicit ticket choice exists (VC-53).
+          readDefaultModel: () => resolveDefaultModel(readModelAccessDefaults(sessionDb), "ticket"),
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readBornTicketless: async (sessionId) =>
@@ -776,7 +781,8 @@ app.whenReady().then(async () => {
     sessionSkills !== null
       ? createProjectSessions({
           runtime: sessionRuntime,
-          readDefaultModel: () => readDefaultModelSelection(sessionDb),
+          // The global purpose: orchestration — Home/project chats (VC-53).
+          readDefaultModel: () => resolveDefaultModel(readModelAccessDefaults(sessionDb), "global"),
           readBornTicketless: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
           readModelSelection: async (sessionId) =>
@@ -790,14 +796,25 @@ app.whenReady().then(async () => {
       : registerSessionRpcIpcHandlers({
           runtime: sessionRuntime,
           inspectModelAccess: piRuntimeHost?.inspectModelAccess,
-          readDefaultModelSelection:
-            sessionDb !== null ? () => readDefaultModelSelection(sessionDb) : undefined,
-          writeDefaultModelSelection:
+          readModelAccessDefaults:
+            sessionDb !== null ? () => readModelAccessDefaults(sessionDb) : undefined,
+          writeModelAccessDefault:
             sessionDb !== null && piRuntimeHost !== null
-              ? async (selection) => {
-                  const access = await piRuntimeHost.inspectModelAccess({});
-                  assertDefaultModelAvailable(access, selection);
-                  writeDefaultModelSelection(sessionDb, selection, Date.now());
+              ? async (purpose, selection) => {
+                  // Clearing an explicit choice needs no availability check —
+                  // it resolves to the global default, which had one when saved.
+                  if (selection !== null) {
+                    const access = await piRuntimeHost.inspectModelAccess({});
+                    assertDefaultModelAvailable(access, selection);
+                  }
+                  return writeModelAccessDefault(sessionDb, purpose, selection, Date.now());
+                }
+              : undefined,
+          readHiddenModels: sessionDb !== null ? () => readHiddenModels(sessionDb) : undefined,
+          writeHiddenModels:
+            sessionDb !== null
+              ? (hidden) => {
+                  writeHiddenModels(sessionDb, hidden, Date.now());
                 }
               : undefined,
           startTicketSession: ticketSessions?.start,

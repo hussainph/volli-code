@@ -34,8 +34,10 @@ export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
  */
 export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "modelAccess.inspect",
-  "modelAccess.defaultSelection",
+  "modelAccess.defaults",
   "modelAccess.setDefault",
+  "modelAccess.hiddenModels",
+  "modelAccess.setHiddenModels",
   "ticketSessions.start",
   "ticketSessions.create",
   "ticketSessions.attach",

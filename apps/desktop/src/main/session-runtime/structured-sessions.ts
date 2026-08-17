@@ -16,6 +16,7 @@
  */
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
+import { DEFAULT_MODEL_REQUIRED } from "@volli/shared";
 import type { ModelSelection, PromptResource, SessionStartResult } from "@volli/shared";
 
 /**
@@ -33,10 +34,11 @@ export const STRUCTURED_ADAPTER_ID = "pi";
 /**
  * The refusal, once, for both Roles. Two wordings of one rule would read as two
  * rules — a person meeting it on a project chat and again on a Ticket has no way
- * to tell that the second is the same missing setting as the first.
+ * to tell that the second is the same missing setting as the first. The wording
+ * itself lives in `@volli/shared` because the renderer classifies this refusal
+ * as a predictable configuration state rather than an error to toast.
  */
-export const DEFAULT_MODEL_REQUIRED =
-  "Choose a default model in Settings before starting a Session.";
+export { DEFAULT_MODEL_REQUIRED };
 
 export type StructuredSessionsErrorCode =
   | "DEFAULT_MODEL_REQUIRED"

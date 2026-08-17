@@ -13,10 +13,14 @@ import {
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  MODEL_PURPOSES,
   REASONING_LEVELS,
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type HiddenModelRef,
+  type ModelAccessDefaults,
+  type ModelPurpose,
   type RendererSessionEvent,
   type SessionPresentationProjection,
 } from "@volli/shared";
@@ -102,8 +106,13 @@ export interface SessionCreateResult {
 export interface SessionRouterContext {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
-  readDefaultModelSelection?: () => RpcModelSelection | null;
-  writeDefaultModelSelection?: (selection: RpcModelSelection) => void | Promise<void>;
+  readModelAccessDefaults?: () => ModelAccessDefaults;
+  writeModelAccessDefault?: (
+    purpose: ModelPurpose,
+    selection: RpcModelSelection | null,
+  ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
+  readHiddenModels?: () => readonly HiddenModelRef[];
+  writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
   startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
   /** Create-only (no attach): the optimistic chat-open route — see the facades. */
   createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
@@ -317,6 +326,21 @@ const modelSelectionSchema = z.object({
   modelId: nonEmptyString,
   reasoningLevel: z.enum(REASONING_LEVELS),
 });
+const modelPurposeSchema = z.enum(MODEL_PURPOSES);
+const modelAccessDefaultsSchema = z.object({
+  global: modelSelectionSchema.nullable(),
+  ticket: modelSelectionSchema.nullable(),
+  utility: modelSelectionSchema.nullable(),
+});
+/**
+ * A hidden-model entry is an identity pair, never a whole model row: the list
+ * is user curation persisted app-wide, and anything beyond the two ids would
+ * be catalog state masquerading as preference. The count cap is a sanity bound
+ * — the catalog itself is ~1000 entries.
+ */
+const hiddenModelsSchema = z
+  .array(z.object({ providerId: nonEmptyString, modelId: nonEmptyString }))
+  .max(2000);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 const modelAccessSnapshotSchema = z.object({
   observedAt: z.number().finite(),
@@ -617,20 +641,45 @@ export function createSessionRouter() {
           }
           return modelAccessSnapshotSchema.parse(await ctx.inspectModelAccess(input));
         }),
-      defaultSelection: instrumentedProcedure.query(({ ctx }) => {
-        if (!ctx.readDefaultModelSelection) {
+      defaults: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readModelAccessDefaults) {
           unavailable("Model Access preferences are unavailable on this transport");
         }
-        const selection = ctx.readDefaultModelSelection();
-        return selection === null ? null : modelSelectionSchema.parse(selection);
+        return modelAccessDefaultsSchema.parse(ctx.readModelAccessDefaults());
       }),
       setDefault: instrumentedProcedure
-        .input(modelSelectionSchema)
+        .input(
+          z
+            .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
+            // Clearing ticket/utility means "use the project default"; clearing
+            // global would leave every purpose resolving to nothing, which is a
+            // state the UI never offers and this edge refuses to mint.
+            .refine(
+              (input) => input.purpose !== "global" || input.selection !== null,
+              "The project default cannot be cleared — choose a model instead",
+            ),
+        )
         .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeDefaultModelSelection) {
+          if (!ctx.writeModelAccessDefault) {
             unavailable("Model Access preferences are unavailable on this transport");
           }
-          await ctx.writeDefaultModelSelection(input);
+          return modelAccessDefaultsSchema.parse(
+            await ctx.writeModelAccessDefault(input.purpose, input.selection),
+          );
+        }),
+      hiddenModels: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readHiddenModels) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return hiddenModelsSchema.parse(ctx.readHiddenModels());
+      }),
+      setHiddenModels: instrumentedProcedure
+        .input(hiddenModelsSchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeHiddenModels) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          await ctx.writeHiddenModels(input);
           return input;
         }),
     }),
