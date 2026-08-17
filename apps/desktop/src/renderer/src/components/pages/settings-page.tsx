@@ -3,6 +3,7 @@ import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
@@ -11,6 +12,7 @@ import { errorMessage } from "@volli/shared";
 import type { DirtyWorktreeOrphan } from "../../../../ipc/contract";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
+import { CliSettings } from "@renderer/components/pages/cli-settings";
 import { HarnessSettings } from "@renderer/components/pages/harness-settings";
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import {
@@ -67,6 +69,12 @@ export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: stri
       label: "Harness Runtimes",
       icon: CpuIcon,
       content: <HarnessSettings />,
+    },
+    {
+      key: "cli",
+      label: "CLI",
+      icon: TerminalWindowIcon,
+      content: <CliSettings />,
     },
     {
       key: "worktrees",

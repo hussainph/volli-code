@@ -6,6 +6,8 @@ import {
   FILE_IPC,
   HARNESS_CHANNELS,
   HARNESS_IPC,
+  CLI_CHANNELS,
+  CLI_IPC,
   MODEL_ACCESS_CHANNELS,
   MODEL_ACCESS_IPC,
   THEME_CHANNELS,
@@ -1842,6 +1844,52 @@ describe("HARNESS_IPC descriptor table", () => {
         "volli:harness-trust-set",
         "volli:harness-registered",
       ]);
+    });
+  });
+});
+
+describe("CLI_IPC descriptor table", () => {
+  describe("volli:cli-status (no-arg request)", () => {
+    const { guard, invalidError } = CLI_IPC["volli:cli-status"];
+
+    it("accepts an empty args tuple", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("rejects stray arguments", () => {
+      expect(guard(["junk"])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:cli-doctor", () => {
+    const { guard, invalidError } = CLI_IPC["volli:cli-doctor"];
+
+    it("accepts a boolean fix flag, in both positions", () => {
+      expect(guard([{ fix: false }])).toBe(true);
+      expect(guard([{ fix: true }])).toBe(true);
+    });
+
+    it("rejects a missing or non-boolean flag, a non-record, and the wrong arity", () => {
+      expect(guard([{}])).toBe(false);
+      expect(guard([{ fix: "yes" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ fix: true }, { fix: true }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid doctor request");
+    });
+  });
+
+  describe("CLI_CHANNELS derivation", () => {
+    it("derives from the descriptor table's keys and covers the whole surface", () => {
+      expect(CLI_CHANNELS).toEqual(Object.keys(CLI_IPC));
+      expect(CLI_CHANNELS).toEqual(["volli:cli-status", "volli:cli-doctor"]);
     });
   });
 });

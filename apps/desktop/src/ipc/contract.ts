@@ -20,6 +20,7 @@ import type {
   CreateTerminalSessionResult,
   DiffStat,
   DirEntry,
+  DoctorCheck,
   FileKind,
   FileSource,
   GhosttyAppearancePayload,
@@ -563,6 +564,58 @@ export interface VolliHarnessIpcContract {
 
 export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
 
+// ---- CLI install detection (VC-52) ----------------------------------------
+
+/**
+ * What is true of the background CLI install right now, measured at call time
+ * by `src/main/cli-status.ts`. Every field is detection, not configuration:
+ * the pane this feeds exists because the install is silent, and a silent
+ * install with no truthful surface is indistinguishable from a broken one.
+ */
+export interface CliToolStatus {
+  /** `~/.local/bin/volli`: `ours` links this app's shim; `foreign`/`not-symlink` were left alone. */
+  link: {
+    path: string;
+    state: "ours" | "missing" | "foreign" | "not-symlink";
+    target: string | null;
+  };
+  /** Whether the login shell reaches `~/.local/bin`; `unknown` means the shell could not be asked. */
+  path: { binDir: string; state: "reachable" | "missing" | "unknown" };
+  /** The agent socket this launch owns, and whether it came up. */
+  socket: { path: string; live: boolean };
+  /** Harness wrapper command names the last runtime regeneration produced. */
+  wrappers: { commands: string[] };
+  /** The login shell, whether the zsh-only chain supports it, and whether the chain exists. */
+  shell: { name: string; supported: boolean; chainActive: boolean };
+  /** The retired admin-owned `/usr/local/bin/volli` link, when one survives migration. */
+  legacy: { path: string; state: "absent" | "ours" | "foreign" };
+  /** The File → Remove tombstone: background install stands down until reinstalled. */
+  installSuppressed: boolean;
+}
+
+export type CliStatusResult = { ok: true; status: CliToolStatus } | { ok: false; error: string };
+
+/** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
+export interface CliDoctorInput {
+  fix: boolean;
+}
+
+/**
+ * A real `volli doctor` run: main spawns the user's login shell, which resolves
+ * `volli` off its own PATH — the environment agents outside Volli actually get.
+ */
+export type CliDoctorResult =
+  | { ok: true; checks: DoctorCheck[]; summary: string }
+  | { ok: false; error: string };
+
+/** The Settings → CLI surface (`src/main/cli-ipc.ts`). */
+export interface VolliCliIpcContract {
+  "volli:cli-status": { args: []; result: CliStatusResult };
+  "volli:cli-doctor": { args: [input: CliDoctorInput]; result: CliDoctorResult };
+}
+
+export type CliIpcChannel = keyof VolliCliIpcContract;
+
 // ---- theming ----------------------------------------------------------------
 
 /** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
@@ -886,6 +939,7 @@ export interface VolliInvokeContract
     VolliDataIpcContract,
     VolliFileIpcContract,
     VolliHarnessIpcContract,
+    VolliCliIpcContract,
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
     VolliSessionRpcIpcContract,
