@@ -612,6 +612,37 @@ describe("Ticket Sessions", () => {
       });
     });
 
+    it("falls back to the central medium level for a model-only override with no default", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const ticketSessions = createTicketSessions({
+        readBornTicketless: async () => false,
+        ticketBelongsToProject: () => true,
+        skills: NO_SKILLS,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return result(
+              request,
+              request.command.kind === "adapter.attach" ? "accepted" : "completed",
+            );
+          },
+        },
+        readDefaultModel: () => null,
+        inspectModelAccess: async () => access,
+      });
+
+      const started = await ticketSessions.start({
+        ...startInput("operation-model-no-default"),
+        modelOverride: { model: { providerId: "anthropic", modelId: "claude-opus" } },
+      });
+
+      expect(started.model).toEqual({
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "medium",
+      });
+    });
+
     it("refuses an override Model Access does not know, before creating anything", async () => {
       const commands: SessionRuntimeCommandRequest[] = [];
       await expect(

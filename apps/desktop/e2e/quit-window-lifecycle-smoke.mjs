@@ -475,7 +475,6 @@ async function main() {
     dbPath,
     userDataDir,
     extraEnv: {
-      VOLLI_AGENT_CONSENT_CHOICE: "defer",
       // Override smoke-kit's normal teardown bypass: native decisions are the
       // subject of this probe.
       VOLLI_SKIP_CLOSE_CONFIRM: "0",
@@ -587,7 +586,6 @@ async function main() {
         dbPath,
         userDataDir,
         extraEnv: {
-          VOLLI_AGENT_CONSENT_CHOICE: "defer",
           VOLLI_SKIP_CLOSE_CONFIRM: "0",
         },
       });

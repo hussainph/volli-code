@@ -1,22 +1,26 @@
 /**
- * E2e probe: first-launch consent flow.
+ * E2e probe: the silent background CLI + skills install (VC-52).
  *
- * The consent moment fires once, during boot, before any Playwright client can
- * patch dialog.showMessageBox — so it is pre-answered through the
- * test seam VOLLI_AGENT_CONSENT_CHOICE (mirrors VOLLI_SKIP_CLOSE_CONFIRM for
- * the quit gate). Asserts both branches of the consent gate:
- *   1. "defer" persists consent = "deferred" and installs NOTHING.
- *   2. "install" persists consent = "installed" and writes the skill pack.
- *   3. A subsequent boot with consent already "installed" triggers the
- *      hash-guarded app-update refresh (the installer runs again, idempotently).
+ * There is no first-boot dialog any more: the install runs in the background,
+ * user-space, with no admin prompt and no opt-out — its only surfaces are the
+ * detection pane and the disk. So this probe asserts the disk:
+ *   1. A fresh profile's boot writes the skill pack AND links
+ *      `~/.local/bin/volli` at this profile's shim, with no dialog to answer
+ *      (the boot completing headless IS that assertion — a native sheet would
+ *      have hung it).
+ *   2. The dev-only VOLLI_SKIP_AGENT_TOOLS seam installs nothing at all —
+ *      the guarantee every other smoke's home-isolation now rests on.
+ *   3. A second boot of the installed profile is the hash-guarded refresh
+ *      (the manifest is rewritten; managed files are not).
  *
  * The install home is redirected with VOLLI_AGENT_HOME so nothing lands in the
- * developer's real home (app.getPath("home") ignores $HOME on macOS). The
- * /usr/local/bin admin symlink is env-gated off under the consent seam.
+ * developer's real home (app.getPath("home") ignores $HOME on macOS). Smoke-kit
+ * defaults VOLLI_SKIP_AGENT_TOOLS=1 for every probe; this one opts back in
+ * with "0" against the scratch home.
  *
  *   Run:
  *     vp run --filter @volli/desktop build
- *     node apps/desktop/e2e/agent-consent-smoke.mjs
+ *     node apps/desktop/e2e/agent-background-install-smoke.mjs
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
@@ -33,27 +37,19 @@ import {
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
-const { scratch, cleanup } = await makeShortScratch("con");
+const { scratch, cleanup } = await makeShortScratch("bgi");
 const { attempt, summarize } = createRunner();
 
-const CONSENT_KEY = "volli:agent-tools-consent";
 const harness = await buildFakeHarness(scratch);
 const fakePath = `${harness.binDir}:${process.env.PATH ?? ""}`;
-
-/** Poll the app's app_state (via the preload bootstrap) for the consent value. */
-async function readConsent(page) {
-  return page.evaluate(async (key) => {
-    const res = await window.api.data.bootstrap();
-    return res.ok ? (res.data.appState[key] ?? null) : null;
-  }, CONSENT_KEY);
-}
 
 function profile(tag) {
   const userDataDir = join(scratch, `${tag}-ud`);
   const dbPath = join(scratch, `${tag}.db`);
   const fakeHome = join(scratch, `${tag}-home`);
   const manifest = join(fakeHome, ".agents/skills/volli/.volli-managed.json");
-  return { userDataDir, dbPath, fakeHome, manifest };
+  const userLink = join(fakeHome, ".local/bin/volli");
+  return { userDataDir, dbPath, fakeHome, manifest, userLink };
 }
 
 function boot({ userDataDir, dbPath, fakeHome }, extraEnv) {
@@ -65,79 +61,103 @@ function boot({ userDataDir, dbPath, fakeHome }, extraEnv) {
 }
 
 async function main() {
-  // === 1. "defer" persists "deferred" and installs nothing =================
-  const deferP = profile("defer");
-  await fs.mkdir(deferP.fakeHome, { recursive: true });
-  await attempt(1, 'consent "defer" persists deferred and installs nothing', async () => {
-    const app = await boot(deferP, { VOLLI_AGENT_CONSENT_CHOICE: "defer" });
-    try {
-      await assertProfileIsolated(app, deferP.userDataDir);
-      const page = await app.firstWindow();
-      await page.waitForLoadState("domcontentloaded");
-      const consent = await waitUntil("consent to persist", async () => await readConsent(page), {
-        timeout: 20000,
-      });
-      // Give any (erroneous) install a chance to have written before asserting none did.
-      const installedNothing = !(await pathExists(deferP.manifest));
-      const ok = consent === '"deferred"' && installedNothing;
-      return {
-        ok,
-        detail: `consent=${JSON.stringify(consent)} installedNothing=${installedNothing}`,
-      };
-    } finally {
-      await app.close();
-    }
-  });
-
-  // === 2. "install" persists "installed" and writes the skill pack =========
-  const installP = profile("install");
+  // === 1. A fresh boot silently installs the pack and the user-space link ===
+  const installP = profile("bg");
   await fs.mkdir(installP.fakeHome, { recursive: true });
   let installManifestMtime = 0;
-  await attempt(2, 'consent "install" persists installed and writes the pack', async () => {
-    const app = await boot(installP, { VOLLI_AGENT_CONSENT_CHOICE: "install" });
+  await attempt(
+    1,
+    "fresh boot installs skills + ~/.local/bin/volli with zero dialogs",
+    async () => {
+      const app = await boot(installP, { VOLLI_SKIP_AGENT_TOOLS: "0" });
+      try {
+        await assertProfileIsolated(app, installP.userDataDir);
+        const page = await app.firstWindow();
+        await page.waitForLoadState("domcontentloaded");
+        await waitUntil("skill pack to install", () => pathExists(installP.manifest), {
+          timeout: 20000,
+        });
+        await waitUntil("user-space link to land", () => pathExists(installP.userLink), {
+          timeout: 20000,
+        });
+        installManifestMtime = (await fs.stat(installP.manifest)).mtimeMs;
+        const linkStat = await fs.lstat(installP.userLink);
+        const target = await fs.readlink(installP.userLink);
+        const expectedShim = join(installP.userDataDir, "bin", "volli");
+        // Realpath both sides: main sees the scratch under /private/tmp while
+        // the smoke names it /tmp (macOS's symlink), so a string compare would
+        // fail a correct link.
+        const linkOk =
+          linkStat.isSymbolicLink() &&
+          (await fs.realpath(target)) === (await fs.realpath(expectedShim));
+        // The shim the link names must actually exist and be executable-ish.
+        const shimOk = await pathExists(expectedShim);
+        // And the Settings → CLI detection surface must tell the same story:
+        // the pane exists to make the silent install readable, so its answer
+        // is part of what "installed" means.
+        const status = await page.evaluate(() => window.api.cli.status());
+        const statusOk =
+          status.ok === true &&
+          status.status.link.state === "ours" &&
+          status.status.socket.live === true;
+        return {
+          ok: linkOk && shimOk && statusOk,
+          detail: `link=${linkOk} (→ ${target}) shim=${shimOk} status=${statusOk ? "ours+live" : JSON.stringify(status)}`,
+        };
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  // === 2. The skip seam installs nothing — every other smoke rests on this ==
+  const skipP = profile("skip");
+  await fs.mkdir(skipP.fakeHome, { recursive: true });
+  await attempt(2, "VOLLI_SKIP_AGENT_TOOLS=1 boots without touching the home", async () => {
+    const app = await boot(skipP, { VOLLI_SKIP_AGENT_TOOLS: "1" });
     try {
       const page = await app.firstWindow();
       await page.waitForLoadState("domcontentloaded");
-      const consent = await waitUntil("consent to persist", async () => await readConsent(page), {
-        timeout: 20000,
-      });
-      await waitUntil("skill pack to install", () => pathExists(installP.manifest), {
-        timeout: 20000,
-      });
-      installManifestMtime = (await fs.stat(installP.manifest)).mtimeMs;
-      const ok = consent === '"installed"' && installManifestMtime > 0;
-      return {
-        ok,
-        detail: `consent=${JSON.stringify(consent)} manifest=${await pathExists(installP.manifest)}`,
-      };
+      // Give an (erroneous) install a moment to have written before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const noManifest = !(await pathExists(skipP.manifest));
+      const noLink = !(await pathExists(skipP.userLink));
+      return { ok: noManifest && noLink, detail: `noManifest=${noManifest} noLink=${noLink}` };
     } finally {
       await app.close();
     }
   });
 
-  // === 3. A boot with consent already "installed" runs the refresh =========
-  await attempt(3, 'stored "installed" triggers the hash-guarded boot refresh', async () => {
-    // No consent seam this time: consent is already "installed", so the prompt
-    // never fires and the app-update refresh path runs instead.
-    const app = await boot(installP, {});
-    try {
-      const page = await app.firstWindow();
-      await page.waitForLoadState("domcontentloaded");
-      // The refresh always rewrites the manifest — a later mtime proves it ran.
-      const refreshed = await waitUntil(
-        "refresh to rewrite the manifest",
-        async () => (await fs.stat(installP.manifest)).mtimeMs > installManifestMtime,
-        { timeout: 20000 },
-      )
-        .then(() => true)
-        .catch(() => false);
-      const stillInstalled = (await readConsent(page)) === '"installed"';
-      const ok = refreshed && stillInstalled;
-      return { ok, detail: `refreshed=${refreshed} stillInstalled=${stillInstalled}` };
-    } finally {
-      await app.close();
-    }
-  });
+  // === 3. A second boot is the hash-guarded refresh, not a rewrite ==========
+  await attempt(
+    3,
+    "second boot refreshes idempotently (manifest rewritten, files skipped)",
+    async () => {
+      const skillMd = join(installP.fakeHome, ".agents/skills/volli/SKILL.md");
+      const skillMtimeBefore = (await fs.stat(skillMd)).mtimeMs;
+      const app = await boot(installP, { VOLLI_SKIP_AGENT_TOOLS: "0" });
+      try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState("domcontentloaded");
+        // The refresh always rewrites the manifest — a later mtime proves it ran.
+        const refreshed = await waitUntil(
+          "refresh to rewrite the manifest",
+          async () => (await fs.stat(installP.manifest)).mtimeMs > installManifestMtime,
+          { timeout: 20000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+        // A byte-identical managed file is skipped, not rewritten.
+        const skillUntouched = (await fs.stat(skillMd)).mtimeMs === skillMtimeBefore;
+        return {
+          ok: refreshed && skillUntouched,
+          detail: `refreshed=${refreshed} skillUntouched=${skillUntouched}`,
+        };
+      } finally {
+        await app.close();
+      }
+    },
+  );
 
   return summarize();
 }

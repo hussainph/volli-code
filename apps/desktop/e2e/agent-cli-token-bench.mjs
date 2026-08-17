@@ -69,7 +69,7 @@ async function main() {
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_AGENT_CONSENT_CHOICE: "defer" },
+    extraEnv: {},
   });
   const shimPath = shimPathFor(userDataDir);
   const socketPath = socketPathFor(userDataDir);

@@ -151,7 +151,7 @@ jobs:
             agent-cli-token-bench.mjs
             agent-pty-env-smoke.mjs
             agent-installer-smoke.mjs
-            agent-consent-smoke.mjs
+            agent-background-install-smoke.mjs
             agent-board-live-move-smoke.mjs
             session-rpc-transport-smoke.mjs
             bare-path-env-smoke.mjs

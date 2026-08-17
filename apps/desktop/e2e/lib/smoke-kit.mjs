@@ -152,6 +152,11 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
     ...process.env,
     VOLLI_DB_PATH: dbPath,
     VOLLI_SKIP_CLOSE_CONFIRM: "1",
+    // The background CLI/skills install (VC-52) writes into the real home by
+    // design — exactly what a smoke must never do. Off by default for every
+    // probe; the installer smokes opt back in ("0") against a VOLLI_AGENT_HOME
+    // scratch, the same posture VOLLI_WORKTREE_HOME_DIR takes for worktrees.
+    VOLLI_SKIP_AGENT_TOOLS: "1",
     ...extraEnv,
     VOLLI_WORKTREE_HOME_DIR: worktreeHomeFor(dbPath, extraEnv),
   };
