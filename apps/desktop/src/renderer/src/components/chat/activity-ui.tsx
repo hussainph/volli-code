@@ -461,13 +461,13 @@ const COPY_FEEDBACK_MS = 1200;
 type ClipboardWriter = Pick<Clipboard, "writeText">;
 
 /**
- * The browser boundary for copying an activity object.
+ * The browser boundary for copying visible text.
  *
  * Clipboard access can reject for ordinary runtime conditions (permission,
  * focus, or insecure context). Return the result the control must show rather
  * than leaving its caller to guess whether a rejected promise was success.
  */
-export async function copyActivityObject(
+export async function copyText(
   value: string,
   clipboard: ClipboardWriter | undefined = navigator.clipboard,
 ): Promise<"copied" | "failed"> {
@@ -479,6 +479,9 @@ export async function copyActivityObject(
     return "failed";
   }
 }
+
+/** Kept as the activity row's semantic entry point. */
+export const copyActivityObject = copyText;
 
 /** Revealed on hover or keyboard focus, never occupying resting space. */
 function RowActions({ row }: { row: ActivityRow }) {

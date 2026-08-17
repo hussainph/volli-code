@@ -148,6 +148,27 @@ export function resolvingWith(
  */
 export type MessageRoute = "send" | "hold";
 
+/* ---------------------------------------------------------------- copying */
+
+/**
+ * The raw prose a feed row presents, in the order the reader sees it.
+ *
+ * A turn can contain several messages and a message can contain several text
+ * parts. The feed separates each part with its normal prose beat, so the copied
+ * form uses a blank line rather than welding those boundaries together. Tool and
+ * reasoning parts intentionally stay out: they have their own inline controls
+ * and are not message text.
+ */
+export function messageCopyText(messages: readonly UIMessage[]): string | null {
+  const text: string[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "text" && part.text.length > 0) text.push(part.text);
+    }
+  }
+  return text.length > 0 ? text.join("\n\n") : null;
+}
+
 export function messageRoute(intent: ComposerIntent, deliverable: boolean): MessageRoute {
   return intent !== "queue" && deliverable ? "send" : "hold";
 }
