@@ -92,23 +92,37 @@ const BOARD = [
 
 type SessionState = "done" | "active" | "waiting" | "error";
 
+/** Each cell carries its own id so the grid never keys on an array index. */
+interface SessionCell {
+  id: string;
+  state: SessionState;
+}
+
 /**
  * Deterministic, so the field looks the same every reload and two screenshots
  * are comparable. Pure — no module-level side effects (see `scratch.ts`).
  */
-function sessionField(count: number, seed: number): readonly SessionState[] {
-  const out: SessionState[] = [];
+function sessionField(prefix: string, count: number, seed: number): readonly SessionCell[] {
+  const out: SessionCell[] = [];
   let x = seed;
   for (let index = 0; index < count; index += 1) {
     x = (x * 1103515245 + 12345) % 2147483648;
     const roll = x / 2147483648;
-    out.push(roll > 0.94 ? "waiting" : roll > 0.9 ? "error" : roll > 0.82 ? "active" : "done");
+    out.push({
+      id: `${prefix}-${index}`,
+      state: roll > 0.94 ? "waiting" : roll > 0.9 ? "error" : roll > 0.82 ? "active" : "done",
+    });
   }
   return out;
 }
 
-const PROJECT_SESSIONS = sessionField(147, 7);
-const TICKET_SESSIONS: readonly SessionState[] = ["done", "done", "done", "active"];
+const PROJECT_SESSIONS = sessionField("p", 147, 7);
+const TICKET_SESSIONS: readonly SessionCell[] = [
+  { id: "t-0", state: "done" },
+  { id: "t-1", state: "done" },
+  { id: "t-2", state: "done" },
+  { id: "t-3", state: "active" },
+];
 
 /** Tickets this session has mentioned as `@vc-nn`. Nothing is fetched for it. */
 const MENTIONED = [
@@ -224,8 +238,8 @@ function MarkEmpty() {
  */
 function SessionFieldEmpty({ project }: { project: boolean }) {
   const cells = project ? PROJECT_SESSIONS : TICKET_SESSIONS;
-  const waiting = cells.filter((state) => state === "waiting").length;
-  const active = cells.filter((state) => state === "active").length;
+  const waiting = cells.filter((cell) => cell.state === "waiting").length;
+  const active = cells.filter((cell) => cell.state === "active").length;
 
   return (
     <div className="flex flex-col items-center gap-4">
@@ -234,11 +248,11 @@ function SessionFieldEmpty({ project }: { project: boolean }) {
         role="img"
         aria-label={`${cells.length} sessions in scope`}
       >
-        {cells.map((state, index) => (
+        {cells.map((cell) => (
           <span
-            key={index}
-            className={cn("aspect-square rounded-full", STATE_TONE[state])}
-            title={state}
+            key={cell.id}
+            className={cn("aspect-square rounded-full", STATE_TONE[cell.state])}
+            title={cell.state}
           />
         ))}
       </div>
@@ -365,9 +379,12 @@ function WorkingTreeEmpty({ project }: { project: boolean }) {
     const { modified, added, untracked } = PROJECT.dirty;
     const total = modified + added + untracked;
     const ticks = [
-      ...Array.from({ length: modified }, () => "bg-attention"),
-      ...Array.from({ length: added }, () => "bg-positive"),
-      ...Array.from({ length: untracked }, () => "bg-muted-foreground/40"),
+      ...Array.from({ length: modified }, (_, i) => ({ id: `m${i}`, tone: "bg-attention" })),
+      ...Array.from({ length: added }, (_, i) => ({ id: `a${i}`, tone: "bg-positive" })),
+      ...Array.from({ length: untracked }, (_, i) => ({
+        id: `u${i}`,
+        tone: "bg-muted-foreground/40",
+      })),
     ];
     return (
       <div className="flex flex-col items-center gap-4">
@@ -376,8 +393,8 @@ function WorkingTreeEmpty({ project }: { project: boolean }) {
           role="img"
           aria-label={`${total} uncommitted files`}
         >
-          {ticks.map((tone, index) => (
-            <span key={index} className={cn("h-full w-2 rounded-full", tone)} />
+          {ticks.map((tick) => (
+            <span key={tick.id} className={cn("h-full w-2 rounded-full", tick.tone)} />
           ))}
         </div>
         <div className="flex items-baseline gap-2">
