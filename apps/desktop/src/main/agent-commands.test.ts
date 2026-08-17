@@ -3450,6 +3450,9 @@ describe("model.list", () => {
                 reasoning: ["low", "medium", "high"],
               },
             ],
+            // claude-legacy is unavailable, so the default view withholds it
+            // — and says so, the same honesty the provider rollup has.
+            omittedModels: 1,
           },
         ],
         omittedProviders: 1,
@@ -3484,6 +3487,7 @@ describe("model.list", () => {
         providers: [
           {
             id: "anthropic",
+            omittedModels: 0,
             models: [
               { model: "anthropic/claude-opus-5" },
               { model: "anthropic/claude-legacy", state: "unavailable" },
@@ -3492,6 +3496,7 @@ describe("model.list", () => {
           {
             id: "openai-codex",
             state: "authentication-required",
+            omittedModels: 0,
             models: [
               {
                 model: "openai-codex/gpt-5.6-terra",

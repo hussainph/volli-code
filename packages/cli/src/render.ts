@@ -214,8 +214,9 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
 /**
  * The model.list catalog: the app default first, then one header line per
  * provider with its copyable `provider/model` rows and reasoning levels
- * beneath it, and an honest rollup for the signed-out providers the default
- * view withholds (they are behind --all, not missing).
+ * beneath it, and honest rollups for everything the default view withholds
+ * (unavailable providers, and unavailable models inside a shown provider —
+ * they are behind --all, not missing).
  */
 function renderModelList(data: Record<string, unknown>): string | null {
   const providers = recordsAt(data, "providers");
@@ -242,10 +243,21 @@ function renderModelList(data: Record<string, unknown>): string | null {
         `  ${terminalSafeInline(model["model"])}  ${levels.length > 0 ? levels.map(terminalSafeInline).join("|") : "-"}${state}`,
       );
     }
+    // Models the default view withheld inside this shown provider get the same
+    // honesty counter the provider rollup has — nothing disappears silently.
+    const omittedModels = provider["omittedModels"];
+    if (typeof omittedModels === "number" && omittedModels > 0) {
+      lines.push(
+        `  … and ${terminalSafeInline(omittedModels)} more models not available (use --all)`,
+      );
+    }
   }
+  // "not available", not "not signed in": a provider can be signed in and
+  // still be withheld here (probe failure, refresh error) — the wording must
+  // stay honest in both cases.
   const omitted = data["omittedProviders"];
   if (typeof omitted === "number" && omitted > 0) {
-    lines.push(`… and ${terminalSafeInline(omitted)} more providers not signed in (use --all)`);
+    lines.push(`… and ${terminalSafeInline(omitted)} more providers not available (use --all)`);
   }
   return lines.join("\n");
 }

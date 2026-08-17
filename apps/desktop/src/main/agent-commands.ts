@@ -1241,12 +1241,9 @@ export function createAgentCommandService(
         const shownProviders = all
           ? snapshot.providers
           : snapshot.providers.filter((provider) => provider.state === "available");
-        const providers = shownProviders.map((provider) => ({
-          id: provider.id,
-          label: provider.label,
-          state: provider.state,
-          models: snapshot.models
-            .filter((model) => model.providerId === provider.id)
+        const providers = shownProviders.map((provider) => {
+          const catalog = snapshot.models.filter((model) => model.providerId === provider.id);
+          const models = catalog
             .filter((model) => all || model.state === "available")
             .map((model) => ({
               // The copyable string: `session start --model` takes it verbatim
@@ -1256,8 +1253,17 @@ export function createAgentCommandService(
               label: model.label,
               state: model.state,
               reasoning: model.reasoningLevels,
-            })),
-        }));
+            }));
+          return {
+            id: provider.id,
+            label: provider.label,
+            state: provider.state,
+            models,
+            // Models the filter withheld inside this shown provider get the
+            // same honesty counter `omittedProviders` gives the provider list.
+            omittedModels: catalog.length - models.length,
+          };
+        });
         // The app default is reported even when it names a model the filtered
         // view no longer shows — what `session start` will do without an
         // override is a fact about the app, not about this view.
