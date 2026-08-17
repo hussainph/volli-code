@@ -821,6 +821,30 @@ const PROJECT_LIST_SPEC: CommandSpec = {
   options: {},
 };
 
+const PROMPT_BASELINE_SPEC: CommandSpec = {
+  summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
+  example: "volli prompt baseline",
+  notes: [
+    "Token counts are estimates at 4 characters/token; the provider's own meter is the count of record.",
+    "Excludes tool definitions, the user's first message, and provider overhead, which ride on top of everything counted here.",
+    "--ticket prices a Ticket Session instead, including that ticket's Brief.",
+  ],
+  options: {
+    "--ticket": {
+      kind: "value",
+      key: "ticket",
+      placeholder: "<id>",
+      help: "Price a Ticket Session for this ticket instead of a project chat.",
+    },
+    "--project": {
+      kind: "value",
+      key: "project",
+      placeholder: "<p>",
+      help: "Resolve against this project instead of the context ladder.",
+    },
+  },
+};
+
 const DOCTOR_SPEC: CommandSpec = {
   summary: "Audit the harness integration and report what it is actually doing.",
   example: "volli doctor --fix",
@@ -883,6 +907,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "session link", group: "Session", spec: SESSION_LINK_SPEC },
   { name: "notify", group: "Session", spec: NOTIFY_SPEC },
   { name: "app launch", group: "App", spec: APP_LAUNCH_SPEC },
+  { name: "prompt baseline", group: "App", spec: PROMPT_BASELINE_SPEC },
   { name: "doctor", group: "App", spec: DOCTOR_SPEC },
   { name: "help", group: "App", spec: HELP_SPEC },
 ];
@@ -961,6 +986,9 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   if (argv[0] === "notify") return parseWithSpec("notify", argv.slice(1), NOTIFY_SPEC);
   if (argv[0] === "app" && argv[1] === "launch") {
     return parseWithSpec("app.launch", argv.slice(2), APP_LAUNCH_SPEC);
+  }
+  if (argv[0] === "prompt" && argv[1] === "baseline") {
+    return parseWithSpec("prompt.baseline", argv.slice(2), PROMPT_BASELINE_SPEC);
   }
   if (argv[0] === "doctor") return parseWithSpec("doctor", argv.slice(1), DOCTOR_SPEC);
   if (argv[0] === "help") return parseHelp(argv.slice(1));
