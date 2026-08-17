@@ -535,6 +535,44 @@ describe("model access", () => {
     ]);
   });
 
+  it("omits a context window the catalog cannot vouch for", async () => {
+    // Pi types the field as required, but a gateway entry can still carry 0 or
+    // garbage — and "no window" must stay distinguishable from a zero-token one,
+    // because the renderer's context meter divides by this.
+    const faux = fauxProvider({
+      provider: "example",
+      models: [{ id: "zero" }, { id: "garbage" }, { id: "fractional" }],
+    });
+    const [zero, garbage, fractional] = faux.models;
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Example API key",
+          resolve: async () => ({ auth: { apiKey: "configured" }, source: "EXAMPLE_API_KEY" }),
+        },
+      },
+      getModels: () => [
+        { ...zero!, contextWindow: 0 },
+        { ...garbage!, contextWindow: Number.NaN },
+        { ...fractional!, contextWindow: 100000.75 },
+      ],
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.models.map((model) => [model.modelId, model.contextWindow])).toEqual([
+      ["zero", undefined],
+      ["garbage", undefined],
+      ["fractional", 100000],
+    ]);
+  });
+
   it("keeps credential-filtered models unavailable when their provider is usable", async () => {
     const faux = fauxProvider({
       provider: "subscription",
