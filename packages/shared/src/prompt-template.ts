@@ -34,7 +34,8 @@
  * Pure string ops only, so the renderer, main and the CLI share one grammar —
  * the same rule `file-ref.ts` follows for `@path`.
  */
-import { skillInvocationText, type SkillReference } from "./skill";
+import type { PromptResource } from "./agent-runtime";
+import { skillPromptResource, type SkillReference } from "./skill";
 
 /**
  * One loaded template. Structurally Pi's `PromptTemplate`, and deliberately so:
@@ -231,23 +232,47 @@ export function findCommandInvocations(text: string): readonly CommandInvocation
   return invocations;
 }
 
+/** What a message with `/command`s in it actually submits — see {@link expandCommandInvocation}. */
+export interface ExpandedInvocation {
+  /** The message text: templates expanded in place, skill references intact. */
+  readonly text: string;
+  /**
+   * The skill bodies the message's `/slug` references resolved to, in
+   * invocation order, one per skill however often it was named. They travel
+   * beside the text — attached to the message as their own typed parts
+   * (`skillResourcePart`) and appended after it as delimited RESOURCE blocks
+   * where the delivered prompt is composed (`appendPromptResources`) — never
+   * spliced into the user's words.
+   */
+  readonly resources: readonly PromptResource[];
+}
+
 /**
- * The text a message with `/command`s in it actually sends.
+ * The text a message with `/command`s in it actually sends, and the skill
+ * resources that ride beside it.
  *
  * Client-side expansion, and the last thing that happens before the existing
- * submit path takes over: each known `/name` at a word boundary becomes its
- * template's body with the rest of its line substituted in as arguments, in
- * place — text before it, and every other line, pass through untouched. A
- * known command consumes its whole line, so a second `/name` on the same line
- * is an argument, not a second command; an UNKNOWN one consumes nothing, so it
- * neither blocks a later command on its line nor vanishes itself.
+ * submit path takes over: each known template `/name` at a word boundary
+ * becomes its template's body with the rest of its line substituted in as
+ * arguments, in place — text before it, and every other line, pass through
+ * untouched. A known command consumes its whole line, so a second `/name` on
+ * the same line is an argument, not a second command; an UNKNOWN one consumes
+ * nothing, so it neither blocks a later command on its line nor vanishes
+ * itself.
  *
  * A `/name` may also be a SKILL (`skill.ts`): the same grammar, the same
- * line-scoped consumption, a different expansion. A template's body goes
- * through Pi's argument substitution; a skill's body arrives verbatim inside
- * a delimited RESOURCE block with the line's remaining text preserved after
- * it — `skillInvocationText` says why. Templates win a shared name outright,
- * which is the rule `visibleSkills` keeps the picker honest against.
+ * line-scoped consumption, a different delivery. A template's body replaces
+ * its invocation because the invocation IS shorthand for that text; a skill
+ * reference is not shorthand — it is the user naming a document — so the
+ * reference stays in the text exactly as typed (mid-sentence included) and
+ * the body joins {@link ExpandedInvocation.resources} instead (VC-49).
+ * Rewriting the sentence around it produced a message that read as if the
+ * person had pasted the whole SKILL.md themselves. The skill still consumes
+ * its line — the words after it are its arguments, left in place where the
+ * model reads them beside the reference — so a template `/name` later on that
+ * line stays an argument, exactly as before. Templates win a shared name
+ * outright, which is the rule `visibleSkills` keeps the picker honest
+ * against.
  *
  * An unknown command is deliberately NOT an error: the harness is perfectly
  * able to read a sentence that mentions a slash, and swallowing it would lose
@@ -257,9 +282,10 @@ export function expandCommandInvocation(
   text: string,
   templates: readonly PromptTemplate[],
   skills: readonly SkillReference[] = [],
-): string {
+): ExpandedInvocation {
   let result = "";
   let cursor = 0;
+  const resources = new Map<string, PromptResource>();
   for (const invocation of findCommandInvocations(text)) {
     // Consumed already: this candidate sits inside a known command's arguments.
     if (invocation.start < cursor) continue;
@@ -270,14 +296,19 @@ export function expandCommandInvocation(
         : undefined;
     if (template === undefined && skill === undefined) continue;
     result += text.slice(cursor, invocation.start);
-    result +=
-      template !== undefined
-        ? formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString))
-        : // The guard above leaves exactly one of the two defined on this path.
-          skillInvocationText(skill!, invocation.argsString);
+    if (template !== undefined) {
+      result += formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString));
+    } else {
+      // The guard above leaves exactly one of the two defined on this path.
+      // The reference and its line stay verbatim; only the resource is new.
+      result += text.slice(invocation.start, invocation.end);
+      if (!resources.has(skill!.name)) {
+        resources.set(skill!.name, skillPromptResource(skill!));
+      }
+    }
     cursor = invocation.end;
   }
   // Nothing expanded — the exact string in is the exact string out.
-  if (cursor === 0) return text;
-  return result + text.slice(cursor);
+  if (cursor === 0) return { text, resources: [...resources.values()] };
+  return { text: result + text.slice(cursor), resources: [...resources.values()] };
 }

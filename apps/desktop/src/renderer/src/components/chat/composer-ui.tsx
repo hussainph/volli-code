@@ -61,6 +61,7 @@ import {
 import {
   expandCommandInvocation,
   type IndexedFile,
+  type PromptResource,
   type PromptTemplate,
   type SkillReference,
 } from "@volli/shared";
@@ -121,11 +122,16 @@ export interface SessionComposerProps {
   /** `false` means resident delivery already owns the row; leave its UI untouched. */
   onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
   onSteerQueued(id: string): void;
-  onSubmit(text: string, intent: ComposerIntent): void;
+  /**
+   * `resources` is the message-scoped half of the submission: the skill
+   * bodies the text's `/slug` references resolved to, delivered beside the
+   * text rather than spliced into it. Empty for a message that named none.
+   */
+  onSubmit(text: string, intent: ComposerIntent, resources?: readonly PromptResource[]): void;
   onStop(): void;
   /** `/` picker rows, and what expands a staged `/name args` on submit. */
   promptTemplates?: readonly PromptTemplate[];
-  /** The `/` picker's second supply: skills, expanded as delimited RESOURCE blocks. */
+  /** The `/` picker's second supply: skills, delivered as message-scoped RESOURCE blocks. */
   skills?: readonly SkillReference[];
   /** `@` picker rows — the project file index, ranked by the shared grammar. */
   files?: readonly IndexedFile[];
@@ -197,12 +203,16 @@ export const SessionComposer = React.memo(function SessionComposer({
   const send = (intent: ComposerIntent) => {
     if (!canSubmit) return;
     // The one place `/` expansion happens, and the last thing before the
-    // existing submit path takes over. The expansion is what the transcript
-    // shows, because it is what was sent: there is no second "display text"
-    // travelling beside a durable message, and inventing one to keep `/review`
-    // on screen would mean the record and the request disagree about what the
-    // model was asked.
-    onSubmit(expandCommandInvocation(value.trim(), promptTemplates, skills), intent);
+    // existing submit path takes over. Template expansion is what the
+    // transcript shows, because it is what was sent — a template invocation is
+    // shorthand for its own text. A SKILL reference is not shorthand: the text
+    // keeps `/skill` exactly as typed, and the resolved body travels beside it
+    // as a typed message part, recorded durably with the message (VC-49).
+    // There is still no invented "display text": the record holds both halves
+    // of what was actually sent — the words as typed and the resource bytes
+    // delivered — so the record and the request cannot disagree.
+    const expanded = expandCommandInvocation(value.trim(), promptTemplates, skills);
+    onSubmit(expanded.text, intent, expanded.resources);
   };
 
   const editQueued = (id: string) => {

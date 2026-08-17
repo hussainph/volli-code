@@ -366,6 +366,52 @@ describe("persistence", () => {
     });
   });
 
+  // A held message re-sent after a relaunch must deliver what its `/skill`
+  // reference resolved to when it was written — not lose the body silently.
+  it("round-trips a held message's skill resources through storage (VC-49)", async () => {
+    const storage = createMemoryStorage();
+    const resources = [{ name: "logos", text: "# Logos\n\nDesign logos." }];
+    const first = createChatDraftsStore(storage);
+    first.getState().holdMessage("s1", { id: "m1", text: "/logos a wordmark", resources });
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts.s1?.held).toEqual([
+      { id: "m1", text: "/logos a wordmark", resources, state: "unsent" },
+    ]);
+  });
+
+  it("drops malformed stored resources but keeps the words they rode with", async () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:chat-drafts",
+      JSON.stringify({
+        state: {
+          drafts: {
+            s1: {
+              text: "",
+              touchedAt: 1,
+              held: [
+                { id: "m1", text: "kept", state: "queued", resources: "not an array" },
+                { id: "m2", text: "also kept", state: "queued", resources: [{ name: 7 }] },
+              ],
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts.s1?.held).toEqual([
+      { id: "m1", text: "kept", state: "unsent" },
+      { id: "m2", text: "also kept", state: "unsent" },
+    ]);
+  });
+
   // A renderer that has just booted has no round trip open and no release
   // queue, so anything still held is a message nothing took.
   it("reads every held message back as unsent, whatever it was stored as", async () => {

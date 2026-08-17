@@ -73,12 +73,14 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
+  appendPromptResources,
   askChoice,
   askOffer,
   askInteractionId,
   askUserInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
+  readSkillResources,
   type AgentRuntime,
   type DeliveryOutcome,
   type ModelSelection,
@@ -989,7 +991,17 @@ class PiBinding implements BindingHandle {
   }
 }
 
-/** Pi takes one string; a `UIMessage` may carry several text parts. */
+/**
+ * Pi takes one string; a `UIMessage` may carry several text parts — and,
+ * since VC-49, skill resource parts. This is where the two halves of such a
+ * message become the delivered prompt: the user's text first and verbatim
+ * (its `/skill` reference intact, mid-sentence included), then each skill
+ * body as its own delimited RESOURCE block, adjacent to the text and never
+ * spliced into it.
+ */
 function messageText(message: UIMessage): string {
-  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n\n");
+  return appendPromptResources(text, readSkillResources(message.parts));
 }

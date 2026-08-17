@@ -1,5 +1,7 @@
 /* ---------------------------------------------------------------- composer */
 
+import type { PromptResource } from "@volli/shared";
+
 /**
  * What ⏎ means right now.
  *
@@ -18,6 +20,14 @@ export function composerIntent(state: { working: boolean; steer: boolean }): Com
 export interface QueuedMessage {
   id: string;
   text: string;
+  /**
+   * Skill bodies the text's `/slug` references resolved to at submit — the
+   * message-scoped half of the message, delivered beside the text as RESOURCE
+   * blocks rather than spliced into it (VC-49). Carried on the message object
+   * itself so a queued or held copy releases with exactly what was resolved
+   * when the person pressed ⏎. Absent means the text referenced no skill.
+   */
+  resources?: readonly PromptResource[];
 }
 
 /** Blank text is not a message; it never reaches the queue. */
@@ -26,7 +36,12 @@ export function enqueueMessage(
   message: QueuedMessage,
 ): QueuedMessage[] {
   const text = message.text.trim();
-  return text.length === 0 ? [...queue] : [...queue, { id: message.id, text }];
+  if (text.length === 0) return [...queue];
+  const entry: QueuedMessage =
+    message.resources === undefined
+      ? { id: message.id, text }
+      : { id: message.id, text, resources: message.resources };
+  return [...queue, entry];
 }
 
 export function removeQueued(queue: readonly QueuedMessage[], id: string): QueuedMessage[] {

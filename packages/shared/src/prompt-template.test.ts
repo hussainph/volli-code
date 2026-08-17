@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { skillPromptResource } from "./skill";
 import {
   expandCommandInvocation,
   formatPromptTemplateInvocation,
@@ -206,70 +207,77 @@ describe("expandCommandInvocation", () => {
   ];
 
   it("expands a known command with its arguments", () => {
-    expect(expandCommandInvocation("/review src/app.ts bugs", templates)).toBe(
-      "Review src/app.ts for bugs.",
-    );
+    expect(expandCommandInvocation("/review src/app.ts bugs", templates)).toEqual({
+      text: "Review src/app.ts for bugs.",
+      resources: [],
+    });
   });
 
   it("expands a known command that takes nothing", () => {
-    expect(expandCommandInvocation("/ship", templates)).toBe("Ship it.");
+    expect(expandCommandInvocation("/ship", templates).text).toBe("Ship it.");
   });
 
   it("honours quoting when splitting the arguments", () => {
-    expect(expandCommandInvocation(`/review "the file" style`, templates)).toBe(
+    expect(expandCommandInvocation(`/review "the file" style`, templates).text).toBe(
       "Review the file for style.",
     );
   });
 
   it("passes an unknown command through rather than losing the message", () => {
-    expect(expandCommandInvocation("/unknown thing", templates)).toBe("/unknown thing");
+    expect(expandCommandInvocation("/unknown thing", templates)).toEqual({
+      text: "/unknown thing",
+      resources: [],
+    });
   });
 
   it("passes ordinary prose through untouched", () => {
-    expect(expandCommandInvocation("just a message", templates)).toBe("just a message");
+    expect(expandCommandInvocation("just a message", templates).text).toBe("just a message");
   });
 
   it("expands a command mid-sentence, in place, keeping the prose before it", () => {
-    expect(expandCommandInvocation("please /review src/app.ts bugs", templates)).toBe(
+    expect(expandCommandInvocation("please /review src/app.ts bugs", templates).text).toBe(
       "please Review src/app.ts for bugs.",
     );
   });
 
   it("never mistakes a slash inside a word for a command", () => {
-    expect(expandCommandInvocation("look at src/review", templates)).toBe("look at src/review");
+    expect(expandCommandInvocation("look at src/review", templates).text).toBe(
+      "look at src/review",
+    );
   });
 
   it("stops a command's arguments at its own line", () => {
-    expect(expandCommandInvocation("/ship\nAlso check tests", templates)).toBe(
+    expect(expandCommandInvocation("/ship\nAlso check tests", templates).text).toBe(
       "Ship it.\nAlso check tests",
     );
   });
 
   it("expands one command per line, each on its own line", () => {
-    expect(expandCommandInvocation("/ship\n/review a.ts bugs", templates)).toBe(
+    expect(expandCommandInvocation("/ship\n/review a.ts bugs", templates).text).toBe(
       "Ship it.\nReview a.ts for bugs.",
     );
   });
 
   it("lets a known command consume the rest of its line — a second slash there is an argument", () => {
-    expect(expandCommandInvocation("/review a.ts bugs /ship", templates)).toBe(
+    expect(expandCommandInvocation("/review a.ts bugs /ship", templates).text).toBe(
       "Review a.ts for bugs.",
     );
   });
 
   it("lets a known command follow an unknown one on the same line", () => {
-    expect(expandCommandInvocation("/nope /ship", templates)).toBe("/nope Ship it.");
+    expect(expandCommandInvocation("/nope /ship", templates).text).toBe("/nope Ship it.");
   });
 
   describe("with skills", () => {
+    const logos = {
+      name: "logos",
+      description: "Design logos",
+      body: "# Logos\n\nRun `awk '{print $1}'` first.",
+      userInvokeOnly: false,
+      root: ".agents/skills/logos",
+    };
     const skills = [
-      {
-        name: "logos",
-        description: "Design logos",
-        body: "# Logos\n\nRun `awk '{print $1}'` first.",
-        userInvokeOnly: false,
-        root: ".agents/skills/logos",
-      },
+      logos,
       {
         name: "ship",
         description: "Shadowed by the template",
@@ -278,44 +286,64 @@ describe("expandCommandInvocation", () => {
         root: ".agents/skills/ship",
       },
     ];
-    const block = [
-      "--- BEGIN RESOURCE: logos ---",
-      "Skill directory: .agents/skills/logos/ — file references in this skill resolve relative to it.",
-      "",
-      "# Logos\n\nRun `awk '{print $1}'` first.",
-      "--- END RESOURCE: logos ---",
-    ].join("\n");
+    const logosResource = skillPromptResource(logos);
 
-    it("expands a skill reference into its delimited RESOURCE block", () => {
-      expect(expandCommandInvocation("/logos", templates, skills)).toBe(block);
+    it("keeps a bare skill reference in the text and resolves its body beside it", () => {
+      expect(expandCommandInvocation("/logos", templates, skills)).toEqual({
+        text: "/logos",
+        resources: [logosResource],
+      });
     });
 
-    it("keeps the invocation line's own words after the block", () => {
-      expect(expandCommandInvocation("/logos make a wordmark", templates, skills)).toBe(
-        `${block}\n\nmake a wordmark`,
-      );
+    it("keeps the invocation and its arguments exactly as typed", () => {
+      expect(expandCommandInvocation("/logos make a wordmark", templates, skills)).toEqual({
+        text: "/logos make a wordmark",
+        resources: [logosResource],
+      });
     });
 
-    it("leaves the skill body's placeholders alone — no argument substitution", () => {
-      expect(expandCommandInvocation("/logos arg", templates, skills)).toContain(
-        "awk '{print $1}'",
+    // VC-49's repro: a skill named mid-sentence must not garble the sentence.
+    it("leaves a mid-sentence reference intact — the resource travels beside, never spliced in", () => {
+      const expanded = expandCommandInvocation(
+        "can you tell me what /logos does?",
+        templates,
+        skills,
       );
+      expect(expanded.text).toBe("can you tell me what /logos does?");
+      expect(expanded.text).not.toContain("BEGIN RESOURCE");
+      expect(expanded.resources).toEqual([logosResource]);
+    });
+
+    it("resolves one resource however often the message names the skill", () => {
+      const expanded = expandCommandInvocation("/logos a\n/logos b", templates, skills);
+      expect(expanded.text).toBe("/logos a\n/logos b");
+      expect(expanded.resources).toEqual([logosResource]);
+    });
+
+    it("delivers the body verbatim in the resource — no argument substitution", () => {
+      const [resource] = expandCommandInvocation("/logos arg", templates, skills).resources;
+      expect(resource?.text).toContain("awk '{print $1}'");
     });
 
     it("lets a template win a name a skill also claims", () => {
-      expect(expandCommandInvocation("/ship", templates, skills)).toBe("Ship it.");
+      expect(expandCommandInvocation("/ship", templates, skills)).toEqual({
+        text: "Ship it.",
+        resources: [],
+      });
     });
 
-    it("consumes the skill's whole line, like any known command", () => {
-      expect(expandCommandInvocation("/logos then /ship", templates, skills)).toBe(
-        `${block}\n\nthen /ship`,
-      );
+    it("still consumes the skill's whole line — a template named there stays an argument", () => {
+      expect(expandCommandInvocation("/logos then /ship", templates, skills)).toEqual({
+        text: "/logos then /ship",
+        resources: [logosResource],
+      });
     });
 
-    it("expands mid-draft, keeping prose before it and later lines after it", () => {
-      expect(expandCommandInvocation("please /logos\nthanks", templates, skills)).toBe(
-        `please ${block}\nthanks`,
-      );
+    it("expands templates around an intact skill reference in the same draft", () => {
+      expect(expandCommandInvocation("/ship\n/logos x\nthanks", templates, skills)).toEqual({
+        text: "Ship it.\n/logos x\nthanks",
+        resources: [logosResource],
+      });
     });
   });
 });

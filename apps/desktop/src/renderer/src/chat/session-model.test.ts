@@ -25,6 +25,13 @@ describe("composer delivery", () => {
     expect(enqueueMessage([], { id: "a", text: "   " })).toEqual([]);
   });
 
+  it("keeps the skill resources riding a queued message (VC-49)", () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    expect(enqueueMessage([], { id: "a", text: " /logos go ", resources })).toEqual([
+      { id: "a", text: "/logos go", resources },
+    ]);
+  });
+
   it("gives an unqueued message back rather than dropping it", () => {
     const queue = [
       { id: "a", text: "first" },

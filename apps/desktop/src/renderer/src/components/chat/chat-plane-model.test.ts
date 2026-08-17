@@ -1353,6 +1353,15 @@ describe("heldStrip", () => {
       { id: "m2", text: "two" },
     ]);
   });
+
+  // The row is also what `beginQueuedSteer` persists back, so a skill body
+  // riding the held copy must survive the strip round trip (VC-49).
+  it("keeps a held row's skill resources on its strip row", () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    expect(heldStrip([{ ...heldMessage("m1", "/logos go", "unsent"), resources }], [])).toEqual([
+      { id: "m1", text: "/logos go", resources },
+    ]);
+  });
 });
 
 describe("settledHeldIds", () => {
@@ -1408,6 +1417,16 @@ describe("sameQueuedMessage", () => {
 
     expect(sameQueuedMessage(row, { id: "m1", text: "ship it now" })).toBe(false);
     expect(sameQueuedMessage(row, { id: "m2", text: "ship it" })).toBe(false);
+  });
+
+  it("separates rows whose resolved skill resources differ, and holds a shared list", () => {
+    const resources = [{ name: "logos", text: "# Logos" }];
+    const row = { id: "m1", text: "/logos go", resources };
+
+    // The strip reuses the stored array, so identity is the honest comparison.
+    expect(sameQueuedMessage(row, { ...row })).toBe(true);
+    expect(sameQueuedMessage(row, { ...row, resources: [...resources] })).toBe(false);
+    expect(sameQueuedMessage(row, { id: "m1", text: "/logos go" })).toBe(false);
   });
 
   it("holds a strip's identity across a rebuild that changed nothing", () => {
