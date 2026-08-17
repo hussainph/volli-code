@@ -19,6 +19,7 @@
  */
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
+import { DEFAULT_MODEL_REQUIRED } from "@volli/shared";
 import type {
   ModelAccessSnapshot,
   ModelSelection,
@@ -43,10 +44,12 @@ export const STRUCTURED_ADAPTER_ID = "pi";
 /**
  * The refusal, once, for both Roles. Two wordings of one rule would read as two
  * rules — a person meeting it on a project chat and again on a Ticket has no way
- * to tell that the second is the same missing setting as the first.
+ * to tell that the second is the same missing setting as the first. The wording
+ * itself lives in `@volli/shared` because the renderer classifies this refusal
+ * as a predictable configuration state rather than an error to toast (VC-53):
+ * a copy declared here would drift out from under that classifier silently.
  */
-export const DEFAULT_MODEL_REQUIRED =
-  "Choose a default model in Settings before starting a Session.";
+export { DEFAULT_MODEL_REQUIRED };
 
 export type StructuredSessionsErrorCode =
   | "DEFAULT_MODEL_REQUIRED"
@@ -181,9 +184,26 @@ export interface SessionAttachInput {
   sessionId: string;
 }
 
+/**
+ * Which Role's default a resolution wants — `ticketId !== null`, and nothing
+ * else, decides it.
+ *
+ * The Role is this module's own vocabulary, so it is what the port asks in;
+ * mapping a Role onto a Model Access *purpose* (VC-53's global / ticket /
+ * utility policy) is the composition root's job, and stays in one place there.
+ */
+export type SessionDefaultModelRole = "ticket" | "project";
+
 export interface SessionsOptions {
   runtime: StructuredSessionCommands;
-  readDefaultModel(): ModelSelection | null;
+  /**
+   * The configured default for one Role: the execution default for a Ticket
+   * Session, the orchestration default for a project chat (VC-53). Separate
+   * answers, asked at the one moment the Role is known — never a substitution,
+   * since a Role with no explicit choice of its own inherits the project
+   * default by stated policy rather than by silent fallback.
+   */
+  readDefaultModel(role: SessionDefaultModelRole): ModelSelection | null;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
@@ -220,8 +240,9 @@ export interface SessionsOptions {
 async function resolveModelSelection(
   options: SessionsOptions,
   override: SessionModelOverride | undefined,
+  role: SessionDefaultModelRole,
 ): Promise<ModelSelection> {
-  const base = options.readDefaultModel();
+  const base = options.readDefaultModel(role);
   if (
     override === undefined ||
     (override.model === undefined && override.reasoningLevel === undefined)
@@ -279,7 +300,11 @@ export function createSessions(options: SessionsOptions): Sessions {
         "The requested Ticket was not found in this project.",
       );
     }
-    const model = await resolveModelSelection(options, input.modelOverride);
+    const model = await resolveModelSelection(
+      options,
+      input.modelOverride,
+      input.ticketId === null ? "project" : "ticket",
+    );
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
     const explicit =
@@ -347,8 +372,13 @@ export function createSessions(options: SessionsOptions): Sessions {
       // reach the branch in real data — every mint above records at birth — so
       // this is the legacy migration duty, stated without a Role read.
       if ((await options.readModelSelection(input.sessionId)) === null) {
+        // The project default, and deliberately so: this door knows a Session
+        // id and no Role, and the project default is the one every Role
+        // inherits from anyway. It is still written as this Session's own
+        // `model.select` before the attachment, so what it resolved to is
+        // visible in its history rather than assumed.
         const model = requireDefaultModel(
-          options.readDefaultModel(),
+          options.readDefaultModel("project"),
           DEFAULT_MODEL_REQUIRED,
           input.sessionId,
         );

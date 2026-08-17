@@ -8,6 +8,7 @@ export * from "./harness-command";
 export * from "./harness";
 export * from "./agent-surface";
 export * from "./agent-runtime";
+export * from "./model-access-policy";
 export * from "./model-access-sign-in";
 export * from "./authority";
 export * from "./authority-policy";

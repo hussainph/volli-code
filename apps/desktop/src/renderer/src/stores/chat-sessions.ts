@@ -13,7 +13,7 @@
  * outlives every view — the store's three lifecycle actions are the whole of
  * what a client asks of it, plus the fold.
  */
-import { errorMessage } from "@volli/shared";
+import { errorMessage, isDefaultModelRequired } from "@volli/shared";
 import { create } from "zustand";
 
 import {
@@ -30,6 +30,7 @@ import { enqueueMessage, removeQueued, type QueuedMessage } from "@renderer/chat
 import { appendFrames, EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { rejectedReceipt } from "@renderer/chat/wire";
 import { toastError } from "@renderer/lib/toast";
+import { useUiStore } from "@renderer/stores/ui";
 
 export interface CreateChatSessionInput {
   projectId: string;
@@ -188,6 +189,13 @@ export function createChatSessionsStore(
               : {}),
           });
         } catch (failure) {
+          // A create refused for the missing default model is a predictable
+          // configuration state, not an error: the recovery is Model Access,
+          // so this opens it instead of raising a toast about it (VC-53).
+          if (isDefaultModelRequired(errorMessage(failure))) {
+            useUiStore.getState().setSettingsOpen(true, "model-access");
+            return null;
+          }
           // The one failure with nothing durable to carry it: there is no id, so
           // there is no slice, so a toast is the only place it can be said.
           toastError(`Could not start Session: ${errorMessage(failure)}`);

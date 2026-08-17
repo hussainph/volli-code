@@ -1,11 +1,33 @@
+/**
+ * The Model Access pane: per-purpose default models, the visibility curation
+ * every composer honors, and the provider accounts underneath both.
+ *
+ * Three defaults instead of one (VC-53): orchestration (project chats),
+ * execution (Ticket Sessions), and cost-efficient utility work resolve
+ * separately at Session creation. Ticket and Utility inherit the project
+ * default until an explicit choice is made — the "Project default" option is
+ * that inheritance stated as a value, never a silent substitution.
+ *
+ * Every control saves on change. A Save button earned its place when there was
+ * one selection to compose; three purposes and a switch per model would make
+ * this pane a form, and a picker whose choice does not hold is a picker lying
+ * about what is configured.
+ */
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import * as React from "react";
-import type {
-  ModelAccessModel,
-  ModelAccessProvider,
-  ModelSelection,
-  ReasoningLevel,
+import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  isModelHidden,
+  withModelVisibility,
+  type HiddenModelRef,
+  type ModelAccessDefaults,
+  type ModelAccessModel,
+  type ModelAccessProvider,
+  type ModelPurpose,
+  type ModelSelection,
+  type ReasoningLevel,
 } from "@volli/shared";
 
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
@@ -19,14 +41,42 @@ import {
   SelectValue,
 } from "@renderer/components/ui/select";
 import { Spinner } from "@renderer/components/ui/spinner";
+import { Switch } from "@renderer/components/ui/switch";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
+import { useUiStore } from "@renderer/stores/ui";
 
-export function ModelAccessSettings() {
+/** The rows of the Default models section, in resolution order. */
+const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string }[] = [
+  { purpose: "global", label: "Project chats" },
+  { purpose: "ticket", label: "Ticket Sessions" },
+  { purpose: "utility", label: "Utility" },
+];
+
+/** The Select value that says "no explicit choice — resolve the project default". */
+const INHERIT_VALUE = "__project-default__";
+
+export function ModelAccessSettings({
+  autoSignInProviderId,
+}: { autoSignInProviderId?: string } = {}) {
   const client = useModelAccessClient();
+  // The deep-linked sign-in, taken once and spent as it is taken.
+  //
+  // Held as this mount's own initial value, not read live: the store field is
+  // cleared immediately (below), and the row underneath still needs the answer
+  // for the rest of THIS visit. Switching category unmounts the pane, so the
+  // next visit initializes from a field that now says nothing and starts no
+  // auth flow — which is the point. A provider's browser sign-in is an external
+  // act and belongs to the press that asked for it, not to the pane's mounting.
+  const [deepLinkedProviderId] = React.useState(autoSignInProviderId);
+  const consumeSignInRequest = useUiStore((state) => state.consumeSettingsSignIn);
+  React.useEffect(() => {
+    if (deepLinkedProviderId !== undefined) consumeSignInRequest();
+  }, [deepLinkedProviderId, consumeSignInRequest]);
   const [models, setModels] = React.useState<readonly ModelAccessModel[]>([]);
   const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>([]);
-  const [selection, setSelection] = React.useState<ModelSelection | null>(null);
+  const [defaults, setDefaults] = React.useState<ModelAccessDefaults>(EMPTY_MODEL_ACCESS_DEFAULTS);
+  const [hidden, setHidden] = React.useState<readonly HiddenModelRef[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
 
@@ -35,13 +85,15 @@ export function ModelAccessSettings() {
       if (!client) return;
       setLoading(true);
       try {
-        const [access, configured] = await Promise.all([
+        const [access, configured, curated] = await Promise.all([
           client.inspect({ refresh }),
-          client.defaultSelection(),
+          client.defaults(),
+          client.hiddenModels(),
         ]);
         setModels(access.models);
         setProviders(access.providers);
-        setSelection(configured);
+        setDefaults(configured);
+        setHidden(curated);
       } catch (error) {
         toastError(`Couldn't load models: ${errorMessage(error)}`);
       } finally {
@@ -56,19 +108,31 @@ export function ModelAccessSettings() {
   }, [load]);
 
   if (!client) return null;
-  const offerable = offerableModels(models);
-  const selectedModel = modelFor(models, selection);
-  const valid = canSaveDefaultModel(selectedModel, selection);
 
-  async function save(): Promise<void> {
-    if (!selection || !valid || saving) return;
+  async function saveDefault(purpose: ModelPurpose, selection: ModelSelection | null) {
+    if (saving) return;
     setSaving(true);
     try {
-      setSelection(await client!.setDefault(selection));
+      setDefaults(await client!.setDefault(purpose, selection));
     } catch (error) {
       toastError(`Couldn't save the default model: ${errorMessage(error)}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveVisibility(model: HiddenModelRef, visible: boolean) {
+    // Optimistic: the switch is the state, and a toggle that waits a round
+    // trip to move reads as a switch that did not take. The write's answer
+    // (or its failure) settles it.
+    const next = withModelVisibility(hidden, model, visible);
+    const before = hidden;
+    setHidden(next);
+    try {
+      setHidden(await client!.setHiddenModels(next));
+    } catch (error) {
+      setHidden(before);
+      toastError(`Couldn't save model visibility: ${errorMessage(error)}`);
     }
   }
 
@@ -84,10 +148,13 @@ export function ModelAccessSettings() {
     await load(true);
   }
 
+  const offerable = offerableModels(models);
+  const groups = availableModelsByProvider(models, providers);
+
   return (
     <>
       <SettingsSection
-        title="Default model"
+        title="Default models"
         icon={CpuIcon}
         action={
           <Button
@@ -105,66 +172,145 @@ export function ModelAccessSettings() {
           </Button>
         }
       >
-        <SettingsRow label="Model">
-          <Select
-            // A stored default whose provider is signed out reads as unset,
-            // because that is what it is: it names no model this profile can
-            // run, and Save stays inert until one is picked.
-            value={selectedModel?.state === "available" ? modelKey(selectedModel) : ""}
+        {PURPOSE_ROWS.map(({ purpose, label }) => (
+          <DefaultModelRow
+            key={purpose}
+            purpose={purpose}
+            label={label}
+            selection={defaults[purpose]}
+            models={models}
+            offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
+            providers={providers}
             disabled={loading || saving}
-            onValueChange={(key) => {
-              const model = offerable.find((candidate) => modelKey(candidate) === key);
-              if (!model) return;
-              setSelection({
-                providerId: model.providerId,
-                modelId: model.modelId,
-                reasoningLevel: preferredReasoning(model, selection?.reasoningLevel),
-              });
-            }}
-          >
-            <SelectTrigger className="w-72">
-              <SelectValue placeholder="Choose a model" />
-            </SelectTrigger>
-            <SelectContent>
-              {offerable.map((model) => (
-                <SelectItem key={modelKey(model)} value={modelKey(model)}>
-                  {modelOptionLabel(model, providers)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-        <SettingsRow label="Reasoning">
-          <Select
-            value={selection?.reasoningLevel ?? ""}
-            disabled={!selectedModel || saving}
-            onValueChange={(reasoningLevel) => {
-              if (!selection) return;
-              setSelection({ ...selection, reasoningLevel: reasoningLevel as ReasoningLevel });
-            }}
-          >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Reasoning" />
-            </SelectTrigger>
-            <SelectContent>
-              {(selectedModel?.reasoningLevels ?? []).map((level) => (
-                <SelectItem key={level} value={level}>
-                  {level}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button disabled={!valid || saving} onClick={() => void save()}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </SettingsRow>
+            onSave={(selection) => void saveDefault(purpose, selection)}
+          />
+        ))}
       </SettingsSection>
+      {groups.length > 0 ? (
+        <SettingsSection title="Visible models" icon={EyeIcon}>
+          {groups.map((group) => (
+            <React.Fragment key={group.providerId}>
+              <p className="pt-2 pb-1 text-ui font-medium text-muted-foreground first:pt-1">
+                {group.providerLabel}
+              </p>
+              {group.models.map((model) => (
+                <SettingsRow
+                  key={`${model.providerId}/${model.modelId}`}
+                  label={model.label}
+                  testId={`visibility-${model.providerId}-${model.modelId}`}
+                >
+                  <Switch
+                    aria-label={`Show ${model.label} in pickers`}
+                    checked={!isModelHidden(hidden, model)}
+                    onCheckedChange={(visible) => void saveVisibility(model, visible)}
+                  />
+                </SettingsRow>
+              ))}
+            </React.Fragment>
+          ))}
+        </SettingsSection>
+      ) : null}
       <ModelAccessAccounts
         providers={providers}
+        autoSignInProviderId={deepLinkedProviderId}
         onRecover={() => void retry()}
         onChanged={() => load(true)}
       />
     </>
+  );
+}
+
+/**
+ * One purpose's choice: the model, and the reasoning level beside it.
+ *
+ * A ticket/utility row carries "Project default" as an ordinary option rather
+ * than a blank: unset is a real, resolvable value, and a Select that shows
+ * nothing when the purpose inherits would read as unconfigured — which is the
+ * one thing it is not.
+ */
+function DefaultModelRow({
+  purpose,
+  label,
+  selection,
+  models,
+  offerable,
+  providers,
+  disabled,
+  onSave,
+}: {
+  purpose: ModelPurpose;
+  label: string;
+  selection: ModelSelection | null;
+  models: readonly ModelAccessModel[];
+  offerable: readonly ModelAccessModel[];
+  providers: readonly ModelAccessProvider[];
+  disabled: boolean;
+  onSave(selection: ModelSelection | null): void;
+}) {
+  const inheritable = purpose !== "global";
+  const selectedModel = modelFor(models, selection);
+  // A stored default whose provider is signed out reads as unset, because that
+  // is what it is: it names no model this profile can run.
+  const value =
+    selection === null
+      ? inheritable
+        ? INHERIT_VALUE
+        : ""
+      : selectedModel?.state === "available"
+        ? modelKey(selectedModel)
+        : "";
+
+  return (
+    <SettingsRow label={label} testId={`default-model-${purpose}`}>
+      <Select
+        value={value}
+        disabled={disabled}
+        onValueChange={(key) => {
+          if (key === INHERIT_VALUE) {
+            onSave(null);
+            return;
+          }
+          const model = offerable.find((candidate) => modelKey(candidate) === key);
+          if (!model) return;
+          onSave({
+            providerId: model.providerId,
+            modelId: model.modelId,
+            reasoningLevel: preferredReasoning(model, selection?.reasoningLevel),
+          });
+        }}
+      >
+        <SelectTrigger className="w-72">
+          <SelectValue placeholder="Choose a model" />
+        </SelectTrigger>
+        <SelectContent>
+          {inheritable ? <SelectItem value={INHERIT_VALUE}>Project default</SelectItem> : null}
+          {offerable.map((model) => (
+            <SelectItem key={modelKey(model)} value={modelKey(model)}>
+              {modelOptionLabel(model, providers)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select
+        value={selection?.reasoningLevel ?? ""}
+        disabled={disabled || selection === null || selectedModel === null}
+        onValueChange={(reasoningLevel) => {
+          if (selection === null) return;
+          onSave({ ...selection, reasoningLevel: reasoningLevel as ReasoningLevel });
+        }}
+      >
+        <SelectTrigger className="w-32">
+          <SelectValue placeholder="Reasoning" />
+        </SelectTrigger>
+        <SelectContent>
+          {(selectedModel?.reasoningLevels ?? []).map((level) => (
+            <SelectItem key={level} value={level}>
+              {level}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </SettingsRow>
   );
 }
 
@@ -201,17 +347,58 @@ export function offerableModels(models: readonly ModelAccessModel[]): readonly M
   return models.filter((model) => model.state === "available");
 }
 
-export function canSaveDefaultModel(
-  model: ModelAccessModel | null,
-  selection: ModelSelection | null,
-): boolean {
-  return (
-    model !== null &&
-    model.state === "available" &&
-    selection !== null &&
-    (model.reasoningLevels.includes(selection.reasoningLevel) ||
-      (model.reasoningLevels.length === 0 && selection.reasoningLevel === "off"))
+/**
+ * What a default picker lists: the offerable catalog minus the user's hidden
+ * models — plus the currently configured model even when hidden, because a
+ * value the control holds and cannot name is a control that looks broken.
+ */
+export function defaultPickerModels(
+  offerable: readonly ModelAccessModel[],
+  hidden: readonly HiddenModelRef[],
+  current: ModelSelection | null,
+): readonly ModelAccessModel[] {
+  return offerable.filter(
+    (model) =>
+      !isModelHidden(hidden, model) ||
+      (current !== null &&
+        model.providerId === current.providerId &&
+        model.modelId === current.modelId),
   );
+}
+
+/** One provider's offerable models, for the visibility switches. */
+export interface ProviderModelGroup {
+  providerId: string;
+  providerLabel: string;
+  models: readonly ModelAccessModel[];
+}
+
+/**
+ * The offerable catalog grouped per provider, providers and models each in
+ * label order. Only signed-in providers have offerable models, so the section
+ * this feeds never lists forty providers of nothing.
+ */
+export function availableModelsByProvider(
+  models: readonly ModelAccessModel[],
+  providers: readonly ModelAccessProvider[],
+): readonly ProviderModelGroup[] {
+  const groups = new Map<string, ModelAccessModel[]>();
+  for (const model of offerableModels(models)) {
+    const group = groups.get(model.providerId);
+    if (group) group.push(model);
+    else groups.set(model.providerId, [model]);
+  }
+  return [...groups.entries()]
+    .map(([providerId, grouped]) => ({
+      providerId,
+      providerLabel: providers.find((provider) => provider.id === providerId)?.label ?? providerId,
+      models: grouped.toSorted((a, b) =>
+        a.label.localeCompare(b.label, undefined, { numeric: true }),
+      ),
+    }))
+    .toSorted((a, b) =>
+      a.providerLabel.localeCompare(b.providerLabel, undefined, { numeric: true }),
+    );
 }
 
 /**

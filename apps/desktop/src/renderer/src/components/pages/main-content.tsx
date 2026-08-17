@@ -22,6 +22,7 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const settingsCategory = useUiStore((state) => state.settingsCategory);
+  const settingsSignInProviderId = useUiStore((state) => state.settingsSignInProviderId);
 
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
   // The Sessions surface hosts live PTY terminals, so it is ALWAYS mounted and
@@ -40,7 +41,10 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
       <SessionsLayer visible={sessionsVisible} />
       {
         settingsOpen ? (
-          <SettingsPage initialCategoryKey={settingsCategory ?? undefined} />
+          <SettingsPage
+            initialCategoryKey={settingsCategory ?? undefined}
+            initialSignInProviderId={settingsSignInProviderId ?? undefined}
+          />
         ) : selected === null && projectCount === 0 ? (
           <EmptyProjectsState />
         ) : selected === null ? (

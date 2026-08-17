@@ -134,3 +134,33 @@ export function accountAction(provider: ModelAccessProvider): AccountAction {
   if (provider.signIn.length === 0) return "none";
   return provider.signIn.length === 1 ? "sign-in" : "choose";
 }
+
+/** The subset of {@link AccountAction} an arrival may press for the user. */
+export type DeepLinkedAction = "sign-in" | "choose" | "none";
+
+/**
+ * What an arrival deep-linked to `requestedProviderId` presses on this row.
+ *
+ * A chat blocker naming a provider is a person saying "sign in to this one", so
+ * the pane presses that row's OWN sign-in and never invents one. Which settles
+ * the two cases a bare provider id cannot: a provider already reachable offers
+ * no sign-in at all, so a connected account never gets a fresh browser flow it
+ * did not ask for; and a provider whose refresh failed offers `retry`, which is
+ * a read rather than an auth flow and is excluded from this type entirely,
+ * because a Retry pressed on someone's behalf is a Retry they cannot see they
+ * asked for. `choose` opens the method menu instead of answering it — two
+ * methods are two accounts with two bills.
+ *
+ * The request is spent as the pane takes it (`consumeSettingsSignIn` in
+ * stores/ui.ts), so every later visit arrives naming nobody and this answers
+ * `none`. That pairing is the guarantee: launching a provider's browser auth is
+ * an external act, and it happens once per press — never again on the way past.
+ */
+export function deepLinkedAction(
+  provider: ModelAccessProvider,
+  requestedProviderId: string | undefined,
+): DeepLinkedAction {
+  if (requestedProviderId !== provider.id) return "none";
+  const action = accountAction(provider);
+  return action === "sign-in" || action === "choose" ? action : "none";
+}

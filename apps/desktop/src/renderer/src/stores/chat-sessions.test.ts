@@ -15,6 +15,7 @@ import type {
 import { getChatClient } from "@renderer/chat/registry";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { createChatSessionsStore } from "./chat-sessions";
+import { useUiStore } from "./ui";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -349,10 +350,12 @@ describe("createChatSession", () => {
     );
   });
 
-  it("reports a start refused for want of a default model the same way on either route", async () => {
-    // Both Roles record the app default before anything attaches, so both
-    // refuse before a Session exists when there is none — with one wording, and
-    // a refusal with no id to carry it has one road out whichever route asked.
+  it("answers the missing-default refusal with Model Access, never a toast", async () => {
+    // Both Roles record a default before anything attaches, so both refuse
+    // before a Session exists when none resolves. That is a predictable
+    // configuration state (VC-53): the recovery is Model Access, so the store
+    // opens it there — straight at the pane — instead of raising an error
+    // toast about a setting the toast cannot fix.
     const { state, store } = fixture();
     const refusal = "Choose a default model in Settings before starting a Session.";
 
@@ -367,10 +370,10 @@ describe("createChatSession", () => {
     ).resolves.toBeNull();
 
     expect(store.getState().sessions).toEqual({});
-    expect(vi.mocked(toast.error).mock.calls.map(([message]) => message)).toEqual([
-      `Could not start Session: ${refusal}`,
-      `Could not start Session: ${refusal}`,
-    ]);
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+    expect(useUiStore.getState().settingsOpen).toBe(true);
+    expect(useUiStore.getState().settingsCategory).toBe("model-access");
+    useUiStore.getState().setSettingsOpen(false);
   });
 });
 

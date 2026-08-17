@@ -843,48 +843,80 @@ describe("Session tRPC router", () => {
     ]);
   });
 
-  it("reads and writes the user-configured default model through an exact safe shape", async () => {
+  it("reads and writes the per-purpose defaults through an exact safe shape", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      readDefaultModelSelection: () => ({
+    const stored = {
+      global: {
         providerId: "openai-codex",
         modelId: "gpt-5.6-sol",
-        reasoningLevel: "high",
+        reasoningLevel: "high" as const,
         credential: "must-not-cross",
-      }),
-      writeDefaultModelSelection: (selection) => {
-        writes.push(selection);
+      },
+      ticket: null,
+      utility: null,
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readModelAccessDefaults: () => stored,
+      writeModelAccessDefault: (purpose, selection) => {
+        writes.push({ purpose, selection });
+        return { ...stored, ticket: selection };
       },
       diagnostics: new RpcDiagnosticLog(),
     });
 
-    const current = await caller.modelAccess.defaultSelection();
-    await caller.modelAccess.setDefault({
+    const current = await caller.modelAccess.defaults();
+    const afterWrite = await caller.modelAccess.setDefault({
+      purpose: "ticket",
+      selection: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
+    });
+
+    // The stray credential on the stored value never crosses the edge.
+    expect(current).toEqual({
+      global: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
+      ticket: null,
+      utility: null,
+    });
+    expect(writes).toEqual([
+      {
+        purpose: "ticket",
+        selection: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
+      },
+    ]);
+    expect(afterWrite.ticket).toEqual({
       providerId: "anthropic",
       modelId: "claude-sonnet",
       reasoningLevel: "medium",
     });
 
-    expect(current).toEqual({
-      providerId: "openai-codex",
-      modelId: "gpt-5.6-sol",
-      reasoningLevel: "high",
-    });
-    expect(writes).toEqual([
-      {
-        providerId: "anthropic",
-        modelId: "claude-sonnet",
-        reasoningLevel: "medium",
-      },
-    ]);
-    const empty = createSessionRouter().createCaller({
+    // Clearing an execution default is allowed — it resolves to global — but
+    // clearing the global one would leave nothing to resolve to anywhere.
+    await caller.modelAccess.setDefault({ purpose: "utility", selection: null });
+    await expect(
+      caller.modelAccess.setDefault({ purpose: "global", selection: null }),
+    ).rejects.toThrow("cannot be cleared");
+  });
+
+  it("round-trips the curated hidden-model list as identity pairs only", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
-      readDefaultModelSelection: () => null,
+      readHiddenModels: () => [{ providerId: "anthropic", modelId: "claude-haiku" }],
+      writeHiddenModels: (hidden) => {
+        writes.push(hidden);
+      },
       diagnostics: new RpcDiagnosticLog(),
     });
-    await expect(empty.modelAccess.defaultSelection()).resolves.toBeNull();
+
+    await expect(caller.modelAccess.hiddenModels()).resolves.toEqual([
+      { providerId: "anthropic", modelId: "claude-haiku" },
+    ]);
+    await expect(
+      caller.modelAccess.setHiddenModels([{ providerId: "openai", modelId: "gpt-5.6-luna" }]),
+    ).resolves.toEqual([{ providerId: "openai", modelId: "gpt-5.6-luna" }]);
+    expect(writes).toEqual([[{ providerId: "openai", modelId: "gpt-5.6-luna" }]]);
   });
 
   it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {
@@ -1047,16 +1079,21 @@ describe("Session tRPC router", () => {
       caller.sessions.attach({ operationId: "session-attach", sessionId: "session-1" }),
     ).rejects.toThrow("Sessions are unavailable");
     await expect(caller.modelAccess.inspect({})).rejects.toThrow("Model Access is unavailable");
-    await expect(caller.modelAccess.defaultSelection()).rejects.toThrow(
+    await expect(caller.modelAccess.defaults()).rejects.toThrow(
       "Model Access preferences are unavailable",
     );
     await expect(
       caller.modelAccess.setDefault({
-        providerId: "openai-codex",
-        modelId: "gpt-5.6-sol",
-        reasoningLevel: "high",
+        purpose: "global",
+        selection: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
       }),
     ).rejects.toThrow("Model Access preferences are unavailable");
+    await expect(caller.modelAccess.hiddenModels()).rejects.toThrow(
+      "Model Access preferences are unavailable",
+    );
+    await expect(caller.modelAccess.setHiddenModels([])).rejects.toThrow(
+      "Model Access preferences are unavailable",
+    );
   });
 
   it("classifies unconfigured product facades as unavailable transport capabilities", async () => {
@@ -1076,13 +1113,14 @@ describe("Session tRPC router", () => {
         }),
       () => caller.sessions.attach({ operationId: "operation-attach", sessionId: "s1" }),
       () => caller.modelAccess.inspect({}),
-      () => caller.modelAccess.defaultSelection(),
+      () => caller.modelAccess.defaults(),
       () =>
         caller.modelAccess.setDefault({
-          providerId: "openai-codex",
-          modelId: "gpt-5.6-sol",
-          reasoningLevel: "high",
+          purpose: "global",
+          selection: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
         }),
+      () => caller.modelAccess.hiddenModels(),
+      () => caller.modelAccess.setHiddenModels([]),
     ];
 
     for (const call of calls) {

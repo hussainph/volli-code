@@ -5,8 +5,13 @@ import { openTestDb, type TestDb } from "../db/test-helpers";
 import {
   assertDefaultModelAvailable,
   MODEL_ACCESS_DEFAULT_APP_STATE_KEY,
+  MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
+  MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY,
   readDefaultModelSelection,
-  writeDefaultModelSelection,
+  readHiddenModels,
+  readModelAccessDefaults,
+  writeHiddenModels,
+  writeModelAccessDefault,
 } from "./model-access-preferences";
 
 let ctx: TestDb | null = null;
@@ -17,7 +22,7 @@ afterEach(() => {
 });
 
 describe("Model Access default selection", () => {
-  it("round-trips the user-configured model and reasoning policy", () => {
+  it("round-trips one purpose's model policy without disturbing the others", () => {
     ctx = openTestDb();
     const selection = {
       providerId: "openai-codex",
@@ -25,9 +30,72 @@ describe("Model Access default selection", () => {
       reasoningLevel: "high" as const,
     };
 
-    writeDefaultModelSelection(ctx.db, selection, 123);
+    writeModelAccessDefault(ctx.db, "global", selection, 123);
+    const ticket = { ...selection, modelId: "gpt-5.6-luna" };
+    expect(writeModelAccessDefault(ctx.db, "ticket", ticket, 124)).toEqual({
+      global: selection,
+      ticket,
+      utility: null,
+    });
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global: selection,
+      ticket,
+      utility: null,
+    });
 
-    expect(readDefaultModelSelection(ctx.db)).toEqual(selection);
+    // Clearing an explicit choice is a write, not an absence.
+    writeModelAccessDefault(ctx.db, "ticket", null, 125);
+    expect(readModelAccessDefaults(ctx.db).ticket).toBeNull();
+    expect(readModelAccessDefaults(ctx.db).global).toEqual(selection);
+  });
+
+  it("reads a pre-purpose single default as the global purpose", () => {
+    ctx = openTestDb();
+    const selection = {
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      reasoningLevel: "medium" as const,
+    };
+    setAppState(ctx.db, MODEL_ACCESS_DEFAULT_APP_STATE_KEY, JSON.stringify(selection), 1);
+
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global: selection,
+      ticket: null,
+      utility: null,
+    });
+
+    // The first purpose-aware write persists the new shape; the legacy key
+    // stops being consulted from then on.
+    writeModelAccessDefault(ctx.db, "utility", { ...selection, modelId: "claude-haiku" }, 2);
+    setAppState(ctx.db, MODEL_ACCESS_DEFAULT_APP_STATE_KEY, "not-json", 3);
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global: selection,
+      ticket: null,
+      utility: { ...selection, modelId: "claude-haiku" },
+    });
+  });
+
+  it("sanitizes each stored purpose independently", () => {
+    ctx = openTestDb();
+    setAppState(
+      ctx.db,
+      MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
+      JSON.stringify({
+        global: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
+        ticket: { providerId: "  ", modelId: "broken", reasoningLevel: "medium" },
+        utility: "not-an-object",
+      }),
+      1,
+    );
+
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
+      ticket: null,
+      utility: null,
+    });
+
+    setAppState(ctx.db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY, "not-json", 2);
+    expect(readModelAccessDefaults(ctx.db)).toEqual({ global: null, ticket: null, utility: null });
   });
 
   it("treats missing or malformed stored state as unconfigured", () => {
@@ -80,6 +148,38 @@ describe("Model Access default selection", () => {
       modelId: "claude-sonnet",
       reasoningLevel: "medium",
     });
+  });
+
+  it("round-trips the curated hidden-model list and drops malformed entries", () => {
+    ctx = openTestDb();
+    expect(readHiddenModels(ctx.db)).toEqual([]);
+
+    writeHiddenModels(
+      ctx.db,
+      [{ providerId: "anthropic", modelId: "claude-haiku", extra: "dropped" } as never],
+      1,
+    );
+    expect(readHiddenModels(ctx.db)).toEqual([
+      { providerId: "anthropic", modelId: "claude-haiku" },
+    ]);
+
+    setAppState(
+      ctx.db,
+      MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY,
+      JSON.stringify([
+        { providerId: "anthropic", modelId: "claude-haiku" },
+        { providerId: "  ", modelId: "claude-haiku" },
+        "not-an-object",
+        null,
+      ]),
+      2,
+    );
+    expect(readHiddenModels(ctx.db)).toEqual([
+      { providerId: "anthropic", modelId: "claude-haiku" },
+    ]);
+
+    setAppState(ctx.db, MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY, "not-json", 3);
+    expect(readHiddenModels(ctx.db)).toEqual([]);
   });
 
   it("stores only a model this profile can run today", () => {

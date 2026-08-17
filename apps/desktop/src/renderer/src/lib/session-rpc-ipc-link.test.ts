@@ -127,13 +127,14 @@ describe("query and mutation", () => {
       modelId: "gpt-5.6-sol",
       reasoningLevel: "high" as const,
     };
+    const saved = { global: selection, ticket: null, utility: null };
 
-    const answer = client.modelAccess.setDefault.mutate(selection);
+    const answer = client.modelAccess.setDefault.mutate({ purpose: "global", selection });
     await flush();
     expect(bridge.requests[0]?.procedure).toBe("modelAccess.setDefault");
 
-    bridge.reply({ ok: true, data: selection });
-    await expect(answer).resolves.toEqual(selection);
+    bridge.reply({ ok: true, data: saved });
+    await expect(answer).resolves.toEqual(saved);
   });
 
   // The bridge flattens a router failure into `{ code, message }`, and a caller
@@ -143,13 +144,13 @@ describe("query and mutation", () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
 
-    const answer = client.modelAccess.defaultSelection.query();
+    const answer = client.modelAccess.defaults.query();
     await flush();
     bridge.reply({ ok: false, error: { code: "NOT_FOUND", message: "Unknown model" } });
 
     await expect(answer).rejects.toMatchObject({
       message: "Unknown model",
-      data: { code: "NOT_FOUND", httpStatus: 404, path: "modelAccess.defaultSelection" },
+      data: { code: "NOT_FOUND", httpStatus: 404, path: "modelAccess.defaults" },
     });
   });
 

@@ -41,10 +41,12 @@ import type {
 import {
   accountAction,
   applySignInUpdate,
+  deepLinkedAction,
   IDLE_SIGN_IN_VIEW,
   orderedAccounts,
   providerAccessLabel,
   retireAnsweredPrompt,
+  type DeepLinkedAction,
   type SignInView,
 } from "@renderer/components/pages/model-access-accounts-model";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
@@ -76,10 +78,20 @@ const COPY_FEEDBACK_MS = 1200;
 
 export function ModelAccessAccounts({
   providers,
+  autoSignInProviderId,
   onRecover,
   onChanged,
 }: {
   providers: readonly ModelAccessProvider[];
+  /**
+   * A provider a blocker sent the user here to sign in to (VC-53). The matching
+   * row presses its own offered action on arrival — starting its one sign-in
+   * method, or opening the choice when the provider offers several, because two
+   * methods are two accounts with two bills and neither may be picked for the
+   * user. Spent by the pane above as it is taken, so this arrives on the first
+   * visit only (see `deepLinkedAction`).
+   */
+  autoSignInProviderId?: string;
   /** The `retry` half of recovery — a refresh of the whole snapshot. */
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   /** A credential was stored or removed; the snapshot no longer describes the profile. */
@@ -92,6 +104,7 @@ export function ModelAccessAccounts({
         <ProviderAccount
           key={provider.id}
           provider={provider}
+          onArrival={deepLinkedAction(provider, autoSignInProviderId)}
           onRecover={onRecover}
           onChanged={onChanged}
         />
@@ -102,10 +115,13 @@ export function ModelAccessAccounts({
 
 function ProviderAccount({
   provider,
+  onArrival,
   onRecover,
   onChanged,
 }: {
   provider: ModelAccessProvider;
+  /** What a deep-linked arrival presses here, or `none` on an ordinary visit. */
+  onArrival: DeepLinkedAction;
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   onChanged(): void | Promise<void>;
 }) {
@@ -135,6 +151,29 @@ function ProviderAccount({
   // this row's own in-flight work, starting a sign-in or signing out, disables
   // its actions; sign-out and cancel are unchanged.
   const busy = starting || signingOut;
+
+  // The deep-linked sign-in, honored once and only once.
+  //
+  // `sign-in` means this row offers exactly one method and the press that sent
+  // the user here already named the provider, so the method is started. Two
+  // methods (`choose`) keep the choice with the user via the control's own
+  // menu, opened rather than answered. Anything else — a reachable provider,
+  // one whose refresh merely needs retrying — is left alone; see
+  // `deepLinkedAction`.
+  //
+  // The ref is the second half of the one-shot: it holds across a snapshot
+  // reload or a cancelled attempt, so nothing re-fires while this row stays
+  // mounted. The store spending the request is what guards the NEXT visit,
+  // where a fresh row would arrive with a fresh ref.
+  const startOnArrival = onArrival === "sign-in" ? (provider.signIn[0]?.type ?? null) : null;
+  const autoStarted = React.useRef(false);
+  const startSignInRef = React.useRef(startSignIn);
+  startSignInRef.current = startSignIn;
+  React.useEffect(() => {
+    if (startOnArrival === null || autoStarted.current) return;
+    autoStarted.current = true;
+    void startSignInRef.current(startOnArrival);
+  }, [startOnArrival]);
 
   async function startSignIn(type: ModelAccessSignInType): Promise<void> {
     if (client === null || session !== null || starting) return;
@@ -221,6 +260,7 @@ function ProviderAccount({
             <SignInControl
               provider={provider}
               busy={busy}
+              autoOpenChoice={onArrival === "choose"}
               onRetry={() => void onRecover(provider)}
               onSignIn={(type) => void startSignIn(type)}
             />
@@ -250,11 +290,14 @@ function ProviderAccount({
 function SignInControl({
   provider,
   busy,
+  autoOpenChoice = false,
   onRetry,
   onSignIn,
 }: {
   provider: ModelAccessProvider;
   busy: boolean;
+  /** A deep-linked arrival lands with the method menu already open. */
+  autoOpenChoice?: boolean;
   onRetry(): void;
   onSignIn(type: ModelAccessSignInType): void;
 }) {
@@ -276,7 +319,7 @@ function SignInControl({
     );
   }
   return (
-    <DropdownMenu>
+    <DropdownMenu defaultOpen={autoOpenChoice}>
       <DropdownMenuTrigger asChild>
         <Button size="sm" variant="secondary" disabled={busy}>
           Sign in

@@ -42,10 +42,13 @@ Volli set. Reverting removes the key from Volli's overlay file rather than
 touching your Ghostty config. Two buttons under **Config files** reveal the
 Ghostty config and Volli's overlay file in Finder.
 
-### Agent
+### Model Access
 
-**Settings → Agent** holds Model Access. Choose the default model and reasoning
-level used when a structured Session starts. The Accounts section shows which
+**Settings → Model Access** holds the model policy for structured Sessions.
+Choose separate defaults for **Project chats**, **Ticket Sessions**, and
+**Utility** work; Ticket Sessions and Utility inherit the Project chats default
+until you choose one explicitly. **Visible models** controls which available
+models appear in every composer and picker. The Accounts section shows which
 providers are available and gives you a recovery action when sign-in is
 required. Volli never silently substitutes a different model or account.
 
@@ -54,7 +57,7 @@ required. Volli never silently substitutes a different model or account.
 **Settings → Harness Runtimes** lists the terminal companions Volli can launch:
 **Claude Code**, **Codex**, **Cursor**, and **OpenCode**, plus registered custom
 harnesses. These settings describe manual terminal integrations, not the
-Pi-backed structured runtime configured under Agent.
+Pi-backed structured runtime configured under Model Access.
 
 ### Worktrees
 

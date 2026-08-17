@@ -1,8 +1,11 @@
 import * as React from "react";
 import type {
+  HiddenModelRef,
+  ModelAccessDefaults,
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   ModelAccessSnapshot,
+  ModelPurpose,
   ModelSelection,
 } from "@volli/shared";
 
@@ -24,8 +27,13 @@ export interface ModelAccessSignInSession {
 
 export interface ModelAccessClient {
   inspect(input: { refresh?: boolean }): Promise<ModelAccessSnapshot>;
-  defaultSelection(): Promise<ModelSelection | null>;
-  setDefault(selection: ModelSelection): Promise<ModelSelection>;
+  /** The per-purpose defaults — see {@link ModelAccessDefaults}. */
+  defaults(): Promise<ModelAccessDefaults>;
+  /** Null clears a ticket/utility choice back to "use the project default". */
+  setDefault(purpose: ModelPurpose, selection: ModelSelection | null): Promise<ModelAccessDefaults>;
+  /** The models the user toggled out of composers and pickers. */
+  hiddenModels(): Promise<readonly HiddenModelRef[]>;
+  setHiddenModels(hidden: readonly HiddenModelRef[]): Promise<readonly HiddenModelRef[]>;
   /**
    * Starts a sign-in and routes its updates to `onUpdate`.
    *
@@ -58,11 +66,29 @@ export function ModelAccessProvider({
   const value = React.useMemo<ModelAccessContextValue>(
     () => ({
       inspect: (input) => client.inspect(input),
-      defaultSelection: () => client.defaultSelection(),
-      beginSignIn: (providerId, type, onUpdate) => client.beginSignIn(providerId, type, onUpdate),
-      signOut: (providerId) => client.signOut(providerId),
-      setDefault: async (selection) => {
-        const saved = await client.setDefault(selection);
+      defaults: () => client.defaults(),
+      hiddenModels: () => client.hiddenModels(),
+      // A completed sign-in changes what every open composer may offer, so the
+      // shared revision — what their catalogs re-read on — bumps here too, not
+      // only when a default is saved.
+      beginSignIn: (providerId, type, onUpdate) =>
+        client.beginSignIn(providerId, type, (update) => {
+          if (update.kind === "settled" && update.outcome.kind === "signed-in") {
+            setRevision((current) => current + 1);
+          }
+          onUpdate(update);
+        }),
+      signOut: async (providerId) => {
+        await client.signOut(providerId);
+        setRevision((current) => current + 1);
+      },
+      setDefault: async (purpose, selection) => {
+        const saved = await client.setDefault(purpose, selection);
+        setRevision((current) => current + 1);
+        return saved;
+      },
+      setHiddenModels: async (hidden) => {
+        const saved = await client.setHiddenModels(hidden);
         setRevision((current) => current + 1);
         return saved;
       },

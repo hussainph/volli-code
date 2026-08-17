@@ -8,6 +8,7 @@ import type {
 import {
   accountAction,
   applySignInUpdate,
+  deepLinkedAction,
   IDLE_SIGN_IN_VIEW,
   orderedAccounts,
   providerAccessLabel,
@@ -259,5 +260,54 @@ describe("the action a row offers", () => {
       ],
     });
     expect(accountAction(codex)).toBe("choose");
+  });
+});
+
+describe("what a deep-linked arrival presses", () => {
+  const OAUTH = { type: "oauth", label: "Sign in with OpenAI", isSubscription: true } as const;
+  const API_KEY = { type: "api-key", label: "API key", isSubscription: false } as const;
+  const blocked = provider({
+    id: "openai-codex",
+    label: "OpenAI Codex",
+    state: "authentication-required",
+    recovery: { kind: "sign-in" },
+    signIn: [OAUTH],
+  });
+
+  it("presses the row's own sign-in when the blocker named this provider", () => {
+    expect(deepLinkedAction(blocked, "openai-codex")).toBe("sign-in");
+  });
+
+  it("presses nothing on any other row", () => {
+    expect(deepLinkedAction(blocked, "anthropic")).toBe("none");
+  });
+
+  it("presses nothing on a visit nobody deep-linked — which is every visit but the first", () => {
+    // The pane spends the request as it takes it (stores/ui.ts), so walking
+    // back past Model Access arrives here naming nobody.
+    expect(deepLinkedAction(blocked, undefined)).toBe("none");
+  });
+
+  it("opens the choice instead of picking one of two accounts", () => {
+    const twoMethods = provider({ ...blocked, signIn: [OAUTH, API_KEY] });
+    expect(deepLinkedAction(twoMethods, "openai-codex")).toBe("choose");
+  });
+
+  it("never starts a fresh auth flow for an account already connected", () => {
+    // The row offers Sign out, not Sign in — so there is nothing here to press,
+    // and launching a provider's browser flow at a connected account would be
+    // an external act with no request behind it.
+    const connected = provider({
+      ...blocked,
+      state: "available",
+      recovery: null,
+      hasStoredCredential: true,
+    });
+    expect(deepLinkedAction(connected, "openai-codex")).toBe("none");
+  });
+
+  it("never runs the Retry a failed refresh offers", () => {
+    const stale = provider({ ...blocked, recovery: { kind: "retry" } });
+    expect(deepLinkedAction(stale, "openai-codex")).toBe("none");
   });
 });

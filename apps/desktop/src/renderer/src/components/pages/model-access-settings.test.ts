@@ -2,7 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ModelAccessModel, ModelAccessProvider } from "@volli/shared";
 
 import {
-  canSaveDefaultModel,
+  availableModelsByProvider,
+  defaultPickerModels,
   modelOptionLabel,
   offerableModels,
   preferredReasoning,
@@ -30,32 +31,64 @@ describe("default model reasoning", () => {
   });
 });
 
-describe("default model availability", () => {
-  const selection = {
-    providerId: MODEL.providerId,
-    modelId: MODEL.modelId,
-    reasoningLevel: "high" as const,
-  };
+describe("default picker curation", () => {
+  const hiddenSol = { providerId: MODEL.providerId, modelId: MODEL.modelId };
+  const luna: ModelAccessModel = { ...MODEL, modelId: "gpt-5.6-luna", label: "GPT-5.6 Luna" };
 
-  it("refuses a default nobody is signed in to, whatever the catalog knows", () => {
-    expect(canSaveDefaultModel({ ...MODEL, state: "authentication-required" }, selection)).toBe(
-      false,
-    );
-    expect(canSaveDefaultModel(null, selection)).toBe(false);
+  it("withholds hidden models from a default picker", () => {
+    expect(defaultPickerModels([MODEL, luna], [hiddenSol], null)).toEqual([luna]);
   });
 
-  it("uses off as the product policy for a model without reasoning controls", () => {
+  it("keeps the currently configured model listed even when hidden", () => {
     expect(
-      canSaveDefaultModel(
-        { ...MODEL, reasoningLevels: [] },
-        { ...selection, reasoningLevel: "off" },
-      ),
-    ).toBe(true);
+      defaultPickerModels([MODEL, luna], [hiddenSol], {
+        providerId: MODEL.providerId,
+        modelId: MODEL.modelId,
+        reasoningLevel: "high",
+      }),
+    ).toEqual([MODEL, luna]);
   });
+});
 
-  it("rejects unavailable models and unsupported reasoning", () => {
-    expect(canSaveDefaultModel({ ...MODEL, state: "unavailable" }, selection)).toBe(false);
-    expect(canSaveDefaultModel(MODEL, { ...selection, reasoningLevel: "xhigh" })).toBe(false);
+describe("visibility grouping", () => {
+  it("groups only offerable models, per provider, each in label order", () => {
+    const other: ModelAccessModel = {
+      ...MODEL,
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      label: "Claude Sonnet",
+    };
+    const groups = availableModelsByProvider(
+      [
+        MODEL,
+        { ...MODEL, modelId: "gpt-5.6-astra", label: "GPT-5.6 Astra" },
+        other,
+        {
+          ...other,
+          modelId: "claude-haiku",
+          label: "Claude Haiku",
+          state: "authentication-required",
+        },
+      ],
+      [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state: "available",
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: true,
+        },
+      ],
+    );
+
+    expect(groups.map((group) => group.providerLabel)).toEqual(["Anthropic", "openai-codex"]);
+    expect(groups[1]?.models.map((model) => model.label)).toEqual(["GPT-5.6 Astra", "GPT-5.6 Sol"]);
+    // The signed-out Haiku never reaches a switch: there is nothing to curate
+    // on a model no picker would offer anyway.
+    expect(groups[0]?.models.map((model) => model.label)).toEqual(["Claude Sonnet"]);
   });
 });
 

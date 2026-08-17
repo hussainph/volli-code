@@ -27,8 +27,10 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
     const rpc = sessionRpcClient();
     return {
       inspect: (input) => rpc.modelAccess.inspect.query(input),
-      defaultSelection: () => rpc.modelAccess.defaultSelection.query(),
-      setDefault: (selection) => rpc.modelAccess.setDefault.mutate(selection),
+      defaults: () => rpc.modelAccess.defaults.query(),
+      setDefault: (purpose, selection) => rpc.modelAccess.setDefault.mutate({ purpose, selection }),
+      hiddenModels: () => rpc.modelAccess.hiddenModels.query(),
+      setHiddenModels: (hidden) => rpc.modelAccess.setHiddenModels.mutate([...hidden]),
       beginSignIn: (providerId, type, onUpdate) => beginSignIn(providerId, type, onUpdate),
       signOut: async (providerId) => {
         expect(await window.api.modelAccess.signOut(providerId));

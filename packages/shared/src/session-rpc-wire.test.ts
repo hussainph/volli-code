@@ -21,8 +21,10 @@ describe("Session RPC wire protocol", () => {
     expect(Object.isFrozen(SESSION_RPC_IPC_PROCEDURES)).toBe(true);
     expect(SESSION_RPC_IPC_PROCEDURES).toEqual([
       "modelAccess.inspect",
-      "modelAccess.defaultSelection",
+      "modelAccess.defaults",
       "modelAccess.setDefault",
+      "modelAccess.hiddenModels",
+      "modelAccess.setHiddenModels",
       "sessions.create",
       "sessions.attach",
       "session.snapshot",

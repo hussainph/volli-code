@@ -26,6 +26,19 @@ function createMemoryStorage() {
   };
 }
 
+/**
+ * The Model Access pane mounting, in the two lines that matter: it takes the
+ * deep-linked sign-in request as this mount's OWN value and spends it on the
+ * way past (model-access-settings.tsx keeps the taken value in mount state —
+ * the return here stands in for that). Switching category unmounts the pane, so
+ * every visit to it is one of these calls.
+ */
+function mountModelAccessPane(store: ReturnType<typeof createUiStore>): string | null {
+  const taken = store.getState().settingsSignInProviderId;
+  if (taken !== null) store.getState().consumeSettingsSignIn();
+  return taken;
+}
+
 describe("clampSidebarWidth", () => {
   it("clamps to the min/max range and rounds fractional widths", () => {
     expect(clampSidebarWidth(SIDEBAR_MIN_WIDTH - 100)).toBe(SIDEBAR_MIN_WIDTH);
@@ -167,8 +180,19 @@ describe("setSettingsOpen", () => {
     const store = createUiStore(createMemoryStorage());
     expect(store.getState().settingsCategory).toBeNull();
 
-    store.getState().setSettingsOpen(true, "agent");
-    expect(store.getState().settingsCategory).toBe("agent");
+    store.getState().setSettingsOpen(true, "model-access");
+    expect(store.getState().settingsCategory).toBe("model-access");
+  });
+
+  it("carries the provider a blocker wants signed in to, one-shot like the category", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().settingsSignInProviderId).toBeNull();
+
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+    expect(store.getState().settingsSignInProviderId).toBe("anthropic");
+
+    store.getState().setSettingsOpen(true, "model-access");
+    expect(store.getState().settingsSignInProviderId).toBeNull();
   });
 
   it("forgets the category on the next opening that names none", () => {
@@ -176,13 +200,60 @@ describe("setSettingsOpen", () => {
     // would send the NEXT visitor somewhere the surface that opened it never
     // asked for.
     const store = createUiStore(createMemoryStorage());
-    store.getState().setSettingsOpen(true, "agent");
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
 
     store.getState().setSettingsOpen(false);
     expect(store.getState().settingsCategory).toBeNull();
+    expect(store.getState().settingsSignInProviderId).toBeNull();
 
     store.getState().setSettingsOpen(true);
     expect(store.getState().settingsCategory).toBeNull();
+  });
+});
+
+describe("consumeSettingsSignIn", () => {
+  it("spends the request, so revisiting the pane starts no sign-in", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+
+    // The blocker's press, honored.
+    expect(mountModelAccessPane(store)).toBe("anthropic");
+
+    // General, then Model Access again — ordinary navigation inside a Settings
+    // overlay that never closed. A provider's browser auth relaunching here is
+    // an external act nobody asked for the second time.
+    expect(mountModelAccessPane(store)).toBeNull();
+    expect(mountModelAccessPane(store)).toBeNull();
+  });
+
+  it("spends only itself: Settings stays open, on the category it was sent to", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+
+    store.getState().consumeSettingsSignIn();
+
+    expect(store.getState().settingsOpen).toBe(true);
+    expect(store.getState().settingsCategory).toBe("model-access");
+  });
+
+  it("is a no-op for a visit nobody deep-linked", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setSettingsOpen(true, "model-access");
+
+    store.getState().consumeSettingsSignIn();
+
+    expect(store.getState().settingsSignInProviderId).toBeNull();
+  });
+
+  it("re-arms on the next press — one launch per press, not one per profile", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+    expect(mountModelAccessPane(store)).toBe("anthropic");
+
+    // A second blocker, a second press, its own launch.
+    store.getState().setSettingsOpen(true, "model-access", "openai-codex");
+    expect(mountModelAccessPane(store)).toBe("openai-codex");
+    expect(mountModelAccessPane(store)).toBeNull();
   });
 });
 

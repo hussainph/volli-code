@@ -171,20 +171,24 @@ describe("the Session's own model, against the catalog", () => {
         catalog,
         providers,
       ),
-    ).toEqual({ providerLabel: "Azure OpenAI Responses", state: "authentication-required" });
+    ).toEqual({
+      providerId: "azure-openai-responses",
+      providerLabel: "Azure OpenAI Responses",
+      state: "authentication-required",
+    });
     expect(
       sessionModelStanding(
         { providerId: "openai-codex", modelId: "gpt-5.6-luna" },
         catalog,
         providers,
       ),
-    ).toEqual({ providerLabel: "openai-codex", state: "available" });
+    ).toEqual({ providerId: "openai-codex", providerLabel: "openai-codex", state: "available" });
   });
 
   it("counts a model the catalog no longer lists as one that cannot be run", () => {
     expect(
       sessionModelStanding({ providerId: "openai", modelId: "gone" }, catalog, providers),
-    ).toEqual({ providerLabel: "openai", state: "unavailable" });
+    ).toEqual({ providerId: "openai", providerLabel: "openai", state: "unavailable" });
   });
 
   it("has nothing to say about a Session with no recorded model", () => {
@@ -197,6 +201,7 @@ const ACTS: SessionBlockerActs = {
   recover: NO_OP,
   retryRuntime: NO_OP,
   openSettings: NO_OP,
+  signIn: NO_OP,
 };
 
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
@@ -205,7 +210,8 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     attention: { active: [], primary: null },
     catalogState: "ready",
     catalogError: null,
-    sessionModel: { providerLabel: "OpenAI Codex", state: "available" },
+    sessionModel: { providerId: "openai-codex", providerLabel: "OpenAI Codex", state: "available" },
+    signInProviders: [],
     ...overrides,
   };
 }
@@ -307,30 +313,39 @@ describe("sessionBlocker", () => {
     // pointing at a provider nobody signed into. Today it looks ordinary until
     // the first message dies at the provider's API.
     const pinned = blockerInput({
-      sessionModel: { providerLabel: "Azure OpenAI Responses", state: "authentication-required" },
+      sessionModel: {
+        providerId: "azure-openai-responses",
+        providerLabel: "Azure OpenAI Responses",
+        state: "authentication-required",
+      },
     });
 
-    expect(sessionBlocker(pinned, ACTS, false)).toEqual({
+    expect(sessionBlocker(pinned, ACTS, false)).toMatchObject({
       message: "Sign-in required for Azure OpenAI Responses",
       detail: null,
       tone: "error",
-      action: { label: "Settings", act: NO_OP },
+      action: { label: "Sign in" },
     });
   });
 
-  // One fact, one destination. The catalog reading a provider as signed out and
-  // the harness raising `auth_required` about it are the same fact arriving from
-  // two directions, and which one spoke first must not decide where the reader
-  // is sent.
-  it("routes a signed-out pinned model exactly where the harness's own report goes", () => {
-    const pinned = {
+  // The row that already knows WHICH provider is blocking typing sends the
+  // reader straight to that provider's sign-in, never merely to the category
+  // (VC-53). The harness's own `auth_required` names no provider id, so its
+  // recovery stays Settings.
+  it("deep-links a signed-out pinned model to its own provider's sign-in", () => {
+    const signedInTo: string[] = [];
+    const pinned = blockerInput({
       sessionModel: {
+        providerId: "azure-openai-responses",
         providerLabel: "Azure OpenAI Responses",
-        state: "authentication-required" as const,
+        state: "authentication-required",
       },
-    };
+    });
 
-    expect(sessionBlocker(blockerInput(pinned), ACTS, false)?.action?.label).toBe("Settings");
+    const blocker = sessionBlocker(pinned, { ...ACTS, signIn: (id) => signedInTo.push(id) }, false);
+    blocker?.action?.act();
+
+    expect(signedInTo).toEqual(["azure-openai-responses"]);
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)?.action?.label).toBe(
       "Settings",
     );
@@ -343,7 +358,9 @@ describe("sessionBlocker", () => {
   it("offers no action for a model Settings would not repin", () => {
     expect(
       sessionBlocker(
-        blockerInput({ sessionModel: { providerLabel: "OpenAI", state: "unavailable" } }),
+        blockerInput({
+          sessionModel: { providerId: "openai", providerLabel: "OpenAI", state: "unavailable" },
+        }),
         ACTS,
         false,
       ),
@@ -359,6 +376,7 @@ describe("sessionBlocker", () => {
     const pinned = {
       ...raised(attention("auth_required", "Provider is not configured: azure-openai-responses")),
       sessionModel: {
+        providerId: "azure-openai-responses",
         providerLabel: "Azure OpenAI Responses",
         state: "authentication-required" as const,
       },
@@ -373,7 +391,13 @@ describe("sessionBlocker", () => {
   });
 
   it("accuses no model until the catalog has answered", () => {
-    const unanswered = { sessionModel: { providerLabel: "OpenAI", state: "unavailable" as const } };
+    const unanswered = {
+      sessionModel: {
+        providerId: "openai",
+        providerLabel: "OpenAI",
+        state: "unavailable" as const,
+      },
+    };
 
     expect(
       sessionBlocker(blockerInput({ ...unanswered, catalogState: "loading" }), ACTS, false),
@@ -397,6 +421,32 @@ describe("sessionBlocker", () => {
 
     expect(sessionBlocker(empty, ACTS, true)).toBeNull();
     expect(sessionBlocker(empty, ACTS, false)?.message).toBe("No models configured");
+    // No providers offering sign-in — the row offers Settings alone, no menu.
+    expect(sessionBlocker(empty, ACTS, false)?.signInMenu).toBeUndefined();
+  });
+
+  it("offers the first-run provider menu, and it routes straight to sign-in", () => {
+    const signedInTo: string[] = [];
+    const empty = blockerInput({
+      catalogState: "empty",
+      signInProviders: [
+        { id: "anthropic", label: "Anthropic" },
+        { id: "openai-codex", label: "OpenAI Codex" },
+      ],
+    });
+
+    const blocker = sessionBlocker(empty, { ...ACTS, signIn: (id) => signedInTo.push(id) }, false);
+
+    expect(blocker?.signInMenu?.label).toBe("Sign in");
+    expect(blocker?.signInMenu?.options.map((option) => option.id)).toEqual([
+      "anthropic",
+      "openai-codex",
+    ]);
+    // Settings stays beside the menu — the rest of the pane (defaults,
+    // visibility, the full account list) is still one press away.
+    expect(blocker?.action?.label).toBe("Settings");
+    blocker?.signInMenu?.choose("anthropic");
+    expect(signedInTo).toEqual(["anthropic"]);
   });
 
   it("never lets a catalog failure stand in for the Session's own", () => {

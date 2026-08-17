@@ -42,7 +42,7 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
-import { writeDefaultModelSelection } from "./session-runtime/model-access-preferences";
+import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
@@ -3885,9 +3885,13 @@ describe("model.list", () => {
   });
 
   it("reports the configured app default alongside the catalog", async () => {
+    // Only the project default is configured, and `session start` starts a
+    // Ticket Session — so what it reports is the ticket purpose resolving to
+    // the project default it inherits (VC-53), not a second stored value.
     const harness = modelListHarness();
-    writeDefaultModelSelection(
+    writeModelAccessDefault(
       ctx.db,
+      "global",
       { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
       500,
     );
@@ -3897,6 +3901,32 @@ describe("model.list", () => {
     expect(response).toMatchObject({
       ok: true,
       data: { default: { model: "anthropic/claude-opus-5", reasoning: "medium" } },
+    });
+  });
+
+  it("reports the Ticket default once one is chosen, not the project default", async () => {
+    // `volli session start` is a Ticket Session, so the model it will run is
+    // the execution default — reporting the orchestration one would name a
+    // model this command is never going to use.
+    const harness = modelListHarness();
+    writeModelAccessDefault(
+      ctx.db,
+      "global",
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
+      500,
+    );
+    writeModelAccessDefault(
+      ctx.db,
+      "ticket",
+      { providerId: "openai-codex", modelId: "gpt-5.6-terra", reasoningLevel: "high" },
+      501,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { default: { model: "openai-codex/gpt-5.6-terra", reasoning: "high" } },
     });
   });
 

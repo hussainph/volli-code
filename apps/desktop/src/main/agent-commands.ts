@@ -28,6 +28,7 @@ import {
   parseHarnessId,
   REASONING_LEVELS,
   resolveAgentContext,
+  resolveDefaultModel,
   runDoctorChecks,
   shortSessionId,
   supersededHarnessEvent,
@@ -82,7 +83,7 @@ import {
 import { PI_TOOLS } from "./session-runtime/pi-adapter";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type { Sessions } from "./session-runtime/sessions";
-import { readDefaultModelSelection } from "./session-runtime/model-access-preferences";
+import { readModelAccessDefaults } from "./session-runtime/model-access-preferences";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -1382,7 +1383,11 @@ export function createAgentCommandService(
         // The app default is reported even when it names a model the filtered
         // view no longer shows — what `session start` will do without an
         // override is a fact about the app, not about this view.
-        const selection = readDefaultModelSelection(options.db);
+        //
+        // Which default: the Ticket one (VC-53), because `volli session start`
+        // starts a Ticket Session. A profile that configured only the project
+        // default sees that one, since an unset ticket default resolves to it.
+        const selection = resolveDefaultModel(readModelAccessDefaults(options.db), "ticket");
         return {
           v: 1,
           ok: true,

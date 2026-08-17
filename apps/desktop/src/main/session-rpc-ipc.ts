@@ -10,7 +10,14 @@ import {
   type SessionCreateResult,
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
-import type { ModelAccessSnapshot, ModelSelection, SessionStartResult } from "@volli/shared";
+import type {
+  HiddenModelRef,
+  ModelAccessDefaults,
+  ModelAccessSnapshot,
+  ModelPurpose,
+  ModelSelection,
+  SessionStartResult,
+} from "@volli/shared";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -99,8 +106,13 @@ export type SessionRpcIpcCoverage = AssertNever<
 export interface RegisterSessionRpcIpcOptions {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
-  readDefaultModelSelection?: () => ModelSelection | null;
-  writeDefaultModelSelection?: (selection: ModelSelection) => void | Promise<void>;
+  readModelAccessDefaults?: () => ModelAccessDefaults;
+  writeModelAccessDefault?: (
+    purpose: ModelPurpose,
+    selection: ModelSelection | null,
+  ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
+  readHiddenModels?: () => readonly HiddenModelRef[];
+  writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
   /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -150,8 +162,10 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         const caller = router.createCaller({
           runtime: options.runtime,
           inspectModelAccess: options.inspectModelAccess,
-          readDefaultModelSelection: options.readDefaultModelSelection,
-          writeDefaultModelSelection: options.writeDefaultModelSelection,
+          readModelAccessDefaults: options.readModelAccessDefaults,
+          writeModelAccessDefault: options.writeModelAccessDefault,
+          readHiddenModels: options.readHiddenModels,
+          writeHiddenModels: options.writeHiddenModels,
           createSession: options.createSession,
           attachSession: options.attachSession,
           diagnostics,
@@ -275,10 +289,14 @@ async function callProcedure(
   switch (request.procedure) {
     case "modelAccess.inspect":
       return caller.modelAccess.inspect(request.input as never);
-    case "modelAccess.defaultSelection":
-      return caller.modelAccess.defaultSelection();
+    case "modelAccess.defaults":
+      return caller.modelAccess.defaults();
     case "modelAccess.setDefault":
       return caller.modelAccess.setDefault(request.input as never);
+    case "modelAccess.hiddenModels":
+      return caller.modelAccess.hiddenModels();
+    case "modelAccess.setHiddenModels":
+      return caller.modelAccess.setHiddenModels(request.input as never);
     case "sessions.create":
       return caller.sessions.create(request.input as never);
     case "sessions.attach":

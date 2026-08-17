@@ -16,6 +16,10 @@ import {
   startScratchTerminal,
 } from "@renderer/components/sessions/session-create";
 import {
+  ModelAccessFirstRun,
+  useModelAccessReady,
+} from "@renderer/components/sessions/model-access-first-run";
+import {
   chatTabId,
   chatTabStatus,
   parseChatTabId,
@@ -301,22 +305,29 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // checkout, `agent-runtime/src/prompt.ts`); a terminal is its manual
   // companion, one caret away on the strip's control, never the landing
   // surface. A terminal counts as one: the surface is not empty, and a chat
-  // nobody asked for would be an odd thing to find beside it. A fresh profile
-  // with no default model refuses the create exactly as an explicit press
-  // would — the toast names the setting, and the empty state keeps the retry.
+  // nobody asked for would be an odd thing to find beside it.
+  //
+  // Gated on Model Access (VC-53): a fresh profile with no resolvable default
+  // would have its create refused in main before any Session exists, so the
+  // auto-open does not fire — no toast, no refusal — and the empty state
+  // stands the sign-in path in its place. The project deliberately stays OUT
+  // of `autoOpenedRef` until a default exists: finishing Model Access setup is
+  // what arms the first visit, and the effect re-checks on every revision.
   const emptySurface = terminalTabs.length === 0 && openChatIds.length === 0;
+  const modelReady = useModelAccessReady(visible && selected !== null && emptySurface);
   React.useEffect(() => {
     if (
       visible &&
       selected &&
       emptySurface &&
+      modelReady === true &&
       !autoOpenedRef.current.has(selected.id) &&
       !creating
     ) {
       autoOpenedRef.current.add(selected.id);
       createChat(selected.id);
     }
-  }, [visible, selected, emptySurface, creating, createChat]);
+  }, [visible, selected, emptySurface, creating, createChat, modelReady]);
 
   /**
    * Where a file a chat names opens. A ticketless chat has no worktree, so
@@ -510,24 +521,34 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
 
           {selected && emptySurface && (
             <div className={cn("absolute inset-0", EMPTY_PAGE, "gap-4")}>
-              {/* Chat, not a terminal: the control below starts a chat, and the
-                  glyph crowning an empty state has to name the thing the button
-                  does. */}
-              <ChatCircleIcon className="size-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">No open sessions.</p>
-              {/* The same control the strip carries, drawn solid: it is the only
-                  affordance on screen, so it takes the emphasis and says what it
-                  does rather than naming a kind among tabs that no longer exist. */}
-              <NewSessionControl
-                disabled={creating}
-                placement="empty"
-                align="start"
-                shortcuts
-                skills={skills}
-                onNewChat={() => createChat(selected.id)}
-                onNewChatWithSkill={(name) => createChatWithSkill(selected.id, name)}
-                onNewTerminal={() => createScratch(selected.id)}
-              />
+              {modelReady === false ? (
+                // The first-run blocked state: no chat can mint until Model
+                // Access resolves a default, so the sign-in path IS the
+                // surface — inline, zero toasts (VC-53).
+                <ModelAccessFirstRun />
+              ) : (
+                <>
+                  {/* Chat, not a terminal: the control below starts a chat, and
+                      the glyph crowning an empty state has to name the thing
+                      the button does. */}
+                  <ChatCircleIcon className="size-8 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">No open sessions.</p>
+                  {/* The same control the strip carries, drawn solid: it is the
+                      only affordance on screen, so it takes the emphasis and
+                      says what it does rather than naming a kind among tabs
+                      that no longer exist. */}
+                  <NewSessionControl
+                    disabled={creating}
+                    placement="empty"
+                    align="start"
+                    shortcuts
+                    skills={skills}
+                    onNewChat={() => createChat(selected.id)}
+                    onNewChatWithSkill={(name) => createChatWithSkill(selected.id, name)}
+                    onNewTerminal={() => createScratch(selected.id)}
+                  />
+                </>
+              )}
             </div>
           )}
         </div>

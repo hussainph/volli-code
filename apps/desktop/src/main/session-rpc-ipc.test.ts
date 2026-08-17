@@ -522,51 +522,66 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
-  it("routes the user-configured Model Access default over IPC", async () => {
+  it("routes the user-configured Model Access defaults over IPC", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
+    const global = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    const ticket = {
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      reasoningLevel: "medium" as const,
+    };
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
-      readDefaultModelSelection: () => ({
-        providerId: "openai-codex",
-        modelId: "gpt-5.6-sol",
-        reasoningLevel: "high",
-      }),
-      writeDefaultModelSelection: (selection) => {
-        writes.push(selection);
+      readModelAccessDefaults: () => ({ global, ticket: null, utility: null }),
+      writeModelAccessDefault: (purpose, selection) => {
+        writes.push({ purpose, selection });
+        return { global, ticket: selection, utility: null };
       },
     });
 
     await expect(
-      invoke(sender(), { procedure: "modelAccess.defaultSelection", input: undefined }),
+      invoke(sender(), { procedure: "modelAccess.defaults", input: undefined }),
     ).resolves.toEqual({
       ok: true,
-      data: {
-        providerId: "openai-codex",
-        modelId: "gpt-5.6-sol",
-        reasoningLevel: "high",
-      },
+      data: { global, ticket: null, utility: null },
     });
     await expect(
       invoke(sender(), {
         procedure: "modelAccess.setDefault",
-        input: {
-          providerId: "anthropic",
-          modelId: "claude-sonnet",
-          reasoningLevel: "medium",
-        },
+        input: { purpose: "ticket", selection: ticket },
       }),
     ).resolves.toEqual({
       ok: true,
-      data: {
-        providerId: "anthropic",
-        modelId: "claude-sonnet",
-        reasoningLevel: "medium",
+      data: { global, ticket, utility: null },
+    });
+    expect(writes).toEqual([{ purpose: "ticket", selection: ticket }]);
+    await registration.close();
+  });
+
+  it("routes the curated hidden-model list over IPC", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const hidden = [{ providerId: "anthropic", modelId: "claude-haiku" }];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      readHiddenModels: () => hidden,
+      writeHiddenModels: (next) => {
+        writes.push(next);
       },
     });
-    expect(writes).toEqual([
-      { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
-    ]);
+
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.hiddenModels", input: undefined }),
+    ).resolves.toEqual({ ok: true, data: hidden });
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.setHiddenModels", input: [] }),
+    ).resolves.toEqual({ ok: true, data: [] });
+    expect(writes).toEqual([[]]);
     await registration.close();
   });
 
