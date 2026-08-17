@@ -26,6 +26,7 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  messageCopyText,
   messageRoute,
   resolvingWith,
   sameInteractionId,
@@ -672,6 +673,45 @@ describe("messageRoute", () => {
   it("sends when the Session can take it", () => {
     expect(messageRoute("send", true)).toBe("send");
     expect(messageRoute("steer", true)).toBe("send");
+  });
+});
+
+describe("messageCopyText", () => {
+  it("keeps every visible text part in feed order", () => {
+    const messages: readonly UIMessage[] = [
+      {
+        id: "user-1",
+        role: "user",
+        parts: [
+          { type: "text", text: "Rewrite this prompt." },
+          { type: "text", text: "Keep the examples." },
+        ],
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Here is a tighter version." }],
+      },
+    ];
+
+    expect(messageCopyText(messages)).toBe(
+      "Rewrite this prompt.\n\nKeep the examples.\n\nHere is a tighter version.",
+    );
+  });
+
+  it("offers no copy for a feed row with no message text", () => {
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "Private reasoning", state: "done" },
+          { type: "text", text: "" },
+        ],
+      },
+    ];
+
+    expect(messageCopyText(messages)).toBeNull();
   });
 });
 
