@@ -2,6 +2,15 @@ packages:
   - apps/*
   - packages/*
 
+# Hard-fail `pnpm install` when the running Node is outside the root
+# `engines.node` pin (^24.13.0). Without this, an install under a stray older
+# Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
+# succeeds and quietly builds native modules against the wrong ABI — the
+# desktop app then boots into a dead database with sign-in greyed out (VC-76).
+# CI installs under the pinned Node (node-version-file: package.json), so this
+# only ever bites the machine it is protecting.
+engineStrict: true
+
 # Successor to onlyBuiltDependencies (pnpm 11): true = allowed to run build scripts.
 # electron@43 ships no lifecycle scripts (its binary comes from a require-time
 # fetch), but pnpm 11 still hard-fails install (ERR_PNPM_IGNORED_BUILDS) without

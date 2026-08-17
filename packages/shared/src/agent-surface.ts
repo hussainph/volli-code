@@ -16,6 +16,9 @@ export const AGENT_COMMANDS = [
   "worktree.diff",
   "project.list",
   "label.list",
+  // Model discovery (VC-78): the same Model Access snapshot the app reads,
+  // filtered for a context window — never a parallel provider probe.
+  "model.list",
   "session.list",
   "session.peek",
   // Attended-only Session start (VC-13): rides the app-owned product start

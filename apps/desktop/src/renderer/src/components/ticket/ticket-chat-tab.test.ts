@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  chatTabId,
-  chatTabStatus,
-  nextChatOrdinal,
-  parseChatTabId,
-  resolveChatRelaunch,
-} from "./ticket-chat-tab";
+import { chatTabId, chatTabStatus, parseChatTabId, resolveChatRelaunch } from "./ticket-chat-tab";
 
 describe("chat tab identity", () => {
   it("round-trips a Session id through its prefixed tab id", () => {
@@ -30,14 +24,6 @@ describe("chatTabStatus", () => {
     expect(chatTabStatus("ready")).toBe("ready");
     expect(chatTabStatus("error")).toBe("error");
     expect(chatTabStatus(undefined)).toBe("idle");
-  });
-});
-
-describe("nextChatOrdinal", () => {
-  it("counts from whichever answer is larger", () => {
-    expect(nextChatOrdinal(0, 0)).toBe(1);
-    expect(nextChatOrdinal(3, 1)).toBe(4);
-    expect(nextChatOrdinal(0, 2)).toBe(3);
   });
 });
 

@@ -164,6 +164,52 @@ function countCell(value: unknown): string {
   return value === null || value === undefined ? "-" : terminalSafeInline(value);
 }
 
+/**
+ * An elapsed span at the precision a peek is read at: seconds while something
+ * is happening, minutes while it is thinking, hours once it has stopped. The
+ * caller is deciding whether to look closer, not measuring anything.
+ */
+function ageText(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "-";
+  const seconds = Math.floor(value / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
+/**
+ * A chat Session's peek: one activity line, then one line per transcript
+ * message. The activity line leads because it answers the question the command
+ * was run to ask — alive, doing what, since when — and the tail below it is
+ * evidence, kept to a line each so a peek costs the caller a screen, not a
+ * conversation.
+ */
+function renderChatPeek(data: Record<string, unknown>, transcript: readonly unknown[]): string {
+  const waitingOn = data["waitingOn"];
+  const unreadable = data["unreadable"];
+  const header = [
+    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${
+      typeof waitingOn === "string" ? ` on ${terminalSafeInline(waitingOn)}` : ""
+    }`,
+    `last ${ageText(data["lastActivityAgeMs"])}`,
+    `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
+    ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
+  ].join("  ");
+  return [header, ...transcript.filter(isRecord).map(transcriptLine)].join("\n");
+}
+
+/** One transcript message: how long ago, who, which tools, what it said. */
+function transcriptLine(entry: Record<string, unknown>): string {
+  const tools = Array.isArray(entry["tools"])
+    ? entry["tools"].filter((tool): tool is string => typeof tool === "string")
+    : [];
+  const text = typeof entry["text"] === "string" ? entry["text"] : "";
+  const said = `${tools.length > 0 ? `[${tools.map(terminalSafeInline).join(" ")}]` : ""}${
+    tools.length > 0 && text.length > 0 ? " " : ""
+  }${terminalSafeInline(text)}`;
+  return `${ageText(entry["ageMs"])}  ${terminalSafeInline(entry["role"])}${said.length > 0 ? `  ${said}` : ""}`;
+}
+
 /** The worktree.status snapshot: branch→base, worktree path, dirty/sequencer/sync. */
 function renderWorktreeStatus(data: Record<string, unknown>): string {
   const branch = typeof data["branch"] === "string" ? data["branch"] : "(detached)";
@@ -207,6 +253,57 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
   const omitted = data["omittedFiles"];
   if (typeof omitted === "number" && omitted > 0) {
     lines.push(`  … and ${terminalSafeInline(omitted)} more files`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The model.list catalog: the app default first, then one header line per
+ * provider with its copyable `provider/model` rows and reasoning levels
+ * beneath it, and honest rollups for everything the default view withholds
+ * (unavailable providers, and unavailable models inside a shown provider —
+ * they are behind --all, not missing).
+ */
+function renderModelList(data: Record<string, unknown>): string | null {
+  const providers = recordsAt(data, "providers");
+  if (providers === null) return null;
+  const def = data["default"];
+  const lines = [
+    isRecord(def) && typeof def["model"] === "string"
+      ? `default  ${terminalSafeInline(def["model"])}  ${terminalSafeInline(def["reasoning"])}`
+      : "default  -",
+  ];
+  for (const provider of providers) {
+    lines.push(
+      `${terminalSafeInline(provider["id"])}  ${terminalSafeInline(provider["label"])}  ${terminalSafeInline(provider["state"])}`,
+    );
+    const models = Array.isArray(provider["models"]) ? provider["models"].filter(isRecord) : [];
+    for (const model of models) {
+      const levels = Array.isArray(model["reasoning"])
+        ? model["reasoning"].filter((level): level is string => typeof level === "string")
+        : [];
+      // The default view holds only available models, so the state cell earns
+      // its width exactly when it says something other than "available".
+      const state = model["state"] === "available" ? "" : `  ${terminalSafeInline(model["state"])}`;
+      lines.push(
+        `  ${terminalSafeInline(model["model"])}  ${levels.length > 0 ? levels.map(terminalSafeInline).join("|") : "-"}${state}`,
+      );
+    }
+    // Models the default view withheld inside this shown provider get the same
+    // honesty counter the provider rollup has — nothing disappears silently.
+    const omittedModels = provider["omittedModels"];
+    if (typeof omittedModels === "number" && omittedModels > 0) {
+      lines.push(
+        `  … and ${terminalSafeInline(omittedModels)} more models not available (use --all)`,
+      );
+    }
+  }
+  // "not available", not "not signed in": a provider can be signed in and
+  // still be withheld here (probe failure, refresh error) — the wording must
+  // stay honest in both cases.
+  const omitted = data["omittedProviders"];
+  if (typeof omitted === "number" && omitted > 0) {
+    lines.push(`… and ${terminalSafeInline(omitted)} more providers not available (use --all)`);
   }
   return lines.join("\n");
 }
@@ -259,6 +356,7 @@ function renderStableLines(command: string, data: unknown): string | null {
         .join("\n") ?? null
     );
   }
+  if (command === "model.list") return renderModelList(data);
   if (command === "label.list") {
     const labels = recordsAt(data, "labels");
     return (
@@ -285,6 +383,10 @@ function renderStableLines(command: string, data: unknown): string | null {
   }
   if (command === "session.peek") {
     if (typeof data["session"] !== "string" || typeof data["status"] !== "string") return null;
+    // A chat peek is told apart by what it carries, not by a `kind` word: the
+    // terminal reply is a status line plus raw output and stays byte-for-byte
+    // what it always was, while a chat's is an activity line plus a transcript.
+    if (Array.isArray(data["transcript"])) return renderChatPeek(data, data["transcript"]);
     const output = typeof data["output"] === "string" ? data["output"] : "";
     return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
   }

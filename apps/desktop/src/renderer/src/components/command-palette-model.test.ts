@@ -1,4 +1,4 @@
-import type { Project, Ticket } from "@volli/shared";
+import type { ChatSessionRecord, Project, Ticket } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildCommandPaletteItems } from "./command-palette-model";
@@ -48,6 +48,23 @@ function ticket(
 
 function container(...tabs: SessionContainer["tabs"]): SessionContainer {
   return { tabs, activeSessionId: tabs[0]?.sessionId ?? null };
+}
+
+function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
+  return {
+    sessionId: "chat-1",
+    title: "Plan the migration",
+    projectId: "p1",
+    ticketId: "t1",
+    createdAt: 0,
+    adapterId: "pi",
+    live: true,
+    activity: "idle",
+    waitingOn: null,
+    lastActivityAt: 0,
+    bornTicketless: false,
+    ...overrides,
+  };
 }
 
 describe("buildCommandPaletteItems", () => {
@@ -115,6 +132,29 @@ describe("buildCommandPaletteItems", () => {
     expect(
       result.sessions.find((item) => item.sessionId === "scratch")?.ticketDisplayId,
     ).toBeNull();
+  });
+
+  it("adds durable chats and overlays a title that just changed in a resident client", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
+
+    const result = buildCommandPaletteItems(
+      [alpha],
+      { [alpha.id]: [linked] },
+      {},
+      alpha.id,
+      [chat()],
+      { "chat-1": "Validate ALP-1" },
+    );
+
+    expect(result.sessions).toEqual([
+      expect.objectContaining({
+        sessionId: "chat-1",
+        sessionKind: "chat",
+        title: "Validate ALP-1",
+        ticketDisplayId: "ALP-1",
+      }),
+    ]);
   });
 
   it("drops stale session scopes whose project or ticket no longer exists", () => {

@@ -195,6 +195,8 @@ describe("parseCliArgs", () => {
         "VC-4",
         "-m",
         "Focus on the failing tests",
+        "--title",
+        "Validate VC-4",
         "--model",
         "openai-codex/gpt-5.2-sol",
         "--reasoning",
@@ -208,6 +210,7 @@ describe("parseCliArgs", () => {
         args: {
           id: "VC-4",
           message: "Focus on the failing tests",
+          title: "Validate VC-4",
           model: { providerId: "openai-codex", modelId: "gpt-5.2-sol" },
           reasoning: "high",
         },
@@ -218,6 +221,10 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs(["session", "start", "VC-4", "--message", "go"])).toMatchObject({
       ok: true,
       invocation: { args: { id: "VC-4", message: "go" } },
+    });
+    expect(parseCliArgs(["session", "start", "VC-4", "--title", "Validate VC-4"])).toMatchObject({
+      ok: true,
+      invocation: { args: { id: "VC-4", title: "Validate VC-4" } },
     });
   });
 
@@ -322,6 +329,14 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs(["label", "list", "--project", "VC"])).toEqual({
       ok: true,
       invocation: { command: "label.list", args: { project: "VC" }, json: false },
+    });
+    expect(parseCliArgs(["model", "list"])).toEqual({
+      ok: true,
+      invocation: { command: "model.list", args: {}, json: false },
+    });
+    expect(parseCliArgs(["model", "list", "--all", "--json"])).toEqual({
+      ok: true,
+      invocation: { command: "model.list", args: { all: true }, json: true },
     });
     expect(parseCliArgs(["session", "list", "--project", "VC", "--ticket", "VC-12"])).toEqual({
       ok: true,

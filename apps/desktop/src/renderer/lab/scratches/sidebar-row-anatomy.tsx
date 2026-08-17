@@ -576,7 +576,7 @@ const PREVIOUS_ROWS: readonly PreviousSessionRow[] = [
   }),
   previousRow({
     id: "p-3d",
-    title: "Chat 1",
+    title: "Chat",
     kind: "chat",
     endedOrQuietAt: NOW - 3 * DAY,
   }),

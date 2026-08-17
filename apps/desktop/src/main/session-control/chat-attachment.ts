@@ -25,7 +25,10 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
   const attachment = latestStructuredAttachment(projection.attachments);
   return {
     sessionId: projection.session.id,
-    title: projection.session.title ?? "Session",
+    // A structured Session that has not yet exchanged a message is simply a
+    // chat awaiting its subject — never the indistinguishable `Session` wall
+    // the CLI start door used to create.
+    title: projection.session.title ?? "Chat",
     projectId: projection.session.projectId,
     ticketId: projection.session.ticketId,
     createdAt: projection.session.createdAt,

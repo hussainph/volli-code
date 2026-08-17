@@ -16,16 +16,19 @@
  */
 import * as React from "react";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
+import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import type {
   ModelAccessModel,
   ModelAccessProvider,
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -37,6 +40,7 @@ import {
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
+import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   gatedToolCallId,
   gatedToolCallIds,
@@ -58,7 +62,7 @@ import {
   useSessionController,
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
-import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -68,6 +72,7 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  messageCopyText,
   messageRoute,
   resolvingWith,
   sameInteractionId,
@@ -275,8 +280,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * delivered turn, or a ledger that already records the intent.
    */
   const send = React.useCallback(
-    (text: string, intent: ComposerIntent) => {
-      const message = { id: nextId(), text };
+    (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
+      // The resources ride the message object itself — through hold, queue and
+      // steer — so a copy released later delivers exactly what `/skill`
+      // resolved to when ⏎ was pressed, not whatever the file says by then.
+      const message: QueuedMessage =
+        resources !== undefined && resources.length > 0
+          ? { id: nextId(), text, resources }
+          : { id: nextId(), text };
       holdMessage(sessionId, message);
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
@@ -536,27 +547,6 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
           <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-            {/* The attach-time injection's visible receipt. The skills landed
-                in the system prompt, which no transcript bubble shows, so the
-                names are said once at the top of the conversation — folded
-                from the Session's own durable record, never from what the
-                project's skills directory holds today. */}
-            {session.promptResources.length > 0 ? (
-              <ContentColumn>
-                <div
-                  className="flex flex-wrap items-center gap-1.5 text-ui text-muted-foreground"
-                  aria-label="Skills injected at start"
-                >
-                  <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
-                  <span>Started with</span>
-                  {session.promptResources.map((name) => (
-                    <Badge key={name} variant="outline" className="font-mono">
-                      {name}
-                    </Badge>
-                  ))}
-                </div>
-              </ContentColumn>
-            ) : null}
             {messages.length === 0 ? (
               // A mark, and nothing else. What blocks typing sits on the
               // composer, where the typing is.
@@ -575,9 +565,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
                     live={working && index === turns.length - 1}
                   />
                 ))}
-                {working && isAwaitingFirstOutput(messages) ? (
-                  <ReasoningLine verb="Working" meta={null} streaming />
-                ) : null}
+                {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
               </ContentColumn>
             )}
           </ConversationContent>
@@ -726,6 +714,61 @@ function composerModel(
   };
 }
 
+/* ---------------------------------------------------------------- running */
+
+/**
+ * The one thing on screen that says the turn is not over.
+ *
+ * It lives for the WHOLE turn now, not just the gap before the first token.
+ * That gap was the only moment the transcript could not speak for itself, so it
+ * was the only moment this was drawn — and every moment after it looked exactly
+ * like a finished reply: settled prose, a collapsed bundle, nothing moving. A
+ * reader could not tell a turn that had ended from one that was two tool calls
+ * from ending, which is what the first external user described as disorienting.
+ * The mark is mounted by `working` and unmounted by it, so the stop token that
+ * ends the turn is the same event that takes it off screen; there is no timer
+ * and no second source of truth to disagree with the lifecycle.
+ *
+ * TWO DRESSES, because the transcript's own voice is the better one wherever it
+ * has something to say. Before the first output there is nothing else on
+ * screen, so the mark says the word; once a bundle above it is reporting
+ * `Running 2 commands…` the word would be the same sentence twice at two
+ * indents, and the orbs alone carry the fact that neither of them has stopped.
+ *
+ * The words are said once, `sr-only`, inside the live region — so the dress
+ * swap mid-turn is silent (the orbs are `aria-hidden`) and a screen reader
+ * hears "Working" at the start of a turn rather than at every step of it.
+ *
+ * Memoized on one boolean, which is the whole of its props: this sits in the
+ * plane's own render, and the plane renders on every streamed frame of the very
+ * turn the mark is reporting. `narrated` flips once per turn.
+ */
+export const TurnRunningMark = React.memo(function TurnRunningMark({
+  narrated,
+}: {
+  /**
+   * The transcript is already reporting this turn's work, so the mark drops
+   * its own word and keeps only the orbs.
+   */
+  narrated: boolean;
+}) {
+  return (
+    <div role="status" className="flex min-w-0 flex-col">
+      <span className="sr-only">Working</span>
+      <div aria-hidden className="flex min-w-0">
+        {narrated ? (
+          // `py-1` is the row padding {@link ReasoningLine} carries, so the
+          // orbs sit on the same rhythm as the line they stand in for and the
+          // tail does not jump when the dress changes.
+          <ThinkingOrbs className="py-1 text-primary" />
+        ) : (
+          <ReasoningLine verb="Working" meta={null} streaming />
+        )}
+      </div>
+    </div>
+  );
+});
+
 /* ---------------------------------------------------------------- blocked */
 
 function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
@@ -861,6 +904,18 @@ export const ChatTurn = React.memo(function ChatTurn({
           ),
     [messages, role],
   );
+  const copyableText = React.useMemo(() => messageCopyText(messages), [messages]);
+  // The visible receipt of a message-scoped skill delivery (VC-49): the text
+  // above keeps `/skill` exactly as typed, and this chip row is what says the
+  // body actually rode along — the compact reference, never the fifteen
+  // kilobytes it stands for.
+  const skillChips = React.useMemo<readonly string[]>(
+    () =>
+      role === "user"
+        ? messages.flatMap((message) => readSkillResources(message.parts).map(({ name }) => name))
+        : [],
+    [messages, role],
+  );
 
   if (first === null || role === null) return null;
 
@@ -875,7 +930,7 @@ export const ChatTurn = React.memo(function ChatTurn({
   if (segments && segments.length === 0) return null;
 
   return (
-    <Message from={role} className="max-w-full">
+    <Message from={role} className="relative max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
         <div className={SEGMENT_GAP}>
           {segments
@@ -884,10 +939,71 @@ export const ChatTurn = React.memo(function ChatTurn({
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
+        {skillChips.length > 0 ? (
+          // A skill name is a mono outline Badge behind a book icon, wherever
+          // it appears. This is the only place the transcript says one: the
+          // attach-time "Started with" row was noise and is gone (VC-71), so
+          // the names surface where they were actually delivered.
+          <div
+            className="flex flex-wrap items-center gap-1.5 pt-2 text-ui text-muted-foreground"
+            aria-label="Skills delivered with this message"
+          >
+            <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
+            {skillChips.map((name) => (
+              <Badge key={name} variant="outline" className="font-mono">
+                {name}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
       </MessageContent>
+      {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}
     </Message>
   );
 });
+
+/** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
+const COPY_FEEDBACK_MS = 1200;
+
+/**
+ * Copy is a hover/focus action in the message's outside gutter.
+ *
+ * The message remains the reading target; the action occupies no resting space
+ * and never competes with the prose for a line. User bubbles expose it on their
+ * leading side and assistant turns on their trailing side, so the control stays
+ * outside the message surface at either edge of the feed.
+ */
+function MessageCopyAction({ text, from }: { text: string; from: UIMessage["role"] }) {
+  const [copyState, setCopyState] = React.useState<"idle" | "copied" | "failed">("idle");
+  React.useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), COPY_FEEDBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+  const CopyStateIcon =
+    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+
+  return (
+    <span
+      className={cn(
+        "pointer-events-none absolute top-0 flex opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+        from === "user" ? "right-[calc(100%+0.25rem)]" : "left-[calc(100%+0.25rem)]",
+      )}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={
+          copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"
+        }
+        onClick={() => void copyText(text).then(setCopyState)}
+      >
+        <CopyStateIcon className={cn("size-3", copyState === "failed" && "text-destructive")} />
+      </Button>
+    </span>
+  );
+}
 
 function renderSegment(
   segment: ChatSegment,

@@ -37,6 +37,25 @@
  * work), and unlike a widget it participates in layout and in cursor movement.
  * That is what renders a list bullet in place of a hidden `-`.
  *
+ * ## The two layers of a line class
+ *
+ * A `line-class` op names ONE class, and Monaco has two places to put it:
+ * `className`, which lands on the full-width element it draws behind the line,
+ * and `inlineClassName`, which lands on the glyph spans themselves. They are
+ * not interchangeable and they are not both always wanted. A code fence's
+ * ground and a blockquote's rule are a BOX — they have to be painted once,
+ * across the whole line, including the empty run past the last character. A
+ * heading is TEXT — it has no box at all, and a whole-line decoration carrying
+ * it would only put an element that paints nothing on every heading line.
+ *
+ * So the box layer is emitted only for the classes that have one (below), and
+ * the stylesheet keeps every box property under `volli-md-box` — the marker
+ * class that rides the whole-line element and nothing else. Without that split
+ * the same class is on both layers, and a box property is drawn again for every
+ * span in the line: the blockquote rule reappears in front of each run of text,
+ * and the fence's ground repaints over the selection wash Monaco draws beneath
+ * the glyphs.
+ *
  * ## Sizing
  *
  * Font sizes and weights stay in CSS (`document-mode.css`), where DESIGN.md's
@@ -133,6 +152,27 @@ export interface DocumentRender {
 export const HIDDEN_CLASS = "volli-md-hidden";
 
 /**
+ * The marker the whole-line element carries and the glyph spans never do. Every
+ * box property in the stylesheet hangs off it, so a class that reaches both
+ * layers still paints its box exactly once (see the module note).
+ */
+export const LINE_BOX_CLASS = "volli-md-box";
+
+/**
+ * The line classes that paint a box behind the line rather than styling its
+ * text: a fenced block's ground and a blockquote's rule. Their `-open`/`-close`
+ * companions round the ends of that same box, so they ride along with it and do
+ * not need to be listed. Everything else a `line-class` op can name — the
+ * headings, a revealed thematic break — is text only.
+ */
+const LINE_BOX_CLASSES: ReadonlySet<string> = new Set(["volli-md-fence", "volli-md-blockquote"]);
+
+/** Whether a (possibly compound) line-class list paints a box behind the line. */
+function paintsLineBox(className: string): boolean {
+  return className.split(/\s+/).some((name) => LINE_BOX_CLASSES.has(name));
+}
+
+/**
  * Line-box growth for the line classes whose text is bigger than the editor's
  * font size. Only h1–h2 need it now that the heading sizes ride the app's type
  * scale: h3 renders at the body step and h4–h6 below it, so the default line box
@@ -205,13 +245,17 @@ export function renderProjection(input: RenderProjectionInput): DocumentRender {
           endColumn: line.to - line.from + 1,
         },
         options: {
-          // Both layers on purpose: `className` paints the full-width box a
-          // blockquote border or code-fence background needs, `inlineClassName`
-          // is the only one that can reach the glyphs.
-          className: op.className,
+          // The box layer, and only for a class that has a box to paint (see
+          // the module note). `volli-md-box` is what the stylesheet hangs those
+          // properties off, so the class below can also reach the glyphs
+          // without painting its box a second time on each of them.
+          ...(paintsLineBox(op.className)
+            ? { className: `${LINE_BOX_CLASS} ${op.className}`, isWholeLine: true }
+            : {}),
+          // The only layer that can reach the glyphs — the block's face and
+          // colour, whether or not anything is drawn behind them.
           inlineClassName: op.className,
           inlineClassNameAffectsLetterSpacing: true,
-          isWholeLine: true,
           lineHeight: lineHeightFor(op.className),
           stickiness: NEVER_GROWS_WHEN_TYPING_AT_EDGES,
         },
@@ -314,7 +358,10 @@ export function renderProjection(input: RenderProjectionInput): DocumentRender {
           endColumn: line.to - line.from + 1,
         },
         options: {
-          className: "volli-md-hr",
+          // A rule is nothing BUT a box — no inline layer, since the `---` it
+          // replaces is hidden. It still takes the marker, so "a box property
+          // lives under `volli-md-box`" holds for the whole stylesheet.
+          className: `${LINE_BOX_CLASS} volli-md-hr`,
           isWholeLine: true,
           stickiness: NEVER_GROWS_WHEN_TYPING_AT_EDGES,
         },

@@ -4,7 +4,15 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { AgentRequest, AgentResponse, DoctorCheck, HarnessId } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import type {
+  AgentRequest,
+  AgentResponse,
+  DoctorCheck,
+  HarnessId,
+  ModelAccessSnapshot,
+} from "@volli/shared";
+import type { UIMessage } from "ai";
 import type {
   HarnessEventNotice,
   SessionHarnessNotice,
@@ -27,15 +35,24 @@ import { recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import {
+  CHAT_PEEK_ENTRIES,
   composeProjectBrief,
   createAgentCommandService as createAgentCommandServiceBase,
   DEFAULT_KICKOFF_MESSAGE,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
+import { writeDefaultModelSelection } from "./session-runtime/model-access-preferences";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
+
+/** The transcript store the chat-peek tests read through, as main's file store would. */
+const artifacts = createInMemoryTranscriptArtifactStore();
+
+/** When the Nth transcript message of a peeked chat session happened. */
+const messageAt = (index: number): number => 10_000 + index * 1_000;
 
 /** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
@@ -1291,8 +1308,10 @@ describe("agent command service", () => {
       args: {},
       ctx: { cwd: "/repo/volli", env: {} },
     });
-    // `identify` and `session peek` address that same snapshot, so a Session
-    // absent from it must be unaddressable rather than half-resolved.
+    // Identity resolution is engine-backed (VC-51): a structured Session
+    // exports VOLLI_SESSION too, so `identify` answers for it even though the
+    // terminal snapshot (resume/rename) never contains it. (`session peek`
+    // reads BOTH halves — VC-79 — and is exercised on its own below.)
     const identify = await service.execute({
       v: 1,
       cmd: "identify",
@@ -1316,9 +1335,16 @@ describe("agent command service", () => {
       },
     });
     expect(JSON.stringify(sessions)).not.toContain(structured.session.id);
-    // `identify` and `session peek` still address terminals only — a chat has
-    // no PTY to peek and exports no VOLLI_SESSION of its own.
-    expect(identify).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    // A ticketless structured Session identifies against its project root: it
+    // has no PTY cwd and no worktree, and that is the directory it runs in.
+    expect(identify).toMatchObject({
+      ok: true,
+      data: {
+        session: structured.session.id.slice(0, 8),
+        ticket: null,
+        worktreePath: "/repo/volli",
+      },
+    });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
@@ -1411,6 +1437,265 @@ describe("agent command service", () => {
     expect(observed).toEqual([{ sessionId, lines: 2 }]);
     expect(notified).toEqual({ v: 1, ok: true, data: { notified: true } });
     expect(notifications).toEqual([{ title: "Agent", message: "Needs input" }]);
+  });
+
+  // VC-79. The orchestration paradigm runs on chat Sessions, and a peek that
+  // answered only for terminals left a long-running one indistinguishable from
+  // a hung one: its only liveness signal was the eventual ticket comment.
+  describe("session.peek over a chat session", () => {
+    const PROVENANCE = {
+      source: { kind: "adapter" as const, id: "pi", detail: null },
+      venue: { id: "local" as const, kind: "local" as const },
+    };
+    const PEEK_AT = 100_000;
+
+    /**
+     * A structured Session with an open Pi attachment, one started turn, and
+     * whatever transcript the caller asked for — the shape a chat has while an
+     * agent is working in it.
+     */
+    async function chatSession(input: { messages: readonly UIMessage[] }): Promise<{
+      service: ReturnType<typeof createAgentCommandService>;
+      sessionEngine: SessionEngine;
+      sessionId: string;
+      shortId: string;
+    }> {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+      const created = await sessionEngine.createSession({
+        commandId: "chat-create",
+        projectId: "project-one",
+        ticketId: null,
+        title: "Review VC-53",
+        provenance: PROVENANCE,
+      });
+      const sessionId = created.session.id;
+      await sessionEngine.observe({
+        id: "chat-attach",
+        kind: "attachment.opened",
+        sessionId,
+        occurredAt: 1_000,
+        provenance: PROVENANCE,
+        attachment: {
+          id: "attachment-1",
+          sessionId,
+          adapterId: "pi",
+          venue: { id: "local", kind: "local" },
+          continuity: "fresh",
+          native: { id: "pi-1", detail: null },
+        },
+      });
+      await sessionEngine.observe({
+        id: "chat-turn",
+        kind: "turn.started",
+        sessionId,
+        attachmentId: "attachment-1",
+        occurredAt: 2_000,
+        provenance: PROVENANCE,
+        turnId: "turn-1",
+      });
+      for (const [index, message] of input.messages.entries()) {
+        await sessionEngine.observe({
+          id: `chat-transcript-${index}`,
+          kind: "transcript.referenced",
+          sessionId,
+          attachmentId: "attachment-1",
+          occurredAt: messageAt(index),
+          provenance: PROVENANCE,
+          turnId: "turn-1",
+          reference: await artifacts.write({
+            version: 1,
+            threadId: "thread-1",
+            branchId: "branch-1",
+            attemptId: "attempt-1",
+            turnId: "turn-1",
+            message,
+          }),
+        });
+      }
+      return {
+        sessionEngine,
+        sessionId,
+        shortId: sessionId.slice(0, 8),
+        service: createAgentCommandService({
+          db: ctx.db,
+          appVersion: "1.2.3",
+          now: () => PEEK_AT,
+          sessionEngine,
+          readTranscriptArtifact: (reference) => artifacts.read(reference),
+        }),
+      };
+    }
+
+    it("answers what it is doing, when it last moved, and its transcript tail", async () => {
+      const { service, sessionId, shortId } = await chatSession({
+        messages: [
+          { id: "m1", role: "user", parts: [{ type: "text", text: "Review VC-53" }] },
+          {
+            id: "m2",
+            role: "assistant",
+            parts: [
+              {
+                type: "dynamic-tool",
+                toolName: "volli.activity",
+                toolCallId: "call-1",
+                state: "output-available",
+                input: {},
+                output: {},
+                toolMetadata: {
+                  [ACTIVITY_METADATA_KEY]: {
+                    kind: "run-command",
+                    nativeToolName: "bash",
+                    subject: { label: "pnpm test", path: null, lineRange: null },
+                    outcome: null,
+                    startedAt: null,
+                    endedAt: null,
+                  },
+                },
+              },
+            ],
+          },
+          {
+            id: "m3",
+            role: "assistant",
+            parts: [
+              { type: "reasoning", text: "weighing the options", state: "done" },
+              { type: "text", text: "Gates are green.", state: "done" },
+            ],
+          },
+        ],
+      });
+
+      const peek = await service.execute({
+        v: 1,
+        cmd: "session.peek",
+        args: { id: shortId, lines: 2 },
+        ctx: { cwd: "/repo/volli", env: {} },
+      });
+
+      expect(peek).toMatchObject({
+        ok: true,
+        data: {
+          session: shortId,
+          // An open turn under a live attachment: the agent is working, which
+          // is the same word the app's own sidebar row uses.
+          status: "working",
+          waitingOn: null,
+          turns: 1,
+          turnDepth: 3,
+          messages: 3,
+          unreadable: 0,
+          transcript: [
+            { role: "assistant", text: "", tools: ["bash"] },
+            // Reasoning stays out of a peek; the words and the tools are what
+            // answer "what is it doing".
+            { role: "assistant", text: "Gates are green.", tools: [] },
+          ],
+        },
+      });
+      if (!peek.ok) throw new Error("expected a peek");
+      const data = peek.data as { lastActivityAgeMs: number; transcript: { ageMs: number }[] };
+      // Ages against the caller's own clock are the liveness signal, and the
+      // last thing that happened here is the newest message.
+      expect(data.lastActivityAgeMs).toBe(PEEK_AT - messageAt(2));
+      expect(data.transcript.map((entry) => entry.ageMs)).toEqual([
+        PEEK_AT - messageAt(1),
+        PEEK_AT - messageAt(2),
+      ]);
+      // Short ids are the only public handles, on this half of the verb too.
+      expect(JSON.stringify(peek)).not.toContain(sessionId);
+    });
+
+    it("caps an unasked tail and names what a human is blocking", async () => {
+      const { service, sessionEngine, sessionId, shortId } = await chatSession({
+        messages: Array.from({ length: 14 }, (_, index) => ({
+          id: `m${index}`,
+          role: "assistant" as const,
+          parts: [{ type: "text" as const, text: `line ${index}` }],
+        })),
+      });
+      await sessionEngine.observe({
+        id: "chat-attention",
+        kind: "attention.raised",
+        sessionId,
+        attachmentId: "attachment-1",
+        occurredAt: 30_000,
+        provenance: PROVENANCE,
+        attention: {
+          id: "attention-1",
+          kind: "permission_required",
+          attachmentId: "attachment-1",
+          detail: null,
+          diagnostic: null,
+        },
+      });
+
+      const peek = await service.execute({
+        v: 1,
+        cmd: "session.peek",
+        args: { id: shortId },
+        ctx: { cwd: "/repo/volli", env: {} },
+      });
+
+      expect(peek).toMatchObject({
+        ok: true,
+        // Waiting outranks working: a peek that said "working" would hide the
+        // one thing the caller could act on.
+        data: {
+          status: "waiting",
+          waitingOn: "permission",
+          messages: 14,
+          turnDepth: 14,
+          lastActivityAgeMs: PEEK_AT - 30_000,
+        },
+      });
+      if (!peek.ok) throw new Error("expected a peek");
+      const { transcript } = peek.data as { transcript: { text: string }[] };
+      // Cheap by default: the last CHAT_PEEK_ENTRIES messages, no more.
+      expect(transcript).toHaveLength(CHAT_PEEK_ENTRIES);
+      expect(transcript.at(0)?.text).toBe("line 2");
+      expect(transcript.at(-1)?.text).toBe("line 13");
+    });
+
+    it("refuses an unknown handle and answers counts alone with no artifact store", async () => {
+      const { shortId, sessionId } = await chatSession({
+        messages: [{ id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] }],
+      });
+      const storeless = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        sessionEngine: createDesktopSessionEngine(ctx.db),
+      });
+      const peek = async (id: unknown) =>
+        storeless.execute({
+          v: 1,
+          cmd: "session.peek",
+          args: { id },
+          ctx: { cwd: "/repo/volli", env: {} },
+        });
+
+      // A handle nothing answers to, a full UUID, and a malformed one: the
+      // structured half refuses exactly the way the terminal half does.
+      expect(await peek("nosuchid")).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_NOT_FOUND" },
+      });
+      expect(await peek(sessionId)).toMatchObject({
+        ok: false,
+        error: { code: "SESSION_NOT_FOUND" },
+      });
+      expect(await peek(7)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      // No store to read: the activity counts are still true, and nothing is
+      // reported as unreadable, because nothing looked.
+      expect(await peek(shortId)).toMatchObject({
+        ok: true,
+        data: { messages: 1, unreadable: 0, transcript: [] },
+      });
+    });
   });
 
   it("records lifecycle signals in the Session ledger without changing planner history", async () => {
@@ -1601,6 +1886,102 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  it("accepts a lifecycle signal from a structured session with no terminal attachment (VC-51)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    // A structured (chat) Session: created through the engine, never given a
+    // terminal attachment — exactly what `volli session start` produces.
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const sessionId = created.session.id;
+    const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+      onMutation: (change) => mutations.push(change),
+    });
+
+    const done = await service.execute({
+      v: 1,
+      cmd: "session.done",
+      args: { reason: "Implementation finished" },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+    });
+
+    expect(done).toMatchObject({
+      ok: true,
+      data: { signal: "done", reason: "Implementation finished", recorded: true },
+    });
+    expect((await sessionEngine.getSession({ sessionId }))?.signal).toMatchObject({
+      signal: "done",
+      reason: "Implementation finished",
+    });
+    expect(mutations).toEqual([
+      { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
+    ]);
+  });
+
+  it("attributes a socket write from a structured session to the session, not the user (VC-51)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+    });
+
+    const comment = await service.execute({
+      v: 1,
+      cmd: "ticket.comment",
+      args: { id: "VC-1", message: "Findings recorded." },
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+    const identified = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/outside", env: { session: created.session.id } },
+    });
+
+    // Before VC-51 this failed SESSION_NOT_FOUND against the terminal-only
+    // snapshot, and a chat session's comment attributed as "user" with no
+    // session at all.
+    expect(comment).toMatchObject({
+      ok: true,
+      data: { comment: { actor: "session" } },
+    });
+    expect(
+      (comment as { data: { comment: { session: string | null } } }).data.comment.session,
+    ).not.toBeNull();
+    expect(identified).toMatchObject({
+      ok: true,
+      data: { ticket: "VC-1", project: { prefix: "VC" } },
+    });
   });
 
   describe("session.link (issue #78)", () => {
@@ -3342,6 +3723,223 @@ describe("composeProjectBrief", () => {
   });
 });
 
+describe("model.list", () => {
+  /**
+   * The door under test with the seam faked out: `model.list` owns the bounded
+   * read, the signed-in filter, and the default report; the snapshot itself is
+   * `inspectPiModelAccess`'s contract, tested beside it in agent-runtime.
+   */
+  function modelListHarness(
+    overrides: {
+      snapshot?: ModelAccessSnapshot;
+      inspect?: AgentCommandServiceOptions["inspectModelAccess"];
+      withoutSeam?: boolean;
+      timeoutMs?: number;
+    } = {},
+  ) {
+    ctx = openTestDb();
+    const snapshot: ModelAccessSnapshot = overrides.snapshot ?? {
+      observedAt: 900,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state: "available",
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+          signIn: [],
+          hasStoredCredential: true,
+        },
+        {
+          id: "openai-codex",
+          label: "OpenAI Codex",
+          state: "authentication-required",
+          accountLabel: null,
+          billingSource: "unknown",
+          recovery: { kind: "sign-in" },
+          signIn: [],
+          hasStoredCredential: false,
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus-5",
+          label: "Claude Opus 5",
+          state: "available",
+          reasoningLevels: ["low", "medium", "high"],
+        },
+        {
+          providerId: "anthropic",
+          modelId: "claude-legacy",
+          label: "Claude Legacy",
+          state: "unavailable",
+          reasoningLevels: ["off"],
+        },
+        {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-terra",
+          label: "Terra",
+          state: "authentication-required",
+          reasoningLevels: ["medium", "high", "xhigh"],
+        },
+      ],
+    };
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      ...(overrides.withoutSeam
+        ? {}
+        : { inspectModelAccess: overrides.inspect ?? (async () => snapshot) }),
+      ...(overrides.timeoutMs !== undefined ? { modelAccessTimeoutMs: overrides.timeoutMs } : {}),
+    });
+    const execute = (args: Record<string, unknown> = {}) =>
+      service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: {} } });
+    return { execute };
+  }
+
+  it("lists the signed-in slice by default, with copyable ids and an honest omission count", async () => {
+    const harness = modelListHarness();
+
+    const response = await harness.execute();
+
+    expect(response).toEqual({
+      v: 1,
+      ok: true,
+      data: {
+        observedAt: 900,
+        default: null,
+        providers: [
+          {
+            id: "anthropic",
+            label: "Anthropic",
+            state: "available",
+            models: [
+              {
+                model: "anthropic/claude-opus-5",
+                label: "Claude Opus 5",
+                state: "available",
+                reasoning: ["low", "medium", "high"],
+              },
+            ],
+            // claude-legacy is unavailable, so the default view withholds it
+            // — and says so, the same honesty the provider rollup has.
+            omittedModels: 1,
+          },
+        ],
+        omittedProviders: 1,
+      },
+    });
+  });
+
+  it("never leaks credential-adjacent snapshot fields, filtered or not", async () => {
+    const harness = modelListHarness();
+
+    for (const args of [{}, { all: true }]) {
+      const rendered = JSON.stringify(await harness.execute(args));
+      // The provider rows drop everything but identity/state/catalog — the
+      // credential-adjacent fields (stored-credential flags, billing, sign-in
+      // methods) stay behind the app's own surfaces.
+      expect(rendered).not.toContain("hasStoredCredential");
+      expect(rendered).not.toContain("billingSource");
+      expect(rendered).not.toContain("signIn");
+      expect(rendered).not.toContain("accountLabel");
+    }
+  });
+
+  it("shows the whole registered catalog behind --all", async () => {
+    const harness = modelListHarness();
+
+    const response = await harness.execute({ all: true });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        omittedProviders: 0,
+        providers: [
+          {
+            id: "anthropic",
+            omittedModels: 0,
+            models: [
+              { model: "anthropic/claude-opus-5" },
+              { model: "anthropic/claude-legacy", state: "unavailable" },
+            ],
+          },
+          {
+            id: "openai-codex",
+            state: "authentication-required",
+            omittedModels: 0,
+            models: [
+              {
+                model: "openai-codex/gpt-5.6-terra",
+                state: "authentication-required",
+                reasoning: ["medium", "high", "xhigh"],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("reports the configured app default alongside the catalog", async () => {
+    const harness = modelListHarness();
+    writeDefaultModelSelection(
+      ctx.db,
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
+      500,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { default: { model: "anthropic/claude-opus-5", reasoning: "medium" } },
+    });
+  });
+
+  it("answers APP_UNREACHABLE when the Pi runtime never came up this launch", async () => {
+    const harness = modelListHarness({ withoutSeam: true });
+    expect(await harness.execute()).toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE" },
+    });
+  });
+
+  it("bounds a hung provider probe: aborts the inspect and answers TIMEOUT (VC-61 direction)", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const harness = modelListHarness({
+      timeoutMs: 20,
+      // A probe that ignores its signal entirely — the race, not the abort, is
+      // what must keep the verb from hanging.
+      inspect: ({ signal }) => {
+        observedSignal = signal;
+        return new Promise<never>(() => {});
+      },
+    });
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("names an inspect that fails outright before the bound", async () => {
+    const harness = modelListHarness({
+      inspect: async () => {
+        throw new Error("provider store unreadable");
+      },
+    });
+
+    expect(await harness.execute()).toMatchObject({
+      ok: false,
+      error: { code: "MUTATION_FAILED", message: "provider store unreadable" },
+    });
+  });
+});
+
 describe("session.start", () => {
   const startedSessionId = "abcdef12-3456-7890-abcd-ef1234567890";
 
@@ -3434,7 +4032,7 @@ describe("session.start", () => {
         operationId: "generated-1",
         projectId: "project-one",
         ticketId: "ticket-one",
-        title: null,
+        title: "Work on VC-1",
         actor: { kind: "user" },
       },
     ]);
@@ -3451,25 +4049,38 @@ describe("session.start", () => {
     ]);
   });
 
-  it("lets -m replace the kickoff and threads the model/reasoning override", async () => {
+  it("names a -m kickoff and threads the model/reasoning override", async () => {
     const harness = startHarness();
 
     await harness.execute({
       id: "VC-1",
-      message: "Fix the flaky auth test first",
+      message: "Validate VC-52 before release",
       model: { providerId: "anthropic", modelId: "claude-opus" },
       reasoning: "low",
     });
 
     expect(harness.kickoffs).toEqual([
-      { sessionId: startedSessionId, text: "Fix the flaky auth test first" },
+      { sessionId: startedSessionId, text: "Validate VC-52 before release" },
     ]);
     expect(harness.startInputs[0]).toMatchObject({
+      title: "Validate VC-52",
       modelOverride: {
         model: { providerId: "anthropic", modelId: "claude-opus" },
         reasoningLevel: "low",
       },
     });
+  });
+
+  it("uses --title unchanged instead of replacing a user-set name", async () => {
+    const harness = startHarness();
+
+    await harness.execute({
+      id: "VC-1",
+      message: "Validate VC-52 before release",
+      title: "My review",
+    });
+
+    expect(harness.startInputs[0]).toMatchObject({ title: "My review" });
   });
 
   it("announces the start to every surface without moving the board", async () => {
@@ -3579,6 +4190,7 @@ describe("session.start", () => {
 
   it.each([
     [{ id: "VC-1", message: "   " }],
+    [{ id: "VC-1", title: "   " }],
     [{ id: "VC-1", model: "openai/gpt" }],
     [{ id: "VC-1", model: { providerId: "openai" } }],
     [{ id: "VC-1", reasoning: "ultra" }],
@@ -3703,6 +4315,7 @@ describe("session.start", () => {
             id: structured.session.id.slice(0, 8),
             kind: "chat",
             ticket: "VC-1",
+            title: "Chat",
             ageMs: 100,
           },
         ],

@@ -1,0 +1,227 @@
+---
+import "@fontsource-variable/mona-sans/wght.css";
+import "../styles/global.css";
+
+const repositoryUrl = "https://github.com/hussainph/volli-code";
+const releasesUrl = `${repositoryUrl}/releases`;
+const docsUrl = "https://docs.volli.app";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta
+      name="description"
+      content="Download Volli Code for macOS — stable and canary builds, served straight from GitHub Releases."
+    />
+    <link rel="canonical" href="https://volli.app/download/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://volli.app/download/" />
+    <meta property="og:title" content="Download Volli Code" />
+    <meta
+      property="og:description"
+      content="Download Volli Code for macOS — stable and canary builds, served straight from GitHub Releases."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Download Volli Code" />
+    <meta
+      name="twitter:description"
+      content="Download Volli Code for macOS — stable and canary builds, served straight from GitHub Releases."
+    />
+    <meta name="theme-color" content="#0a0a0a" />
+    <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
+    <title>Download Volli Code</title>
+    <noscript>
+      <style>
+        [data-live] {
+          display: none;
+        }
+      </style>
+    </noscript>
+  </head>
+  <body>
+    <main class="download-main">
+      <header class="download-topbar">
+        <a class="footer-brand download-brand" href="/" aria-label="Volli home">
+          <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
+          <span>Volli</span>
+        </a>
+        <nav aria-label="Site">
+          <a href={docsUrl}>Docs</a>
+          <a href={repositoryUrl}>GitHub</a>
+        </nav>
+      </header>
+
+      <section class="download-intro">
+        <h1>Download Volli Code</h1>
+        <p class="download-sub">
+          macOS builds, served straight from <a href={releasesUrl}>GitHub Releases</a>. Prefer to
+          build it yourself? Follow the <a href={`${docsUrl}/start/install/`}>install guide</a>.
+        </p>
+        <p class="platform-note" data-platform-note hidden>
+          Volli Code currently ships for macOS only.
+        </p>
+      </section>
+
+      <section class="channel-grid" aria-label="Release channels">
+        <article class="channel-card" data-channel="stable">
+          <header class="channel-head">
+            <h2>Stable</h2>
+          </header>
+          <p class="channel-tagline">The recommended build.</p>
+          <div class="channel-body" data-slot="body">
+            <p class="channel-status" data-live>Checking the latest version…</p>
+            <p class="channel-status"><a href={releasesUrl}>Browse releases on GitHub</a></p>
+          </div>
+        </article>
+
+        <article class="channel-card channel-card--canary" data-channel="canary">
+          <header class="channel-head">
+            <h2>Canary</h2>
+            <span class="channel-badge">Prerelease</span>
+          </header>
+          <p class="channel-tagline">The newest changes, before they stabilize.</p>
+          <div class="channel-body" data-slot="body">
+            <p class="channel-status" data-live>Checking the latest version…</p>
+            <p class="channel-status"><a href={releasesUrl}>Browse releases on GitHub</a></p>
+          </div>
+        </article>
+      </section>
+
+      <p class="download-all-releases">
+        Every build, with notes and checks, lives on <a href={releasesUrl}>GitHub Releases</a>.
+      </p>
+    </main>
+
+    <footer>
+      <a class="footer-brand" href="/" aria-label="Volli home">
+        <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
+        <span>Volli</span>
+      </a>
+      <nav aria-label="Footer">
+        <a href="/download/">Download</a>
+        <a href="https://docs.volli.app">Docs</a>
+        <a href={repositoryUrl}>GitHub</a>
+        <a href={`${repositoryUrl}#readme`}>Readme</a>
+      </nav>
+    </footer>
+
+    <script>
+      import {
+        emphasizedChannel,
+        formatBytes,
+        formatPublishedDate,
+        isMacPlatform,
+        resolveDownloadFeed,
+        type ChannelBuild,
+        type Release,
+      } from "../lib/releases";
+
+      const RELEASES_API = "https://api.github.com/repos/hussainph/volli-code/releases?per_page=20";
+      const RELEASES_URL = "https://github.com/hussainph/volli-code/releases";
+
+      function el<K extends keyof HTMLElementTagNameMap>(
+        tag: K,
+        className: string,
+        text?: string,
+      ): HTMLElementTagNameMap[K] {
+        const node = document.createElement(tag);
+        node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
+      function statusLine(text: string, linkLabel: string, linkHref: string): HTMLElement[] {
+        const status = el("p", "channel-status", text);
+        const linkLine = el("p", "channel-status");
+        const link = el("a", "", linkLabel);
+        link.href = linkHref;
+        linkLine.append(link);
+        return [status, linkLine];
+      }
+
+      function buildNodes(build: ChannelBuild, emphasized: boolean): HTMLElement[] {
+        const nodes: HTMLElement[] = [];
+
+        const meta = el("p", "channel-version");
+        meta.append(el("span", "channel-version-number", `v${build.version}`));
+        const published = formatPublishedDate(build.publishedAt);
+        if (published) meta.append(el("span", "channel-version-date", published));
+        nodes.push(meta);
+
+        const list = el("div", "artifact-list");
+        for (const artifact of build.artifacts) {
+          const primary = emphasized && artifact.kind === "dmg";
+          const row = el("a", primary ? "artifact artifact--primary" : "artifact");
+          row.href = artifact.url;
+          const label =
+            artifact.kind === "dmg"
+              ? `Download for ${artifact.arch ?? "macOS"}`
+              : `${artifact.arch ?? "macOS"} .zip archive`;
+          row.append(el("span", "artifact-label", label));
+          row.append(
+            el("span", "artifact-meta", `.${artifact.kind} · ${formatBytes(artifact.sizeBytes)}`),
+          );
+          list.append(row);
+        }
+        nodes.push(list);
+
+        const notes = el("p", "channel-status");
+        const notesLink = el("a", "", "Release notes");
+        notesLink.href = build.releaseUrl;
+        notes.append(notesLink);
+        nodes.push(notes);
+
+        return nodes;
+      }
+
+      function render(channel: "stable" | "canary", nodes: HTMLElement[]): void {
+        const body = document.querySelector(`[data-channel="${channel}"] [data-slot="body"]`);
+        if (!body) return;
+        body.replaceChildren(...nodes);
+      }
+
+      async function load(): Promise<void> {
+        let releases: Release[];
+        try {
+          const response = await fetch(RELEASES_API, {
+            headers: { accept: "application/vnd.github+json" },
+          });
+          if (!response.ok) throw new Error(`GitHub API responded ${response.status}`);
+          releases = (await response.json()) as Release[];
+        } catch {
+          // Rate limit (60 req/hr unauthenticated) or offline — keep a
+          // working path to the same builds instead of a dead end.
+          const fallback = () =>
+            statusLine("Couldn’t reach GitHub just now.", "Get it from GitHub Releases", RELEASES_URL);
+          render("stable", fallback());
+          render("canary", fallback());
+          return;
+        }
+
+        const feed = resolveDownloadFeed(releases);
+        const emphasis = emphasizedChannel(feed);
+        render(
+          "stable",
+          feed.stable
+            ? buildNodes(feed.stable, emphasis === "stable")
+            : statusLine("No stable release yet — Canary is the newest build.", "Watch for the first stable on GitHub", RELEASES_URL),
+        );
+        render(
+          "canary",
+          feed.canary
+            ? buildNodes(feed.canary, emphasis === "canary")
+            : statusLine("No canary build published right now.", "Browse releases on GitHub", RELEASES_URL),
+        );
+      }
+
+      if (!isMacPlatform(navigator.userAgent, navigator.platform)) {
+        document.querySelector("[data-platform-note]")?.removeAttribute("hidden");
+      }
+
+      void load();
+    </script>
+  </body>
+</html>

@@ -5,11 +5,15 @@ import {
   EFFORT_DEAD_ZONE,
   EFFORT_MIX_CEILING,
   EFFORT_MIX_FLOOR,
+  EFFORT_SQUIGGLE_AMPLITUDE,
+  EFFORT_SQUIGGLE_WAVELENGTH,
   EFFORT_STRETCH_LIMIT,
   effortChroma,
   effortGlow,
   effortIndex,
   effortLabel,
+  effortSquigglePath,
+  effortSquiggleScale,
   effortStopPercent,
   effortWashMix,
   readEffortPointer,
@@ -230,5 +234,55 @@ describe("where a stop is drawn", () => {
     expect(effortStopPercent(9, 5)).toBe(100);
     expect(effortStopPercent(-3, 5)).toBe(0);
     expect(effortStopPercent(0, 1)).toBe(0);
+  });
+});
+
+describe("the squiggle's geometry", () => {
+  it("peaks at the amplitude it was asked for, not at the control point", () => {
+    // A quadratic's midpoint takes HALF its control's offset, so the control
+    // has to sit at 2×amplitude — the constant the path bakes in. Pin it via
+    // the first segment's control coordinate.
+    const path = effortSquigglePath(24, EFFORT_SQUIGGLE_WAVELENGTH, EFFORT_SQUIGGLE_AMPLITUDE);
+    expect(path).toBe("M 0 0 Q 3 4 6 0 T 12 0 T 18 0 T 24 0");
+  });
+
+  it("runs to the half-wave boundary at or past the width, never short of it", () => {
+    // The seam clips the overshoot for free; an undershoot would leave the
+    // last stop's share bare. 20 / 6 half-waves → 4 segments ending at 24.
+    const path = effortSquigglePath(20, 12, 2);
+    expect(path.endsWith("T 24 0")).toBe(true);
+    // An exact multiple ends exactly on the width.
+    expect(effortSquigglePath(24, 12, 2).endsWith("T 24 0")).toBe(true);
+  });
+
+  it("covers a width narrower than one half-wave with the opening segment", () => {
+    expect(effortSquigglePath(4, 12, 2)).toBe("M 0 0 Q 3 4 6 0");
+  });
+
+  it("reads degenerate inputs as no wave rather than dividing by them", () => {
+    // An unmeasured rail, and a wavelength no wave can have.
+    expect(effortSquigglePath(0, 12, 2)).toBe("");
+    expect(effortSquigglePath(224, 0, 2)).toBe("");
+  });
+});
+
+describe("how much of the wave is standing", () => {
+  it("is flat at the bottom of the range and full at the top", () => {
+    expect(effortSquiggleScale(0, 5)).toBe(0);
+    expect(effortSquiggleScale(4, 5)).toBe(1);
+  });
+
+  it("climbs linearly, so every adjacent pair of stops differs by the same step", () => {
+    // The wave is a comparison channel like the mix, not a lone read like the
+    // halo — a squared ramp would leave the bottom half of the range flat.
+    expect(effortSquiggleScale(2, 5)).toBe(0.5);
+    expect(effortSquiggleScale(3, 7)).toBe(0.5);
+  });
+
+  it("clamps to the ramp and gives a single-stop set the top of it", () => {
+    expect(effortSquiggleScale(-3, 5)).toBe(0);
+    expect(effortSquiggleScale(99, 5)).toBe(1);
+    // Nothing to be calmer than — flat would read as disabled.
+    expect(effortSquiggleScale(0, 1)).toBe(1);
   });
 });
