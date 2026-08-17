@@ -110,6 +110,10 @@ export default defineConfig(({ mode }) => ({
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
+        // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
+        // as tab-focus.ts: the squiggle's geometry is arithmetic the view
+        // renders but never owns.
+        "src/components/theme/slider-squiggle.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
         "src/components/ticket/label-picker-model.ts",

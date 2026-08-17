@@ -106,6 +106,13 @@ import {
   type CanvasContrastReport,
   type CanvasFloorReading,
 } from "@renderer/components/theme/canvas-editor-model";
+import {
+  SLIDER_SQUIGGLE_AMPLITUDE,
+  SLIDER_SQUIGGLE_WAVELENGTH,
+  SLIDER_SQUIGGLE_WIDTH,
+  sliderSquigglePath,
+  sliderSquiggleScale,
+} from "@renderer/components/theme/slider-squiggle";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -657,12 +664,19 @@ function PrimaryColourRow({
  * `::-webkit-slider-runnable-track` rule reads it. The track is declared there
  * rather than left to `accent-color`, which cannot paint an unfilled half that
  * follows the appearance — see that rule.
+ *
+ * VIBRANCY WEARS THE SQUIGGLE (`squiggle`), the Arc-lineage wave VC-57 authored
+ * for exactly this pass and VC-82 took back out of the effort slider: a
+ * hairline wave riding the track, clipped at the fill's seam, whose amplitude
+ * IS the value. Only the vibrancy control asks for it — a wave on a slider
+ * that does not mean "how vivid" would be decoration, not report.
  */
 function UnitSlider({
   id,
   label,
   value,
   chip,
+  squiggle = false,
   onInput,
   onSettle,
 }: {
@@ -670,29 +684,92 @@ function UnitSlider({
   label: string;
   value: number;
   chip: React.ReactNode;
+  /** Ride the VC-57 wave along the fill. See the doc above. */
+  squiggle?: boolean;
   onInput(next: number): void;
   onSettle(): void;
 }) {
+  // The seam both the gradient and the wave clip at, on the same rounding the
+  // painted fill uses — two objects arriving at the same pixel, not near it.
+  const fillPercent = Math.round(value * 100);
   return (
     <div className="flex items-center gap-4">
       {chip}
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={1}
-        step={UNIT_STEP}
-        value={value}
-        aria-label={label}
-        onChange={(event) => onInput(Number(event.target.value))}
-        // One write per gesture: the drag and the key repeat are previews, and
-        // the release is the commit.
-        onPointerUp={onSettle}
-        onKeyUp={onSettle}
-        onBlur={onSettle}
-        style={{ "--slider-fill": percentLabel(value) } as React.CSSProperties}
-        className="w-44"
-      />
+      <span className="relative">
+        <input
+          id={id}
+          type="range"
+          min={0}
+          max={1}
+          step={UNIT_STEP}
+          value={value}
+          aria-label={label}
+          onChange={(event) => onInput(Number(event.target.value))}
+          // One write per gesture: the drag and the key repeat are previews, and
+          // the release is the commit.
+          onPointerUp={onSettle}
+          onKeyUp={onSettle}
+          onBlur={onSettle}
+          style={{ "--slider-fill": percentLabel(value) } as React.CSSProperties}
+          className="w-44"
+        />
+        {/* THE SQUIGGLE — the magnitude, drawn as agitation.
+
+            IT SPANS THE GROOVE IT RIDES. The input is 16px tall and the track
+            is its middle 4px (y 6–10; the thumb's −5px margin centres it), so
+            the 6px band centred on the track (`top-[5px] h-1.5`) puts the ±2px
+            peaks exactly on the track's top and bottom edges at full
+            vibrancy — the filled groove itself stands up as a wave, and at the
+            bottom of the range it flattens onto the centreline and the empty
+            fill clips it away with the same seam the gradient uses.
+
+            THE VALUE IS THE AMPLITUDE, via `scaleY` on the path rather than a
+            regenerated `d`: a transform interpolates between two amplitudes,
+            a path string snaps. `non-scaling-stroke` holds the ink at hairline
+            weight while the geometry flattens — without it the wave would thin
+            as it lies down — and `fill-box` makes the scale's origin the wave's
+            own centreline, so it flattens in place instead of sagging toward
+            an edge.
+
+            NO TRANSITION, DELIBERATELY. The native fill repaints the gradient
+            the moment the value moves and nothing can ease that half of the
+            seam, so an eased wave would drift off the fill it rides — the seam
+            is one object, not two on different clocks. The wave is state, not
+            motion: it stands wherever the value is, instantly. */}
+        {squiggle && (
+          <svg
+            aria-hidden
+            data-slot="slider-squiggle"
+            viewBox={`0 ${-(SLIDER_SQUIGGLE_AMPLITUDE + 1)} ${SLIDER_SQUIGGLE_WIDTH} ${
+              2 * (SLIDER_SQUIGGLE_AMPLITUDE + 1)
+            }`}
+            preserveAspectRatio="none"
+            style={{ clipPath: `inset(0 ${100 - fillPercent}% 0 0)` }}
+            className="pointer-events-none absolute inset-x-0 top-[5px] h-1.5"
+          >
+            <path
+              d={sliderSquigglePath(
+                SLIDER_SQUIGGLE_WIDTH,
+                SLIDER_SQUIGGLE_WAVELENGTH,
+                SLIDER_SQUIGGLE_AMPLITUDE,
+              )}
+              fill="none"
+              vectorEffect="non-scaling-stroke"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              style={{
+                transform: `scaleY(${sliderSquiggleScale(value)})`,
+                transformBox: "fill-box",
+                transformOrigin: "center",
+              }}
+              // `/40`, the wave's shipped voice: a redundant channel under the
+              // thumb and the fill, texture of the substance rather than a
+              // second control.
+              className="stroke-foreground/40"
+            />
+          </svg>
+        )}
+      </span>
       <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
         {percentLabel(value)}
       </span>
@@ -1076,6 +1153,7 @@ export function CanvasEditor({
           id="canvas-vibrancy"
           label="Vibrancy"
           value={live.vibrancy}
+          squiggle
           chip={
             <span
               aria-hidden
