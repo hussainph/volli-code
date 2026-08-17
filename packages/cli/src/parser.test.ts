@@ -323,6 +323,14 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "label.list", args: { project: "VC" }, json: false },
     });
+    expect(parseCliArgs(["model", "list"])).toEqual({
+      ok: true,
+      invocation: { command: "model.list", args: {}, json: false },
+    });
+    expect(parseCliArgs(["model", "list", "--all", "--json"])).toEqual({
+      ok: true,
+      invocation: { command: "model.list", args: { all: true }, json: true },
+    });
     expect(parseCliArgs(["session", "list", "--project", "VC", "--ticket", "VC-12"])).toEqual({
       ok: true,
       invocation: {

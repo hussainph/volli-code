@@ -211,6 +211,45 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+/**
+ * The model.list catalog: the app default first, then one header line per
+ * provider with its copyable `provider/model` rows and reasoning levels
+ * beneath it, and an honest rollup for the signed-out providers the default
+ * view withholds (they are behind --all, not missing).
+ */
+function renderModelList(data: Record<string, unknown>): string | null {
+  const providers = recordsAt(data, "providers");
+  if (providers === null) return null;
+  const def = data["default"];
+  const lines = [
+    isRecord(def) && typeof def["model"] === "string"
+      ? `default  ${terminalSafeInline(def["model"])}  ${terminalSafeInline(def["reasoning"])}`
+      : "default  -",
+  ];
+  for (const provider of providers) {
+    lines.push(
+      `${terminalSafeInline(provider["id"])}  ${terminalSafeInline(provider["label"])}  ${terminalSafeInline(provider["state"])}`,
+    );
+    const models = Array.isArray(provider["models"]) ? provider["models"].filter(isRecord) : [];
+    for (const model of models) {
+      const levels = Array.isArray(model["reasoning"])
+        ? model["reasoning"].filter((level): level is string => typeof level === "string")
+        : [];
+      // The default view holds only available models, so the state cell earns
+      // its width exactly when it says something other than "available".
+      const state = model["state"] === "available" ? "" : `  ${terminalSafeInline(model["state"])}`;
+      lines.push(
+        `  ${terminalSafeInline(model["model"])}  ${levels.length > 0 ? levels.map(terminalSafeInline).join("|") : "-"}${state}`,
+      );
+    }
+  }
+  const omitted = data["omittedProviders"];
+  if (typeof omitted === "number" && omitted > 0) {
+    lines.push(`… and ${terminalSafeInline(omitted)} more providers not signed in (use --all)`);
+  }
+  return lines.join("\n");
+}
+
 function renderStableLines(command: string, data: unknown): string | null {
   if (!isRecord(data)) return null;
   if (command === "worktree.status") return renderWorktreeStatus(data);
@@ -238,6 +277,7 @@ function renderStableLines(command: string, data: unknown): string | null {
         .join("\n") ?? null
     );
   }
+  if (command === "model.list") return renderModelList(data);
   if (command === "label.list") {
     const labels = recordsAt(data, "labels");
     return (

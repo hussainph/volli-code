@@ -1451,6 +1451,16 @@ app.whenReady().then(async () => {
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
           ...(sessions !== null ? { sessions } : {}),
+          // Model discovery (VC-78): `model list` reads the same Model Access
+          // snapshot every other surface does — never a parallel provider
+          // probe, never raw provider files. The door bounds the read itself
+          // (abort + race), so a hung probe cannot hang the CLI verb.
+          ...(piRuntimeHost !== null
+            ? {
+                inspectModelAccess: (input: { signal: AbortSignal }) =>
+                  piRuntimeHost.inspectModelAccess(input),
+              }
+            : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.

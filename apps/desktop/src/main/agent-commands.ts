@@ -41,6 +41,7 @@ import type {
   DoctorFacts,
   DoctorObservation,
   HarnessId,
+  ModelAccessSnapshot,
   Observed,
   Project,
   ReasoningLevel,
@@ -74,6 +75,7 @@ import {
 } from "./session-control";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type { Sessions } from "./session-runtime/sessions";
+import { readDefaultModelSelection } from "./session-runtime/model-access-preferences";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -188,6 +190,24 @@ export interface AgentCommandServiceOptions {
     lines: number,
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
+  /**
+   * The Model Access snapshot read `model.list` serves (VC-78) — the same
+   * `inspectPiModelAccess` seam every app surface reads, threaded in the way
+   * {@link sessions} is so no parallel provider probe can grow here. Absent
+   * means the Pi runtime never came up this launch, which the verb reports as
+   * retryable APP_UNREACHABLE. The snapshot is structurally secret-free
+   * (`ModelAccessSnapshot` has no credential field), so passing it through is
+   * what keeps this verb's output credential-free.
+   */
+  inspectModelAccess?: (input: { signal: AbortSignal }) => Promise<ModelAccessSnapshot>;
+  /**
+   * How long `model.list` waits on the snapshot before answering TIMEOUT.
+   * Bounded below the CLI's own 10s socket deadline so a hung provider probe
+   * (VC-61's live pain — the sequential inspect loop has no per-probe bound
+   * yet) surfaces as this verb's legible TIMEOUT rather than the socket's.
+   * A seam only so tests need not wait out the real bound.
+   */
+  modelAccessTimeoutMs?: number;
   /**
    * The product Session start route (VC-13) — the same facade the renderer's
    * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
@@ -344,6 +364,41 @@ function resolveRequestedHarness(
  */
 function positiveIntOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/** See {@link AgentCommandServiceOptions.modelAccessTimeoutMs}. */
+const MODEL_ACCESS_TIMEOUT_MS = 8_000;
+
+/**
+ * The bounded Model Access read (VC-61's direction, applied in this arm): the
+ * inspect gets an abort signal AND is raced against the same timer, because
+ * the signal only helps a probe that honors it — a hung OAuth refresh inside
+ * pi-ai ignores both, and the race is what keeps it from hanging the verb.
+ * `null` is the timeout verdict; a pre-timeout inspection failure still
+ * rejects through the race so the caller can name it.
+ */
+async function boundedModelAccessSnapshot(
+  inspect: (input: { signal: AbortSignal }) => Promise<ModelAccessSnapshot>,
+  timeoutMs: number,
+): Promise<ModelAccessSnapshot | null> {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, timeoutMs);
+  });
+  const inspection = inspect({ signal: controller.signal });
+  // A probe that loses the race settles later (usually rejecting on the
+  // abort); that late settlement is already answered and must not surface as
+  // an unhandled rejection.
+  inspection.catch(() => {});
+  try {
+    return await Promise.race([inspection, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 type ProjectResolution = { ok: true; project: Project } | { ok: false; response: AgentResponse };
@@ -1037,6 +1092,7 @@ export function createAgentCommandService(
       // here to answer to and dropping it is correct, not a compatibility gap.
       const sessions =
         request.cmd === "hook" ||
+        request.cmd === "model.list" ||
         request.cmd === "session.done" ||
         request.cmd === "session.blocked" ||
         request.cmd === "session.link" ||
@@ -1137,6 +1193,77 @@ export function createAgentCommandService(
             tickets: projectTickets.filter((ticket) => ticket.labels.includes(label.name)).length,
           }));
         return { v: 1, ok: true, data: { labels } };
+      }
+      if (request.cmd === "model.list") {
+        // Same structural stance as `session.start`: the only transport is the
+        // app-owned socket, the Pi runtime lives in Electron main, and a launch
+        // whose runtime never came up reports the retryable class.
+        const inspect = options.inspectModelAccess;
+        if (!inspect) {
+          return failure(
+            "APP_UNREACHABLE",
+            "The Model Access runtime is not available this launch.",
+          );
+        }
+        let snapshot: ModelAccessSnapshot | null;
+        try {
+          snapshot = await boundedModelAccessSnapshot(
+            inspect,
+            options.modelAccessTimeoutMs ?? MODEL_ACCESS_TIMEOUT_MS,
+          );
+        } catch (error) {
+          return failure("MUTATION_FAILED", errorMessage(error));
+        }
+        if (snapshot === null) {
+          return failure(
+            "TIMEOUT",
+            "Model Access did not answer in time (a provider probe may be hung). Retry, or check provider sign-in in the app.",
+          );
+        }
+        // The signed-in slice is the default view: the full registered catalog
+        // is ~1,200 rows, and dumping it into an agent's context window is the
+        // failure mode this verb exists to prevent. `--all` is the explicit
+        // opt-in, and the rollup count keeps the omission honest.
+        const all = request.args["all"] === true;
+        const shownProviders = all
+          ? snapshot.providers
+          : snapshot.providers.filter((provider) => provider.state === "available");
+        const providers = shownProviders.map((provider) => ({
+          id: provider.id,
+          label: provider.label,
+          state: provider.state,
+          models: snapshot.models
+            .filter((model) => model.providerId === provider.id)
+            .filter((model) => all || model.state === "available")
+            .map((model) => ({
+              // The copyable string: `session start --model` takes it verbatim
+              // (the parser splits on the FIRST slash, so gateway model ids
+              // containing one survive the round trip).
+              model: `${model.providerId}/${model.modelId}`,
+              label: model.label,
+              state: model.state,
+              reasoning: model.reasoningLevels,
+            })),
+        }));
+        // The app default is reported even when it names a model the filtered
+        // view no longer shows — what `session start` will do without an
+        // override is a fact about the app, not about this view.
+        const selection = readDefaultModelSelection(options.db);
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            observedAt: snapshot.observedAt,
+            default: selection
+              ? {
+                  model: `${selection.providerId}/${selection.modelId}`,
+                  reasoning: selection.reasoningLevel,
+                }
+              : null,
+            providers,
+            omittedProviders: snapshot.providers.length - shownProviders.length,
+          },
+        };
       }
       if (request.cmd === "session.list") {
         const ticketSelector = request.args["ticket"];
