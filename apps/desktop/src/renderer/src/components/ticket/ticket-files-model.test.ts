@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { TicketAttachment } from "@volli/shared";
+import type { NamedBlobLink } from "@volli/shared";
 
 import { buildTicketFilesNavigator, type TicketFilesNavigatorInput } from "./ticket-files-model";
 
@@ -21,27 +21,18 @@ describe("buildTicketFilesNavigator", () => {
     expect(nav.referenced.every((r) => r.source === "body")).toBe(true);
   });
 
-  it("includes file attachments as referenced context via materialized paths", () => {
-    const attachments: TicketAttachment[] = [
-      {
-        id: "a1",
-        ticketId: "t1",
-        kind: "file",
-        label: "homepage mock",
-        fileName: "spec.png",
-        createdAt: 1,
-      },
-      {
-        id: "a2",
-        ticketId: "t1",
-        kind: "url",
-        label: "design",
-        url: "https://example.com",
-        createdAt: 2,
-      },
+  it("includes every attachment as referenced context via its materialized path", () => {
+    const attachments: NamedBlobLink[] = [
+      { linkId: "a1", blobHash: "h1", label: "homepage mock", originalName: "spec.png" },
+      { linkId: "a2", blobHash: "h2", label: "design", originalName: "design.pdf" },
     ];
     const nav = buildTicketFilesNavigator(input({ attachments }));
     expect(nav.referenced).toEqual([
+      {
+        relPath: ".volli/attachments/design.pdf",
+        label: "design",
+        source: "attachment",
+      },
       {
         relPath: ".volli/attachments/spec.png",
         label: "homepage mock",
@@ -68,16 +59,7 @@ describe("buildTicketFilesNavigator", () => {
     const nav = buildTicketFilesNavigator(
       input({
         body: "See @.volli/attachments/spec.png",
-        attachments: [
-          {
-            id: "a1",
-            ticketId: "t1",
-            kind: "file",
-            label: "spec",
-            fileName: "spec.png",
-            createdAt: 1,
-          },
-        ],
+        attachments: [{ linkId: "a1", blobHash: "h1", label: "spec", originalName: "spec.png" }],
       }),
     );
     expect(nav.referenced.map((r) => r.relPath)).toEqual([".volli/attachments/spec.png"]);

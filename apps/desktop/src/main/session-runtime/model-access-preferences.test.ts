@@ -193,6 +193,7 @@ describe("Model Access default selection", () => {
           label: "GPT-5.6 Sol",
           state: "available" as const,
           reasoningLevels: ["off", "high"] as const,
+          acceptsImageInput: true,
         },
       ],
     };

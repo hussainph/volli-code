@@ -77,7 +77,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -104,7 +104,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -128,7 +128,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -157,7 +157,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -181,7 +181,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -207,7 +207,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -243,7 +243,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticketId);
@@ -264,7 +264,7 @@ describe("publishTicketBranch", () => {
       db: harness.db,
       git: scriptedGit(() => "").git,
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await publishTicketBranch(deps, ticket.id);
@@ -282,7 +282,7 @@ describe("commitTicketRemaining", () => {
       db,
       git: commitGit(" M src/a.ts\n"),
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await commitTicketRemaining(deps, ticketId);
@@ -312,7 +312,7 @@ describe("commitTicketRemaining", () => {
       db,
       git: commitGit("M  src/a.ts\n"),
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await commitTicketRemaining(deps, ticketId, {
@@ -336,7 +336,7 @@ describe("commitTicketRemaining", () => {
   it("returns the committed:false no-op and records NO event on a clean tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = { db, git: commitGit(""), net: run, attachmentsRoot: "unused" };
+    const deps: PublishDeps = { db, git: commitGit(""), net: run, blobsRoot: "unused" };
 
     const result = await commitTicketRemaining(deps, ticketId);
 
@@ -357,7 +357,7 @@ describe("commitTicketRemaining", () => {
       db,
       git: commitGit(" M src/a.ts\n"),
       net: run,
-      attachmentsRoot: "unused",
+      blobsRoot: "unused",
     };
 
     const result = await commitTicketRemaining(deps, ticketId);

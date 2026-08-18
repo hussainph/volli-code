@@ -1287,6 +1287,75 @@ describe("submit", () => {
     ]);
   });
 
+  it("sends an attachment as a volli-blob file part, never as bytes (VC-50)", async () => {
+    const { client, rpc } = await ready();
+    const hash = "a".repeat(64);
+
+    await expect(
+      client.submit(
+        {
+          id: "queued-1",
+          text: "what is this?",
+          attachments: [
+            {
+              linkId: "l1",
+              blobHash: hash,
+              label: "shot.png",
+              originalName: "shot.png",
+              mime: "image/png",
+              sizeBytes: 12,
+            },
+          ],
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    const submitted = rpc.submissions()[0]!.command;
+    expect(submitted).toMatchObject({
+      kind: "message.submit",
+      message: {
+        parts: [
+          { type: "text", text: "what is this?" },
+          {
+            type: "file",
+            url: `volli-blob:${hash}`,
+            mediaType: "image/png",
+            filename: "shot.png",
+          },
+        ],
+      },
+    });
+    // The durable record holds a reference and nothing else. Base64 in the
+    // transcript is the failure this whole design is written against: it
+    // replays on every later turn until the session stops accepting even text.
+    expect(JSON.stringify(submitted)).not.toMatch(/base64|data:/i);
+  });
+
+  it("delivers a message that is nothing but an attachment (VC-50)", async () => {
+    const { client } = await ready();
+
+    await expect(
+      client.submit(
+        {
+          id: "queued-2",
+          text: "   ",
+          attachments: [
+            {
+              linkId: "l1",
+              blobHash: "b".repeat(64),
+              label: "shot.png",
+              originalName: "shot.png",
+              mime: "image/png",
+              sizeBytes: 12,
+            },
+          ],
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+  });
+
   it("sends a skill resource as its own part beside the intact text (VC-49)", async () => {
     const { client, rpc } = await ready();
     const resource = { name: "hussain-sol", text: "# The skill body" };

@@ -21,7 +21,10 @@ import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { errorMessage, type DirEntry, type Ticket, type TicketAttachment } from "@volli/shared";
+import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
+import { useAttachments } from "@renderer/hooks/use-attachments";
 
 import {
   RAIL_PANEL_INSET,
@@ -173,25 +176,57 @@ export function TicketFilesList({
   );
 }
 
-const NO_ATTACHMENTS: readonly TicketAttachment[] = [];
-
 /**
- * Ticket Files panel: body refs + optional attachments + worktree directory
- * listing. Attachments are accepted as a prop because the renderer has no
- * attachments IPC yet — hosts that can supply them (or tests) pass them in.
+ * Ticket Files panel: body refs + attachments + worktree directory listing.
  * Single-click previews; double-click pins (decision #56).
+ *
+ * Attachments load from the Ticket itself (VC-50). The prop survives for the
+ * fixture gallery and the tests, which mount this panel without an IPC bridge —
+ * when it is passed, it wins and nothing is fetched.
  */
 export function TicketFilesPanel({
   ticket,
-  attachments = NO_ATTACHMENTS,
+  attachments: providedAttachments,
   onPreviewFile,
   onPinFile,
 }: {
   ticket: Ticket;
-  attachments?: readonly TicketAttachment[];
+  attachments?: readonly NamedBlobLink[];
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
 }) {
+  const {
+    attachments: loadedAttachments,
+    attachFiles,
+    remove: removeAttachment,
+    reset: resetAttachments,
+  } = useAttachments({
+    owner: { ticketId: ticket.id },
+    onError: (message) => toastError(message),
+  });
+  // A repository file attached here resolves to an `@` reference, and the body
+  // is where such a reference belongs — but this panel does not own the body.
+  // So the ref is reported rather than written, which is honest: the file is
+  // already in the repository and the Files rail already lists it.
+  React.useEffect(() => {
+    let cancelled = false;
+    if (providedAttachments !== undefined) return;
+    void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
+      if (!cancelled && result.ok) resetAttachments(result.blobs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [providedAttachments, resetAttachments, ticket.id]);
+
+  const attachments: readonly NamedBlobLink[] =
+    providedAttachments ??
+    loadedAttachments.map((entry) => ({
+      linkId: entry.linkId ?? entry.blobHash,
+      blobHash: entry.blobHash,
+      label: entry.label,
+      originalName: entry.originalName,
+    }));
   const [cwd, setCwd] = React.useState("");
   const [entries, setEntries] = React.useState<TicketWorktreeEntry[]>([]);
   const [error, setError] = React.useState<string | null>(null);
@@ -311,7 +346,20 @@ export function TicketFilesPanel({
             </TooltipTrigger>
             <TooltipContent side="bottom">Filter files</TooltipContent>
           </Tooltip>
+          {/* Attach lives beside Filter rather than in the list: it acts on the
+              Ticket, not on whatever row is under the cursor. Hidden when a
+              host supplied the attachments, because then this panel is a view
+              of someone else's list and must not mutate it. */}
+          {providedAttachments === undefined ? (
+            <ComposerAttachButton onFiles={(picked) => void attachFiles(picked)} />
+          ) : null}
         </div>
+        <AttachmentStrip
+          attachments={loadedAttachments}
+          {...(providedAttachments === undefined
+            ? { onRemove: (attachment) => void removeAttachment(attachment) }
+            : {})}
+        />
         {filtering ? (
           <Input
             autoFocus

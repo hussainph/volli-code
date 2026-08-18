@@ -98,8 +98,8 @@ import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
 import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
-import { attachmentsRoot, importAttachmentFile } from "./attachment-store";
-import { createAttachment } from "./db/attachments-repo";
+import { importBlob } from "./blob-import";
+import { blobsRoot, removeBlob } from "./blob-store";
 import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
 import {
@@ -1402,15 +1402,18 @@ describe("ticket sessions", () => {
   });
 
   it("materializes the ticket's file attachments into the PROJECT root and appends the Attachments section to the kickoff prompt", async () => {
-    const attachmentsRootDir = attachmentsRoot(userDataPathRef.current);
-    const attachment = createAttachment(
+    const blobsRootDir = blobsRoot(userDataPathRef.current);
+    importBlob(
       testDb.db,
-      { ticketId: "tk1", kind: "file", fileName: "spec.png", label: "homepage mock" },
+      blobsRootDir,
+      {
+        fileName: "spec.png",
+        bytes: Buffer.from("spec bytes"),
+        label: "homepage mock",
+        owner: { ticketId: "tk1" },
+      },
       Date.now(),
     );
-    const source = join(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-src-")), "spec.png");
-    await fs.writeFile(source, "spec bytes");
-    importAttachmentFile(attachmentsRootDir, attachment.id, source, "spec.png");
 
     const { result, pty } = await createKickoffSession("tk1", {
       harnessId: "codex",
@@ -1431,11 +1434,18 @@ describe("ticket sessions", () => {
   });
 
   it("errors the create call (never spawns) when an attachment's stored bytes are missing", async () => {
-    createAttachment(
+    const link = importBlob(
       testDb.db,
-      { ticketId: "tk1", kind: "file", fileName: "missing.png", label: "the missing one" },
+      blobsRoot(userDataPathRef.current),
+      {
+        fileName: "missing.png",
+        bytes: Buffer.from("gone"),
+        label: "the missing one",
+        owner: { ticketId: "tk1" },
+      },
       Date.now(),
     );
+    removeBlob(blobsRoot(userDataPathRef.current), link.blobHash);
 
     // The materialize failure aborts inside `resolveScope`, before `create`
     // ever loads node-pty — no fake pty is queued, since `spawn` is never
@@ -1878,9 +1888,15 @@ describe("worktree ticket sessions", () => {
 
   it("appends the Attachments section (re-derived, no fs touch) to a worktree kickoff prompt", async () => {
     ensureOk(false); // reused worktree → launch immediately, no setup gate
-    createAttachment(
+    importBlob(
       testDb.db,
-      { ticketId: "wt1", kind: "url", url: "https://example.com/design", label: "design doc" },
+      blobsRoot(userDataPathRef.current),
+      {
+        fileName: "design.pdf",
+        bytes: Buffer.from("design bytes"),
+        label: "design doc",
+        owner: { ticketId: "wt1" },
+      },
       Date.now(),
     );
 
@@ -1892,7 +1908,7 @@ describe("worktree ticket sessions", () => {
 
     const written = pty.write.mock.calls[0]![0] as string;
     expect(written).toContain("## Attachments");
-    expect(written).toContain("https://example.com/design");
+    expect(written).toContain(".volli/attachments/design.pdf");
     expect(written).toContain("design doc");
     // The section trails the ticket prompt, after the orientation preamble.
     expect(written.indexOf("run tests")).toBeLessThan(written.indexOf("## Attachments"));

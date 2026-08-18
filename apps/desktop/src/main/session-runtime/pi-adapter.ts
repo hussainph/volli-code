@@ -97,9 +97,11 @@ import {
   type SessionNativeDetail,
   type SessionNativeReference,
   type SessionRuntimeSpec,
+  type UIMessageLike,
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+import type { TurnAttachments } from "../turn-attachments";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /**
@@ -227,6 +229,16 @@ export interface PiAdapterOptions {
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
+  /**
+   * Materializes a turn's attachments and reads back what the model needs
+   * (VC-50). Injected, so this module keeps knowing nothing about the database
+   * or the Blob store; main supplies the real one. Absent means a Session whose
+   * messages carry no files, which is every message a test sends.
+   */
+  prepareTurnAttachments?: (
+    message: UIMessageLike,
+    owner: { sessionId: string; ticketId: string | null; workspacePath: string },
+  ) => Promise<TurnAttachments>;
   now?: () => number;
 }
 
@@ -344,7 +356,14 @@ function piNativeAdapter(
           "configuration_invalid",
         );
       }
-      const binding = new PiBinding({ spec, sink, context, recovery, now });
+      const binding = new PiBinding({
+        spec,
+        sink,
+        context,
+        recovery,
+        now,
+        prepareTurnAttachments: options.prepareTurnAttachments,
+      });
       try {
         binding.bind(await runtime.startSession(binding.runtimeSpec()));
       } catch (error) {
@@ -417,6 +436,7 @@ interface PiBindingOptions {
   context: PiRuntimeContext;
   recovery: RuntimeRecoveryRef | undefined;
   now: () => number;
+  prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
 }
 
 class PiBinding implements BindingHandle {
@@ -425,6 +445,7 @@ class PiBinding implements BindingHandle {
   readonly #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
+  readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
@@ -451,6 +472,22 @@ class PiBinding implements BindingHandle {
     this.#context = options.context;
     this.#recovery = options.recovery;
     this.#now = options.now;
+    this.#prepareTurnAttachments = options.prepareTurnAttachments;
+  }
+
+  /**
+   * This turn's attachments, or nothing when the host wired no preparer and
+   * when the message carries no files. Reading `directory` off the spec keeps
+   * the materialize target the same tree the agent is actually working in.
+   */
+  async #prepareAttachments(message: UIMessageLike): Promise<TurnAttachments> {
+    const prepare = this.#prepareTurnAttachments;
+    if (prepare === undefined) return { note: "", images: [] };
+    return prepare(message, {
+      sessionId: this.#spec.sessionId,
+      ticketId: this.#context.ticketId,
+      workspacePath: this.#spec.directory,
+    });
   }
 
   get native(): SessionNativeReference {
@@ -696,7 +733,18 @@ class PiBinding implements BindingHandle {
     // is durable: chosen through `model.select`, and applied at attach from
     // the Session's own projected selection.
     const text = messageText(command.message);
-    if (text.trim().length === 0) {
+    // Attachments are prepared BEFORE the empty-text check, because they can
+    // make an otherwise-empty message a real one: dragging in a screenshot and
+    // pressing return without typing is an ordinary way to ask "what is this?"
+    // (VC-50). A failure here is the turn's failure — a message whose file the
+    // agent will never see is not one worth delivering silently.
+    let attachments: TurnAttachments;
+    try {
+      attachments = await this.#prepareAttachments(command.message);
+    } catch (error) {
+      return this.#rejected(command.commandId, "PI_ATTACHMENT_FAILED", errorMessage(error));
+    }
+    if (text.trim().length === 0 && attachments.note.length === 0) {
       return this.#rejected(
         command.commandId,
         "PI_EMPTY_MESSAGE",
@@ -711,7 +759,12 @@ class PiBinding implements BindingHandle {
       );
     }
     try {
-      const outcome = await handle.submitUserMessage(text, command.delivery, command.commandId);
+      const outcome = await handle.submitUserMessage(
+        `${text}${attachments.note}`,
+        command.delivery,
+        command.commandId,
+        attachments.images,
+      );
       return outcome.kind === "delivered"
         ? this.#accepted(command.commandId)
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);

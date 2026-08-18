@@ -15,7 +15,7 @@ export * from "./authority-policy";
 export * from "./session-activity";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
-export * from "./ticket-attachment";
+export * from "./blob";
 export * from "./ticket-events";
 export * from "./change-set";
 export * from "./ticket-filter";

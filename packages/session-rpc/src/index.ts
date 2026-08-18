@@ -404,6 +404,10 @@ const modelAccessSnapshotSchema = z.object({
         // Absent when the catalog reports no usable size; the renderer's
         // context meter divides by this, so zero is not allowed through.
         contextWindow: positiveSafeInteger.optional(),
+        // Whether the attach affordance may offer images (VC-50). Defaults to
+        // permitting them: an older main process that does not send the field
+        // should not silently disable attachments across the whole catalog.
+        acceptsImageInput: z.boolean().optional().default(true),
       })
       .transform((model) => ({
         ...model,

@@ -75,14 +75,17 @@ export function layerTranscriptOverlay(
  * So it passes here and the transcript draws it as the one-line receipt it is,
  * rather than as prose it does not have.
  *
- * Asked per role because the two are rendered by different code: a user message
- * is prose only, and the assistant path owns every other shape. This is the
- * seam an attachment part would be added at, on the day one can be sent.
+ * Asked per role because the two are rendered by different code: a user
+ * message is prose and attachment thumbs, and the assistant path owns every
+ * other shape. `file` counts as drawable (VC-50): a message that is nothing
+ * but a dropped screenshot is a real turn, and the transcript draws its thumb
+ * where prose would have been.
  */
 function speaks(message: UIMessage): boolean {
   if (message.role === "user") {
     return message.parts.some(
-      (part) => part.type === "text" || part.type === "data-interaction-resolution",
+      (part) =>
+        part.type === "text" || part.type === "file" || part.type === "data-interaction-resolution",
     );
   }
   return message.parts.some(

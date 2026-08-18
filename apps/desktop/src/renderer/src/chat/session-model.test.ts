@@ -25,6 +25,29 @@ describe("composer delivery", () => {
     expect(enqueueMessage([], { id: "a", text: "   " })).toEqual([]);
   });
 
+  it("keeps attachments riding a queued message, and lets them carry it alone (VC-50)", () => {
+    const attachments = [
+      {
+        linkId: "l1",
+        blobHash: "a".repeat(64),
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: 12,
+      },
+    ];
+    expect(enqueueMessage([], { id: "a", text: " look ", attachments })).toEqual([
+      { id: "a", text: "look", attachments },
+    ]);
+    // A dropped screenshot with no words is a question, so an attachment makes
+    // an otherwise-blank message real.
+    expect(enqueueMessage([], { id: "b", text: "   ", attachments })).toEqual([
+      { id: "b", text: "", attachments },
+    ]);
+    // ...but an empty attachment list does not.
+    expect(enqueueMessage([], { id: "c", text: "  ", attachments: [] })).toEqual([]);
+  });
+
   it("keeps the skill resources riding a queued message (VC-49)", () => {
     const resources = [{ name: "logos", text: "# Logos" }];
     expect(enqueueMessage([], { id: "a", text: " /logos go ", resources })).toEqual([

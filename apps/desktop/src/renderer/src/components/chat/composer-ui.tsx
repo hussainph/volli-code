@@ -71,7 +71,10 @@ import {
 } from "@volli/shared";
 
 import { reclampEffort } from "@renderer/chat/composer-effort";
+import type { BlobLinkView } from "@volli/shared";
 import type { SessionContextUsage } from "@renderer/chat/context-usage";
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
@@ -166,12 +169,27 @@ export interface SessionComposerProps {
    * durable transcript, so it cannot switch the memo boundary off.
    */
   contextUsage?: SessionContextUsage | null;
+  /**
+   * Files attached to the message being written (VC-50). Owned by the parent,
+   * because they outlive this box: a queued message releases with exactly what
+   * was attached when ⏎ was pressed.
+   */
+  attachments?: readonly BlobLinkView[];
+  /** Something was dropped, pasted or picked. Absent hides the attach affordance entirely. */
+  onAttachFiles?(files: readonly File[]): void;
+  onRemoveAttachment?(attachment: BlobLinkView): void;
+  /**
+   * The selected model takes no image input, so the affordance says so rather
+   * than letting a picture be attached to a model that cannot see it.
+   */
+  imagesUnsupported?: boolean;
   className?: string;
 }
 
 const NO_TEMPLATES: readonly PromptTemplate[] = [];
 const NO_SKILLS: readonly SkillReference[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
+const NO_ATTACHMENTS: readonly BlobLinkView[] = [];
 
 /**
  * MEMOIZED, and this is the boundary that keeps typing off the stream's clock.
@@ -209,9 +227,15 @@ export const SessionComposer = React.memo(function SessionComposer({
   interactionOpen = false,
   answering = false,
   contextUsage = null,
+  attachments = NO_ATTACHMENTS,
+  onAttachFiles,
+  onRemoveAttachment,
+  imagesUnsupported = false,
   className,
 }: SessionComposerProps) {
-  const canSubmit = ready && value.trim().length > 0;
+  // An attachment makes an otherwise-empty message a real one (VC-50): a
+  // dropped screenshot with no words is a question.
+  const canSubmit = ready && (value.trim().length > 0 || attachments.length > 0);
   const effortStops = effortLevels(models, selection);
   // The menu's own event callbacks share this render. Keeping the selected id
   // in their closure lets close distinguish Edit from an ordinary dismissal
@@ -273,6 +297,36 @@ export const SessionComposer = React.memo(function SessionComposer({
           className,
         )}
         onSubmit={() => send(composerIntent({ working, steer: false }))}
+        // CAPTURE, and that is the whole point. `PromptInput` binds its own
+        // native drop listener on the form and routes what it catches into the
+        // vendored attachment state, which this composer does not use — so a
+        // dropped file would land there and be seen by nobody. React registers
+        // these at the root, so they run while the event is still descending,
+        // and stopping the NATIVE event is what keeps it from reaching the
+        // form's own listener at all.
+        onDropCapture={(event) => {
+          const dropped = [...(event.dataTransfer?.files ?? [])];
+          if (onAttachFiles === undefined || dropped.length === 0) return;
+          event.preventDefault();
+          event.nativeEvent.stopPropagation();
+          onAttachFiles(dropped);
+        }}
+        onDragOverCapture={(event) => {
+          // Without this the drop is never delivered: the default action for a
+          // dragover is "reject", and only preventing it makes this a target.
+          if (onAttachFiles !== undefined && event.dataTransfer?.types.includes("Files")) {
+            event.preventDefault();
+          }
+        }}
+        onPasteCapture={(event) => {
+          const pasted = [...(event.clipboardData?.files ?? [])];
+          if (onAttachFiles === undefined || pasted.length === 0) return;
+          // Only when the clipboard actually carries files. A paste of text
+          // that happens to come from a file manager still pastes as text.
+          event.preventDefault();
+          event.nativeEvent.stopPropagation();
+          onAttachFiles(pasted);
+        }}
       >
         {queued.length > 0 ? (
           // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
@@ -366,6 +420,14 @@ export const SessionComposer = React.memo(function SessionComposer({
         ) : null}
 
         <PromptInputBody>
+          {/* Above the text, not below it: the strip is part of the message
+              being written, and a person scanning what they are about to send
+              reads top to bottom. */}
+          <AttachmentStrip
+            attachments={attachments}
+            {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
+            className="px-3 pt-2"
+          />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
               thing has to hold the caret between them, and threading it back
@@ -466,6 +528,12 @@ export const SessionComposer = React.memo(function SessionComposer({
               move at all — which is the whole reason the row was built with the
               cluster as the fixed half. */}
           <PromptInputTools className="min-w-0 flex-1 flex-wrap">
+            {onAttachFiles === undefined ? null : (
+              <ComposerAttachButton
+                onFiles={onAttachFiles}
+                imagesUnsupported={imagesUnsupported === true}
+              />
+            )}
             <ModelPill
               models={models}
               selection={selection}

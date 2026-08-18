@@ -98,6 +98,23 @@ function isTicketIdInput(value: unknown): value is { ticketId: string } {
   return isRecord(value) && typeof value["ticketId"] === "string";
 }
 
+/** An absent key and a string key both pass; anything else is a malformed payload. */
+function isOptionalString(input: Record<string, unknown>, key: string): boolean {
+  return input[key] === undefined || typeof input[key] === "string";
+}
+
+/**
+ * Exactly one attachment owner (VC-50), mirroring the `blob_links` CHECK that
+ * enforces the same thing durably. `unowned` is the new-Ticket composer, whose
+ * Ticket has no id yet.
+ */
+function isBlobOwner(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value["ticketId"] === "string") return true;
+  if (typeof value["sessionId"] === "string") return true;
+  return value["unowned"] === true;
+}
+
 /** The `{ projectId }` shape shared by every single-project-scoped channel. */
 function isProjectIdInput(value: unknown): value is { projectId: string } {
   return isRecord(value) && typeof value["projectId"] === "string";
@@ -348,6 +365,64 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:comment-remove"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["commentId"] === "string",
     invalidError: "Invalid comment",
+  },
+
+  "volli:blob-attach": {
+    guard: (args): args is IpcArgs<"volli:blob-attach"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (typeof input["fileName"] !== "string" || input["fileName"].trim().length === 0) {
+        return false;
+      }
+      // Bytes or a path — with neither there is nothing to attach, and the
+      // handler would have to invent a failure further in.
+      const hasBytes = input["bytes"] instanceof Uint8Array;
+      const hasPath = typeof input["sourcePath"] === "string";
+      if (!hasBytes && !hasPath) return false;
+      return (
+        isBlobOwner(input["owner"]) &&
+        isOptionalString(input, "mime") &&
+        isOptionalString(input, "label") &&
+        isOptionalString(input, "refRoot")
+      );
+    },
+    invalidError: "Invalid attachment",
+  },
+  "volli:blob-list": {
+    guard: (args): args is IpcArgs<"volli:blob-list"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        isOptionalString(input, "ticketId") &&
+        isOptionalString(input, "sessionId")
+      );
+    },
+    invalidError: "Invalid attachment owner",
+  },
+  "volli:blob-remove": {
+    guard: (args): args is IpcArgs<"volli:blob-remove"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["linkId"] === "string",
+    invalidError: "Invalid attachment",
+  },
+  "volli:blob-link-drafts": {
+    guard: (args): args is IpcArgs<"volli:blob-link-drafts"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["ticketId"] !== "string") return false;
+      const blobs = input["blobs"];
+      return (
+        Array.isArray(blobs) &&
+        blobs.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry["blobHash"] === "string" &&
+            isOptionalString(entry, "label"),
+        )
+      );
+    },
+    invalidError: "Invalid attachment drafts",
   },
 
   "volli:session-list": {

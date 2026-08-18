@@ -94,6 +94,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
     modelId: "sonnet-4.5",
     label: "sonnet-4.5",
     state: "available",
+    acceptsImageInput: true,
     reasoningLevels: ["low", "medium", "high"],
     contextWindow: 200_000,
   },
@@ -102,6 +103,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
     modelId: "haiku-4.5",
     label: "haiku-4.5",
     state: "available",
+    acceptsImageInput: true,
     reasoningLevels: ["off", "low", "medium", "high"],
     contextWindow: 200_000,
   },
@@ -110,6 +112,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
     modelId: "gpt-5.6-luna",
     label: "gpt-5.6-luna",
     state: "available",
+    acceptsImageInput: true,
     // Seven stops: the widest set the effort rail has to hold, and the reason
     // to open the chip on THIS model rather than on the seeded one.
     reasoningLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
@@ -120,6 +123,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
     modelId: "gpt-5.3-codex-spark",
     label: "gpt-5.3-codex-spark",
     state: "available",
+    acceptsImageInput: true,
     reasoningLevels: ["low", "medium", "high"],
   },
 ];

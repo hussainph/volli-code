@@ -216,3 +216,42 @@ describe("runKickoff", () => {
     expect(deps.toastSuccess).not.toHaveBeenCalled();
   });
 });
+
+describe("composer attachments (VC-50)", () => {
+  it("attaches composer drafts to the ticket it just created", async () => {
+    const linkAttachments = vi.fn<NonNullable<SubmitDeps["linkAttachments"]>>(async () => {});
+    const deps = fakeDeps({ linkAttachments });
+
+    await runPlainCreate(fields(), deps);
+
+    expect(linkAttachments).toHaveBeenCalledWith("t1");
+  });
+
+  it("attaches them before the agent is briefed, not after", async () => {
+    const order: string[] = [];
+    const deps = fakeDeps({
+      linkAttachments: vi.fn(async () => {
+        order.push("link");
+      }),
+      startChat: vi.fn(async () => {
+        order.push("start");
+        return "s1";
+      }),
+    });
+
+    await runKickoff(fields(), deps, { createMore: true, model: MODEL });
+
+    // The kickoff brief names the attachments; a session booted first would
+    // read a brief pointing at files that had not been linked yet.
+    expect(order).toEqual(["link", "start"]);
+  });
+
+  it("creates nothing to attach to when the ticket was refused", async () => {
+    const linkAttachments = vi.fn<NonNullable<SubmitDeps["linkAttachments"]>>(async () => {});
+    const deps = fakeDeps({ addTicket: vi.fn(async () => null), linkAttachments });
+
+    await runPlainCreate(fields(), deps);
+
+    expect(linkAttachments).not.toHaveBeenCalled();
+  });
+});

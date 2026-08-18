@@ -1,3 +1,4 @@
+import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { ComposerFileAttach } from "@renderer/components/board/new-ticket/composer-file-attach";
 import {
   ComposerRunRow,
@@ -61,6 +62,7 @@ import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
 export function ComposerFooter({
   fileIndex,
   onInsertRef,
+  onAttachFiles,
   run,
   createMore,
   onCreateMoreChange,
@@ -70,6 +72,8 @@ export function ComposerFooter({
 }: {
   fileIndex: FileIndexHandle;
   onInsertRef: (relPath: string) => void;
+  /** Attach a file from anywhere (VC-50) — the repository-file picker beside it stays. */
+  onAttachFiles?: (files: readonly File[]) => void;
   /** The model + effort a kickoff will run on — see {@link ComposerRunRow}. */
   run: ComposerRun;
   createMore: boolean;
@@ -80,7 +84,12 @@ export function ComposerFooter({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
+      {/* Two paperclips, two questions. This one searches the repository index
+          and writes `@path`; the one beside it takes a file from anywhere. A
+          repository file chosen through either ends as the same `@` reference,
+          because main resolves that, not the button. */}
       <ComposerFileAttach fileIndex={fileIndex} onInsert={onInsertRef} />
+      {onAttachFiles === undefined ? null : <ComposerAttachButton onFiles={onAttachFiles} />}
       <ComposerRunRow run={run} />
 
       <label className="ml-auto flex shrink-0 items-center gap-2 text-ui text-muted-foreground">

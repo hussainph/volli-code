@@ -18,7 +18,7 @@ import type {
   HarnessId,
   HarnessWrapperLookup,
 } from "@volli/shared";
-import { materializeAttachments } from "../attachment-materialize";
+import { materializeBlobs } from "../blob-materialize";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketSessionContext } from "../db/tickets-repo";
 import { terminalSessionRecord } from "../session-control";
@@ -97,7 +97,7 @@ export async function resolveScope(
   db: Database.Database,
   sessionEngine: SessionEngine,
   request: CreateTerminalSessionRequest,
-  attachmentsRootPath: string,
+  blobsRootPath: string,
   wrapperFor: HarnessWrapperLookup,
   adapterFor: HarnessAdapterLookup,
 ): Promise<ScopeResolution> {
@@ -208,9 +208,10 @@ export async function resolveScope(
     if (!usesWorktree && kickoff !== undefined) {
       let prompt = kickoff.prompt;
       try {
-        const materialized = await materializeAttachments(
+        const materialized = await materializeBlobs(
           db,
-          attachmentsRootPath,
+          blobsRootPath,
+          null,
           request.ticket.ticketId,
           ctx.projectPath,
         );

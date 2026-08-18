@@ -395,6 +395,7 @@ describe("model access", () => {
           state: "available",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
           contextWindow: 128000,
+          acceptsImageInput: true,
         },
         {
           providerId: "anthropic",
@@ -403,6 +404,7 @@ describe("model access", () => {
           state: "authentication-required",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
           contextWindow: 128000,
+          acceptsImageInput: true,
         },
       ],
     });
@@ -518,6 +520,7 @@ describe("model access", () => {
           state: "unavailable",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
           contextWindow: 128000,
+          acceptsImageInput: true,
         },
       ],
     });
@@ -838,6 +841,61 @@ describe("asking the driver", () => {
     await handle.close();
     return (offered?.tools ?? []).map((tool) => tool.name);
   }
+
+  it("sends an attached image as content beside the text (VC-50)", async () => {
+    const { spec } = fixture();
+    let offered: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: join(spec.workspacePath, "..", "sessions"),
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            offered = context;
+            emit.text("A screenshot of a login form.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({ ...spec, authority: undefined });
+
+    await handle.submitUserMessage("what is this?", "queue", undefined, [
+      { data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+    await handle.close();
+
+    // Text first, then the image: the model reads the question against the
+    // picture, and a path is not something it can look at.
+    const sent = offered?.messages.at(-1);
+    expect(sent?.role).toBe("user");
+    expect(sent?.content).toEqual([
+      { type: "text", text: expect.stringContaining("what is this?") },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+  });
+
+  it("leaves a message with no images as a plain string, as every existing sidecar holds it", async () => {
+    const { spec } = fixture();
+    let offered: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: join(spec.workspacePath, "..", "sessions"),
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            offered = context;
+            emit.text("Fine.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({ ...spec, authority: undefined });
+
+    await handle.submitUserMessage("go");
+    await handle.close();
+
+    expect(typeof offered?.messages.at(-1)?.content).toBe("string");
+  });
 
   it("does not offer the tool to a Session with nowhere to send the question", async () => {
     const { spec } = fixture();

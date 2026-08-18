@@ -33,12 +33,18 @@ function provider(id: string): Provider {
   return { id, name: id, auth: { oauth: oauth() } } as unknown as Provider;
 }
 
-function model(providerId: string, id: string, contextWindow?: number): Model<Api> {
+function model(
+  providerId: string,
+  id: string,
+  contextWindow?: number,
+  input?: readonly ("text" | "image")[],
+): Model<Api> {
   return {
     id,
     name: id,
     provider: providerId,
     ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(input === undefined ? {} : { input }),
   } as unknown as Model<Api>;
 }
 
@@ -317,6 +323,34 @@ describe("inspectPiModelAccess catalog sizes", () => {
     expect(byId.windowed?.contextWindow).toBe(200_000);
     expect(byId.zero?.contextWindow).toBeUndefined();
     expect(byId.unsized?.contextWindow).toBeUndefined();
+  });
+
+  it("reports image input, and assumes it when the catalog does not say", async () => {
+    // The attach affordance gates on this (VC-50). A model that genuinely lists
+    // only text must read as false, but an entry with no `input` at all reads
+    // as true: an attachment a model cannot see still materializes into the
+    // workspace and is still named in the brief by path, so guessing "yes"
+    // degrades to a file reference while guessing "no" removes the affordance.
+    const known = [
+      model("vision", "sees", undefined, ["text", "image"]),
+      model("vision", "text-only", undefined, ["text"]),
+      model("vision", "unstated"),
+    ];
+    const models = fakeModels([
+      {
+        provider: provider("vision"),
+        checkAuth: async () => ({ type: "oauth" }),
+        getAvailable: async () => known,
+        known,
+      },
+    ]);
+
+    const resolved = await inspectPiModelAccess({ models, credentials: null }, () => 0);
+    const byId = Object.fromEntries(resolved.models.map((entry) => [entry.modelId, entry]));
+
+    expect(byId.sees?.acceptsImageInput).toBe(true);
+    expect(byId["text-only"]?.acceptsImageInput).toBe(false);
+    expect(byId.unstated?.acceptsImageInput).toBe(true);
   });
 });
 

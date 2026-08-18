@@ -19,8 +19,9 @@
  * requirements for.
  */
 import type { SessionStreamOverlay } from "@volli/session-engine";
-import { autoTitleFromMessage, errorMessage, skillResourcePart } from "@volli/shared";
+import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
+  BlobLinkView,
   ModelSelection,
   SessionInteractionResolution,
   SessionPresentationProjection,
@@ -613,7 +614,12 @@ export class ChatSessionClient {
   async submit(message: QueuedMessage, delivery: ChatMessageDelivery): Promise<MessageDelivery> {
     const slice = this.#slice();
     const body = message.text.trim();
-    if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
+    const attachments = message.attachments ?? [];
+    // An attachment makes an otherwise-empty message a real one (VC-50): a
+    // dropped screenshot with no words is a question, and refusing it here
+    // would drop the file the person just chose.
+    if (slice === undefined || !isDeliverable(slice)) return "refused";
+    if (body.length === 0 && attachments.length === 0) return "refused";
     try {
       // The message-scoped resource channel (VC-49): each skill body the text's
       // `/slug` references resolved to travels as its own typed part BESIDE the
@@ -627,6 +633,17 @@ export class ChatSessionClient {
         parts: [
           { type: "text" as const, text: body },
           ...(message.resources ?? []).map(skillResourcePart),
+          // Attachments travel as AI SDK file parts addressed by
+          // `volli-blob:<hash>` — never as bytes. The hash is what makes the
+          // durable transcript small enough to replay forever, and what lets
+          // main find the file again after the worktree it was materialized
+          // into has been pruned.
+          ...attachments.map((attachment) => ({
+            type: "file" as const,
+            url: blobUrl(attachment.blobHash),
+            mediaType: attachment.mime,
+            filename: attachment.originalName,
+          })),
         ],
       };
       const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
@@ -650,7 +667,7 @@ export class ChatSessionClient {
       // the one choke point both go through — is the moment a Session gains a
       // subject. Fire-and-forget: a failed rename costs a toast (renameChatSession
       // already surfaces one), never the message that just landed.
-      this.#autoTitle(body);
+      this.#autoTitle(body, attachments);
       return "delivered";
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
@@ -980,12 +997,21 @@ export class ChatSessionClient {
    * it yet. A non-null title was explicitly set by a person, including one
    * that happens to read `Chat 1`, so automatic naming never replaces it.
    */
-  #autoTitle(body: string): void {
+  #autoTitle(body: string, attachments: readonly BlobLinkView[]): void {
     const title = this.#slice()?.projection?.session.title ?? null;
     if (!isUntitledChatSession(title)) return;
-    // `body` is `submit`'s own trimmed, non-empty text — at least one visible
-    // line survives it, so `autoTitleFromMessage` can never read null here.
-    void renameChatSession(this.sessionId, autoTitleFromMessage(body)!);
+    // `body` can now be empty: a message that is nothing but an attachment is
+    // a real message (VC-50), and it has no words to name itself with. The
+    // file's label is the only honest subject in that case — "shot.png" says
+    // more about the Session than "Chat 3" does.
+    // Neither is unreachable from `submit`, which refuses a message with no
+    // text AND no attachments, and a label is never empty at rest (the
+    // `blob_links` CHECK). Returning rather than asserting anyway: a Session's
+    // name is not worth a throw if that invariant ever moves.
+    const subject = autoTitleFromMessage(body) ?? attachments[0]?.label;
+    /* v8 ignore next -- submit refuses a message with neither text nor attachments */
+    if (subject === undefined) return;
+    void renameChatSession(this.sessionId, subject);
   }
 
   #writes(): ChatSessionWrites {

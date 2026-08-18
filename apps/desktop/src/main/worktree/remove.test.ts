@@ -62,7 +62,7 @@ describe("remove", () => {
   it("no-ops when the ticket has no worktree path", async () => {
     seed(null);
     const { git, calls } = scriptedGit(() => "");
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
     expect(result.ok).toBe(true);
@@ -76,7 +76,7 @@ describe("remove", () => {
     setPhase("ticket-1", "ready");
     const { git, calls } = statusGit(wt, gitDir, false);
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -101,7 +101,7 @@ describe("remove", () => {
     seed(gone);
     const { git, calls } = scriptedGit(() => "");
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -123,7 +123,7 @@ describe("remove", () => {
     archiveTicket(ctx.db, "ticket-1", 2);
     const { git } = scriptedGit(() => "");
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -142,7 +142,7 @@ describe("remove", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, true);
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -158,7 +158,7 @@ describe("remove", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, true);
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: true,
     });
 
@@ -184,18 +184,14 @@ describe("remove", () => {
       return git(args, cwd);
     };
 
-    const result = await remove(
-      { db: ctx.db, git: tracedGit, attachmentsRoot: "unused" },
-      "ticket-1",
-      {
-        force: false,
-        releaseAgentSites: async (directory) => {
-          order.push("release");
-          released.push(directory);
-          return { released: ["chat-1"], stillOpen: [] };
-        },
+    const result = await remove({ db: ctx.db, git: tracedGit, blobsRoot: "unused" }, "ticket-1", {
+      force: false,
+      releaseAgentSites: async (directory) => {
+        order.push("release");
+        released.push(directory);
+        return { released: ["chat-1"], stillOpen: [] };
       },
-    );
+    });
 
     expect(result.ok).toBe(true);
     expect(released).toEqual([wt]);
@@ -212,7 +208,7 @@ describe("remove", () => {
     const { git } = statusGit(wt, gitDir, true);
     let releases = 0;
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
       releaseAgentSites: async () => {
         releases += 1;
@@ -230,7 +226,7 @@ describe("remove", () => {
     const { git } = scriptedGit(() => "");
     const released: string[] = [];
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
       releaseAgentSites: async (directory) => {
         released.push(directory);
@@ -251,7 +247,7 @@ describe("remove", () => {
     seed(wt);
     const { git, calls } = statusGit(wt, gitDir, false);
 
-    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
       force: false,
       releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }),
     });
