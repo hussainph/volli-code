@@ -21,6 +21,7 @@
 import type { SessionStreamOverlay } from "@volli/session-engine";
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
+  BlobLinkView,
   ModelSelection,
   SessionInteractionResolution,
   SessionPresentationProjection,
@@ -605,7 +606,7 @@ export class ChatSessionClient {
       // the one choke point both go through — is the moment a Session gains a
       // subject. Fire-and-forget: a failed rename costs a toast (renameChatSession
       // already surfaces one), never the message that just landed.
-      this.#autoTitle(body);
+      this.#autoTitle(body, attachments);
       return "delivered";
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
@@ -894,12 +895,21 @@ export class ChatSessionClient {
    * it yet. A non-null title was explicitly set by a person, including one
    * that happens to read `Chat 1`, so automatic naming never replaces it.
    */
-  #autoTitle(body: string): void {
+  #autoTitle(body: string, attachments: readonly BlobLinkView[]): void {
     const title = this.#slice()?.projection?.session.title ?? null;
     if (!isUntitledChatSession(title)) return;
-    // `body` is `submit`'s own trimmed, non-empty text — at least one visible
-    // line survives it, so `autoTitleFromMessage` can never read null here.
-    void renameChatSession(this.sessionId, autoTitleFromMessage(body)!);
+    // `body` can now be empty: a message that is nothing but an attachment is
+    // a real message (VC-50), and it has no words to name itself with. The
+    // file's label is the only honest subject in that case — "shot.png" says
+    // more about the Session than "Chat 3" does.
+    // Neither is unreachable from `submit`, which refuses a message with no
+    // text AND no attachments, and a label is never empty at rest (the
+    // `blob_links` CHECK). Returning rather than asserting anyway: a Session's
+    // name is not worth a throw if that invariant ever moves.
+    const subject = autoTitleFromMessage(body) ?? attachments[0]?.label;
+    /* v8 ignore next -- submit refuses a message with neither text nor attachments */
+    if (subject === undefined) return;
+    void renameChatSession(this.sessionId, subject);
   }
 
   #writes(): ChatSessionWrites {
