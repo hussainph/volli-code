@@ -74,6 +74,8 @@ export const NON_CODING_TOOL_IDS = [
   "ask_user",
   /** Reading one public web document through Volli's own fetch boundary. */
   "web_fetch",
+  /** Asking the configured search provider for references, through Volli's own search boundary. */
+  "web_search",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

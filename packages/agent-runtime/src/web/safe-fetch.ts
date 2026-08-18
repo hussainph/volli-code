@@ -237,8 +237,12 @@ function pinAddresses(
  * Node asks with `all: true`; the single-answer shape is honoured too, because
  * a lookup that returned the wrong shape would fail open into the client's own
  * DNS path, which is the exact hole this closes.
+ *
+ * Exported for `./search.ts`, which reaches a different kind of endpoint under a
+ * different policy but must pin its socket the same way. One implementation of
+ * the trick, so neither boundary can drift into resolving twice.
  */
-function pinnedLookup(
+export function pinnedLookup(
   addresses: readonly WebFetchAddress[],
 ): NonNullable<RequestOptions["lookup"]> {
   const answers = addresses.map(({ address, family }) => ({ address, family }));

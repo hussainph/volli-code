@@ -43,3 +43,37 @@ export {
   type WebFetchLimits,
   type WebFetchRuleId,
 } from "./web/safe-fetch";
+export {
+  createWebSearch,
+  WEB_SEARCH_LIMITS,
+  WEB_SEARCH_RULE_IDS,
+  WEB_SEARCH_USER_AGENT,
+  WebSearchRefusal,
+  type WebSearch,
+  type WebSearchCall,
+  type WebSearchLimits,
+  type WebSearchOptions,
+  type WebSearchProvider,
+  type WebSearchReference,
+  type WebSearchRequest,
+  type WebSearchRuleId,
+} from "./web/search";
+export {
+  admitSearchEndpoint,
+  SEARCH_ENDPOINT_RULE_IDS,
+  type AdmittedSearchEndpoint,
+  type SearchEndpointAdmission,
+  type SearchEndpointReach,
+  type SearchEndpointRuleId,
+} from "./web/search-endpoint";
+export {
+  braveWebSearchProvider,
+  BRAVE_PROVIDER_ID,
+  BRAVE_SEARCH_ENDPOINT,
+  type BraveSearchOptions,
+} from "./web/brave";
+export {
+  searxngWebSearchProvider,
+  SEARXNG_PROVIDER_ID,
+  type SearxngSearchOptions,
+} from "./web/searxng";

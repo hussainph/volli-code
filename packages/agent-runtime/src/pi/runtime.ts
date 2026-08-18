@@ -45,7 +45,7 @@ import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
 import { piOwnedModelAccess } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { createAskUserTool, createPiTools, createWebFetchTool } from "./tools";
+import { createAskUserTool, createPiTools, createWebFetchTool, createWebSearchTool } from "./tools";
 import {
   attentionReasonFor,
   classifyAssistantMessage,
@@ -614,6 +614,11 @@ async function attachSession(
     // unreachable from here, not a refusal the model would have to be told
     // about after reaching for it.
     if (spec.webFetch !== undefined) tools.push(createWebFetchTool(spec.webFetch, spec.signal));
+    // Independent of the fetch above, not paired with it. Searching and reading
+    // are different capabilities with different costs — a search discloses the
+    // query to a third party, a read does not — so a Session may be given
+    // either, both or neither, and is offered exactly what it was given.
+    if (spec.webSearch !== undefined) tools.push(createWebSearchTool(spec.webSearch, spec.signal));
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;
