@@ -19,7 +19,10 @@ import {
 } from "@renderer/components/files/close-guard";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { ContentColumn } from "@renderer/components/layout/content-column";
-import type { DocumentFileRefs } from "@renderer/components/editor/monaco-document-editor";
+import type {
+  DocumentFileRefs,
+  MonacoDocumentEditorHandle,
+} from "@renderer/components/editor/monaco-document-editor";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import {
   bootChatSession,
@@ -45,6 +48,9 @@ import {
   type TicketRecencyWatchOwner,
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
+import { appendFileRef } from "@renderer/editor/file-refs";
+import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
+import { useAttachments } from "@renderer/hooks/use-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
@@ -62,6 +68,7 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
@@ -203,6 +210,64 @@ export function TicketDetail({
     (state) => state.clearTerminalFocusUnlessTicket,
   );
   const closeGuard = useCloseGuard();
+  // The checkout a repository file dropped on the Ticket would be named
+  // against — same `refRoot` the New-ticket composer attaches with, so a repo
+  // file becomes an `@` reference in the body here too rather than a snapshot
+  // nobody asked to duplicate (VC-106). Undefined while the project is unknown,
+  // which degrades to snapshotting exactly as before.
+  const refRoot = useProjectsStore(
+    (state) => state.projects.find((project) => project.id === ticket.projectId)?.path,
+  );
+  // The Body editor's handle, for splicing those `@` refs in. Null whenever
+  // the Body tab is not mounted — the fallback below writes the ref through the
+  // store instead, which is safe precisely because an unmounted editor has
+  // already flushed its draft on the way out.
+  const bodyEditorRef = React.useRef<MonacoDocumentEditorHandle>(null);
+  const updateTicket = useBoardStore((state) => state.updateTicket);
+  /**
+   * The Ticket's attachment strip, owned HERE rather than in the Files rail
+   * that draws it (VC-106).
+   *
+   * Two surfaces attach to one Ticket: the rail, and the Body tab a file gets
+   * dropped on. Left in the rail, its state would be the only copy, so a drop
+   * on the Body would attach a file the rail could not show until it remounted
+   * — and the rail unmounts when it is collapsed, which is exactly when a
+   * person drops on the Body instead. One owner above both, one list.
+   */
+  const ticketAttachments = useAttachments({
+    owner: { ticketId: ticket.id },
+    ...(refRoot === undefined ? {} : { refRoot }),
+    onRefInsert: (relPath) => {
+      const token = `@${relPath}`;
+      if (bodyEditorRef.current?.insertAtCursor(token) === true) return;
+      // No editor to splice into (Body tab closed, or Monaco still loading).
+      // The body is read FRESH from the store, not from this render's `ticket`:
+      // a multi-file drop appends one ref per file, and each append patches the
+      // slice synchronously — the render-time body could still be a turn behind
+      // and would drop the previous ref, which for a repo document is the whole
+      // attachment (a pure ref creates no blob to fall back on).
+      const current =
+        useBoardStore
+          .getState()
+          .ticketsByProject[ticket.projectId]?.find((candidate) => candidate.id === ticket.id) ??
+        ticket;
+      void updateTicket({
+        ticketId: ticket.id,
+        body: appendFileRef(current.body, token),
+      });
+    },
+    onError: (message) => toastError(message),
+  });
+  const resetAttachments = ticketAttachments.reset;
+  React.useEffect(() => {
+    let cancelled = false;
+    void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
+      if (!cancelled && result.ok) resetAttachments(result.blobs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [resetAttachments, ticket.id]);
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
     reduceTicketRecencyOwner,
     EMPTY_TICKET_RECENCY_OWNER_STATE,
@@ -978,8 +1043,17 @@ export function TicketDetail({
               )}
             >
               {activeTab.kind === "body" ? (
-                <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-                  <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} />
+                <div
+                  // The Body tab is a drop target: this is where the Ticket is
+                  // written, so a file dragged onto it attaches to the Ticket.
+                  // Scoped to this tab rather than the whole detail view on
+                  // purpose — a capture handler on the root would fire before
+                  // the embedded chat composer's own and steal drops meant for
+                  // the conversation.
+                  {...fileAttachHandlers((picked) => void ticketAttachments.attachFiles(picked))}
+                  className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+                >
+                  <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} editorRef={bodyEditorRef} />
                 </div>
               ) : null}
               {activeTab.kind === "file" && activeTab.relPath !== undefined ? (
@@ -1062,6 +1136,7 @@ export function TicketDetail({
                 filesContent={
                   <TicketFilesPanel
                     ticket={ticket}
+                    handle={ticketAttachments}
                     onPreviewFile={previewFileFromRail}
                     onPinFile={pinFileFromRail}
                   />

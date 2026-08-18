@@ -24,7 +24,8 @@ import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
-import { useAttachments } from "@renderer/hooks/use-attachments";
+import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
+import { type AttachmentsHandle, useAttachments } from "@renderer/hooks/use-attachments";
 
 import {
   RAIL_PANEL_INSET,
@@ -183,41 +184,60 @@ export function TicketFilesList({
  * Attachments load from the Ticket itself (VC-50). The prop survives for the
  * fixture gallery and the tests, which mount this panel without an IPC bridge —
  * when it is passed, it wins and nothing is fetched.
+ *
+ * `handle` is the third case (VC-106): the Ticket detail view owns the strip so
+ * that a file dropped on the BODY and a file dropped on this rail land in one
+ * list. It differs from `attachments` in kind, not degree — that prop is a
+ * read-only view someone else renders, this one is the live state itself, so
+ * Attach and Remove stay live under it.
  */
 export function TicketFilesPanel({
   ticket,
   attachments: providedAttachments,
+  handle,
   onPreviewFile,
   onPinFile,
 }: {
   ticket: Ticket;
   attachments?: readonly NamedBlobLink[];
+  handle?: AttachmentsHandle;
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
 }) {
+  // A repository file attached here resolves to an `@` reference, and the body
+  // is where such a reference belongs — the HOST now writes it there (VC-106):
+  // the detail view passes `refRoot` and an `onRefInsert` that splices into the
+  // Body editor (or appends through the store when the Body tab is closed),
+  // exactly as the New-ticket composer's paperclip does.
+  //
+  // Hooks cannot be conditional, so the panel always has a strip of its own and
+  // simply defers to the host's when there is one. The unused instance holds no
+  // links and issues no IPC, so it costs a state cell and nothing else.
+  const own = useAttachments({
+    owner: { ticketId: ticket.id },
+    onError: (message) => toastError(message),
+  });
   const {
     attachments: loadedAttachments,
     attachFiles,
     remove: removeAttachment,
     reset: resetAttachments,
-  } = useAttachments({
-    owner: { ticketId: ticket.id },
-    onError: (message) => toastError(message),
-  });
-  // A repository file attached here resolves to an `@` reference, and the body
-  // is where such a reference belongs — but this panel does not own the body.
-  // So the ref is reported rather than written, which is honest: the file is
-  // already in the repository and the Files rail already lists it.
+  } = handle ?? own;
+  // A boolean, not `handle` itself: the hook returns a fresh object every
+  // render, so depending on it would re-run this effect on every render.
+  const hostOwnsStrip = handle !== undefined;
   React.useEffect(() => {
     let cancelled = false;
-    if (providedAttachments !== undefined) return;
+    // A host that owns the strip has already loaded it; fetching again here
+    // would race its own load and could overwrite a just-dropped file.
+    if (providedAttachments !== undefined || hostOwnsStrip) return;
     void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
       if (!cancelled && result.ok) resetAttachments(result.blobs);
     });
     return () => {
       cancelled = true;
     };
-  }, [providedAttachments, resetAttachments, ticket.id]);
+  }, [providedAttachments, hostOwnsStrip, resetAttachments, ticket.id]);
 
   const attachments: readonly NamedBlobLink[] =
     providedAttachments ??
@@ -301,7 +321,13 @@ export function TicketFilesPanel({
   }
 
   return (
-    <div data-testid="ticket-files-panel" className="flex min-h-0 flex-1 flex-col">
+    <div
+      data-testid="ticket-files-panel"
+      // The rail is a drop target in its own right: this is the Ticket's file
+      // surface, so a file dragged onto the list attaches rather than bouncing.
+      {...fileAttachHandlers((picked) => void attachFiles(picked))}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
