@@ -3,8 +3,8 @@
  *
  * Three surfaces drew this object before: Project Files
  * (`files/file-tab-strip.tsx`), the ticket detail (`ticket/ticket-tabs.tsx`)
- * and the project Sessions page (`sessions/session-tabs.tsx`). Large stretches
- * of the three were byte-identical — the same transition string, the same
+ * and Home's own strip (`home/home-tab-strip.tsx`). Large stretches of the
+ * three were byte-identical — the same transition string, the same
  * hover-revealed close, the same unsaved dot, the same strip container, the
  * same roving-tabindex helper written out three times — and the comments in all
  * three admitted it ("same technique as…", "mirroring the ticket tab strip…").

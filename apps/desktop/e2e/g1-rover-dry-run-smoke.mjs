@@ -75,7 +75,7 @@ import {
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
-  SESSION_TAB_STRIP,
+  HOME_TAB_STRIP,
   sleep,
   stopButton,
   tabStrip,
@@ -133,12 +133,14 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `g1-${slug}.log`)}`);
 }
 
-/** Navigate to Sessions and wait for its tab strip to mount. */
-async function goToSessions(page) {
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+/** Navigate to Home and wait for its tab strip to mount. */
+async function goToHome(page) {
+  await page.getByRole("button", { name: "Home", exact: true }).click();
   await waitUntil(
-    "the Sessions tab strip to mount",
-    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
+    "Home's tab strip to mount",
+    // >= 1 is the permanent Board tab alone: nothing auto-opens any more
+    // (VC-54 scope 2), so the Session below is created by an explicit press.
+    async () => (await tabStrip(page, HOME_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
 }
@@ -242,8 +244,8 @@ async function main() {
       "seed the app default model and open a Project Session chat on the project",
       async () => {
         const defaultModel = await seedDefaultModel(page);
-        await goToSessions(page);
-        chatTabLabel = await openNewChatTab(page, SESSION_TAB_STRIP);
+        await goToHome(page);
+        chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
         const textarea = page.getByPlaceholder("Ask, plan, or implement…");
         await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
         await waitUntil(
@@ -264,7 +266,7 @@ async function main() {
       );
       // First delivered message retitles the Session; capture what the tab —
       // and the relaunch's sidebar row — is actually called now.
-      chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
+      chatTabLabel = await activeTabLabel(page, HOME_TAB_STRIP);
       // Substance over prose everywhere below: the file on disk (or an
       // independent rerun) is the verdict; the reply is recorded, not judged —
       // the first run of this smoke failed a green check on the model

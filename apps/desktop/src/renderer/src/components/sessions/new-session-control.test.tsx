@@ -46,9 +46,9 @@ describe("NewSessionControl", () => {
 
     // ⌘T is CONTEXT-SENSITIVE (lib/new-session-shortcut.ts): it resolves against
     // the surface in front, so inside a ticket it mints a ticket Session and on
-    // the Sessions page a ticketless one. A control mounted ON one of those
+    // Home's strip a ticketless one. A control mounted ON one of those
     // surfaces starts exactly what the chord starts, and says so — which is why
-    // both the ticket strip and the Sessions strip pass `shortcuts`. (The menus
+    // both the ticket strip and Home's strip pass `shortcuts`. (The menus
     // carry the glyphs too, but they are portalled and closed at rest, so the
     // press half's `aria-keyshortcuts` is what static markup can be asked about.)
     expect(onTheSurface).toContain('aria-keyshortcuts="Meta+T"');

@@ -21,7 +21,7 @@ import {
 
 function snap(
   projectId: string | null,
-  nav: NavSnapshot["nav"] = "board",
+  nav: NavSnapshot["nav"] = "home",
   openTicketId: string | null = null,
 ): NavSnapshot {
   return { projectId, nav, openTicketId };
@@ -34,10 +34,10 @@ function record(...locations: NavSnapshot[]): NavHistory {
 
 describe("sameSnapshot", () => {
   it("compares all three fields", () => {
-    expect(sameSnapshot(snap("a", "board", "t1"), snap("a", "board", "t1"))).toBe(true);
+    expect(sameSnapshot(snap("a", "home", "t1"), snap("a", "home", "t1"))).toBe(true);
     expect(sameSnapshot(snap("a"), snap("b"))).toBe(false);
-    expect(sameSnapshot(snap("a", "board"), snap("a", "sessions"))).toBe(false);
-    expect(sameSnapshot(snap("a", "board", "t1"), snap("a", "board", null))).toBe(false);
+    expect(sameSnapshot(snap("a", "home"), snap("a", "files"))).toBe(false);
+    expect(sameSnapshot(snap("a", "home", "t1"), snap("a", "home", null))).toBe(false);
   });
 
   it("treats null as a distinct value", () => {
@@ -49,13 +49,13 @@ describe("sameSnapshot", () => {
 
 describe("ticketParentSnapshot", () => {
   it("maps a ticket detail location to its plain Board parent", () => {
-    expect(ticketParentSnapshot(snap("a", "board", "t1"))).toEqual(snap("a"));
+    expect(ticketParentSnapshot(snap("a", "home", "t1"))).toEqual(snap("a"));
   });
 
   it("does not invent a parent for top-level or project-less locations", () => {
     expect(ticketParentSnapshot(snap("a"))).toBeNull();
     expect(ticketParentSnapshot(snap("a", "files", "t1"))).toBeNull();
-    expect(ticketParentSnapshot(snap(null, "board", "t1"))).toBeNull();
+    expect(ticketParentSnapshot(snap(null, "home", "t1"))).toBeNull();
   });
 });
 
@@ -74,8 +74,8 @@ describe("recordNav", () => {
   });
 
   it("dedupes a consecutive identical snapshot and returns the same reference", () => {
-    const h1 = record(snap("a", "board", "t1"));
-    const h2 = recordNav(h1, snap("a", "board", "t1"));
+    const h1 = record(snap("a", "home", "t1"));
+    const h2 = recordNav(h1, snap("a", "home", "t1"));
     expect(h2).toBe(h1);
   });
 

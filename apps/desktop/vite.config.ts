@@ -108,6 +108,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
+        // Home's tab resolution: which tab is in front AND what the persisted
+        // record owes a tab that names nothing on screen (VC-54). The ticket's
+        // highest correctness risk, so it is a pure module precisely so the
+        // gate can reach it.
+        "src/components/home/home-tabs.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",

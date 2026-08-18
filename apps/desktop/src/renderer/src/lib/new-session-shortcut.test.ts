@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import {
   isNewSessionGuardedTarget,
   NEW_SESSION_GUARD_SELECTOR,
@@ -121,11 +122,12 @@ describe("isNewSessionGuardedTarget", () => {
   });
 });
 
-/** The plain board of a selected project: nothing in front but the cards. */
+/** Home's plain board for a selected project: nothing in front but the cards. */
 function chrome(overrides: Partial<NewSessionChrome> = {}): NewSessionChrome {
   return {
     selectedProjectId: "p1",
-    nav: "board",
+    nav: "home",
+    homeActiveTab: HOME_BOARD_TAB_ID,
     settingsOpen: false,
     newTicketOpen: false,
     openTicketId: null,
@@ -134,16 +136,24 @@ function chrome(overrides: Partial<NewSessionChrome> = {}): NewSessionChrome {
 }
 
 describe("newSessionLandingForChrome", () => {
-  it("mints on the project and moves to Sessions from the bare board", () => {
+  it("mints on the project and stays on Home from the bare board", () => {
     expect(newSessionLandingForChrome(chrome())).toEqual({
       projectId: "p1",
       ticketId: null,
-      navigateTo: "sessions",
+      navigateTo: null,
     });
   });
 
-  it("stays put when Sessions is already the page", () => {
-    expect(newSessionLandingForChrome(chrome({ nav: "sessions" }))).toEqual({
+  it("moves to Home from another page", () => {
+    expect(newSessionLandingForChrome(chrome({ nav: "files" }))).toEqual({
+      projectId: "p1",
+      ticketId: null,
+      navigateTo: "home",
+    });
+  });
+
+  it("stays put on a Home Session tab", () => {
+    expect(newSessionLandingForChrome(chrome({ homeActiveTab: "chat:c1" }))).toEqual({
       projectId: "p1",
       ticketId: null,
       navigateTo: null,
@@ -151,9 +161,10 @@ describe("newSessionLandingForChrome", () => {
   });
 
   it("mints on the OPEN TICKET, without moving the page under it", () => {
-    // Ticket detail is a STATE of the board nav (`openTicketWorkspace` patches
-    // `{ nav: "board", openTicketId }`), so this IS the in-a-ticket chrome — and
-    // the ticket is already the surface in front, so there is nowhere to go.
+    // Ticket detail is a state of Home's BOARD TAB (`openTicketWorkspace`
+    // patches `{ nav: "home", homeActiveTab: board, openTicketId }`), so this IS
+    // the in-a-ticket chrome — and the ticket is already the surface in front,
+    // so there is nowhere to go.
     expect(newSessionLandingForChrome(chrome({ openTicketId: "t1" }))).toEqual({
       projectId: "p1",
       ticketId: "t1",
@@ -161,15 +172,26 @@ describe("newSessionLandingForChrome", () => {
     });
   });
 
+  it("mints a PROJECT Session from a Home chat tab, even with a ticket open behind it", () => {
+    // The fact that used to be `nav === "board"` is now WHICH HOME TAB is in
+    // front: a Session tab keeps the ticket remembered behind it (VC-54
+    // decision 1), and a chord fired there must not mint onto a ticket that is
+    // nowhere on screen.
+    expect(
+      newSessionLandingForChrome(chrome({ homeActiveTab: "chat:c1", openTicketId: "t1" })),
+    ).toEqual({ projectId: "p1", ticketId: null, navigateTo: null });
+  });
+
   it("ignores a ticket left open behind another page", () => {
-    // `setNav` deliberately does NOT clear `openTicketId`, so a ticket you
-    // opened is still recorded while you stand on Files or Sessions. Minting
-    // onto it from there would put a Session somewhere nobody is looking.
-    for (const nav of ["files", "sessions", "configure"] as const) {
+    // `setNav` clears `openTicketId` only when Home's Board tab is in front, so
+    // a ticket you opened is still recorded while you stand on Files or
+    // Configure. Minting onto it from there would put a Session somewhere
+    // nobody is looking.
+    for (const nav of ["files", "configure"] as const) {
       expect(newSessionLandingForChrome(chrome({ nav, openTicketId: "t1" }))).toEqual({
         projectId: "p1",
         ticketId: null,
-        navigateTo: nav === "sessions" ? null : "sessions",
+        navigateTo: "home",
       });
     }
   });
@@ -178,7 +200,7 @@ describe("newSessionLandingForChrome", () => {
     // Settings is chrome layered OVER the workspace, so nothing behind it is the
     // surface in front — the same reading `terminalFocusTargetForChrome` makes.
     // Falling through to a project landing minted a Session and navigated to
-    // Sessions UNDERNEATH the sheet, where its tab cannot be seen and nothing
+    // Home UNDERNEATH the sheet, where its tab cannot be seen and nothing
     // here dismisses the sheet.
     expect(
       newSessionLandingForChrome(chrome({ openTicketId: "t1", settingsOpen: true })),

@@ -68,7 +68,7 @@ import {
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
-  SESSION_TAB_STRIP,
+  HOME_TAB_STRIP,
   sleep,
   stopButton,
   tabStrip,
@@ -116,14 +116,14 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-project-chat-${slug}.log`)}`);
 }
 
-/** Navigate to Sessions and wait for its tab strip to mount — the first
- *  reveal auto-opens a structured chat (the default model is already seeded
- *  by check 1, so the create lands), which is the ≥1 tab waited on here. */
-async function goToSessions(page) {
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+/** Navigate to Home and wait for its tab strip to mount. */
+async function goToHome(page) {
+  await page.getByRole("button", { name: "Home", exact: true }).click();
   await waitUntil(
-    "the Sessions tab strip to mount",
-    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
+    "Home's tab strip to mount",
+    // >= 1 is the permanent Board tab alone: nothing auto-opens any more
+    // (VC-54 scope 2), so the Session below is created by an explicit press.
+    async () => (await tabStrip(page, HOME_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
 }
@@ -192,10 +192,10 @@ async function main() {
 
     await attempt(
       2,
-      "the Sessions strip's own Chat control creates a ticketless (Project Session) chat tab",
+      "Home's own Chat control creates a ticketless (Project Session) chat tab",
       async () => {
-        await goToSessions(page);
-        chatTabLabel = await openNewChatTab(page, SESSION_TAB_STRIP);
+        await goToHome(page);
+        chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
         return { ok: chatTabLabel !== null, detail: chatTabLabel };
       },
     );
@@ -263,7 +263,7 @@ async function main() {
         // `#autoTitle`), so the neutral `Chat` fallback captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
         // is called.
-        chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
+        chatTabLabel = await activeTabLabel(page, HOME_TAB_STRIP);
         return {
           ok: settled.texts.length > 0 && chatTabLabel !== null,
           detail:

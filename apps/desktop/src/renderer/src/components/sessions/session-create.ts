@@ -1,6 +1,6 @@
 /**
  * Booting Sessions outside the React tree, so every surface that can start one
- * (the Sessions page, the ticket overlay's tab strip, the ticket rail) shares
+ * (Home's strip, the ticket overlay's tab strip, the ticket rail) shares
  * one code path per kind. A terminal create boots a PTY in main (ticket scope
  * injects VOLLI_TICKET env there), pre-creates the renderer engine so output
  * arriving before the view mounts is buffered, and only then registers the
@@ -348,22 +348,22 @@ function abandonChat(sessionId: string): void {
 /**
  * Start one of a project's ticketless Sessions and put its tab in front.
  *
- * Two callers, and they must not drift: the Sessions surface's split control
+ * Two callers, and they must not drift: Home's strip control
  * and the ⌘T / ⌥⌘T chords (`lib/new-session-shortcut.ts`). A chord that started
  * a Session the button would not have — or landed it somewhere the button
  * doesn't — is the class of bug you only find by pressing the key, so there is
  * one function per kind and both surfaces call it.
  *
- * The tab is recorded on `sessionsActiveTab` explicitly rather than left to the
- * container's own `activeSessionId`: {@link resolveActiveTabId} in
- * `sessions-layer.tsx` prefers the recorded id while it still names an open tab,
- * so a fresh terminal opened while another tab was recorded would otherwise land
- * behind it — the chord would look like it had done nothing at all.
+ * The tab is recorded on `homeActiveTab` explicitly rather than left to the
+ * container's own `activeSessionId`: `resolveHomeTabs` (`home-tabs.ts`) prefers
+ * the recorded id while it still names an open tab, and its DEFAULT is the
+ * permanent Board tab — so a fresh Session that recorded nothing would land
+ * behind the board, and the chord would look like it had done nothing at all.
  */
 export async function startProjectTerminal(projectId: string): Promise<void> {
   const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return;
-  useWorkspaceStore.getState().setSessionsActiveTab(projectId, sessionId);
+  useWorkspaceStore.getState().setHomeActiveTab(projectId, sessionId);
 }
 
 /**
@@ -380,7 +380,7 @@ export async function startProjectChat(
     skills,
     land: (sessionId) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      useWorkspaceStore.getState().setSessionsActiveTab(projectId, chatTabId(sessionId));
+      useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
       return true;
     },
   });

@@ -621,10 +621,11 @@ async function main() {
         await openTicketViaCard(page);
         const reopened = await detailOpen(page);
 
-        // Ticket detail is a child location of Board, so clicking the
-        // already-active Board item must still close the detail.
-        await page.getByRole("button", { name: "Board", exact: true }).click();
-        const boardViaNav = await waitUntil("board after Board nav click", () => boardOpen(page));
+        // Ticket detail is a state of Home's Board tab, so clicking the
+        // already-active Home item must still close the detail (VC-54: `setNav`
+        // clears the open ticket while the Board tab is the one in front).
+        await page.getByRole("button", { name: "Home", exact: true }).click();
+        const boardViaNav = await waitUntil("board after Home nav click", () => boardOpen(page));
         await openTicketViaCard(page);
 
         const ok =

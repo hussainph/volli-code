@@ -44,7 +44,7 @@ import {
 } from "@volli/shared";
 
 import { sessionSourceLabel } from "../ticket/session-history";
-import { chatTabId, parseChatTabId } from "../ticket/ticket-chat-tab";
+import { chatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,
   sessionPanes,
@@ -150,32 +150,44 @@ export interface ActiveSessionRow {
 
 /**
  * Whether a ticketless row — a project terminal pane or a ticketless chat —
- * names the tab currently in front on the Sessions surface.
+ * names the tab currently in front on Home.
  *
  * A terminal target additionally has to name the split pane in front, since a
  * tab can hold several; a chat target is one surface, so naming its tab
- * (`sessionsActiveTab`, the workspace store's record of the last chat/terminal
- * tab activated from Sessions) is the whole answer.
+ * (`homeActiveTab`, the workspace store's record of which Home tab is in front)
+ * is the whole answer.
  *
- * The strip's two ledgers do not agree on their own: selecting a chat tab
- * writes `sessionsActiveTab` and deliberately leaves the terminal container's
- * `activeSessionId` where it was (sessions-layer.tsx), so the terminal branch
- * has to check that a chat is not the thing covering it — otherwise the
- * terminal the chat plane is painted over lights up beside the chat.
+ * BOTH kinds are decided by `homeActiveTab` alone — which is what VC-54 changed
+ * here, and it is a simplification rather than a translation. The terminal
+ * branch used to read the terminal CONTAINER's `activeSessionId` instead,
+ * because the old record could be `null` for a project that had never had a tab
+ * in front and so could not be trusted to name the terminal. It then needed a
+ * second clause to rule out a chat covering that terminal, since selecting a
+ * chat deliberately leaves the container's ledger where it was.
+ *
+ * `homeActiveTab` has no null: it defaults to the permanent Board tab and every
+ * path that puts a Session in front records it. So one comparison answers the
+ * whole question, the chat-covering clause dissolves into it, and the Board tab
+ * — which the container's ledger cannot represent at all — correctly lights
+ * nothing. Before this, standing on the board lit whichever terminal row the
+ * container still remembered, which claimed to be the thing you were looking at
+ * while you were looking at the board.
+ *
+ * The container is still consulted, for the one fact only it holds: WHICH PANE
+ * is in front inside a split tab.
  */
 export function isProjectSessionRowSelected(
   row: ActiveSessionRow | PreviousSessionRow,
-  sessionsVisible: boolean,
+  /** Home is the page in front (nav only — which TAB is `homeActiveTab`'s job). */
+  homeVisible: boolean,
   projectContainer: SessionContainer | undefined,
-  sessionsActiveTab: string | null,
+  homeActiveTab: string,
 ): boolean {
-  if (!sessionsVisible || row.ticket !== null) return false;
+  if (!homeVisible || row.ticket !== null) return false;
   const target = row.target;
-  if (target?.kind === "chat") return sessionsActiveTab === target.tabId;
-  if (target?.kind !== "terminal") return false;
-  if (sessionsActiveTab !== null && parseChatTabId(sessionsActiveTab) !== null) return false;
-  if (projectContainer?.activeSessionId !== target.tabId) return false;
-  const activeTab = projectContainer.tabs.find(({ sessionId }) => sessionId === target.tabId);
+  if (target === null || homeActiveTab !== target.tabId) return false;
+  if (target.kind === "chat") return true;
+  const activeTab = projectContainer?.tabs.find(({ sessionId }) => sessionId === target.tabId);
   return activeTab?.activePaneId === target.paneId;
 }
 

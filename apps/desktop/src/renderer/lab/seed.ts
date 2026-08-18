@@ -162,7 +162,7 @@ export function seedBoard(): void {
 
 /**
  * Everything an app-level scratch needs: the rail's projects with one selected,
- * the board's tickets, and a workspace parked on the Board nav.
+ * the board's tickets, and a workspace parked on Home.
  *
  * It also RESETS the chrome and session state rather than only adding to it.
  * The shell installs each scratch's bridge stubs wholesale, so those can't leak
@@ -189,7 +189,7 @@ export function seedApp(): void {
     projectOverride: null,
   });
   useWorkspaceStore.setState({
-    byProject: { [project.id]: { ...DEFAULT_WORKSPACE_UI, nav: "board" } },
+    byProject: { [project.id]: { ...DEFAULT_WORKSPACE_UI, nav: "home" } },
     navHistory: EMPTY_NAV_HISTORY,
   });
   useUiStore.setState({
