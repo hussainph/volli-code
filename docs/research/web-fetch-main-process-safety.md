@@ -247,11 +247,14 @@ default. Rate-limit concurrent fetches and per-origin calls.
 | Mozilla Readability + Turndown | Readability is Firefox Reader View's standalone library and Apache-2.0. [Mozilla source and license](https://github.com/mozilla/readability) Turndown converts HTML to Markdown and is MIT. [Turndown source](https://github.com/mixmark-io/turndown) | Local, deterministic content extraction with permissive licenses. | Neither downloads a URL, enforces SSRF, observes robots, nor makes malformed HTML harmless. Pair with an inert DOM parser (jsdom is MIT and describes itself as a Node-oriented DOM implementation). [jsdom source](https://github.com/jsdom/jsdom) |
 | Firecrawl | Its API exposes `POST /v2/scrape` with a URL and returns readable formats; it can also parse PDFs/documents. [Firecrawl API docs](https://docs.firecrawl.dev/api-reference/v2-introduction) [scrape feature docs](https://docs.firecrawl.dev/features/scrape) | Better JS-rendered-site coverage and managed crawling. | It is an external processor with an API key/egress/data-retention boundary; broad document parsing expands cost and bomb surface. It should be a BYO backend after the local safety contract, not the foundation of it. |
 | Cline | Its native `web_fetch` handler posts the URL and prompt to Cline's hosted endpoint with account authorization and a 15 s timeout. [Cline handler source](https://github.com/cline/cline/blob/8a6441fd/src/core/task/tools/handlers/WebFetchToolHandler.ts) | Treat web fetch as external and surface it in tool UX. | The implementation delegates target fetching to a service; it is not an Electron-main SSRF recipe. |
+| OpenCode | Ships a first-party `webfetch` tool: a 5 MiB response cap, a 30 s default / 120 s maximum timeout, format-specific `Accept` quality values, Turndown HTML→Markdown conversion removing `script`/`style`/`meta`/`link`, a one-shot Cloudflare-challenge retry under an `opencode` user agent, and a permission check before the request. A separate `ToolOutputStore` bounds model-visible tool output to 2,000 lines / 50 KiB and spills anything larger to managed storage with a head/tail preview and a pointer. [webfetch source](https://github.com/sst/opencode/blob/dev/packages/core/src/tool/webfetch.ts) [output store source](https://github.com/sst/opencode/blob/dev/packages/core/src/tool-output-store.ts) | Markdown conversion, bounded output, and the two-stage output store as a second line of defence behind the fetcher's own caps. | No private-address or DNS-rebinding admission is visible in the tool; it converts the full document rather than extracting an article, and its removal list is thinner than Volli's threat model requires. A conversion and output-budgeting reference, not an SSRF recipe. |
 | Goose | Goose documents enabling the MCP Fetch server through `uvx mcp-server-fetch`. [Goose extension docs](https://github.com/block/goose/blob/58f3cc9e/documentation/docs/getting-started/using-extensions.md) | MCP is a viable *manual companion* integration. | It inherits MCP Fetch's Python process, dependencies, network policy, and safety limits; it is not a first-party Node in-process implementation. |
 
-OpenCode was searched but no credible first-party URL-fetch implementation was
-found in the inspected documentation/source results. That absence is not
-evidence of absence; it is intentionally not used to support a design claim.
+An earlier revision of this note recorded OpenCode as not found. That was a
+search failure, not a fact: the tool ships at
+`packages/core/src/tool/webfetch.ts`, and the row above reflects it, verified
+against the upstream `dev` source directly rather than against secondary
+write-ups.
 
 ## Node OSS recipe
 
@@ -412,6 +415,10 @@ metadata service.
    mechanism that connects to an already-approved IP while preserving SNI and
    certificate verification. This is the only unresolved technical item that
    can invalidate the phrase “safe fetch.”
+   *(Resolved in VC-31, by a different mechanism than the one proposed here:
+   `node:https` with a `lookup` callback that answers only with
+   already-approved addresses — see
+   `packages/agent-runtime/src/web/safe-fetch.ts`.)*
 2. **Robots policy:** decide whether explicit user-supplied URLs and
    autonomous model fetches share one strict policy or have visibly different
    modes. Do not invent an invisible bypass.
@@ -419,7 +426,58 @@ metadata service.
    provider's API, retention, rate, region, terms, and result schema need a
    separate comparison; the fetch boundary above deliberately does not depend
    on that choice.
+   *(Resolved in VC-31: Exa, Brave, and SearXNG behind a provider-neutral
+   search contract — `packages/agent-runtime/src/web/`.)*
 4. **PDF/rendering scope:** exclude both initially. Adding them requires a
    sandboxed parser/renderer and separate limits; Firecrawl's document support
    demonstrates that this is a distinct capability, not a MIME toggle.
    [Firecrawl scrape documentation](https://docs.firecrawl.dev/features/scrape)
+
+## Addendum — 2026-08-18, after implementation
+
+Written once the boundary this note recommended became code on the VC-31
+branch, so a future reader can tell recommendation from record.
+
+**What shipped.** `web_fetch` returns extracted Markdown for HTML: an inert
+jsdom parse (no scripts, no subresources, a silent virtual console), a
+sanitising pass on the parsed DOM, Mozilla Readability, Turndown — and only
+then the 25,000-character bound. The ordering is the substance. Measured
+against real documentation pages, returning raw markup sliced at the bound
+delivered 2.9–3.0% visible text and none of the article, because the bound was
+spent inside the navigation; extraction-first fits the whole article into the
+same budget. `Accept` is preference-ordered
+(`text/markdown, text/plain;q=0.9, text/html;q=0.8`) so a host that can serve
+text does, and the extraction path runs only when it cannot. The transport
+diverges from this note's Undici recommendation and pins by a different
+mechanism — `node:https` with a `lookup` that answers only with approved
+addresses, hostname kept for SNI and certificate verification — documented in
+`packages/agent-runtime/src/web/safe-fetch.ts`.
+
+**Adopted from OpenCode, and rejected.** Adopted: extraction before the bound,
+Markdown conversion, preference-ordered `Accept`. Rejected: the user-agent swap
+on a Cloudflare challenge (it conflicts with a fixed product identity and this
+note's robots posture), caller-chosen timeout and format (bounds here are
+reviewed constants, not model dials), the 120-second ceiling (20 seconds of
+wall clock here), and the `script`/`style`/`meta`/`link` removal list, which is
+thinner than the threat model above requires — Volli also strips event-handler
+attributes, frames, hidden text, form controls and unsafe URL schemes, and
+unwraps `form` rather than deleting it, because whole frameworks wrap a page's
+body in one.
+
+**Deliberately not taken.** OpenCode's unmerged Readability-plus-session-cache
+proposal ([issue #19282](https://github.com/sst/opencode/issues/19282),
+[PR #19286](https://github.com/sst/opencode/pull/19286), closed) is half-shipped
+here by design: the Readability half, not the cache. A cache is the
+lowest-value item while fetches are rare, and a safe one must re-run admission
+on every call so a cached entry cannot outlive a DNS change. The
+`ToolOutputStore` pattern — spill oversized output to managed storage, return a
+head/tail preview with a pointer — is the most underrated idea in the OpenCode
+comparison and remains unadopted: a spilled pointer only helps a model that can
+read it back, which routes through `read` authority and is a decision rather
+than a drive-by.
+
+The OpenCode facts above were re-verified against the upstream `dev` source
+before being folded in. They originated in a scratch comparison file
+(`opencode-webfetch-optimization.md`, a test artifact that leaked into the main
+checkout rather than this branch); every specific in it held up, and its
+content now lives here where the rest of the comparison does.
