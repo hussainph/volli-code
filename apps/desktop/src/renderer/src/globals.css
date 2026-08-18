@@ -1126,6 +1126,25 @@ input[type="range"]:focus-visible {
   outline-offset: 2px;
 }
 
+/* THE VIBRANCY FADER paints its own groove — a wave, drawn in
+ * `components/theme/canvas-editor.tsx` from the geometry in
+ * `components/theme/slider-squiggle.ts` — so the native track and thumb above
+ * are suppressed for this ONE input rather than for range inputs generally.
+ *
+ * Only the paint goes. The element keeps its box, so the thumb travels exactly
+ * where it did and the capsule drawn over it lands under the pointer that
+ * grabbed it; click-to-jump, the keyboard, and the `:focus-visible` ring above
+ * are all still the platform's. Suppressing the track is the whole point of the
+ * redesign: the previous pass drew the wave OVER this gradient, which is why it
+ * read as a line scribbled across an ordinary slider. */
+input[type="range"][data-slot="wave-slider"]::-webkit-slider-runnable-track {
+  background: none;
+}
+input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
+  background: none;
+  box-shadow: none;
+}
+
 /* Whole-window repaint (#69, theme/scope-transition.ts): when the app changes
  * THEME SCOPE — a workspace switch — or flips light↔dark, the swap eases instead
  * of hard-cutting. The first is what tells you the window now belongs to a

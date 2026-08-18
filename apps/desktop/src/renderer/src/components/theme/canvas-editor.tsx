@@ -110,6 +110,8 @@ import {
   SLIDER_SQUIGGLE_AMPLITUDE,
   SLIDER_SQUIGGLE_WAVELENGTH,
   SLIDER_SQUIGGLE_WIDTH,
+  SLIDER_THUMB_WIDTH,
+  sliderSeam,
   sliderSquigglePath,
   sliderSquiggleScale,
 } from "@renderer/components/theme/slider-squiggle";
@@ -650,6 +652,55 @@ function PrimaryColourRow({
 }
 
 /**
+ * The band the wave is drawn in, in px: the peak either side of the centreline
+ * plus room for the stroke's own width and its round caps.
+ */
+const WAVE_BAND = 2 * (SLIDER_SQUIGGLE_AMPLITUDE + 2);
+
+/**
+ * One pass of the fader's wave.
+ *
+ * Drawn twice by {@link UnitSlider} — once in the unfilled ink for the whole
+ * groove, then once in the accent clipped at the seam — because a fill that
+ * follows the wave's own shape has to BE the wave, not a bar behind it.
+ *
+ * `fill-box` makes `scaleY`'s origin the path's own centreline, so the wave
+ * flattens in place instead of sagging toward an edge, and `non-scaling-stroke`
+ * holds the ink's weight while it does — without it the wave would thin as it
+ * lay down and vanish before it arrived.
+ */
+function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string }) {
+  return (
+    <svg
+      aria-hidden
+      data-slot="slider-squiggle"
+      viewBox={`0 ${-WAVE_BAND / 2} ${SLIDER_SQUIGGLE_WIDTH} ${WAVE_BAND}`}
+      preserveAspectRatio="none"
+      style={{ clipPath: clip }}
+      className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 overflow-visible transition-[clip-path] duration-150 ease-out motion-reduce:transition-none!"
+    >
+      <path
+        d={sliderSquigglePath(
+          SLIDER_SQUIGGLE_WIDTH,
+          SLIDER_SQUIGGLE_WAVELENGTH,
+          SLIDER_SQUIGGLE_AMPLITUDE,
+        )}
+        fill="none"
+        vectorEffect="non-scaling-stroke"
+        strokeWidth={2}
+        strokeLinecap="round"
+        style={{
+          transform: `scaleY(${stand})`,
+          transformBox: "fill-box",
+          transformOrigin: "center",
+        }}
+        className={`${ink} transition-transform duration-150 ease-out motion-reduce:transition-none!`}
+      />
+    </svg>
+  );
+}
+
+/**
  * Vibrancy, as the platform's own slider.
  *
  * A track is the right shape for it — the value has a position along a line, so
@@ -665,9 +716,13 @@ function PrimaryColourRow({
  * rather than left to `accent-color`, which cannot paint an unfilled half that
  * follows the appearance — see that rule.
  *
- * VIBRANCY WEARS THE SQUIGGLE, the Arc-lineage wave VC-57 authored for exactly
- * this pass and VC-82 took back out of the effort slider: a hairline wave
- * riding the track, clipped at the fill's seam, whose amplitude IS the value.
+ * THE TRACK IS A WAVE, the Arc-lineage form VC-57 authored and VC-82 took out
+ * of the effort slider. Not a wave ON the track: the native paint is suppressed
+ * in globals.css for this one input and the groove is drawn here, so the thing
+ * you drag along IS the wave. Its amplitude ramps with the value, which is what
+ * earns it this control rather than any other — "vibrancy" is how vivid, and a
+ * groove that stands taller as it rises says that without a word of copy.
+ *
  * The wave is part of THIS control, not an option on it — vibrancy is the only
  * unit value in the editor, and a wave on a slider that does not mean "how
  * vivid" would be decoration rather than report. If a second unit slider ever
@@ -688,13 +743,36 @@ function UnitSlider({
   onInput(next: number): void;
   onSettle(): void;
 }) {
-  // The seam both the gradient and the wave clip at, on the same rounding the
-  // painted fill uses — two objects arriving at the same pixel, not near it.
-  const fillPercent = Math.round(value * 100);
+  // The thumb's centre and the fill's seam are ONE x, read from one function —
+  // two objects arriving at the same pixel, not near it.
+  const seam = sliderSeam(value, SLIDER_SQUIGGLE_WIDTH, SLIDER_THUMB_WIDTH);
+  const stand = sliderSquiggleScale(value);
   return (
     <div className="flex items-center gap-4">
       {chip}
-      <span className="relative">
+      <span className="relative inline-flex h-4 w-44 items-center">
+        {/* The trough, so the groove reads as a channel the wave lies in rather
+            than as a line floating on the card. */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 rounded-full bg-muted"
+        />
+        <Wave stand={stand} ink="stroke-border-strong" />
+        <Wave
+          stand={stand}
+          ink="stroke-primary"
+          clip={`inset(0 ${SLIDER_SQUIGGLE_WIDTH - seam}px 0 0)`}
+        />
+        {/* The capsule, centred on the seam and overhanging the trough, which is
+            what makes it a fader handle rather than a dot on a line. */}
+        <span
+          aria-hidden
+          style={{ left: seam }}
+          className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
+        />
+        {/* Last, so it takes the pointer: the platform's own control with its
+            paint suppressed, which keeps click-to-jump, the keyboard, and the
+            focus ring while this file owns every pixel you can see. */}
         <input
           id={id}
           type="range"
@@ -703,69 +781,15 @@ function UnitSlider({
           step={UNIT_STEP}
           value={value}
           aria-label={label}
+          data-slot="wave-slider"
           onChange={(event) => onInput(Number(event.target.value))}
           // One write per gesture: the drag and the key repeat are previews, and
           // the release is the commit.
           onPointerUp={onSettle}
           onKeyUp={onSettle}
           onBlur={onSettle}
-          style={{ "--slider-fill": percentLabel(value) } as React.CSSProperties}
-          className="w-44"
+          className="absolute inset-0 w-full"
         />
-        {/* THE SQUIGGLE — the magnitude, drawn as agitation.
-
-            IT SPANS THE GROOVE IT RIDES. The input is 16px tall and the track
-            is its middle 4px (y 6–10; the thumb's −5px margin centres it), so
-            the 6px band centred on the track (`top-[5px] h-1.5`) puts the ±2px
-            peaks exactly on the track's top and bottom edges at full
-            vibrancy — the filled groove itself stands up as a wave, and at the
-            bottom of the range it flattens onto the centreline and the empty
-            fill clips it away with the same seam the gradient uses.
-
-            THE VALUE IS THE AMPLITUDE, via `scaleY` on the path rather than a
-            regenerated `d`: a transform interpolates between two amplitudes,
-            a path string snaps. `non-scaling-stroke` holds the ink at hairline
-            weight while the geometry flattens — without it the wave would thin
-            as it lies down — and `fill-box` makes the scale's origin the wave's
-            own centreline, so it flattens in place instead of sagging toward
-            an edge.
-
-            NO TRANSITION, DELIBERATELY. The native fill repaints the gradient
-            the moment the value moves and nothing can ease that half of the
-            seam, so an eased wave would drift off the fill it rides — the seam
-            is one object, not two on different clocks. The wave is state, not
-            motion: it stands wherever the value is, instantly. */}
-        <svg
-          aria-hidden
-          data-slot="slider-squiggle"
-          viewBox={`0 ${-(SLIDER_SQUIGGLE_AMPLITUDE + 1)} ${SLIDER_SQUIGGLE_WIDTH} ${
-            2 * (SLIDER_SQUIGGLE_AMPLITUDE + 1)
-          }`}
-          preserveAspectRatio="none"
-          style={{ clipPath: `inset(0 ${100 - fillPercent}% 0 0)` }}
-          className="pointer-events-none absolute inset-x-0 top-[5px] h-1.5"
-        >
-          <path
-            d={sliderSquigglePath(
-              SLIDER_SQUIGGLE_WIDTH,
-              SLIDER_SQUIGGLE_WAVELENGTH,
-              SLIDER_SQUIGGLE_AMPLITUDE,
-            )}
-            fill="none"
-            vectorEffect="non-scaling-stroke"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            style={{
-              transform: `scaleY(${sliderSquiggleScale(value)})`,
-              transformBox: "fill-box",
-              transformOrigin: "center",
-            }}
-            // `/40`, the wave's shipped voice: a redundant channel under the
-            // thumb and the fill, texture of the substance rather than a
-            // second control.
-            className="stroke-foreground/40"
-          />
-        </svg>
       </span>
       <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
         {percentLabel(value)}
