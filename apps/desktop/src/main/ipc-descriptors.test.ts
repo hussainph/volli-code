@@ -1865,15 +1865,19 @@ describe("WEB_ACCESS_IPC descriptor table", () => {
   describe("volli:web-access-set-key", () => {
     const { guard, invalidError } = WEB_ACCESS_IPC["volli:web-access-set-key"];
 
-    it("accepts any string, because Brave decides what its token looks like", () => {
-      expect(guard(["BSA-anything-at-all"])).toBe(true);
-      expect(guard([""])).toBe(true);
+    it("accepts any string, because each provider decides what its token looks like", () => {
+      expect(guard(["brave", "BSA-anything-at-all"])).toBe(true);
+      expect(guard(["exa", ""])).toBe(true);
     });
 
-    it("refuses anything that is not one string", () => {
-      expect(guard([42])).toBe(false);
+    it("refuses anything that is not one keyed provider and one string", () => {
+      expect(guard(["brave", 42])).toBe(false);
       expect(guard([])).toBe(false);
+      expect(guard(["brave"])).toBe(false);
       expect(guard(["key", "key"])).toBe(false);
+      // SearXNG has an address, not a key, and `off` has neither.
+      expect(guard(["searxng", "anything"])).toBe(false);
+      expect(guard(["off", "anything"])).toBe(false);
     });
 
     it("says nothing about the value it rejected", () => {
@@ -1886,8 +1890,11 @@ describe("WEB_ACCESS_IPC descriptor table", () => {
   describe("volli:web-access-clear-key", () => {
     const { guard } = WEB_ACCESS_IPC["volli:web-access-clear-key"];
 
-    it("takes no arguments at all", () => {
-      expect(guard([])).toBe(true);
+    it("names exactly one keyed provider", () => {
+      expect(guard(["brave"])).toBe(true);
+      expect(guard(["exa"])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard(["searxng"])).toBe(false);
       expect(guard(["web-access.brave.api-key"])).toBe(false);
     });
   });

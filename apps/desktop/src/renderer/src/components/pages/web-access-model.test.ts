@@ -7,7 +7,7 @@ function view(overrides: Partial<WebAccessSettingsView> = {}): WebAccessSettings
   return {
     provider: "off",
     searxngUrl: null,
-    braveKey: "absent",
+    keys: { brave: "absent", exa: "absent" },
     encryptionAvailable: true,
     ...overrides,
   };
@@ -28,7 +28,9 @@ describe("webAccessPanel", () => {
 
   it("says nothing extra when Off — the segment is the whole explanation", () => {
     expect(
-      webAccessPanel(view({ braveKey: "present", searxngUrl: "http://localhost:8888/" })),
+      webAccessPanel(
+        view({ keys: { brave: "present", exa: "absent" }, searxngUrl: "http://localhost:8888/" }),
+      ),
     ).toMatchObject({ notice: null, active: false });
   });
 
@@ -42,7 +44,9 @@ describe("webAccessPanel", () => {
     });
 
     it("is on once a key is stored", () => {
-      expect(webAccessPanel(view({ provider: "brave", braveKey: "present" }))).toMatchObject({
+      expect(
+        webAccessPanel(view({ provider: "brave", keys: { brave: "present", exa: "absent" } })),
+      ).toMatchObject({
         active: true,
         notice: null,
       });
@@ -59,7 +63,11 @@ describe("webAccessPanel", () => {
 
     it("tells a person their stored key stopped opening rather than that they have none", () => {
       const panel = webAccessPanel(
-        view({ provider: "brave", braveKey: "unreadable", encryptionAvailable: false }),
+        view({
+          provider: "brave",
+          keys: { brave: "unreadable", exa: "absent" },
+          encryptionAvailable: false,
+        }),
       );
 
       expect(panel.notice).toMatchObject({ tone: "error" });
@@ -89,7 +97,7 @@ describe("webAccessPanel", () => {
         view({
           provider: "searxng",
           searxngUrl: "http://localhost:8888/",
-          braveKey: "unreadable",
+          keys: { brave: "unreadable", exa: "absent" },
           encryptionAvailable: false,
         }),
       );

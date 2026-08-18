@@ -77,3 +77,9 @@ export {
   SEARXNG_PROVIDER_ID,
   type SearxngSearchOptions,
 } from "./web/searxng";
+export {
+  exaWebSearchProvider,
+  EXA_PROVIDER_ID,
+  EXA_SEARCH_ENDPOINT,
+  type ExaSearchOptions,
+} from "./web/exa";

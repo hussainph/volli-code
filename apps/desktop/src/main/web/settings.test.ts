@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
-import { WebCredentialStore, type SecretCipher } from "./credential";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+  type SecretCipher,
+} from "./credential";
 import { WebAccessSettings } from "./settings";
 
 class FakeCipher implements SecretCipher {
@@ -33,7 +38,10 @@ beforeEach(() => {
   cipher = new FakeCipher();
   settings = new WebAccessSettings({
     db: ctx.db,
-    credentials: new WebCredentialStore({ db: ctx.db, cipher }),
+    credentials: {
+      brave: new WebCredentialStore({ db: ctx.db, cipher, secretName: BRAVE_SEARCH_KEY_SECRET }),
+      exa: new WebCredentialStore({ db: ctx.db, cipher, secretName: EXA_SEARCH_KEY_SECRET }),
+    },
     now: () => 1_700_000_000_000,
   });
 });
@@ -42,12 +50,58 @@ afterEach(() => {
   ctx.cleanup();
 });
 
+describe("WebAccessSettings — choosing Exa", () => {
+  const EXA_KEY = "exa-second-provider-key-99";
+
+  it("stores Exa's key beside Brave's rather than over it", () => {
+    settings.saveKey("brave", KEY);
+    settings.saveKey("exa", EXA_KEY);
+
+    // Two providers, two rows. Configuring the second must not cost a person
+    // the first, or switching provider would silently mean re-pasting a key.
+    expect(settings.view().keys).toEqual({ brave: "present", exa: "present" });
+
+    settings.setProvider({ provider: "brave", searxngUrl: null });
+    expect(settings.resolve()).toEqual({ configured: true, provider: "brave", apiKey: KEY });
+    settings.setProvider({ provider: "exa", searxngUrl: null });
+    expect(settings.resolve()).toEqual({ configured: true, provider: "exa", apiKey: EXA_KEY });
+  });
+
+  it("is chosen but unconfigured until its own key is stored", () => {
+    // Brave being configured says nothing about Exa: the reason must be about
+    // the provider actually selected.
+    settings.saveKey("brave", KEY);
+    settings.setProvider({ provider: "exa", searxngUrl: null });
+
+    expect(settings.view().keys.exa).toBe("absent");
+    expect(settings.resolve()).toEqual({ configured: false, reason: "no-key" });
+  });
+
+  it("withholds web when Exa's stored key cannot be read on this machine", () => {
+    settings.saveKey("exa", EXA_KEY);
+    settings.setProvider({ provider: "exa", searxngUrl: null });
+    cipher.available = false;
+
+    expect(settings.view().keys.exa).toBe("unreadable");
+    expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
+  });
+
+  it("forgets one provider's key without touching the other's", () => {
+    settings.saveKey("brave", KEY);
+    settings.saveKey("exa", EXA_KEY);
+
+    settings.clearKey("exa");
+
+    expect(settings.view().keys).toEqual({ brave: "present", exa: "absent" });
+  });
+});
+
 describe("WebAccessSettings defaults", () => {
   it("is Off on a profile that never configured it", () => {
     expect(settings.view()).toEqual({
       provider: "off",
       searxngUrl: null,
-      braveKey: "absent",
+      keys: { brave: "absent", exa: "absent" },
       encryptionAvailable: true,
     });
   });
@@ -109,30 +163,33 @@ describe("WebAccessSettings — choosing Brave", () => {
     const saved = settings.setProvider({ provider: "brave", searxngUrl: null });
 
     expect(saved.provider).toBe("brave");
-    expect(saved.braveKey).toBe("absent");
+    expect(saved.keys.brave).toBe("absent");
     expect(settings.resolve()).toEqual({ configured: false, reason: "no-key" });
   });
 
   it("is configured once a key is stored, and hands that key on only to the resolver", () => {
     settings.setProvider({ provider: "brave", searxngUrl: null });
-    const view = settings.saveBraveKey(KEY);
+    const view = settings.saveKey("brave", KEY);
 
-    expect(view.braveKey).toBe("present");
+    expect(view.keys.brave).toBe("present");
     expect(settings.resolve()).toEqual({ configured: true, provider: "brave", apiKey: KEY });
   });
 
   it("withholds web when the stored key cannot be read on this machine", () => {
     settings.setProvider({ provider: "brave", searxngUrl: null });
-    settings.saveBraveKey(KEY);
+    settings.saveKey("brave", KEY);
     cipher.available = false;
 
-    expect(settings.view()).toMatchObject({ braveKey: "unreadable", encryptionAvailable: false });
+    expect(settings.view()).toMatchObject({
+      keys: { brave: "unreadable", exa: "absent" },
+      encryptionAvailable: false,
+    });
     expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
   });
 
   it("costs a Session its web tools, never its attach, when the ciphertext will not open", () => {
     settings.setProvider({ provider: "brave", searxngUrl: null });
-    settings.saveBraveKey(KEY);
+    settings.saveKey("brave", KEY);
     // The keychain answers, and then fails to decrypt — a profile restored from
     // a backup, or a keychain entry replaced out from under this one.
     cipher.decryptFailure = new Error("decryption failed");
@@ -146,9 +203,9 @@ describe("WebAccessSettings — choosing Brave", () => {
 
   it("forgets the key on request", () => {
     settings.setProvider({ provider: "brave", searxngUrl: null });
-    settings.saveBraveKey(KEY);
+    settings.saveKey("brave", KEY);
 
-    expect(settings.clearBraveKey().braveKey).toBe("absent");
+    expect(settings.clearKey("brave").keys.brave).toBe("absent");
     expect(settings.resolve()).toEqual({ configured: false, reason: "no-key" });
   });
 });
@@ -156,14 +213,14 @@ describe("WebAccessSettings — choosing Brave", () => {
 describe("WebAccessSettings — turning it off", () => {
   it("stops offering web without discarding what was configured", () => {
     settings.setProvider({ provider: "searxng", searxngUrl: "http://127.0.0.1:8080" });
-    settings.saveBraveKey(KEY);
+    settings.saveKey("brave", KEY);
 
     const off = settings.setProvider({ provider: "off", searxngUrl: null });
 
     expect(off).toMatchObject({
       provider: "off",
       searxngUrl: "http://127.0.0.1:8080/",
-      braveKey: "present",
+      keys: { brave: "present", exa: "absent" },
     });
     expect(settings.resolve()).toEqual({ configured: false, reason: "off" });
   });
@@ -174,10 +231,10 @@ describe("WebAccessSettings — what the renderer may learn", () => {
     settings.setProvider({ provider: "brave", searxngUrl: null });
 
     const answers = [
-      settings.saveBraveKey(KEY),
+      settings.saveKey("brave", KEY),
       settings.view(),
       settings.setProvider({ provider: "searxng", searxngUrl: "http://localhost:8888" }),
-      settings.clearBraveKey(),
+      settings.clearKey("brave"),
     ];
 
     expect(JSON.stringify(answers)).not.toContain(KEY);

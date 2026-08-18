@@ -65,7 +65,11 @@ import { describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
-import { WebCredentialStore } from "./web/credential";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+} from "./web/credential";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
@@ -609,7 +613,18 @@ app.whenReady().then(async () => {
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
-        credentials: new WebCredentialStore({ db: dbHandle.db, cipher: safeStorage }),
+        credentials: {
+          brave: new WebCredentialStore({
+            db: dbHandle.db,
+            cipher: safeStorage,
+            secretName: BRAVE_SEARCH_KEY_SECRET,
+          }),
+          exa: new WebCredentialStore({
+            db: dbHandle.db,
+            cipher: safeStorage,
+            secretName: EXA_SEARCH_KEY_SECRET,
+          }),
+        },
       })
     : null;
   const piRuntimeHost =

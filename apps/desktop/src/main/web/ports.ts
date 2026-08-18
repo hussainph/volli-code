@@ -24,6 +24,7 @@
  */
 import {
   braveWebSearchProvider,
+  exaWebSearchProvider,
   createSafeWebFetch,
   createWebSearch,
   searxngWebSearchProvider,
@@ -53,9 +54,17 @@ export interface SessionWebPorts {
  */
 export function webSearchProviderFor(access: ResolvedWebAccess): WebSearchProvider | null {
   if (!access.configured) return null;
-  return access.provider === "brave"
-    ? braveWebSearchProvider({ apiKey: access.apiKey })
-    : searxngWebSearchProvider({ endpoint: access.endpoint });
+  // Switched over rather than branched on `provider === "searxng"`, so a
+  // provider added to the setting without an implementation here is a
+  // compile error rather than a silent fall through to somebody else's API.
+  switch (access.provider) {
+    case "brave":
+      return braveWebSearchProvider({ apiKey: access.apiKey });
+    case "exa":
+      return exaWebSearchProvider({ apiKey: access.apiKey });
+    case "searxng":
+      return searxngWebSearchProvider({ endpoint: access.endpoint });
+  }
 }
 
 /** The ports for one attachment. `{}` when this profile has configured no web access. */

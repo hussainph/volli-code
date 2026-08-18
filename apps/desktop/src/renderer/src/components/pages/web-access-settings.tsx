@@ -23,7 +23,11 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage } from "@volli/shared";
 
-import type { WebAccessProvider, WebAccessSettingsView } from "../../../../ipc/contract";
+import type {
+  KeyedWebAccessProvider,
+  WebAccessProvider,
+  WebAccessSettingsView,
+} from "../../../../ipc/contract";
 import { webAccessPanel } from "@renderer/components/pages/web-access-model";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
@@ -38,8 +42,15 @@ import { toastError } from "@renderer/lib/toast";
 const PROVIDERS: readonly { key: WebAccessProvider; label: string }[] = [
   { key: "off", label: "Off" },
   { key: "brave", label: "Brave" },
+  { key: "exa", label: "Exa" },
   { key: "searxng", label: "SearXNG" },
 ];
+
+/** The provider names shown in the key field's placeholder. */
+const PROVIDER_LABEL: Readonly<Record<KeyedWebAccessProvider, string>> = {
+  brave: "Brave",
+  exa: "Exa",
+};
 
 const KEY_STATE_LABEL = {
   absent: "Not set",
@@ -140,6 +151,11 @@ export function WebAccessSettings() {
   }
 
   const panel = webAccessPanel(state.view);
+  // The key panel renders only for a provider that has one, so the narrowing
+  // is done once here rather than at each of the five places below that would
+  // otherwise have to re-derive which provider's key they are talking about.
+  const keyedProvider: KeyedWebAccessProvider = state.view.provider === "exa" ? "exa" : "brave";
+  const keyState = state.view.keys[keyedProvider];
   const chooseProvider = (provider: WebAccessProvider): void => {
     void write(() =>
       window.api.webAccess.setProvider(
@@ -204,7 +220,9 @@ export function WebAccessSettings() {
               type="password"
               value={key}
               placeholder={
-                state.view.braveKey === "absent" ? "Paste your Brave key" : "Replace stored key"
+                keyState === "absent"
+                  ? `Paste your ${PROVIDER_LABEL[keyedProvider]} key`
+                  : "Replace stored key"
               }
               spellCheck={false}
               autoComplete="off"
@@ -212,17 +230,15 @@ export function WebAccessSettings() {
               onChange={(event) => setKey(event.target.value)}
             />
             <div className="flex items-center gap-2">
-              <span className="text-ui text-muted-foreground">
-                {KEY_STATE_LABEL[state.view.braveKey]}
-              </span>
-              {state.view.braveKey === "absent" ? null : (
+              <span className="text-ui text-muted-foreground">{KEY_STATE_LABEL[keyState]}</span>
+              {keyState === "absent" ? null : (
                 <Button
                   size="xs"
                   variant="outline"
                   disabled={busy}
                   onClick={() =>
                     void write(
-                      () => window.api.webAccess.clearKey(),
+                      () => window.api.webAccess.clearKey(keyedProvider),
                       () => setKey(""),
                     )
                   }
@@ -238,7 +254,7 @@ export function WebAccessSettings() {
                   // Cleared on success: a plaintext key has no reason to sit in
                   // a React tree once main has encrypted it.
                   void write(
-                    () => window.api.webAccess.setKey(key),
+                    () => window.api.webAccess.setKey(keyedProvider, key),
                     () => setKey(""),
                   )
                 }

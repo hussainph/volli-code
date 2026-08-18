@@ -853,7 +853,17 @@ export type ModelAccessIpcChannel = keyof VolliModelAccessIpcContract;
 export type ModelAccessSignInBeginResult = Result<{ attemptId: string }>;
 
 /** Which search provider this profile brings, if any. `off` is the default. */
-export type WebAccessProvider = "off" | "brave" | "searxng";
+export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
+
+/**
+ * The providers that authenticate with a key a person pastes.
+ *
+ * Named apart from {@link WebAccessProvider} because carrying a credential is
+ * what decides most of this surface: a keyed provider has a secret row, a key
+ * state to report, and a "replace stored key" affordance, while SearXNG has an
+ * address and `off` has neither.
+ */
+export type KeyedWebAccessProvider = "brave" | "exa";
 
 /**
  * What the renderer may know about a stored API key: that there is one, that
@@ -871,7 +881,14 @@ export interface WebAccessSettingsView {
   provider: WebAccessProvider;
   /** The normalized instance URL a person configured, or null. Never a secret. */
   searxngUrl: string | null;
-  braveKey: WebAccessKeyState;
+  /**
+   * What is stored for each keyed provider, and never what it is.
+   *
+   * One entry per provider rather than one for the selected one, because the
+   * rows are independent: configuring Exa does not discard a Brave key, and a
+   * person switching back should not be asked to paste one they already gave.
+   */
+  keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
   /** Whether this machine's OS keychain can encrypt at all right now. */
   encryptionAvailable: boolean;
 }
@@ -914,9 +931,15 @@ export interface VolliWebAccessIpcContract {
    * returned, logged, or included in an error string. A machine that cannot
    * encrypt refuses rather than storing it in the clear.
    */
-  "volli:web-access-set-key": { args: [key: string]; result: WebAccessResult };
-  /** Forgets the stored key. The provider choice is left alone. */
-  "volli:web-access-clear-key": { args: []; result: WebAccessResult };
+  "volli:web-access-set-key": {
+    args: [provider: KeyedWebAccessProvider, key: string];
+    result: WebAccessResult;
+  };
+  /** Forgets one provider's stored key. The provider choice, and the other key, are left alone. */
+  "volli:web-access-clear-key": {
+    args: [provider: KeyedWebAccessProvider];
+    result: WebAccessResult;
+  };
 }
 
 export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;

@@ -18,7 +18,11 @@
  * a blocked state with one recovery action. Each of these is one sentence
  * saying what is missing, and there is no notice at all for the working case.
  */
-import type { WebAccessProvider, WebAccessSettingsView } from "../../../../ipc/contract";
+import type {
+  KeyedWebAccessProvider,
+  WebAccessProvider,
+  WebAccessSettingsView,
+} from "../../../../ipc/contract";
 
 /** A blocked state and its one way out, or nothing to say. */
 export interface WebAccessNotice {
@@ -39,11 +43,23 @@ export interface WebAccessPanel {
   notice: WebAccessNotice | null;
 }
 
+/** What a person calls each keyed provider, and what its key is called there. */
+const KEY_NAMES: Readonly<Record<KeyedWebAccessProvider, string>> = {
+  brave: "Brave Search API key",
+  exa: "Exa API key",
+};
+
+/** Whether this provider is one that carries a key at all. */
+function isKeyed(provider: WebAccessSettingsView["provider"]): provider is KeyedWebAccessProvider {
+  return provider === "brave" || provider === "exa";
+}
+
 export function webAccessPanel(view: WebAccessSettingsView): WebAccessPanel {
+  const keyed = isKeyed(view.provider);
   const base = {
     provider: view.provider,
     showsEndpoint: view.provider === "searxng",
-    showsKey: view.provider === "brave",
+    showsKey: keyed,
     keyEntryDisabled: !view.encryptionAvailable,
   };
   if (view.provider === "off") return { ...base, active: false, notice: null };
@@ -56,7 +72,13 @@ export function webAccessPanel(view: WebAccessSettingsView): WebAccessPanel {
         }
       : { ...base, active: true, notice: null };
   }
-  if (view.braveKey === "unreadable") {
+  // Everything past here is a keyed provider. Narrowed rather than assumed, so
+  // a provider added to the setting and not to `KEY_NAMES` cannot reach the
+  // key messages below and be described with somebody else's name.
+  /* v8 ignore next -- `off` and `searxng` both returned above; this is the arm no provider reaches. */
+  if (!keyed) return { ...base, active: false, notice: null };
+  const key = view.keys[view.provider];
+  if (key === "unreadable") {
     return {
       ...base,
       active: false,
@@ -77,11 +99,11 @@ export function webAccessPanel(view: WebAccessSettingsView): WebAccessPanel {
       },
     };
   }
-  return view.braveKey === "present"
+  return key === "present"
     ? { ...base, active: true, notice: null }
     : {
         ...base,
         active: false,
-        notice: { tone: "neutral", message: "Enter your Brave Search API key." },
+        notice: { tone: "neutral", message: `Enter your ${KEY_NAMES[view.provider]}.` },
       };
 }

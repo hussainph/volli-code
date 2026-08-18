@@ -889,7 +889,12 @@ export const MODEL_ACCESS_CHANNELS = Object.keys(
 // them nothing about which of their URL's several problems to fix.
 
 function isWebAccessProvider(value: unknown): boolean {
-  return value === "off" || value === "brave" || value === "searxng";
+  return value === "off" || value === "brave" || value === "searxng" || value === "exa";
+}
+
+/** The providers that carry a key, which are the only ones a key channel names. */
+function isKeyedWebAccessProvider(value: unknown): boolean {
+  return value === "brave" || value === "exa";
 }
 
 export const WEB_ACCESS_IPC: { readonly [C in WebAccessIpcChannel]: IpcRequestDescriptor<C> } = {
@@ -906,11 +911,12 @@ export const WEB_ACCESS_IPC: { readonly [C in WebAccessIpcChannel]: IpcRequestDe
   },
   "volli:web-access-set-key": {
     guard: (args): args is IpcArgs<"volli:web-access-set-key"> =>
-      args.length === 1 && typeof args[0] === "string",
+      args.length === 2 && isKeyedWebAccessProvider(args[0]) && typeof args[1] === "string",
     invalidError: "Invalid API key",
   },
   "volli:web-access-clear-key": {
-    guard: (args): args is [] => args.length === 0,
+    guard: (args): args is IpcArgs<"volli:web-access-clear-key"> =>
+      args.length === 1 && isKeyedWebAccessProvider(args[0]),
     invalidError: "Invalid request",
   },
 };

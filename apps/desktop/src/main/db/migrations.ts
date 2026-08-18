@@ -653,6 +653,34 @@ CREATE TABLE web_access_settings (
 );
 `;
 
+/**
+ * Widen the provider CHECK to admit Exa.
+ *
+ * The table is rebuilt because SQLite cannot alter a CHECK constraint in place.
+ * The constraint is kept rather than dropped: it is what stops a provider name
+ * this version cannot resolve from being written, and the read side already
+ * falls back to `off` for a name it does not know, so the two together mean a
+ * downgrade reads Exa as Off instead of failing.
+ *
+ * Nothing here touches `secrets`. A key stored under `web-access.exa.api-key`
+ * is its own row and survives independently of which provider is selected.
+ */
+const MIGRATION_021_WEB_ACCESS_EXA = `
+CREATE TABLE web_access_settings_new (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  provider    TEXT NOT NULL CHECK (provider IN ('off', 'brave', 'searxng', 'exa')),
+  searxng_url TEXT,
+  updated_at  INTEGER NOT NULL
+);
+
+INSERT INTO web_access_settings_new (id, provider, searxng_url, updated_at)
+  SELECT id, provider, searxng_url, updated_at FROM web_access_settings;
+
+DROP TABLE web_access_settings;
+
+ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -745,6 +773,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 20,
     name: "web access — the BYO search provider setting, and ciphertext kept apart from it",
     sql: MIGRATION_020_WEB_ACCESS,
+  },
+  {
+    version: 21,
+    name: "web access — Exa as a second keyed search provider",
+    sql: MIGRATION_021_WEB_ACCESS_EXA,
   },
 ];
 

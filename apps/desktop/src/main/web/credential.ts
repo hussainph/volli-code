@@ -36,6 +36,9 @@ import { deleteSecret, hasSecret, readSecret, writeSecret } from "../db/secrets-
  */
 export const BRAVE_SEARCH_KEY_SECRET = "web-access.brave.api-key";
 
+/** The name the Exa key is stored under. Its own row, for the reason above. */
+export const EXA_SEARCH_KEY_SECRET = "web-access.exa.api-key";
+
 /**
  * The OS-backed cipher, as this module needs it.
  *
@@ -72,18 +75,29 @@ export class SecretUnavailableError extends Error {
 export interface WebCredentialStoreOptions {
   db: Database.Database;
   cipher: SecretCipher;
+  /**
+   * Which secret this store owns.
+   *
+   * One store per keyed provider rather than one store that takes a provider
+   * on every call: a store that had to be told which key to read on each read
+   * is a store that can be told the wrong one, and the caller holding two of
+   * them cannot mix them up.
+   */
+  secretName: string;
   now?: () => number;
 }
 
-/** The owner. One per launch; main builds it beside the database. */
+/** The owner of one provider's key. Main builds one per keyed provider. */
 export class WebCredentialStore {
   readonly #db: Database.Database;
   readonly #cipher: SecretCipher;
+  readonly #secretName: string;
   readonly #now: () => number;
 
   constructor(options: WebCredentialStoreOptions) {
     this.#db = options.db;
     this.#cipher = options.cipher;
+    this.#secretName = options.secretName;
     this.#now = options.now ?? Date.now;
   }
 
@@ -97,7 +111,7 @@ export class WebCredentialStore {
    * this machine cannot open, or that there is none. Never what it is.
    */
   state(): SecretState {
-    if (!hasSecret(this.#db, BRAVE_SEARCH_KEY_SECRET)) return "absent";
+    if (!hasSecret(this.#db, this.#secretName)) return "absent";
     return this.#cipher.isEncryptionAvailable() ? "present" : "unreadable";
   }
 
@@ -121,12 +135,7 @@ export class WebCredentialStore {
           "Volli will not store one in the clear.",
       );
     }
-    writeSecret(
-      this.#db,
-      BRAVE_SEARCH_KEY_SECRET,
-      this.#cipher.encryptString(trimmed),
-      this.#now(),
-    );
+    writeSecret(this.#db, this.#secretName, this.#cipher.encryptString(trimmed), this.#now());
   }
 
   /**
@@ -137,7 +146,7 @@ export class WebCredentialStore {
    * configured Session into an unconfigured one.
    */
   read(): string | null {
-    const ciphertext = readSecret(this.#db, BRAVE_SEARCH_KEY_SECRET);
+    const ciphertext = readSecret(this.#db, this.#secretName);
     if (ciphertext === null) return null;
     if (!this.#cipher.isEncryptionAvailable()) {
       throw new SecretUnavailableError(
@@ -157,6 +166,6 @@ export class WebCredentialStore {
 
   /** Forget the key. Forgetting nothing is not a failure. */
   clear(): void {
-    deleteSecret(this.#db, BRAVE_SEARCH_KEY_SECRET);
+    deleteSecret(this.#db, this.#secretName);
   }
 }

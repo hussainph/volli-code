@@ -47,7 +47,12 @@ let store: WebCredentialStore;
 beforeEach(() => {
   ctx = openTestDb();
   cipher = new FakeCipher();
-  store = new WebCredentialStore({ db: ctx.db, cipher, now: () => 1_700_000_000_000 });
+  store = new WebCredentialStore({
+    db: ctx.db,
+    cipher,
+    secretName: BRAVE_SEARCH_KEY_SECRET,
+    now: () => 1_700_000_000_000,
+  });
 });
 
 afterEach(() => {

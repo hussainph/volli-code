@@ -38,12 +38,18 @@ import { openTestDb, type TestDb } from "../db/test-helpers";
 import { readSecret } from "../db/secrets-repo";
 import { registerDataIpcHandlers } from "../data-ipc";
 import { createPiNativeAdapter, type PiRuntimeContext } from "../session-runtime/pi-adapter";
-import { BRAVE_SEARCH_KEY_SECRET, WebCredentialStore, type SecretCipher } from "./credential";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+  type SecretCipher,
+} from "./credential";
 import { registerWebAccessIpcHandlers } from "./ipc";
 import { webPortsFor } from "./ports";
 import { WebAccessSettings } from "./settings";
 
 const KEY = "BSA-super-secret-brave-key-42";
+const EXA_KEY = "exa-super-secret-second-key-77";
 
 class FakeCipher implements SecretCipher {
   isEncryptionAvailable(): boolean {
@@ -140,7 +146,13 @@ beforeEach(() => {
   ctx = openTestDb();
   settings = new WebAccessSettings({
     db: ctx.db,
-    credentials: new WebCredentialStore({ db: ctx.db, cipher: new FakeCipher() }),
+    credentials: (() => {
+      const cipher = new FakeCipher();
+      return {
+        brave: new WebCredentialStore({ db: ctx.db, cipher, secretName: BRAVE_SEARCH_KEY_SECRET }),
+        exa: new WebCredentialStore({ db: ctx.db, cipher, secretName: EXA_SEARCH_KEY_SECRET }),
+      };
+    })(),
   });
   registerWebAccessIpcHandlers(settings);
   registerDataIpcHandlers({ ok: true, db: ctx.db }, {});
@@ -154,7 +166,7 @@ afterEach(() => {
 describe("where a stored API key can and cannot be seen", () => {
   it("is not in the payload the renderer boots from", async () => {
     await invoke("volli:web-access-set-provider", "brave", null);
-    await invoke("volli:web-access-set-key", KEY);
+    await invoke("volli:web-access-set-key", "brave", KEY);
 
     const bootstrap = (await invoke("volli:data-bootstrap")) as BootstrapResult;
 
@@ -171,9 +183,64 @@ describe("where a stored API key can and cannot be seen", () => {
     expect(payload).not.toContain(ciphertext?.toString("base64"));
   });
 
+  /**
+   * The same four claims, for the second keyed provider.
+   *
+   * Written out rather than folded into the Brave cases with a loop, because a
+   * second provider is exactly where a secrecy rule gets applied to the first
+   * one only — the store, the row and the settings arm are all per-provider,
+   * and none of them inherit the first one's proof.
+   */
+  it("keeps Exa's key out of the renderer, the Session and the log too", async () => {
+    const printed: unknown[] = [];
+    for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+        printed.push(...args);
+      });
+    }
+
+    await invoke("volli:web-access-set-provider", "exa", null);
+    await invoke("volli:web-access-set-key", "exa", EXA_KEY);
+
+    const bootstrap = (await invoke("volli:data-bootstrap")) as BootstrapResult;
+    const { runtime, sink } = await attach();
+    await invoke("volli:web-access-get");
+    settings.resolve();
+
+    // Configured for real, so the absences below are not an unconfigured
+    // Session's absences.
+    expect(typeof runtime.spec?.webSearch).toBe("function");
+
+    const ciphertext = readSecret(ctx.db, EXA_SEARCH_KEY_SECRET);
+    expect(ciphertext).not.toBeNull();
+    const payload = JSON.stringify(bootstrap);
+    expect(payload).not.toContain(EXA_KEY);
+    expect(payload).not.toContain(ciphertext?.toString("base64"));
+    expect(JSON.stringify(runtime.spec)).not.toContain(EXA_KEY);
+    expect(JSON.stringify(sink.observations)).not.toContain(EXA_KEY);
+    expect(JSON.stringify(printed)).not.toContain(EXA_KEY);
+  });
+
+  it("stores each provider's key in its own row, so neither overwrites the other", async () => {
+    await invoke("volli:web-access-set-key", "brave", KEY);
+    await invoke("volli:web-access-set-key", "exa", EXA_KEY);
+
+    // Two rows, two ciphertexts, and neither contains the other's plaintext.
+    const brave = readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET);
+    const exa = readSecret(ctx.db, EXA_SEARCH_KEY_SECRET);
+    expect(brave).not.toBeNull();
+    expect(exa).not.toBeNull();
+    expect(brave?.equals(exa ?? Buffer.alloc(0))).toBe(false);
+
+    // And clearing one leaves the other where it was.
+    await invoke("volli:web-access-clear-key", "exa");
+    expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).not.toBeNull();
+    expect(readSecret(ctx.db, EXA_SEARCH_KEY_SECRET)).toBeNull();
+  });
+
   it("is not in the Session spec, and not in one Session fact", async () => {
     await invoke("volli:web-access-set-provider", "brave", null);
-    await invoke("volli:web-access-set-key", KEY);
+    await invoke("volli:web-access-set-key", "brave", KEY);
 
     const { runtime, sink } = await attach();
 
@@ -198,7 +265,7 @@ describe("where a stored API key can and cannot be seen", () => {
     }
 
     await invoke("volli:web-access-set-provider", "brave", null);
-    await invoke("volli:web-access-set-key", KEY);
+    await invoke("volli:web-access-set-key", "brave", KEY);
     await invoke("volli:web-access-get");
     await attach();
     settings.resolve();
@@ -207,7 +274,7 @@ describe("where a stored API key can and cannot be seen", () => {
   });
 
   it("is out of reach of the renderer's own writable key/value store", async () => {
-    await invoke("volli:web-access-set-key", KEY);
+    await invoke("volli:web-access-set-key", "brave", KEY);
 
     // `volli:app-state-set` takes any key and any string the renderer likes.
     // Web Access lives outside it in both directions: the renderer cannot write

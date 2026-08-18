@@ -26,10 +26,14 @@ import type Database from "better-sqlite3";
 import { admitSearchEndpoint } from "@volli/agent-runtime";
 
 import { prepared } from "../db/prepared";
-import type { WebAccessProvider, WebAccessSettingsView } from "../../ipc/contract";
+import type {
+  KeyedWebAccessProvider,
+  WebAccessProvider,
+  WebAccessSettingsView,
+} from "../../ipc/contract";
 import type { WebCredentialStore } from "./credential";
 
-export type { WebAccessProvider, WebAccessSettingsView };
+export type { KeyedWebAccessProvider, WebAccessProvider, WebAccessSettingsView };
 
 /** The choice a person is making, as it crosses from Settings. */
 export interface WebAccessProviderInput {
@@ -56,7 +60,7 @@ export type WebAccessUnconfigured = "off" | "no-key" | "unreadable-key" | "no-en
  */
 export type ResolvedWebAccess =
   | { configured: false; reason: WebAccessUnconfigured }
-  | { configured: true; provider: "brave"; apiKey: string }
+  | { configured: true; provider: KeyedWebAccessProvider; apiKey: string }
   | { configured: true; provider: "searxng"; endpoint: string };
 
 /** A refusal a person reads in Settings. Never carries a key; it never sees one. */
@@ -72,7 +76,10 @@ interface SettingsRow {
   searxng_url: string | null;
 }
 
-const PROVIDERS: readonly WebAccessProvider[] = ["off", "brave", "searxng"];
+const PROVIDERS: readonly WebAccessProvider[] = ["off", "brave", "searxng", "exa"];
+
+/** The providers with a key, in the order Settings lists them. */
+export const KEYED_PROVIDERS: readonly KeyedWebAccessProvider[] = ["brave", "exa"];
 
 /** The stored provider, or `off` for anything this version does not recognise. */
 function readProvider(value: string): WebAccessProvider {
@@ -81,13 +88,14 @@ function readProvider(value: string): WebAccessProvider {
 
 export interface WebAccessSettingsOptions {
   db: Database.Database;
-  credentials: WebCredentialStore;
+  /** One store per keyed provider. Total, so no lookup here can miss. */
+  credentials: Readonly<Record<KeyedWebAccessProvider, WebCredentialStore>>;
   now?: () => number;
 }
 
 export class WebAccessSettings {
   readonly #db: Database.Database;
-  readonly #credentials: WebCredentialStore;
+  readonly #credentials: Readonly<Record<KeyedWebAccessProvider, WebCredentialStore>>;
   readonly #now: () => number;
 
   constructor(options: WebAccessSettingsOptions) {
@@ -102,8 +110,10 @@ export class WebAccessSettings {
     return {
       provider: readProvider(row.provider),
       searxngUrl: row.searxng_url,
-      braveKey: this.#credentials.state(),
-      encryptionAvailable: this.#credentials.encryptionAvailable(),
+      keys: { brave: this.#credentials.brave.state(), exa: this.#credentials.exa.state() },
+      // A property of the machine rather than of a provider, so either store
+      // answers it and both answer the same.
+      encryptionAvailable: this.#credentials.brave.encryptionAvailable(),
     };
   }
 
@@ -137,15 +147,15 @@ export class WebAccessSettings {
     return this.view();
   }
 
-  /** Store the Brave key. Refuses, loudly, rather than storing one in the clear. */
-  saveBraveKey(key: string): WebAccessSettingsView {
-    this.#credentials.save(key);
+  /** Store one provider's key. Refuses, loudly, rather than storing one in the clear. */
+  saveKey(provider: KeyedWebAccessProvider, key: string): WebAccessSettingsView {
+    this.#credentials[provider].save(key);
     return this.view();
   }
 
-  /** Forget the Brave key. The provider choice is left alone. */
-  clearBraveKey(): WebAccessSettingsView {
-    this.#credentials.clear();
+  /** Forget one provider's key. The provider choice, and the other key, are left alone. */
+  clearKey(provider: KeyedWebAccessProvider): WebAccessSettingsView {
+    this.#credentials[provider].clear();
     return this.view();
   }
 
@@ -165,13 +175,14 @@ export class WebAccessSettings {
     const row = this.#row();
     const provider = readProvider(row.provider);
     if (provider === "off") return { configured: false, reason: "off" };
-    if (provider === "brave") {
-      const state = this.#credentials.state();
+    if (provider === "brave" || provider === "exa") {
+      const credentials = this.#credentials[provider];
+      const state = credentials.state();
       if (state === "absent") return { configured: false, reason: "no-key" };
       if (state === "unreadable") return { configured: false, reason: "unreadable-key" };
       let apiKey: string | null;
       try {
-        apiKey = this.#credentials.read();
+        apiKey = credentials.read();
       } catch {
         // The keychain answered and the ciphertext still would not open: a
         // profile restored from a backup, or an entry replaced underneath this
@@ -181,7 +192,7 @@ export class WebAccessSettings {
       }
       /* v8 ignore next -- `state()` already said a key is here and readable; this is the racing writer nobody has. */
       if (apiKey === null) return { configured: false, reason: "no-key" };
-      return { configured: true, provider: "brave", apiKey };
+      return { configured: true, provider, apiKey };
     }
     const endpoint = row.searxng_url;
     // Re-judged rather than trusted. What was admitted at save time is not what

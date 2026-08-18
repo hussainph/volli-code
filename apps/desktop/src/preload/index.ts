@@ -129,6 +129,7 @@ import type {
   UpdateUiState,
   VolliInvokeContract,
   WebAccessProvider,
+  KeyedWebAccessProvider,
   WebAccessResult,
   VolliIpcChannel,
   VolliIpcEvent,
@@ -520,13 +521,15 @@ const api = {
       searxngUrl: string | null,
     ): Promise<WebAccessResult> => invoke("volli:web-access-set-provider", provider, searxngUrl),
     /**
-     * Stores the Brave key. The one outbound secret in the app after sign-in,
-     * and one-way: main encrypts it with the OS keychain and it is never read
-     * back, echoed, or put in an error string.
+     * Stores one provider's key. The one outbound secret in the app after
+     * sign-in, and one-way: main encrypts it with the OS keychain and it is
+     * never read back, echoed, or put in an error string.
      */
-    setKey: (key: string): Promise<WebAccessResult> => invoke("volli:web-access-set-key", key),
-    /** Forgets the stored key. The provider choice is left alone. */
-    clearKey: (): Promise<WebAccessResult> => invoke("volli:web-access-clear-key"),
+    setKey: (provider: KeyedWebAccessProvider, key: string): Promise<WebAccessResult> =>
+      invoke("volli:web-access-set-key", provider, key),
+    /** Forgets one provider's key. The provider choice, and the other key, are left alone. */
+    clearKey: (provider: KeyedWebAccessProvider): Promise<WebAccessResult> =>
+      invoke("volli:web-access-clear-key", provider),
   },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>

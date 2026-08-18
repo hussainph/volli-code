@@ -59,8 +59,8 @@ export function registerWebAccessIpcHandlers(
     "volli:web-access-get": () => answer(settings.view()),
     "volli:web-access-set-provider": (provider, searxngUrl) =>
       answer(settings.setProvider({ provider, searxngUrl })),
-    "volli:web-access-set-key": (key) => answer(settings.saveBraveKey(key)),
-    "volli:web-access-clear-key": () => answer(settings.clearBraveKey()),
+    "volli:web-access-set-key": (provider, key) => answer(settings.saveKey(provider, key)),
+    "volli:web-access-clear-key": (provider) => answer(settings.clearKey(provider)),
   };
   registerGuardedIpcHandlers(WEB_ACCESS_IPC, handlers);
 }

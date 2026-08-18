@@ -17,7 +17,12 @@ vi.mock("electron", () => ({
 }));
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
-import { WebCredentialStore, type SecretCipher } from "./credential";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+  type SecretCipher,
+} from "./credential";
 import { WebAccessSettings } from "./settings";
 import { registerWebAccessIpcHandlers } from "./ipc";
 
@@ -56,7 +61,10 @@ beforeEach(() => {
   cipher = new FakeCipher();
   settings = new WebAccessSettings({
     db: ctx.db,
-    credentials: new WebCredentialStore({ db: ctx.db, cipher }),
+    credentials: {
+      brave: new WebCredentialStore({ db: ctx.db, cipher, secretName: BRAVE_SEARCH_KEY_SECRET }),
+      exa: new WebCredentialStore({ db: ctx.db, cipher, secretName: EXA_SEARCH_KEY_SECRET }),
+    },
   });
   registerWebAccessIpcHandlers(settings);
 });
@@ -72,7 +80,7 @@ describe("the Web Access door", () => {
       settings: {
         provider: "off",
         searxngUrl: null,
-        braveKey: "absent",
+        keys: { brave: "absent", exa: "absent" },
         encryptionAvailable: true,
       },
     });
@@ -105,27 +113,30 @@ describe("the Web Access door", () => {
 
   it("stores a key and afterwards will only say that one exists", async () => {
     await invoke("volli:web-access-set-provider", "brave", null);
-    const saved = await invoke("volli:web-access-set-key", KEY);
+    const saved = await invoke("volli:web-access-set-key", "brave", KEY);
     const fetched = await invoke("volli:web-access-get");
 
-    expect(saved).toMatchObject({ ok: true, settings: { braveKey: "present" } });
+    expect(saved).toMatchObject({
+      ok: true,
+      settings: { keys: { brave: "present", exa: "absent" } },
+    });
     // The one non-negotiable: nothing this door answers with contains the key.
     expect(JSON.stringify([saved, fetched])).not.toContain(KEY);
   });
 
   it("forgets a key on request", async () => {
-    await invoke("volli:web-access-set-key", KEY);
+    await invoke("volli:web-access-set-key", "brave", KEY);
 
-    expect(await invoke("volli:web-access-clear-key")).toMatchObject({
+    expect(await invoke("volli:web-access-clear-key", "brave")).toMatchObject({
       ok: true,
-      settings: { braveKey: "absent" },
+      settings: { keys: { brave: "absent", exa: "absent" } },
     });
   });
 
   it("says plainly that a key cannot be stored on a machine that cannot encrypt", async () => {
     cipher.available = false;
 
-    const result = (await invoke("volli:web-access-set-key", KEY)) as Result;
+    const result = (await invoke("volli:web-access-set-key", "brave", KEY)) as Result;
 
     expect(result.ok).toBe(false);
     expect(result).toMatchObject({ error: expect.stringMatching(/keychain/i) });
@@ -137,7 +148,7 @@ describe("the Web Access door", () => {
       ok: false,
       error: "Invalid web access provider",
     });
-    expect(await invoke("volli:web-access-set-key", 42)).toEqual({
+    expect(await invoke("volli:web-access-set-key", "brave", 42)).toEqual({
       ok: false,
       error: "Invalid API key",
     });
