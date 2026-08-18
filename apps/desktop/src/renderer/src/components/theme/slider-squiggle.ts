@@ -9,9 +9,12 @@
  * where amplitude-as-value needs no notched track to justify itself — the
  * control is continuous, so the wave stands taller with every point of
  * vibrancy, flat at 0 (clipped away with the empty fill) to full wave at 100.
- * The design's specimen, exactly as it shipped in the effort pill, is kept
- * alive in `lab/scratches/effort-squiggle.tsx`; the arithmetic below is the
- * same module re-homed, and it is pure so the gate can hold it at 100%.
+ * The arithmetic below is that same geometry re-homed, unchanged from the
+ * effort pill it was authored against, and it is pure so the gate can hold it
+ * at 100%. This module and its tests are now the design's record — the lab
+ * scratch that showcased it was retired with the effort slider's wave, since
+ * a scratch exists to try an idea BEFORE it becomes a feature, and copying a
+ * shipped control into `lab/` to keep a picture of it only drifts.
  */
 
 /** One full wave of the squiggle, in px (VC-57, the Arc-lineage wave). */

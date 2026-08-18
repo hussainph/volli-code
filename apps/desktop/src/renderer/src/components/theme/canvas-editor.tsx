@@ -665,18 +665,19 @@ function PrimaryColourRow({
  * rather than left to `accent-color`, which cannot paint an unfilled half that
  * follows the appearance — see that rule.
  *
- * VIBRANCY WEARS THE SQUIGGLE (`squiggle`), the Arc-lineage wave VC-57 authored
- * for exactly this pass and VC-82 took back out of the effort slider: a
- * hairline wave riding the track, clipped at the fill's seam, whose amplitude
- * IS the value. Only the vibrancy control asks for it — a wave on a slider
- * that does not mean "how vivid" would be decoration, not report.
+ * VIBRANCY WEARS THE SQUIGGLE, the Arc-lineage wave VC-57 authored for exactly
+ * this pass and VC-82 took back out of the effort slider: a hairline wave
+ * riding the track, clipped at the fill's seam, whose amplitude IS the value.
+ * The wave is part of THIS control, not an option on it — vibrancy is the only
+ * unit value in the editor, and a wave on a slider that does not mean "how
+ * vivid" would be decoration rather than report. If a second unit slider ever
+ * lands here, split the wave out with it rather than reaching for a flag.
  */
 function UnitSlider({
   id,
   label,
   value,
   chip,
-  squiggle = false,
   onInput,
   onSettle,
 }: {
@@ -684,8 +685,6 @@ function UnitSlider({
   label: string;
   value: number;
   chip: React.ReactNode;
-  /** Ride the VC-57 wave along the fill. See the doc above. */
-  squiggle?: boolean;
   onInput(next: number): void;
   onSettle(): void;
 }) {
@@ -736,39 +735,37 @@ function UnitSlider({
             seam, so an eased wave would drift off the fill it rides — the seam
             is one object, not two on different clocks. The wave is state, not
             motion: it stands wherever the value is, instantly. */}
-        {squiggle && (
-          <svg
-            aria-hidden
-            data-slot="slider-squiggle"
-            viewBox={`0 ${-(SLIDER_SQUIGGLE_AMPLITUDE + 1)} ${SLIDER_SQUIGGLE_WIDTH} ${
-              2 * (SLIDER_SQUIGGLE_AMPLITUDE + 1)
-            }`}
-            preserveAspectRatio="none"
-            style={{ clipPath: `inset(0 ${100 - fillPercent}% 0 0)` }}
-            className="pointer-events-none absolute inset-x-0 top-[5px] h-1.5"
-          >
-            <path
-              d={sliderSquigglePath(
-                SLIDER_SQUIGGLE_WIDTH,
-                SLIDER_SQUIGGLE_WAVELENGTH,
-                SLIDER_SQUIGGLE_AMPLITUDE,
-              )}
-              fill="none"
-              vectorEffect="non-scaling-stroke"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-              style={{
-                transform: `scaleY(${sliderSquiggleScale(value)})`,
-                transformBox: "fill-box",
-                transformOrigin: "center",
-              }}
-              // `/40`, the wave's shipped voice: a redundant channel under the
-              // thumb and the fill, texture of the substance rather than a
-              // second control.
-              className="stroke-foreground/40"
-            />
-          </svg>
-        )}
+        <svg
+          aria-hidden
+          data-slot="slider-squiggle"
+          viewBox={`0 ${-(SLIDER_SQUIGGLE_AMPLITUDE + 1)} ${SLIDER_SQUIGGLE_WIDTH} ${
+            2 * (SLIDER_SQUIGGLE_AMPLITUDE + 1)
+          }`}
+          preserveAspectRatio="none"
+          style={{ clipPath: `inset(0 ${100 - fillPercent}% 0 0)` }}
+          className="pointer-events-none absolute inset-x-0 top-[5px] h-1.5"
+        >
+          <path
+            d={sliderSquigglePath(
+              SLIDER_SQUIGGLE_WIDTH,
+              SLIDER_SQUIGGLE_WAVELENGTH,
+              SLIDER_SQUIGGLE_AMPLITUDE,
+            )}
+            fill="none"
+            vectorEffect="non-scaling-stroke"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            style={{
+              transform: `scaleY(${sliderSquiggleScale(value)})`,
+              transformBox: "fill-box",
+              transformOrigin: "center",
+            }}
+            // `/40`, the wave's shipped voice: a redundant channel under the
+            // thumb and the fill, texture of the substance rather than a
+            // second control.
+            className="stroke-foreground/40"
+          />
+        </svg>
       </span>
       <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
         {percentLabel(value)}
@@ -1153,7 +1150,6 @@ export function CanvasEditor({
           id="canvas-vibrancy"
           label="Vibrancy"
           value={live.vibrancy}
-          squiggle
           chip={
             <span
               aria-hidden
