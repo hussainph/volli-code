@@ -14,7 +14,6 @@ import {
   buildActiveSessionListing,
   groupPreviousByTicket,
   isProjectSessionRowSelected,
->>>>>>> 07d6ef68 (VC-69: group Previous-band sessions under their ticket)
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -128,7 +127,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     (state) => state.byProject[project.id]?.expandedSessionGroups ?? EMPTY_EXPANDED,
   );
   const setSessionGroupExpanded = useWorkspaceStore((state) => state.setSessionGroupExpanded);
-  );
   // The project's Session rows, shared with the board's active-session
   // indicator and fed by `volli:session-activity` rather than by a timer —
   // see `stores/project-sessions.ts`. This component used to own both the

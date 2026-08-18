@@ -323,6 +323,7 @@ describe("the stored compaction policy", () => {
       models: [
         {
           ...SONNET,
+          acceptsImageInput: true,
           label: "Claude Sonnet 4.5",
           state: "available" as const,
           reasoningLevels: ["off"] as const,
@@ -334,6 +335,7 @@ describe("the stored compaction policy", () => {
           label: "Claude Unsized",
           state: "available" as const,
           reasoningLevels: ["off"] as const,
+          acceptsImageInput: false,
         },
       ],
     };
