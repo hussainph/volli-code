@@ -6,6 +6,7 @@ import { WebAccessSettings } from "./settings";
 
 class FakeCipher implements SecretCipher {
   available = true;
+  decryptFailure: Error | null = null;
 
   isEncryptionAvailable(): boolean {
     return this.available;
@@ -16,6 +17,7 @@ class FakeCipher implements SecretCipher {
   }
 
   decryptString(encrypted: Buffer): string {
+    if (this.decryptFailure !== null) throw this.decryptFailure;
     return Buffer.from(encrypted.toString("utf8").slice("v1:".length), "base64").toString("utf8");
   }
 }
@@ -125,6 +127,20 @@ describe("WebAccessSettings — choosing Brave", () => {
     cipher.available = false;
 
     expect(settings.view()).toMatchObject({ braveKey: "unreadable", encryptionAvailable: false });
+    expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
+  });
+
+  it("costs a Session its web tools, never its attach, when the ciphertext will not open", () => {
+    settings.setProvider({ provider: "brave", searxngUrl: null });
+    settings.saveBraveKey(KEY);
+    // The keychain answers, and then fails to decrypt — a profile restored from
+    // a backup, or a keychain entry replaced out from under this one.
+    cipher.decryptFailure = new Error("decryption failed");
+
+    // Resolving is on the attach path. A throw here would fail the whole
+    // attachment, so a Session with a broken key would be a Session that cannot
+    // start rather than one without web tools.
+    expect(() => settings.resolve()).not.toThrow();
     expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
   });
 

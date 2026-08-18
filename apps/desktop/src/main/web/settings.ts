@@ -154,6 +154,12 @@ export class WebAccessSettings {
    *
    * Main-only. The plaintext key is read here and nowhere else in the app, and
    * the only caller is the one that constructs a provider out of it.
+   *
+   * **This never throws, and that is load-bearing.** It runs on the attach
+   * path, so a throw would not cost a Session its web tools — it would cost it
+   * the attachment. A key this machine cannot decrypt is a profile with no
+   * working search, which is a Session that starts without web tools and a
+   * Settings page that says why.
    */
   resolve(): ResolvedWebAccess {
     const row = this.#row();
@@ -163,7 +169,16 @@ export class WebAccessSettings {
       const state = this.#credentials.state();
       if (state === "absent") return { configured: false, reason: "no-key" };
       if (state === "unreadable") return { configured: false, reason: "unreadable-key" };
-      const apiKey = this.#credentials.read();
+      let apiKey: string | null;
+      try {
+        apiKey = this.#credentials.read();
+      } catch {
+        // The keychain answered and the ciphertext still would not open: a
+        // profile restored from a backup, or an entry replaced underneath this
+        // one. `state()` cannot see that without decrypting, so this is where
+        // it is found out.
+        return { configured: false, reason: "unreadable-key" };
+      }
       /* v8 ignore next -- `state()` already said a key is here and readable; this is the racing writer nobody has. */
       if (apiKey === null) return { configured: false, reason: "no-key" };
       return { configured: true, provider: "brave", apiKey };

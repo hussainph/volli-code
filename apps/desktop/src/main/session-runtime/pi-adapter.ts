@@ -239,6 +239,11 @@ export interface PiAdapterOptions {
    * Called at attach, not per turn: what a Session may reach is pinned when it
    * starts, exactly as its Authority Snapshot would be, so a Settings change
    * never lands mid-turn.
+   *
+   * It must not throw. This runs on the attach path, so a failure to work out
+   * what web access amounts to would cost the Session its attachment rather
+   * than its web tools — an unreadable credential is a Session with no web,
+   * which is what `WebAccessSettings.resolve` answers instead of raising.
    */
   resolveWebPorts?: () => SessionWebPorts;
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
