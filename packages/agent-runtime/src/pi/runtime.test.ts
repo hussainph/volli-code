@@ -2886,6 +2886,60 @@ describe("startSession", () => {
     await handle.close();
   });
 
+  it.each(["queue", "steer"] as const)(
+    "drains a %s accepted while Pi is completing the current turn",
+    async (delivery) => {
+      const attachment = fixture();
+      const completing = Promise.withResolvers<void>();
+      const allowCompletion = Promise.withResolvers<void>();
+      const contexts: Context[] = [];
+      attachment.spec.observer = async (observation) => {
+        attachment.observations.push(observation);
+        if (observation.kind === "turn" && observation.state === "completed") {
+          completing.resolve();
+          await allowCompletion.promise;
+        }
+      };
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit, context) => {
+              contexts.push(context);
+              emit.text("first done");
+              emit.finish();
+            },
+            (emit, context) => {
+              contexts.push(context);
+              emit.text("steered done");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+
+      const first = handle.submitUserMessage("first", "queue", "command-first");
+      await completing.promise;
+      const commandId = `command-late-${delivery}`;
+      await expect(
+        handle.submitUserMessage("take another route", delivery, commandId),
+      ).resolves.toEqual({ kind: "delivered", delivery });
+
+      allowCompletion.resolve();
+      await expect(first).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+
+      expect(contexts).toHaveLength(2);
+      expect(JSON.stringify(contexts[1]?.messages)).toContain("take another route");
+      expect(
+        (await handle.reconcile(null)).receipts?.map(
+          ({ commandId: receiptCommandId }) => receiptCommandId,
+        ),
+      ).toEqual(["command-first", commandId]);
+      await handle.close();
+    },
+  );
+
   it("interrupts without settling the aborted tail", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const streaming = Promise.withResolvers<void>();
