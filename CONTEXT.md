@@ -103,6 +103,21 @@ Session ledger. Availability and billing source are explicit; Volli never
 silently falls back to another model or account.
 _Avoid_: harness profile, provider picker (when meaning the complete access model)
 
+**Web Access**:
+The profile-wide decision about whether Volli may reach the Internet on a
+Session's behalf, and through whose search provider. Off is the default and the
+resting state: a profile that has configured no provider gives its Sessions no
+web tool at all, rather than a tool that refuses when called. A provider
+endpoint is a person's own configuration and is judged by its own admission
+policy when saved and again on every request; a URL the model supplies is not,
+and faces the stricter public-web policy every time. The credential owner
+encrypts a bring-your-own key through the OS keychain, refuses to hold one when
+the keychain cannot encrypt, and never exposes it to the renderer, prompt,
+transcript, or Session ledger — the renderer may learn only whether a key
+exists. What a search returns is third-party text, references rather than
+contents, and reading one of them is a new decision judged from scratch.
+_Avoid_: web search setting, browsing, internet permission
+
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
 Session: message content, an interaction, activity, Thread lineage, attachment
