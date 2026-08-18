@@ -85,6 +85,7 @@ export default defineConfig(({ mode }) => ({
         "src/stores/**",
         "src/chat/activity.ts",
         "src/chat/client.ts",
+        "src/chat/compaction-boundary.ts",
         "src/chat/composer-effort.ts",
         "src/chat/composer-picker.ts",
         "src/chat/interaction.ts",

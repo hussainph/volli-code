@@ -879,7 +879,8 @@ function resolveCommandRoute(
     }
     case "executor.stop":
     case "executor.interrupt":
-    case "executor.retry": {
+    case "executor.retry":
+    case "context.compact": {
       const attachment = projection.attachments.find(
         (candidate) => candidate.id === intent.attachmentId,
       );
@@ -1134,7 +1135,8 @@ function assertAdapterReceiptRoute(
       command.intent.kind === "interaction.resolve" ||
       command.intent.kind === "executor.stop" ||
       command.intent.kind === "executor.interrupt" ||
-      command.intent.kind === "executor.retry") &&
+      command.intent.kind === "executor.retry" ||
+      command.intent.kind === "context.compact") &&
     observationAttachmentId(observation) !== route.attachmentId
   ) {
     throw new SessionEngineConflictError(
@@ -1154,6 +1156,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "executor.stop": "executor.stop.requested",
     "executor.interrupt": "executor.interrupted",
     "executor.retry": "executor.retried",
+    "context.compact": "context.compacted",
     "message.submit": "message.submitted",
     "interaction.resolve": "interaction.resolved",
   };

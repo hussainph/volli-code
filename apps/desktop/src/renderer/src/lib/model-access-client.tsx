@@ -1,5 +1,6 @@
 import * as React from "react";
 import type {
+  CompactionPolicy,
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSignInType,
@@ -34,6 +35,10 @@ export interface ModelAccessClient {
   /** The models the user toggled out of composers and pickers. */
   hiddenModels(): Promise<readonly HiddenModelRef[]>;
   setHiddenModels(hidden: readonly HiddenModelRef[]): Promise<readonly HiddenModelRef[]>;
+  /** The automatic-compaction switch and the per-model reserves under it. */
+  compactionPolicy(): Promise<CompactionPolicy>;
+  /** Saves the whole policy; rejects with the reason a reserve was refused. */
+  setCompactionPolicy(policy: CompactionPolicy): Promise<CompactionPolicy>;
   /**
    * Starts a sign-in and routes its updates to `onUpdate`.
    *
@@ -68,6 +73,7 @@ export function ModelAccessProvider({
       inspect: (input) => client.inspect(input),
       defaults: () => client.defaults(),
       hiddenModels: () => client.hiddenModels(),
+      compactionPolicy: () => client.compactionPolicy(),
       // A completed sign-in changes what every open composer may offer, so the
       // shared revision — what their catalogs re-read on — bumps here too, not
       // only when a default is saved.
@@ -92,6 +98,11 @@ export function ModelAccessProvider({
         setRevision((current) => current + 1);
         return saved;
       },
+      // No revision bump: the shared one exists so open composers re-read what
+      // they may OFFER, and compaction changes nothing about that. The runtime
+      // reads this policy per compaction, off the database, so a Session
+      // already running picks the change up without anything here telling it.
+      setCompactionPolicy: (policy) => client.setCompactionPolicy(policy),
       revision,
     }),
     [client, revision],

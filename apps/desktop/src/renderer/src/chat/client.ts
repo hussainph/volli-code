@@ -220,6 +220,7 @@ type ChatCommand =
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
+  | { kind: "context.compact"; attachmentId?: string; instructions?: string }
   | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution };
 
 export interface ChatCommandRequest {
@@ -598,6 +599,33 @@ export class ChatSessionClient {
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
         command: { kind: "executor.retry", attachmentId },
+      }),
+    );
+  }
+
+  /**
+   * Summarize this Session's context now, because someone typed `/compact`.
+   *
+   * Every way it does not happen comes back as a rejected receipt — a turn
+   * still running, a history with nothing left to summarize, a summary the
+   * provider refused — and {@link #run} settles all of them onto the Session
+   * as one readable line. That is the whole difference between this and the
+   * two compactions nobody asked for: those report to the ledger, and this
+   * reports to a person.
+   */
+  compactContext(instructions: string | null): Promise<boolean> {
+    const attachmentId = this.#liveAttachmentId();
+    if (attachmentId === null) return Promise.resolve(false);
+    return this.#run("Compact", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        // Absent, never explicitly `undefined` — `interrupt`'s rule, for
+        // `interrupt`'s reason: structured clone keeps a key JSON would drop.
+        command:
+          instructions === null
+            ? { kind: "context.compact", attachmentId }
+            : { kind: "context.compact", attachmentId, instructions },
       }),
     );
   }

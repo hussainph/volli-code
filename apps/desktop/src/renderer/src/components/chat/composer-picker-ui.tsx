@@ -21,6 +21,7 @@
  * is closed, decided one level up in `SessionComposer`.
  */
 import * as React from "react";
+import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { NoteIcon } from "@phosphor-icons/react/dist/csr/Note";
@@ -45,23 +46,28 @@ const MODE_HEADING: Record<ComposerPickerMode, string> = {
 };
 
 /**
- * Command mode holds two kinds of row — commands, then skills — and each kind
- * gets its own group so the heading says which kind of thing a row is before
- * anyone reads its glyph. The split preserves the flat row order (`rows` is
- * already commands-then-skills, `rankSkillCompletions` says why), so the
+ * Command mode holds three kinds of row — verbs, then commands, then skills —
+ * and each kind gets its own group so the heading says which kind of thing a
+ * row is before anyone reads its glyph. Empty groups are dropped rather than
+ * drawn empty. The split preserves the flat row order (`composerPickerRows`
+ * builds it in exactly this order, and `rankVerbCompletions` says why), so the
  * arrow keys and the eye walk the same list.
+ *
+ * "Actions" earns its own heading rather than joining the commands: a verb
+ * RUNS something and every other row on this card writes something, which is
+ * the largest difference between any two rows here and the one a reader most
+ * needs before pressing ⏎.
  */
 function groupedRows(
   rows: readonly ComposerPickerRow[],
 ): readonly { heading: string; rows: readonly ComposerPickerRow[] }[] {
-  const skills = rows.filter((row) => row.kind === "skill");
-  if (skills.length === 0) return [{ heading: "Commands", rows }];
-  const commands = rows.filter((row) => row.kind !== "skill");
-  if (commands.length === 0) return [{ heading: "Skills", rows }];
-  return [
-    { heading: "Commands", rows: commands },
-    { heading: "Skills", rows: skills },
-  ];
+  const groups = [
+    { heading: "Actions", rows: rows.filter((row) => row.kind === "verb") },
+    { heading: "Commands", rows: rows.filter((row) => row.kind === "command") },
+    { heading: "Skills", rows: rows.filter((row) => row.kind === "skill") },
+  ].filter((group) => group.rows.length > 0);
+  // A card showing nothing still needs one group to hang "No match" under.
+  return groups.length > 0 ? groups : [{ heading: "Commands", rows }];
 }
 
 /**
@@ -193,6 +199,10 @@ export const ComposerPicker = React.memo(function ComposerPicker({
  * things, not because one is emphasised.
  */
 function RowIcon({ row }: { row: ComposerPickerRow }) {
+  // Two arrows closing onto one line — a history collapsed into a summary,
+  // which is the act rather than the category. A second verb would want its
+  // own glyph rather than inheriting this one.
+  if (row.kind === "verb") return <ArrowsInLineVerticalIcon className="size-3.5 shrink-0" />;
   if (row.kind === "command") return <TerminalWindowIcon className="size-3.5 shrink-0" />;
   if (row.kind === "skill") return <BookOpenIcon className="size-3.5 shrink-0" />;
   return row.artifact ? (

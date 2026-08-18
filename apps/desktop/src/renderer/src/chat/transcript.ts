@@ -13,13 +13,19 @@ import {
   type SessionStreamOverlay,
   type TranscriptOverlay,
 } from "@volli/session-engine";
-import type { RendererSessionEvent, RendererSessionInteraction } from "@volli/shared";
+import type {
+  CompactionReason,
+  RendererSessionEvent,
+  RendererSessionEventPayload,
+  RendererSessionInteraction,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { indexOpenedInteractions } from "@renderer/chat/interaction";
 import {
   layerTranscriptOverlay,
   projectTranscriptMessages,
+  speaksInTranscript,
 } from "@renderer/chat/message-projection";
 
 export interface ChatSessionFrame {
@@ -33,6 +39,37 @@ export interface ChatSessionFrame {
   event: RendererSessionEvent | null;
   transcript: { message: UIMessage } | null;
 }
+
+/**
+ * One compaction, pinned to where in the conversation it happened.
+ *
+ * Two arms, because the ledger has two and they are not one fact with an
+ * outcome: a compaction that happened divides the transcript and has a count
+ * behind it, and one that failed divides nothing and has only the executor's
+ * own words. Both are folded, because a failure that leaves no mark on screen is
+ * exactly the silence the durable event was added to break.
+ *
+ * `afterMessageId` is the anchor, and it is a message id rather than a position
+ * because positions move: the durable list only ever grows at its end, but where
+ * a given message sits in the list a surface is drawing depends on what has been
+ * laid over it. The id is what the transcript can still find. `null` means the
+ * Session had said nothing yet.
+ *
+ * `tokensAfter` rides the durable event and is deliberately not folded. Nothing
+ * has measured the compacted context and nothing can until the model next
+ * answers on it — `chat/compaction-boundary.ts` owns that decision and the
+ * reasoning, and a field carried here would be an invitation to draw it.
+ */
+export type TranscriptCompaction = {
+  /** The frame's sequence: its identity here, and the row's React key. */
+  sequence: number;
+  reason: CompactionReason;
+  afterMessageId: string | null;
+} & (
+  | { outcome: "compacted"; tokensBefore: number }
+  /** The executor's sanitized diagnostic; empty when it had nothing to say. */
+  | { outcome: "failed"; detail: string }
+);
 
 /**
  * What the stream alone can say, kept between batches.
@@ -104,12 +141,23 @@ export interface ChatTranscriptState {
    * wins over a list that never actually changes.
    */
   promptResources: readonly string[];
+  /**
+   * Every compaction this Session has been through, oldest first.
+   *
+   * Folded rather than scanned for the reason everything else here is: the
+   * anchor a boundary needs is *which message had been said when it happened*,
+   * and only a pass in frame order knows that. Rebuilt from the whole frame
+   * list it would cost the Session's length on every settled reply, for a fact
+   * that moves once or twice in a long conversation.
+   */
+  compactions: readonly TranscriptCompaction[];
 }
 
 const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const EMPTY_OVERLAY: TranscriptOverlay = new Map();
 const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
 const EMPTY_PROMPT_RESOURCES: readonly string[] = [];
+const EMPTY_COMPACTIONS: readonly TranscriptCompaction[] = [];
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
@@ -121,6 +169,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   messages: [],
   openedInteractions: EMPTY_INTERACTION_INDEX,
   promptResources: EMPTY_PROMPT_RESOURCES,
+  compactions: EMPTY_COMPACTIONS,
 };
 
 /**
@@ -153,6 +202,18 @@ export function appendFrames(
   let turnEpoch = state.turnEpoch;
   let overlay = state.overlay;
   let promptResources = state.promptResources;
+  // Collected, then appended once, and null while nothing has landed — which is
+  // the whole of it: a batch that carried no compaction must hand back the very
+  // array it was given, or the surface above re-weaves every turn on screen for
+  // a fact that did not move.
+  let landed: TranscriptCompaction[] | null = null;
+  // What the transcript had said when the next compaction lands. The batch
+  // starts wherever the last one left off — the durable list only ever grows at
+  // its end, so its last entry IS the newest thing on screen — and moves inside
+  // the loop, because a batch can carry a reply and the compaction that
+  // followed it, and a boundary drawn at the batch's edge would sit in the
+  // wrong place for one of them.
+  let anchorId = state.durableMessages.at(-1)?.id ?? null;
   // Copied once, and only if something settles. A history replay hands this
   // every transcript frame the Session ever committed in a single batch, and
   // copying per frame would make seeding an old Session quadratic in its own
@@ -171,8 +232,14 @@ export function appendFrames(
     if (payload?.kind === "session.input.recorded" && payload.input.kind === "prompt-resources") {
       promptResources = payload.input.resources.map((resource) => resource.name);
     }
-    const settledId = frame.transcript?.message.id;
-    if (settledId === undefined) continue;
+    const compaction = compactionFrame(payload, frame.sequence, anchorId);
+    if (compaction !== null) (landed ??= []).push(compaction);
+    const settledMessage = frame.transcript?.message;
+    if (settledMessage === undefined) continue;
+    // A message with nothing to draw takes no position, so it is not somewhere a
+    // boundary can be drawn after either — one rule, asked rather than restated.
+    if (speaksInTranscript(settledMessage)) anchorId = settledMessage.id;
+    const settledId = settledMessage.id;
     // The settle point: the message is durable now, so the transient entry goes
     // and the sequence it settled at is what the guard below compares against.
     // Same words on both sides when the emitter is honest, so nothing jumps.
@@ -218,7 +285,42 @@ export function appendFrames(
         ? state.openedInteractions
         : new Map([...state.openedInteractions, ...opened]),
     promptResources,
+    compactions: landed === null ? state.compactions : [...state.compactions, ...landed],
   };
+}
+
+/**
+ * The two ledger facts a compaction leaves, read as one row — or nothing at all,
+ * which is what every other frame is to this question.
+ *
+ * Named rather than inlined so the two arms are one decision: they share an
+ * anchor and a sequence, and the only thing that differs between them is the
+ * evidence each actually has.
+ */
+function compactionFrame(
+  payload: RendererSessionEventPayload | undefined,
+  sequence: number,
+  afterMessageId: string | null,
+): TranscriptCompaction | null {
+  if (payload?.kind === "context.compacted") {
+    return {
+      sequence,
+      reason: payload.reason,
+      afterMessageId,
+      outcome: "compacted",
+      tokensBefore: payload.tokensBefore,
+    };
+  }
+  if (payload?.kind === "context.compaction_failed") {
+    return {
+      sequence,
+      reason: payload.reason,
+      afterMessageId,
+      outcome: "failed",
+      detail: payload.detail,
+    };
+  }
+  return null;
 }
 
 function withoutOverlayMessage(overlay: TranscriptOverlay, messageId: string): TranscriptOverlay {

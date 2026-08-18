@@ -18,6 +18,7 @@ import {
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelPurpose,
@@ -37,6 +38,7 @@ export type RendererSessionCommand =
       | { kind: "model.select" }
       | { kind: "executor.interrupt" }
       | { kind: "executor.retry" }
+      | { kind: "context.compact" }
       | { kind: "interaction.resolve" }
     >;
 
@@ -122,6 +124,10 @@ export interface SessionRouterContext {
   ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
   readHiddenModels?: () => readonly HiddenModelRef[];
   writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
+  readCompactionPolicy?: () => CompactionPolicy;
+  writeCompactionPolicy?: (
+    policy: CompactionPolicy,
+  ) => CompactionPolicy | Promise<CompactionPolicy>;
   /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -358,6 +364,27 @@ const modelAccessDefaultsSchema = z.object({
 const hiddenModelsSchema = z
   .array(z.object({ providerId: nonEmptyString, modelId: nonEmptyString }))
   .max(2000);
+/**
+ * The compaction policy, whole in both directions: the switch and the full
+ * curated list of per-model reserves, never a delta.
+ *
+ * A reserve crosses as a positive whole token count and nothing more — whether
+ * one is larger than the model's own window is a question about a catalog this
+ * edge does not hold, and main refuses it against the snapshot before storing.
+ * The same count cap as the hidden models beside it, for the same reason.
+ */
+const compactionPolicySchema = z.object({
+  autoCompaction: z.boolean(),
+  modelLimits: z
+    .array(
+      z.object({
+        providerId: nonEmptyString,
+        modelId: nonEmptyString,
+        reserveTokens: positiveSafeInteger,
+      }),
+    )
+    .max(2000),
+});
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 const modelAccessSnapshotSchema = z.object({
   observedAt: z.number().finite(),
@@ -466,6 +493,14 @@ const commandSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("executor.interrupt"), attachmentId: nonEmptyString.optional() }),
   z.object({ kind: z.literal("executor.retry"), attachmentId: nonEmptyString.optional() }),
+  z.object({
+    kind: z.literal("context.compact"),
+    attachmentId: nonEmptyString.optional(),
+    // Bounded like every other free string this edge takes: these words are
+    // headed for a summarization prompt, and an unbounded one is a way to
+    // spend a Session's whole window on the call meant to reclaim it.
+    instructions: z.string().max(4000).nullable().optional(),
+  }),
   z.object({
     kind: z.literal("interaction.resolve"),
     interactionId: nonEmptyString,
@@ -651,6 +686,20 @@ export function createSessionRouter() {
           }
           await ctx.writeHiddenModels(input);
           return input;
+        }),
+      compactionPolicy: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readCompactionPolicy) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return compactionPolicySchema.parse(ctx.readCompactionPolicy());
+      }),
+      setCompactionPolicy: instrumentedProcedure
+        .input(compactionPolicySchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeCompactionPolicy) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
         }),
     }),
     session: t.router({

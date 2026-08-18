@@ -11,6 +11,7 @@ import {
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
 import type {
+  CompactionPolicy,
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
@@ -113,6 +114,10 @@ export interface RegisterSessionRpcIpcOptions {
   ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
   readHiddenModels?: () => readonly HiddenModelRef[];
   writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
+  readCompactionPolicy?: () => CompactionPolicy;
+  writeCompactionPolicy?: (
+    policy: CompactionPolicy,
+  ) => CompactionPolicy | Promise<CompactionPolicy>;
   /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -166,6 +171,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           writeModelAccessDefault: options.writeModelAccessDefault,
           readHiddenModels: options.readHiddenModels,
           writeHiddenModels: options.writeHiddenModels,
+          readCompactionPolicy: options.readCompactionPolicy,
+          writeCompactionPolicy: options.writeCompactionPolicy,
           createSession: options.createSession,
           attachSession: options.attachSession,
           diagnostics,
@@ -297,6 +304,10 @@ async function callProcedure(
       return caller.modelAccess.hiddenModels();
     case "modelAccess.setHiddenModels":
       return caller.modelAccess.setHiddenModels(request.input as never);
+    case "modelAccess.compactionPolicy":
+      return caller.modelAccess.compactionPolicy();
+    case "modelAccess.setCompactionPolicy":
+      return caller.modelAccess.setCompactionPolicy(request.input as never);
     case "sessions.create":
       return caller.sessions.create(request.input as never);
     case "sessions.attach":

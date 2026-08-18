@@ -6,6 +6,7 @@ import type {
   SessionAttachment,
   SessionAttachmentContinuity,
   SessionCommand,
+  SessionCommandIntent,
   SessionEvent,
   SessionEventProvenance,
   RuntimeObservation,
@@ -22,6 +23,7 @@ import type { SessionEngine, SubmitSessionCommandResult } from "./session-engine
 import type {
   BindingHandle,
   DeliveryReceipt,
+  HarnessCommand,
   NativeAttachmentSpec,
   NativeHarnessAdapter,
   NativeMessageDelivery,
@@ -119,6 +121,7 @@ export type SessionClientCommand =
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
+  | { kind: "context.compact"; attachmentId?: string; instructions?: string | null }
   | {
       kind: "interaction.resolve";
       interactionId: string;
@@ -150,11 +153,15 @@ type InterruptCommandRequest = ExistingSessionCommandRequest & {
 type RetryCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "executor.retry" }>;
 };
+type CompactCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<SessionClientCommand, { kind: "context.compact" }>;
+};
 type DeliveryResultKind =
   | "executor.start.requested"
   | "executor.stop.requested"
   | "executor.interrupted"
   | "executor.retried"
+  | "context.compacted"
   | "message.submitted"
   | "model.selected"
   | "interaction.resolved";
@@ -560,9 +567,20 @@ class DefaultSessionRuntime implements SessionRuntime {
       return existing.promise;
     }
 
+    // Every command that touches what the executor will next be sent, so none
+    // of them can be deciding it at the same time. `context.compact` is here
+    // for a sharper reason than the two beside it: it REPLACES the executor's
+    // message array rather than extending it, and a message admitted while its
+    // summary was still running would be a turn the returning compaction
+    // overwrote — the message and its reply gone from the model's context
+    // while both remain in the ledger and on screen. Unlike a message, a
+    // compaction holds this tail for its whole run, because it is not finished
+    // when it starts and there is no earlier moment that is safe.
     const serializesAdmission =
       "sessionId" in request &&
-      (request.command.kind === "message.submit" || request.command.kind === "model.select");
+      (request.command.kind === "message.submit" ||
+        request.command.kind === "model.select" ||
+        request.command.kind === "context.compact");
     const previous =
       "sessionId" in request ? this.#sessionAdmissionTails.get(request.sessionId) : null;
     const admission =
@@ -647,6 +665,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         return this.#interrupt(request as InterruptCommandRequest, projection, location, existed);
       case "executor.retry":
         return this.#retry(request as RetryCommandRequest, projection, location, existed);
+      case "context.compact":
+        return this.#compact(request as CompactCommandRequest, projection, location, existed);
       case "interaction.resolve":
         return this.#resolveInteraction(
           request as ResolveInteractionCommandRequest,
@@ -1087,6 +1107,47 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#result(request.sessionId, submitted.command, durable);
   }
 
+  /**
+   * An explicit Context Compaction — the third reason a context is summarized,
+   * and the only one a person chose.
+   *
+   * The same shape of act as an interrupt: one operation addressed to the live
+   * attachment, whose whole outcome is its receipt — so it takes the same road
+   * ({@link #addressedOperation}) rather than a copy of it. Retry's extra
+   * machinery is about the Attention a failed run leaves behind, and a
+   * compaction leaves none: the executor's refusals, including "there is
+   * nothing left to summarize", reach the user through this receipt.
+   */
+  async #compact(
+    request: CompactCommandRequest,
+    projection: SessionProjection,
+    location: SessionLocation,
+    existed: boolean,
+  ): Promise<SessionRuntimeCommandResult> {
+    const attachmentId = request.command.attachmentId ?? projection.liveExecutor?.id;
+    if (!attachmentId) throw new SessionRuntimeConflictError("No live executor can be compacted");
+    // Null, never absent: the instructions are part of the intent, so a
+    // command id resent with different words is a different command rather
+    // than one answered with the first one's receipt.
+    const instructions = request.command.instructions ?? null;
+    return this.#addressedOperation({
+      request,
+      projection,
+      location,
+      existed,
+      attachmentId,
+      intent: { kind: "context.compact", attachmentId, instructions },
+      resultKind: "context.compacted",
+      delivery: {
+        kind: "context.compact",
+        commandId: request.commandId,
+        sessionId: request.sessionId,
+        attachmentId,
+        instructions,
+      },
+    });
+  }
+
   async #interrupt(
     request: InterruptCommandRequest,
     projection: SessionProjection,
@@ -1095,16 +1156,63 @@ class DefaultSessionRuntime implements SessionRuntime {
   ): Promise<SessionRuntimeCommandResult> {
     const attachmentId = request.command.attachmentId ?? projection.liveExecutor?.id;
     if (!attachmentId) throw new SessionRuntimeConflictError("No live executor can be interrupted");
+    return this.#addressedOperation({
+      request,
+      projection,
+      location,
+      existed,
+      attachmentId,
+      intent: { kind: "executor.interrupt", attachmentId },
+      resultKind: "executor.interrupted",
+      delivery: {
+        kind: "executor.interrupt",
+        commandId: request.commandId,
+        sessionId: request.sessionId,
+        attachmentId,
+      },
+    });
+  }
+
+  /**
+   * One operation addressed to one attachment, delivered the way every
+   * adapter-bound command is delivered.
+   *
+   * What is in here is not any operation: it is the delivery discipline they
+   * all owe. Record the intent before anything acts on it; answer a command
+   * whose receipt is already terminal with that receipt; resume a cold binding
+   * before addressing it and settle a location that will not come back; and
+   * let a replay find the receipt its first attempt left rather than doing the
+   * work twice — which for a compaction would mean a second summary call and a
+   * second entry appended.
+   *
+   * Shared by {@link #interrupt} and {@link #compact} because the discipline is
+   * one thing. Two copies of it would be one thing until the day they
+   * disagreed, and the disagreement would be invisible from either call site.
+   */
+  async #addressedOperation(input: {
+    request: ExistingSessionCommandRequest;
+    projection: SessionProjection;
+    location: SessionLocation;
+    existed: boolean;
+    attachmentId: string;
+    intent: Extract<
+      SessionCommandIntent,
+      { kind: "executor.interrupt" } | { kind: "context.compact" }
+    >;
+    resultKind: DeliveryResultKind;
+    delivery: HarnessCommand;
+  }): Promise<SessionRuntimeCommandResult> {
+    const { request, projection, location, existed, attachmentId } = input;
     const submitted = await this.ports.engine.submit({
       commandId: request.commandId,
       sessionId: request.sessionId,
-      intent: { kind: "executor.interrupt", attachmentId },
+      intent: input.intent,
       provenance: userProvenance(location.venue),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
-    // A live binding can always be interrupted without consulting its old cwd.
+    // A live binding can always be addressed without consulting its old cwd.
     // A cold one must first be resumed, so give that location failure the same
     // durable outcome as every other post-intent delivery preflight.
     const needsRehydration = !this.#bindings.has(attachmentId);
@@ -1125,19 +1233,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     );
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
-    const receipt = await binding.handle.dispatch({
-      kind: "executor.interrupt",
-      commandId: request.commandId,
-      sessionId: request.sessionId,
-      attachmentId,
-    });
+    const receipt = await binding.handle.dispatch(input.delivery);
     const durable = await this.#recordDelivery(
       request.sessionId,
       attachmentId,
       binding.adapter,
       binding.venue,
       receipt,
-      "executor.interrupted",
+      input.resultKind,
     );
     return this.#result(request.sessionId, submitted.command, durable);
   }
@@ -1815,6 +1918,24 @@ class DefaultSessionRuntime implements SessionRuntime {
           const release = this.#messageAdmissions.get(spec.sessionId);
           if (release !== undefined) this.#releaseMessageAdmission(spec.sessionId, release);
         }
+        break;
+      case "context.compacted":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          reason: observation.reason,
+          entryId: observation.entryId,
+          tokensBefore: observation.tokensBefore,
+          tokensAfter: observation.tokensAfter,
+        });
+        break;
+      case "context.compaction_failed":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          reason: observation.reason,
+          detail: observation.detail,
+        });
         break;
       case "authority.denied":
         event = await this.ports.engine.observe({
@@ -2710,6 +2831,8 @@ function resultKindFor(command: SessionCommand): DeliveryResultKind {
       return "executor.interrupted";
     case "executor.retry":
       return "executor.retried";
+    case "context.compact":
+      return "context.compacted";
     case "message.submit":
       return "message.submitted";
     case "model.select":

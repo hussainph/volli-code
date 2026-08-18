@@ -72,9 +72,12 @@ import {
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
+  assertCompactionLimitsUsable,
   assertDefaultModelAvailable,
+  readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
+  writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
 } from "./session-runtime/model-access-preferences";
@@ -656,6 +659,16 @@ app.whenReady().then(async () => {
           // or the Blob store.
           prepareTurnAttachments: (message, owner) =>
             prepareTurnAttachments(dbHandle.db, blobsRoot(app.getPath("userData")), message, owner),
+          // The same Role-in/purpose-out resolution the Session defaults use
+          // (VC-53), for the runtime's own background work: a compaction summary
+          // is cost-efficient background work by definition, which is what the
+          // `utility` purpose names. Read per call, so retuning it in Settings
+          // reaches a Session already running.
+          utilityModel: () => resolveDefaultModel(readModelAccessDefaults(dbHandle.db), "utility"),
+          // Read per compaction rather than captured here, for the same reason:
+          // a Session outlives the Settings change that retunes it, and the
+          // next compaction should run under the policy configured now.
+          compactionPolicy: () => readCompactionPolicy(dbHandle.db),
           // Makes `volli` and every detected toolchain resolve inside a
           // structured Session's shell tool whether or not the background
           // install's `~/.local/bin/volli` link is reachable yet — the same
@@ -913,6 +926,22 @@ app.whenReady().then(async () => {
             sessionDb !== null
               ? (hidden) => {
                   writeHiddenModels(sessionDb, hidden, Date.now());
+                }
+              : undefined,
+          readCompactionPolicy:
+            sessionDb !== null ? () => readCompactionPolicy(sessionDb) : undefined,
+          writeCompactionPolicy:
+            sessionDb !== null && piRuntimeHost !== null
+              ? async (policy) => {
+                  // Refused against the catalog before it is stored, like a
+                  // default model is: a reserve the model's own window cannot
+                  // hold would compact after every reply, and the only place
+                  // that is legible is the control that set it.
+                  if (policy.modelLimits.length > 0) {
+                    const access = await piRuntimeHost.inspectModelAccess({});
+                    assertCompactionLimitsUsable(access, policy.modelLimits);
+                  }
+                  return writeCompactionPolicy(sessionDb, policy, Date.now());
                 }
               : undefined,
           createSession: sessions?.create,

@@ -102,6 +102,14 @@ describe("visibleSkills", () => {
     expect(visibleSkills([shadowed, offered], [template()])).toEqual([offered]);
   });
 
+  it("drops a skill whose name a built-in verb has taken", () => {
+    // Reserved above both lists: `expandCommandInvocation` refuses the name
+    // too, so this row could never have been invoked as a skill.
+    const shadowed = skill({ name: "compact" });
+    const offered = skill({ name: "logos" });
+    expect(visibleSkills([shadowed, offered], [])).toEqual([offered]);
+  });
+
   it("sorts by name so the list does not reorder itself", () => {
     const b = skill({ name: "beta" });
     const a = skill({ name: "alpha" });

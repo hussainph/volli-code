@@ -35,7 +35,7 @@
  * this table exists to make impossible.
  */
 
-import { REASONING_LEVELS } from "./agent-runtime";
+import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
 import { errorMessage } from "./errors";
 import {
@@ -275,6 +275,36 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
     }),
+    scrub: (payload) => payload,
+  },
+  // Token counts are read as integers, which is what every producer of one
+  // counts in. A fractional count is not a tolerable rounding difference here:
+  // it is a number nothing in the pipeline can have written, and the loud read
+  // is the same answer this table gives every malformed field inside a known
+  // kind.
+  "context.compacted": {
+    decode: (record, context) => ({
+      kind: "context.compacted",
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      reason: enumValue(record.reason, COMPACTION_REASONS, `${context}.reason`),
+      entryId: readString(record.entryId, `${context}.entryId`),
+      tokensBefore: readInteger(record.tokensBefore, `${context}.tokensBefore`),
+      tokensAfter: readInteger(record.tokensAfter, `${context}.tokensAfter`),
+    }),
+    // Both counts and the reason are Volli's own vocabulary; `entryId` names an
+    // entry in the executor's history and not a path, a locator or a credential,
+    // so the whole payload crosses to the renderer as it stands.
+    scrub: (payload) => payload,
+  },
+  "context.compaction_failed": {
+    decode: (record, context) => ({
+      kind: "context.compaction_failed",
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      reason: enumValue(record.reason, COMPACTION_REASONS, `${context}.reason`),
+      detail: readString(record.detail, `${context}.detail`),
+    }),
+    // `detail` was sanitized at the runtime boundary, like every other
+    // diagnostic that reaches a person.
     scrub: (payload) => payload,
   },
   "transcript.referenced": {
@@ -777,6 +807,12 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
     case "executor.interrupt":
     case "executor.retry":
       return { kind, attachmentId: readString(row.attachmentId, `${context}.attachmentId`) };
+    case "context.compact":
+      return {
+        kind,
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        instructions: readNullableString(row.instructions, `${context}.instructions`),
+      };
     case "message.submit":
       return {
         kind,
@@ -925,6 +961,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "executor.stop.requested",
       "executor.interrupted",
       "executor.retried",
+      "context.compacted",
       "message.submitted",
       "interaction.resolved",
     ],

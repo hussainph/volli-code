@@ -15,7 +15,7 @@ export function projectTranscriptMessages(
 ): readonly UIMessage[] {
   const latestByMessageId = new Map<string, UIMessage>();
   for (const frame of frames) {
-    if (frame.transcript && speaks(frame.transcript.message))
+    if (frame.transcript && speaksInTranscript(frame.transcript.message))
       latestByMessageId.set(frame.transcript.message.id, frame.transcript.message);
   }
   return [...latestByMessageId.values()];
@@ -32,12 +32,12 @@ export function projectTranscriptMessages(
  * so it renders after everything durable, in the order the overlay first heard
  * of it, and takes its real place the moment its settle frame lands.
  *
- * `speaks` gates the overlay projection for the same reason it gates the
- * durable one, and the fallback is what makes it one rule rather than two: an
- * emitter leads a message with a baseline `reset` that can carry nothing
- * drawable yet, and rendering that would open an empty bubble in front of the
- * first word. So the rendered message is the overlay while the overlay has
- * something to draw, else the durable latest, else no row at all.
+ * {@link speaksInTranscript} gates the overlay projection for the same reason
+ * it gates the durable one, and the fallback is what makes it one rule rather
+ * than two: an emitter leads a message with a baseline `reset` that can carry
+ * nothing drawable yet, and rendering that would open an empty bubble in front
+ * of the first word. So the rendered message is the overlay while the overlay
+ * has something to draw, else the durable latest, else no row at all.
  */
 export function layerTranscriptOverlay(
   durable: readonly UIMessage[],
@@ -52,11 +52,11 @@ export function layerTranscriptOverlay(
     if (!entry) return message;
     pending.delete(message.id);
     const projected = projectKeyedTranscriptMessage(entry);
-    return speaks(projected) ? projected : message;
+    return speaksInTranscript(projected) ? projected : message;
   });
   for (const entry of pending.values()) {
     const projected = projectKeyedTranscriptMessage(entry);
-    if (speaks(projected)) layered.push(projected);
+    if (speaksInTranscript(projected)) layered.push(projected);
   }
   return layered;
 }
@@ -80,8 +80,14 @@ export function layerTranscriptOverlay(
  * other shape. `file` counts as drawable (VC-50): a message that is nothing
  * but a dropped screenshot is a real turn, and the transcript draws its thumb
  * where prose would have been.
+ *
+ * Exported because a second reader needs the same answer for a different
+ * question: the transcript fold pins a compaction to the message it happened
+ * after, and "the message it happened after" can only mean one with a position
+ * on screen. Asking this rather than restating it is what keeps the boundary
+ * anchored to a row that exists.
  */
-function speaks(message: UIMessage): boolean {
+export function speaksInTranscript(message: UIMessage): boolean {
   if (message.role === "user") {
     return message.parts.some(
       (part) =>

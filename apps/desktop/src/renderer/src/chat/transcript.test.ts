@@ -108,6 +108,26 @@ function turn(
   return frame(sequence, { kind, attachmentId: "attachment-1", turnId: "turn-1" });
 }
 
+function compacted(sequence: number, tokensBefore = 182_000): ChatSessionFrame {
+  return frame(sequence, {
+    kind: "context.compacted",
+    attachmentId: "attachment-1",
+    reason: "threshold",
+    entryId: `entry-${sequence}`,
+    tokensBefore,
+    tokensAfter: 24_000,
+  });
+}
+
+function compactionFailed(sequence: number): ChatSessionFrame {
+  return frame(sequence, {
+    kind: "context.compaction_failed",
+    attachmentId: "attachment-1",
+    reason: "overflow",
+    detail: "The summarizer refused the request.",
+  });
+}
+
 function opening(sequence: number, id: string): ChatSessionFrame {
   const interaction: RendererSessionInteraction = {
     id,
@@ -346,6 +366,79 @@ describe("appendFrames overlays", () => {
 
     expect(removed.overlay.size).toBe(0);
     expect(removed.messages).toEqual([]);
+  });
+});
+
+describe("compaction boundaries", () => {
+  it("pins each compaction to what had been said when it happened", () => {
+    const state = [
+      transcriptFrame(1, message("m1", "first")),
+      transcriptFrame(2, message("m2", "second")),
+      compacted(3),
+      transcriptFrame(4, message("m3", "third")),
+      compactionFailed(5),
+    ].reduce((held, next) => appendFrames(held, [next]), EMPTY_TRANSCRIPT);
+
+    expect(state.compactions).toEqual([
+      {
+        sequence: 3,
+        reason: "threshold",
+        afterMessageId: "m2",
+        outcome: "compacted",
+        tokensBefore: 182_000,
+      },
+      {
+        sequence: 5,
+        reason: "overflow",
+        afterMessageId: "m3",
+        outcome: "failed",
+        detail: "The summarizer refused the request.",
+      },
+    ]);
+  });
+
+  it("anchors inside a batch, not at its edge", () => {
+    // One batch carrying a reply, the compaction that followed it, and the
+    // reply after that. Anchoring at the batch's edge would put the boundary
+    // under `m2` — below a message that had not been said when it happened.
+    const state = appendFrames(EMPTY_TRANSCRIPT, [
+      transcriptFrame(1, message("m1", "first")),
+      compacted(2),
+      transcriptFrame(3, message("m2", "second")),
+    ]);
+
+    expect(state.compactions.map((entry) => entry.afterMessageId)).toEqual(["m1"]);
+  });
+
+  it("leaves a compaction with nothing said before it unanchored", () => {
+    const state = appendFrames(EMPTY_TRANSCRIPT, [compacted(1)]);
+
+    expect(state.compactions.map((entry) => entry.afterMessageId)).toEqual([null]);
+  });
+
+  it("never anchors to a message the transcript does not draw", () => {
+    // An answered interaction commits a durable user message whose only part is
+    // the resolution; `speaksInTranscript` keeps it, but a message with nothing
+    // drawable at all takes no position and so is nowhere to draw a rule after.
+    const silent: UIMessage = { id: "m2", role: "assistant", parts: [] };
+    const state = appendFrames(EMPTY_TRANSCRIPT, [
+      transcriptFrame(1, message("m1", "first")),
+      transcriptFrame(2, silent),
+      compacted(3),
+    ]);
+
+    expect(state.compactions.map((entry) => entry.afterMessageId)).toEqual(["m1"]);
+  });
+
+  it("keeps the list it had when a batch carried no compaction", () => {
+    const compactedState = appendFrames(EMPTY_TRANSCRIPT, [
+      transcriptFrame(1, message("m1", "first")),
+      compacted(2),
+    ]);
+
+    const later = appendFrames(compactedState, [transcriptFrame(3, message("m2", "second"))]);
+
+    expect(later.compactions).toBe(compactedState.compactions);
   });
 });
 

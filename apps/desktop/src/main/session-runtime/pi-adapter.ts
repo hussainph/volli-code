@@ -82,6 +82,7 @@ import {
   errorMessage,
   readSkillResources,
   type AgentRuntime,
+  type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ModelSelection,
   type ModelSelectionOutcome,
@@ -227,6 +228,20 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The model the runtime's own background work — context compaction's summary
+   * — runs on. Purpose in, selection out: this module speaks Sessions, and
+   * mapping Model Access's `utility` purpose onto a stored default is the
+   * composition root's job, in the one place it already resolves the others.
+   */
+  utilityModel?: PiRuntimeHostOptions["utilityModel"];
+  /**
+   * The compaction policy every Session is run under — the global automatic
+   * switch and the per-model reserves. Read per compaction rather than per
+   * attach, for the reason {@link PiAdapterOptions.utilityModel} is: a Session
+   * outlives the settings change that retunes it.
+   */
+  compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -256,6 +271,23 @@ const MODEL_SELECTION_REJECTION_CODES = {
   "model-unavailable": "PI_MODEL_UNAVAILABLE",
   "reasoning-unsupported": "PI_REASONING_UNSUPPORTED",
 } as const satisfies Record<Extract<ModelSelectionOutcome, { kind: "rejected" }>["reason"], string>;
+
+/**
+ * Every way an explicit compaction does not happen, as a code the receipt
+ * carries. Two of them are not failures at all — a context with nothing left
+ * to summarize, and a summary the provider would not produce — and they are
+ * refusals here for the reason `CompactionRequestOutcome` gives: a person
+ * asked, so every answer has to be one.
+ */
+const COMPACTION_REJECTION_CODES = {
+  "busy-unsupported": "PI_BUSY",
+  closed: "PI_ATTACHMENT_CLOSED",
+  "nothing-to-compact": "PI_NOTHING_TO_COMPACT",
+  "summary-failed": "PI_COMPACTION_FAILED",
+} as const satisfies Record<
+  Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
+  string
+>;
 
 function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
   if (spec.continuity !== "native_resume") return undefined;
@@ -309,6 +341,10 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
+    ...(options.utilityModel === undefined ? {} : { utilityModel: options.utilityModel }),
+    ...(options.compactionPolicy === undefined
+      ? {}
+      : { compactionPolicy: options.compactionPolicy }),
   });
 
   return {
@@ -599,6 +635,23 @@ class PiBinding implements BindingHandle {
           return outcome.kind === "delivered"
             ? this.#accepted(command.commandId)
             : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
+        } catch (error) {
+          return this.#unknown(command.commandId, error);
+        }
+      case "context.compact":
+        try {
+          // The compaction itself is announced by the runtime, as the same
+          // Session Event its two automatic siblings emit. What comes back
+          // here is only whether the request was served, which is this
+          // receipt's whole job.
+          const outcome = await handle.compact(command.instructions ?? undefined);
+          return outcome.kind === "compacted"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(
+                command.commandId,
+                COMPACTION_REJECTION_CODES[outcome.reason],
+                outcome.message,
+              );
         } catch (error) {
           return this.#unknown(command.commandId, error);
         }
