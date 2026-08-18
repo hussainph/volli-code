@@ -148,8 +148,19 @@ export function worktreeHomeFor(dbPath, extraEnv = {}) {
  * @param {Record<string,string>} [extraEnv]
  */
 export function launchEnvFor(dbPath, extraEnv = {}) {
+  // The inherited environment, minus the addressing an OUTER Volli session
+  // donates. An agent runs these probes from inside a live session, so its own
+  // `VOLLI_SESSION` / `VOLLI_TICKET` sit in `process.env` naming rows in the
+  // DEVELOPER's database; handed to the scratch app they address a Session it
+  // cannot know, and anything the app injects them into (a PTY's environment,
+  // the `volli` CLI a harness calls there) inherits the wrong addressing.
+  // Scrubbed from the INHERITED half only, so the probes that mean one still
+  // set it through `extraEnv` below.
+  const inherited = { ...process.env };
+  delete inherited.VOLLI_SESSION;
+  delete inherited.VOLLI_TICKET;
   const env = {
-    ...process.env,
+    ...inherited,
     VOLLI_DB_PATH: dbPath,
     VOLLI_SKIP_CLOSE_CONFIRM: "1",
     // The background CLI/skills install (VC-52) writes into the real home by

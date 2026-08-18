@@ -214,8 +214,28 @@ async function kickoffTicket(page, projectId, title, body, opts = {}) {
   if (!opened) throw new Error("composer did not open");
   // Status chip → Doing: the plain Create honours the chip, and every scenario
   // below needs the ticket in an active column before its agent starts.
+  //
+  // AND THE SETTLE AFTER IT IS LOAD-BEARING. Radix hands focus back to the
+  // trigger when the menu closes, and it does that asynchronously — so a
+  // restore that lands between `clickMonaco`'s click and the keystrokes types
+  // the body into the Status chip instead of into the editor. That is exactly
+  // how it presented: "timed out waiting for typed text to land in Monaco" on
+  // check 4, and then "board view did not become stable" on check 5, behind the
+  // composer that throw left open. The harness-picker version of this function
+  // slept 200ms after its menu for the same reason; the VC-56 rewrite dropped
+  // the sleep along with the picker and inherited the race.
+  //
+  // Waiting for the menu to actually detach is the real condition; the settle
+  // after it is for the focus restore, which follows the unmount.
   await composer(page).getByRole("button", { name: "Backlog" }).click();
-  await page.getByRole("menuitemradio", { name: "Doing" }).click();
+  await sleep(150);
+  await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
+  await waitUntil(
+    "the status menu to close",
+    async () => (await page.getByRole("menuitemradio").count()) === 0,
+    { timeout: 4000 },
+  );
+  await sleep(200);
   await fillTitleAndBody(page, title, body);
   await composer(page).getByRole("button", { name: "Create", exact: true }).click();
   await waitUntil(
