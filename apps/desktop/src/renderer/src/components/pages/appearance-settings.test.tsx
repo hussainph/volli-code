@@ -40,15 +40,23 @@ describe("Settings → Appearance", () => {
     expect(html).not.toContain("Workspace");
   });
 
-  it("gives light/dark/auto its own section, scoped separately from the canvas", () => {
-    // The canvas does not name a mode — the per-mode dials exist so ONE canvas
-    // renders in both — and the two are independently overridable per project.
+  it("puts light/dark/auto with the canvas, above it, in one App theme section", () => {
+    // They are one subject to anyone changing how the app looks, so the separate
+    // "Light & dark" section is gone. What the split protected still holds: the
+    // canvas does not name a mode, so the control is a sibling of the editor
+    // rather than a child — see AppThemeSection.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
-    expect(html).toContain("Light &amp; dark");
+    expect(html).not.toContain("Light &amp; dark");
     expect(html).toContain('data-testid="appearance-mode"');
     expect(html).toContain("Auto");
-    expect(html.indexOf("Light &amp; dark")).toBeGreaterThan(html.indexOf("App theme"));
+    expect(html.indexOf('data-testid="appearance-mode"')).toBeGreaterThan(
+      html.indexOf("App theme"),
+    );
+    // Above the canvas it is seen in, not below it.
+    expect(html.indexOf('data-testid="appearance-mode"')).toBeLessThan(
+      html.indexOf('data-testid="canvas-grain-dial"'),
+    );
   });
 
   it("carries no contrast instrumentation on the shipped canvas", () => {
@@ -68,7 +76,7 @@ describe("Settings → Appearance", () => {
 
     expect(html).toContain("Editor");
     expect(html).toContain("Terminal");
-    // Section order: App theme → Light & dark → Editor → Terminal.
+    // Section order: App theme (mode + canvas) → Editor → Terminal.
     expect(html.indexOf("Editor")).toBeGreaterThan(html.indexOf("App theme"));
     expect(html.indexOf("Terminal")).toBeGreaterThan(html.indexOf("Editor"));
   });
