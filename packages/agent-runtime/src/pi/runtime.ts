@@ -843,6 +843,29 @@ async function attachSession(
       }
     };
 
+    /**
+     * Pi polls its steering queue just before it emits `agent_end`. A command
+     * can land after that poll but before its awaited `agent_end` observers
+     * settle; it was accepted into Pi's queue, yet no live loop remains to
+     * consume it. Once the run is truly idle, continue it until that narrow
+     * closing-window queue is empty. Normal queue/steer delivery is still
+     * owned by Pi's loop; this only closes the poll-to-idle gap.
+     */
+    const canDrainLateQueuedMessages = (): boolean =>
+      !closed && !cancelled && !interrupting && failure === undefined && agent.hasQueuedMessages();
+
+    const drainLateQueuedMessages = async (): Promise<void> => {
+      while (canDrainLateQueuedMessages()) {
+        await agent.continue();
+        await drainAutoRetries();
+      }
+    };
+
+    const settleRun = async (): Promise<void> => {
+      await drainAutoRetries();
+      await drainLateQueuedMessages();
+    };
+
     unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "agent_start") {
         // A resumed attempt is the same turn continuing, so it neither starts one
@@ -1052,7 +1075,7 @@ async function attachSession(
           message,
         };
         await agent.prompt(message);
-        await drainAutoRetries();
+        await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) {
           throw failed;
@@ -1133,7 +1156,7 @@ async function attachSession(
         }
         observationDelivery.consumeFailure();
         const outcome = await retryFailedTurn(commandId ?? null);
-        await drainAutoRetries();
+        await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
         return outcome;
