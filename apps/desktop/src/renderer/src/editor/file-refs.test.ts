@@ -2,6 +2,7 @@ import type { IndexedFile } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  appendFileRef,
   fileRefTokenAt,
   rankFileRefCompletions,
   refInsertion,
@@ -168,5 +169,26 @@ describe("refInsertion", () => {
 
   it("opens a boundary when the caret is pressed against a word", () => {
     expect(refInsertion({ precedingChar: "e", text: "@a.md" })).toBe(" @a.md");
+  });
+});
+
+describe("appendFileRef", () => {
+  it("is just the ref when the body is empty", () => {
+    expect(appendFileRef("", "@a.md")).toBe("@a.md");
+  });
+
+  it("opens a new line rather than gluing the ref onto a sentence", () => {
+    expect(appendFileRef("Repro steps below.", "@a.md")).toBe("Repro steps below.\n@a.md");
+  });
+
+  it("reuses the newline a body already ends on", () => {
+    expect(appendFileRef("Repro steps below.\n", "@a.md")).toBe("Repro steps below.\n@a.md");
+    expect(appendFileRef("Repro steps below.\n", "@a.md")).not.toContain("\n\n");
+  });
+
+  it("gives a second ref a line of its own, without orphaning the first", () => {
+    const once = appendFileRef("Body.", "@a.md");
+    // The rail appends sequentially: the second drop must not orphan the first.
+    expect(appendFileRef(once, "@b.md")).toBe("Body.\n@a.md\n@b.md");
   });
 });

@@ -32,8 +32,13 @@ export interface MonacoDocumentEditorHandle {
    * Insert `text` at the caret, replacing any selected range, then focus. A
    * space is prepended when the preceding character would swallow the ref's
    * boundary (see `refInsertion`).
+   *
+   * Whether the text landed: false when the editor has not acquired its lease
+   * yet (Monaco still loading, or a host that never mounted one), which is the
+   * caller's cue to fall back — the Ticket detail appends to the body through
+   * the store rather than lose the ref (VC-106).
    */
-  insertAtCursor(text: string): void;
+  insertAtCursor(text: string): boolean;
   /**
    * Record that the host has persisted the model's current value. Clears the
    * registry dirty flag and advances the baseline revision — the FileView
@@ -267,7 +272,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         const view = editorRef.current;
         const lease = leaseRef.current;
         const selection = view?.getSelection() ?? null;
-        if (view === null || lease === null || selection === null) return;
+        if (view === null || lease === null || selection === null) return false;
         const model = lease.model;
         const start = model.getOffsetAt(selection.getStartPosition());
         const precedingChar = start === 0 ? "" : model.getValue().slice(start - 1, start);
@@ -279,6 +284,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         view.setPosition(position);
         view.revealPositionInCenterIfOutsideViewport(position);
         view.focus();
+        return true;
       },
       markSaved(nextRevision) {
         const lease = leaseRef.current;

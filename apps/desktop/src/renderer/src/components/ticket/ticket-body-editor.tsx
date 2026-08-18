@@ -5,6 +5,7 @@ import type { Ticket } from "@volli/shared";
 
 import {
   type DocumentFileRefs,
+  type MonacoDocumentEditorHandle,
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
@@ -42,9 +43,12 @@ import { useBoardStore } from "@renderer/stores/board";
 export function TicketBodyEditor({
   ticket,
   fileRefs,
+  editorRef,
 }: {
   ticket: Ticket;
   fileRefs?: DocumentFileRefs;
+  /** The host's splice-in point for `@` refs attached elsewhere on the view (VC-106). */
+  editorRef?: React.Ref<MonacoDocumentEditorHandle>;
 }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
 
@@ -187,6 +191,7 @@ export function TicketBodyEditor({
           fileRefs={fileRefs}
           className="min-h-32"
           style={clamped ? { maxHeight: BODY_CLAMP_PX } : undefined}
+          ref={editorRef}
         />
         {overflowing ? (
           // The same disclosure language as the feed's bunch rows: a muted

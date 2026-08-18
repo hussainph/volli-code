@@ -240,3 +240,18 @@ export function refInsertion(input: { precedingChar: string; text: string }): st
   const needsSpace = precedingChar !== "" && !/\s/.test(precedingChar) && precedingChar !== "(";
   return needsSpace ? ` ${input.text}` : input.text;
 }
+
+/**
+ * Append a ref token to a body whose editor cannot be reached (VC-106).
+ *
+ * The counterpart of `refInsertion` for the case with no caret: a repository
+ * file attached from the Files rail while the Body tab is closed. The ref goes
+ * on a line of its own at the end — a newline is opened only when the body does
+ * not already end on one, so a body that does never gains a blank line — and a
+ * start-of-line `@` is a boundary `parseFileRefs` already recognises, so unlike
+ * a space-glued inline append it can never weld the ref onto a sentence.
+ */
+export function appendFileRef(body: string, text: string): string {
+  if (body === "") return text;
+  return body.endsWith("\n") ? `${body}${text}` : `${body}\n${text}`;
+}
