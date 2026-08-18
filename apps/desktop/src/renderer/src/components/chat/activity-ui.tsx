@@ -247,30 +247,36 @@ function RowDisclosure({
   );
 }
 
-/**
- * Whether a capped box is hiding content past its own bottom edge.
+/*
+ * NO SCRIM AT THE BOTTOM OF A CAPPED WINDOW, and it does not come back (VC-60).
  *
- * Measured rather than assumed: painted unconditionally, the fade would dim the
- * last line of a three-line output and promise more that is not there. The
- * observer catches width changes, which re-wrap and can flip whether the same
- * content clips at all; `revision` catches content arriving as a tool streams.
+ * Both capped scrollers here — a bundle and a payload — used to paint a 32px
+ * bottom-anchored gradient whenever their content overflowed, armed by a
+ * `useClipped` hook that measured `scrollHeight > clientHeight`. Three things
+ * were wrong with it, and only the third is a matter of taste:
+ *
+ *  1. It did not retract. The scrim was bound to "this box overflows", never to
+ *     where the box is scrolled, so at the BOTTOM of the scroll it still sat on
+ *     the last row — measured at 28 of 28px, a tool call washed to background
+ *     with nothing below it to promise. A cut cue that outlives the cut is not a
+ *     cue, it is a stain. `sidebar-scroll.tsx` has the honest version: only the
+ *     ends that are actually cut fade, and a flush end is left alone.
+ *  2. It armed in the wrong cases. The hook's layout effect keyed on the row
+ *     count, but the scrolling node only mounts when the disclosure opens, so
+ *     for a bundle the READER opened the effect never re-ran and neither the
+ *     measurement nor its ResizeObserver ever engaged. The scrim therefore
+ *     appeared on exactly the bundles nobody opened by hand — a live turn whose
+ *     rows are still arriving, and a bundle a failure opened by itself — which
+ *     is where the last row is the one you came to read.
+ *  3. Nothing needs it. The window's own overflow is the cut, and the app paints
+ *     macOS-style overlay scrollbars on every scroller (globals.css): a thumb
+ *     that surfaces on hover and while scrolling already says "there is more",
+ *     without spending a row to say it.
+ *
+ * If a soft edge is ever wanted here, it is a scroll-aware `mask-image` in the
+ * shape of `edgeMask` in `sidebar-scroll.tsx` — never an overlay pinned to
+ * `bottom-0`, which cannot know whether it is covering a cut or the end.
  */
-function useClipped<T extends HTMLElement>(revision: number) {
-  const ref = React.useRef<T>(null);
-  const [clipped, setClipped] = React.useState(false);
-
-  React.useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [revision]);
-
-  return { ref, clipped };
-}
 
 /* -------------------------------------------------------------------- atoms */
 
@@ -555,13 +561,11 @@ const DETAIL_FRAME =
  * two spacing values, 12px between segments and 2px between rows, and a payload
  * belongs to the row that opened it.
  *
- * The clip fade ramps to the frame's own fill, which is a mix and not a rung:
- * the frame is `--muted` at 25% over the transcript's `--background`, so it sits
- * *between* the two named surfaces. A scrim off either one lands a band across
- * the bottom of every clipped payload — measured at 2.5/255 dark and 5/255 light
- * from `--card`, and the same distance the other way from `--background`. Mixing
- * it the way the frame mixes it is the only value that leaves no edge, which is
- * why {@link DETAIL_FRAME}'s fill and this ramp must be changed together.
+ * A clipped payload gets NO bottom scrim — the frame is one node, and the cap
+ * is the only thing between the reader and the rest of the output. The scrim
+ * that used to ride here covered the whole last line of a scrolled-to-the-end
+ * payload; the argument is under "NO SCRIM AT THE BOTTOM OF A CAPPED WINDOW"
+ * above (VC-60).
  *
  * The window scrolls, and at its edges the wheel CHAINS — no
  * `overscroll-contain`. Contain turned the cap into a wheel trap: at the
@@ -571,22 +575,8 @@ const DETAIL_FRAME =
  * the window the payload scrolls, at its edge the feed takes over, exactly
  * like every nested scroller the platform ships.
  */
-function DetailFrame({
-  revision,
-  className,
-  children,
-}: React.PropsWithChildren<{ revision: number; className?: string }>) {
-  const { ref, clipped } = useClipped<HTMLDivElement>(revision);
-  return (
-    <div className="relative my-1">
-      <div ref={ref} className={cn(DETAIL_FRAME, className)}>
-        {children}
-      </div>
-      {clipped ? (
-        <div className="pointer-events-none absolute inset-x-px bottom-px h-8 rounded-b-md bg-[linear-gradient(to_top,color-mix(in_oklab,var(--muted)_25%,var(--background))_0,transparent_100%)]" />
-      ) : null}
-    </div>
-  );
+function DetailFrame({ className, children }: React.PropsWithChildren<{ className?: string }>) {
+  return <div className={cn("my-1", DETAIL_FRAME, className)}>{children}</div>;
 }
 
 function ToolDetail({
@@ -599,9 +589,7 @@ function ToolDetail({
   return (
     <>
       {command !== null ? (
-        <DetailFrame revision={command.length} className="whitespace-pre-wrap text-foreground">
-          {command}
-        </DetailFrame>
+        <DetailFrame className="whitespace-pre-wrap text-foreground">{command}</DetailFrame>
       ) : null}
       {detail !== null ? <ActivityOutputDetail detail={detail} /> : null}
     </>
@@ -612,7 +600,7 @@ function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
   switch (detail.view) {
     case "diff":
       return (
-        <DetailFrame revision={detail.lines.length}>
+        <DetailFrame>
           {detail.lines.map((line) => (
             <div
               key={line.id}
@@ -631,7 +619,7 @@ function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
       );
     case "numbered":
       return (
-        <DetailFrame revision={detail.lines.length}>
+        <DetailFrame>
           {detail.lines.map((line) => (
             <div key={line.number} className="flex gap-4 whitespace-pre">
               <span className="w-8 shrink-0 text-right text-muted-foreground/50 tabular-nums">
@@ -644,7 +632,7 @@ function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
       );
     case "matches":
       return (
-        <DetailFrame revision={detail.groups.length} className="space-y-1">
+        <DetailFrame className="space-y-1">
           {detail.groups.map((group) => (
             <div key={group.file}>
               <div className="truncate text-foreground">
@@ -664,19 +652,13 @@ function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
       );
     case "signature":
       return (
-        <DetailFrame
-          revision={detail.text.length}
-          className="whitespace-pre-wrap text-muted-foreground/70"
-        >
+        <DetailFrame className="whitespace-pre-wrap text-muted-foreground/70">
           {detail.text}
         </DetailFrame>
       );
     default:
       return (
-        <DetailFrame
-          revision={detail.text.length}
-          className="whitespace-pre-wrap text-muted-foreground"
-        >
+        <DetailFrame className="whitespace-pre-wrap text-muted-foreground">
           {detail.text}
         </DetailFrame>
       );
@@ -722,7 +704,6 @@ export const ActivityBundle = React.memo(
     const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
     const open = userOpen ?? bundleNeedsAttention(rows);
-    const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
     // Wired to the click and not to `open`, which is derived: a bundle that
     // opens itself because a row inside it failed is not a reader reaching for
     // anything, and must not detach them from a live stream.
@@ -759,17 +740,13 @@ export const ActivityBundle = React.memo(
           <Caret open={open} pinned />
         </button>
         <Disclosure open={open}>
-          <div className="relative">
-            {/* No `overscroll-contain`: at the bundle's edges the wheel must
-                chain to the transcript, or the feed reads as dead under the
-                cursor for the whole height of the open bundle (VC-32). */}
-            <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto")}>
-              {list}
-            </div>
-            {clipped ? (
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
-            ) : null}
-          </div>
+          {/* No `overscroll-contain`: at the bundle's edges the wheel must chain
+              to the transcript, or the feed reads as dead under the cursor for
+              the whole height of the open bundle (VC-32). And no bottom scrim
+              over the window — it covered the last tool call whole, including at
+              the end of the scroll: see "NO SCRIM AT THE BOTTOM OF A CAPPED
+              WINDOW" above (VC-60). */}
+          <div className={cn(BUNDLE_CAP, "overflow-auto")}>{list}</div>
         </Disclosure>
       </div>
     );

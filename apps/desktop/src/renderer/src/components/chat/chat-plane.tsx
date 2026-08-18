@@ -142,6 +142,44 @@ const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
 const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
+/**
+ * The transcript's dissolve into the composer — 64px of ramp above an opaque bar.
+ *
+ * Something has to sit here: the scroller runs the full height of the plane and
+ * the composer is opaque, so without a ramp a line scrolling under it is cut by
+ * a straight horizontal edge, mid-glyph, with nothing to say it was scrolling
+ * rather than broken. That is the same cut `sidebar-scroll.tsx` softens at the
+ * nav and the footer.
+ *
+ * WHAT THE SHAPE IS FOR, and why it is not a plain linear ramp. Alpha has to
+ * reach 1 BEFORE the seam: a linear fade is still ~2% short one pixel above the
+ * composer, so the last of the ink survives to the seam and is then hard-cut by
+ * an opaque edge — the ghost this gradient has always been trying to avoid. The
+ * first fix for that was a flat 2rem of solid background at the bottom, which
+ * bought a clean seam by DELETING a whole line: text did not fade out, it hit
+ * an invisible wall 32px above the composer and vanished, leaving a stripe of
+ * half-glyphs at the wall and dead paper below it.
+ *
+ * So the ramp is EASED instead of flattened. Stops are sampled from smootherstep
+ * — S(x) = 6x⁵ − 15x⁴ + 10x³, alpha = 1 − S, over the band above the seam — so
+ * the curve is flat at both ends and steep in the middle: opaque with margin at
+ * the seam, imperceptible at the top edge where the fade begins, and dissolving
+ * fastest in between. Full background is reached 5px above the composer rather
+ * than 32, which is the whole gain: three lines dissolve where one used to be
+ * erased. The percentages are samples of that curve, not picks off the alpha
+ * ladder in docs/DESIGN.md — changing one in isolation puts a kink in a curve.
+ */
+const COMPOSER_SCRIM = [
+  "linear-gradient(to top",
+  "var(--background) 0 8%",
+  "color-mix(in oklab, var(--background) 95%, transparent) 25%",
+  "color-mix(in oklab, var(--background) 77%, transparent) 40%",
+  "color-mix(in oklab, var(--background) 48%, transparent) 55%",
+  "color-mix(in oklab, var(--background) 20%, transparent) 70%",
+  "color-mix(in oklab, var(--background) 3%, transparent) 85%",
+  "transparent 100%)",
+].join(",");
+
 export interface ChatPlaneProps {
   sessionId: string;
   /** Project scope for Model Access and file navigation. */
@@ -670,12 +708,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               </ContentColumn>
             )}
           </ConversationContent>
-          {/* A short fade keyed to the measured composer. It lives inside the
-              Conversation, ahead of the button, so paint order is structural:
-              content, then fade, then button. Its bottom 2rem is solid, not
-              ramping — a plain linear fade only reaches full background on its
-              last pixel, which left a legible ghost hard-cut by the card. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-[linear-gradient(to_top,var(--background)_0,var(--background)_2rem,transparent_100%)]" />
+          {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+              for the curve. It lives inside the Conversation, ahead of the
+              button, so paint order is structural: content, then fade, then
+              button. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+            style={{ backgroundImage: COMPOSER_SCRIM }}
+          />
 
           {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
