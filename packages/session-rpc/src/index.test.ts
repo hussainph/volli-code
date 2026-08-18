@@ -925,6 +925,55 @@ describe("Session tRPC router", () => {
     expect(writes).toEqual([[{ providerId: "openai", modelId: "gpt-5.6-luna" }]]);
   });
 
+  it("round-trips the compaction policy whole, and refuses an unusable reserve", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readCompactionPolicy: () => ({ autoCompaction: true, modelLimits: [] }),
+      writeCompactionPolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.compactionPolicy()).resolves.toEqual({
+      autoCompaction: true,
+      modelLimits: [],
+    });
+
+    const saved = {
+      autoCompaction: false,
+      modelLimits: [{ providerId: "anthropic", modelId: "claude-sonnet", reserveTokens: 32_768 }],
+    };
+    await expect(caller.modelAccess.setCompactionPolicy(saved)).resolves.toEqual(saved);
+    expect(writes).toEqual([saved]);
+
+    // A reserve is a positive whole count of tokens at this edge and nothing
+    // more. Whether it fits the model's window is a question about a catalog
+    // this edge does not hold, and main refuses that against the snapshot.
+    await expect(
+      caller.modelAccess.setCompactionPolicy({
+        autoCompaction: true,
+        modelLimits: [{ providerId: "anthropic", modelId: "claude-sonnet", reserveTokens: 0 }],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("says so rather than inventing a policy when preferences are unavailable", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.compactionPolicy()).rejects.toThrow("unavailable");
+    await expect(
+      caller.modelAccess.setCompactionPolicy({ autoCompaction: true, modelLimits: [] }),
+    ).rejects.toThrow("unavailable");
+  });
+
   it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];

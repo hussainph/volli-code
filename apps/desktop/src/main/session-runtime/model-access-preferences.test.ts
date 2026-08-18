@@ -3,13 +3,17 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { setAppState } from "../db/app-state-repo";
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import {
+  assertCompactionLimitsUsable,
   assertDefaultModelAvailable,
+  COMPACTION_POLICY_APP_STATE_KEY,
   MODEL_ACCESS_DEFAULT_APP_STATE_KEY,
   MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
   MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY,
+  readCompactionPolicy,
   readDefaultModelSelection,
   readHiddenModels,
   readModelAccessDefaults,
+  writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
 } from "./model-access-preferences";
@@ -242,5 +246,123 @@ describe("Model Access default selection", () => {
         },
       ),
     ).toThrow("not currently available");
+  });
+});
+
+describe("the stored compaction policy", () => {
+  const SONNET = { providerId: "anthropic", modelId: "claude-sonnet-4-5" };
+
+  it("compacts automatically until a profile says otherwise", () => {
+    ctx = openTestDb();
+    // What every profile did before this setting existed. An update is not a
+    // reason to stop compacting, so an absent key is not an off switch.
+    expect(readCompactionPolicy(ctx.db)).toEqual({ autoCompaction: true, modelLimits: [] });
+
+    setAppState(ctx.db, COMPACTION_POLICY_APP_STATE_KEY, "not-json", 1);
+    expect(readCompactionPolicy(ctx.db)).toEqual({ autoCompaction: true, modelLimits: [] });
+
+    setAppState(ctx.db, COMPACTION_POLICY_APP_STATE_KEY, JSON.stringify({ modelLimits: [] }), 2);
+    expect(readCompactionPolicy(ctx.db).autoCompaction).toBe(true);
+  });
+
+  it("round-trips the switch and the curated limits", () => {
+    ctx = openTestDb();
+    const policy = {
+      autoCompaction: false,
+      modelLimits: [{ ...SONNET, reserveTokens: 32_768, extra: "dropped" } as never],
+    };
+
+    expect(writeCompactionPolicy(ctx.db, policy, 1)).toEqual({
+      autoCompaction: false,
+      modelLimits: [{ ...SONNET, reserveTokens: 32_768 }],
+    });
+    expect(readCompactionPolicy(ctx.db)).toEqual({
+      autoCompaction: false,
+      modelLimits: [{ ...SONNET, reserveTokens: 32_768 }],
+    });
+  });
+
+  it("costs a malformed limit its own row and never the others theirs", () => {
+    ctx = openTestDb();
+    setAppState(
+      ctx.db,
+      COMPACTION_POLICY_APP_STATE_KEY,
+      JSON.stringify({
+        autoCompaction: true,
+        modelLimits: [
+          { ...SONNET, reserveTokens: 32_768 },
+          { providerId: "  ", modelId: "claude-haiku", reserveTokens: 16_384 },
+          { providerId: "anthropic", modelId: "claude-haiku", reserveTokens: "32768" },
+          { providerId: "anthropic", modelId: "claude-haiku", reserveTokens: 16_384.5 },
+          { providerId: "anthropic", modelId: "claude-haiku", reserveTokens: 0 },
+          { providerId: "anthropic", modelId: "claude-haiku" },
+          "not-an-object",
+          null,
+        ],
+      }),
+      1,
+    );
+
+    expect(readCompactionPolicy(ctx.db).modelLimits).toEqual([
+      { ...SONNET, reserveTokens: 32_768 },
+    ]);
+
+    setAppState(
+      ctx.db,
+      COMPACTION_POLICY_APP_STATE_KEY,
+      JSON.stringify({ autoCompaction: true, modelLimits: "not-a-list" }),
+      2,
+    );
+    expect(readCompactionPolicy(ctx.db).modelLimits).toEqual([]);
+  });
+
+  it("stores only a reserve the model's own window can hold", () => {
+    const access = {
+      observedAt: 1,
+      providers: [],
+      models: [
+        {
+          ...SONNET,
+          label: "Claude Sonnet 4.5",
+          state: "available" as const,
+          reasoningLevels: ["off"] as const,
+          contextWindow: 200_000,
+        },
+        {
+          providerId: "anthropic",
+          modelId: "claude-unsized",
+          label: "Claude Unsized",
+          state: "available" as const,
+          reasoningLevels: ["off"] as const,
+        },
+      ],
+    };
+
+    expect(() =>
+      assertCompactionLimitsUsable(access, [{ ...SONNET, reserveTokens: 32_768 }]),
+    ).not.toThrow();
+    expect(() =>
+      assertCompactionLimitsUsable(access, [{ ...SONNET, reserveTokens: 200_000 }]),
+    ).toThrow("larger than the model's context window");
+    // No window is no threshold to measure against, so a limit on it could
+    // never do anything — refused rather than stored as a setting that lies.
+    expect(() =>
+      assertCompactionLimitsUsable(access, [
+        { providerId: "anthropic", modelId: "claude-unsized", reserveTokens: 16_384 },
+      ]),
+    ).toThrow("no context window");
+    expect(() =>
+      assertCompactionLimitsUsable(access, [
+        { providerId: "anthropic", modelId: "never-heard-of-it", reserveTokens: 16_384 },
+      ]),
+    ).toThrow("no context window");
+    // Signed out decides whether a model can answer, not how much room it
+    // holds: a reserve configured for it is a preference worth keeping.
+    expect(() =>
+      assertCompactionLimitsUsable(
+        { ...access, models: [{ ...access.models[0]!, state: "authentication-required" }] },
+        [{ ...SONNET, reserveTokens: 32_768 }],
+      ),
+    ).not.toThrow();
   });
 });

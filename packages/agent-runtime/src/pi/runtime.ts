@@ -9,6 +9,7 @@ import {
   type AgentMessage,
   type AgentOptions,
   type CompactionReason as PiCompactionReason,
+  type CompactionSettings,
   type CustomEntry,
   type Entry,
   type MessageEntry,
@@ -30,10 +31,14 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   COMPACTION_REASONS,
+  DEFAULT_COMPACTION_POLICY,
   isActivityKind,
+  isUsableCompactionReserve,
+  modelCompactionReserve,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
+  type CompactionPolicy,
   type CompactionReason,
   type DeliveryOutcome,
   type ModelSelection,
@@ -92,16 +97,6 @@ export function autoRetryDelayMs(attempt: number): number {
   const backoff = Math.min(AUTO_RETRY_BASE_MS * 2 ** attempt, AUTO_RETRY_CEILING_MS);
   return backoff + Math.random() * AUTO_RETRY_JITTER_MS;
 }
-
-/**
- * When a Session compacts and how much of itself it keeps.
- *
- * Pi's own defaults, held here by name rather than read inline so the settings
- * that will make this configurable have one seam to replace. `enabled` is part
- * of the rule, not a wrapper around it: `shouldCompact` reads it, so the global
- * off switch lands on this value rather than on a second condition beside it.
- */
-const compactionSettings = DEFAULT_COMPACTION_SETTINGS;
 
 /**
  * Volli's compaction vocabulary, checked against the executor's own.
@@ -172,6 +167,20 @@ export interface PiRuntimeHostOptions {
    * and between those two the fallback is not a close call.
    */
   utilityModel?: () => ModelSelection | null;
+  /**
+   * The compaction policy every attachment is run under, read at the moment it
+   * is needed rather than captured at attach.
+   *
+   * A callback for {@link PiRuntimeHostOptions.utilityModel}'s reason: a Session
+   * outlives a settings change, and the next compaction should happen under the
+   * policy configured now — a switch flipped in Settings that only took effect
+   * on the Sessions started after it would be a switch that does not work.
+   *
+   * Absent, this runs {@link DEFAULT_COMPACTION_POLICY}: automatic compaction
+   * on, no model limited, which is the behaviour of every caller that has never
+   * heard of this option.
+   */
+  compactionPolicy?: () => CompactionPolicy;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -186,6 +195,7 @@ interface PiRuntimeHost {
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
   utilityModel: () => ModelSelection | null;
+  compactionPolicy: () => CompactionPolicy;
 }
 
 /**
@@ -224,6 +234,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
       options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
     utilityModel: options.utilityModel ?? (() => null),
+    compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
   };
   return {
     inspectModelAccess: (input) =>
@@ -1032,6 +1043,52 @@ async function attachSession(
       return utility ?? agent.state.model;
     };
 
+    /**
+     * The rule this Session compacts under right now, from the policy configured
+     * right now.
+     *
+     * Read per call for {@link summarizationModel}'s reason: a Session outlives
+     * a settings change. Everything the policy does lands on Pi's own
+     * `CompactionSettings` rather than beside it — the global switch IS
+     * `enabled`, which `shouldCompact` reads, and a per-model limit IS
+     * `reserveTokens`, which the threshold arithmetic subtracts. Neither is a
+     * second condition wrapped around Pi's rule.
+     *
+     * **What switching automatic compaction off does to the overflow path:
+     * nothing.** `enabled` is read by `shouldCompact` and by nothing else in
+     * 0.84.1 — `prepareCompaction` and `compact` never consult it — so the only
+     * caller it reaches is {@link compactBeforeTurn}, through `compactionDue`.
+     * That is the behaviour this runtime wants and it is deliberate, not
+     * inherited: off means "do not interrupt me to make room", and a Session
+     * whose provider has already refused the turn is not being interrupted, it
+     * is being rescued from a dead end. A test pins it, so a future Pi that
+     * taught `prepareCompaction` about `enabled` would fail loudly here rather
+     * than quietly stop recovering overflowed Sessions.
+     *
+     * A per-model reserve the model's own window cannot hold is ignored rather
+     * than clamped: it is refused at the point it would be saved, so reading one
+     * back means the row has gone stale against a catalog whose window changed,
+     * and a stale row costs itself — the Session runs on the executor's own
+     * reserve, exactly as if the row were not there.
+     */
+    const compactionSettings = (): CompactionSettings => {
+      const policy = host.compactionPolicy();
+      const configured = modelCompactionReserve(policy.modelLimits, {
+        providerId: agent.state.model.provider,
+        modelId: agent.state.model.id,
+      });
+      const contextWindow = contextWindowOf(agent.state.model);
+      const usable =
+        configured !== undefined &&
+        contextWindow !== undefined &&
+        isUsableCompactionReserve(configured, contextWindow);
+      return {
+        ...DEFAULT_COMPACTION_SETTINGS,
+        enabled: policy.autoCompaction,
+        ...(usable ? { reserveTokens: configured } : {}),
+      };
+    };
+
     /** The durable branch, read as a conversation. Costs the whole history. */
     const conversationBranch = async (): Promise<Entry[]> =>
       conversationPath(
@@ -1063,7 +1120,7 @@ async function attachSession(
         path,
         models,
         model: summarizationModel(),
-        settings: compactionSettings,
+        settings: compactionSettings(),
         ...(signal === undefined ? {} : { signal }),
       });
       // Pi found nothing to compact — an empty history, or one already ending in
@@ -1129,7 +1186,7 @@ async function attachSession(
       const contextWindow = contextWindowOf(agent.state.model);
       if (contextWindow === undefined) return;
       const path = await conversationBranch();
-      if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings)) return;
+      if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings())) return;
       // The attachment's own lifetime bounds it, like every other provider call
       // here. Nothing else can: no turn has started, so there is no turn to
       // interrupt, and a person pressing stop before their message has been

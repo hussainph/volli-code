@@ -31,6 +31,12 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
       setDefault: (purpose, selection) => rpc.modelAccess.setDefault.mutate({ purpose, selection }),
       hiddenModels: () => rpc.modelAccess.hiddenModels.query(),
       setHiddenModels: (hidden) => rpc.modelAccess.setHiddenModels.mutate([...hidden]),
+      compactionPolicy: () => rpc.modelAccess.compactionPolicy.query(),
+      setCompactionPolicy: (policy) =>
+        rpc.modelAccess.setCompactionPolicy.mutate({
+          autoCompaction: policy.autoCompaction,
+          modelLimits: [...policy.modelLimits],
+        }),
       beginSignIn: (providerId, type, onUpdate) => beginSignIn(providerId, type, onUpdate),
       signOut: async (providerId) => {
         expect(await window.api.modelAccess.signOut(providerId));

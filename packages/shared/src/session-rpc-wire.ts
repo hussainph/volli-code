@@ -38,6 +38,8 @@ export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "modelAccess.setDefault",
   "modelAccess.hiddenModels",
   "modelAccess.setHiddenModels",
+  "modelAccess.compactionPolicy",
+  "modelAccess.setCompactionPolicy",
   "sessions.create",
   "sessions.attach",
   "session.snapshot",

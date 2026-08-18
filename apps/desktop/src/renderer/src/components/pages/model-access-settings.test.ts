@@ -3,6 +3,7 @@ import type { ModelAccessModel, ModelAccessProvider } from "@volli/shared";
 
 import {
   availableModelsByProvider,
+  compactionReserveLabel,
   defaultPickerModels,
   modelOptionLabel,
   offerableModels,
@@ -122,5 +123,16 @@ describe("sanitized access presentation", () => {
     expect(modelOptionLabel(MODEL, providers)).toBe("GPT-5.6 Sol · OpenAI Codex");
     // An unlabelled provider still has to be told apart from its namesakes.
     expect(modelOptionLabel(MODEL, [])).toBe("GPT-5.6 Sol · openai-codex");
+  });
+});
+
+describe("compaction reserve labels", () => {
+  it("names the unit, because the trigger sits beside a model name", () => {
+    expect(compactionReserveLabel(16_384)).toBe("16K reserve");
+    expect(compactionReserveLabel(131_072)).toBe("128K reserve");
+  });
+
+  it("rounds a reserve some other version stored off the ladder", () => {
+    expect(compactionReserveLabel(20_000)).toBe("20K reserve");
   });
 });

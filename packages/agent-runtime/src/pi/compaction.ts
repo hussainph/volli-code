@@ -9,6 +9,11 @@
  * caller Pi does not have, and deliberately no more than that: every decision it
  * makes is Pi's own rule invoked, never a rule restated here.
  *
+ * The policy those rules are run under — whether a Session compacts on its own,
+ * and what reserve a given model keeps free — is `CompactionPolicy` in
+ * `@volli/shared`, resolved into the `CompactionSettings` this module is handed
+ * by whoever calls it. Nothing here reads it, and nothing here defaults it.
+ *
  * Three things are worth stating plainly, because each is a place a
  * reimplementation would drift.
  *
@@ -204,6 +209,7 @@ export interface CompactionInput {
   models: Models;
   /** The model the summary is generated on — Model Access's `utility` purpose. */
   model: Model<Api>;
+  /** The executor's rule, already resolved from the configured policy. */
   settings: CompactionSettings;
   /** Extra focus for the summary. Unused until the manual verb exists. */
   customInstructions?: string;

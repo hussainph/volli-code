@@ -4461,6 +4461,187 @@ describe("recovering a turn that overflowed the window", () => {
   });
 });
 
+describe("the compaction policy a Session is run under", () => {
+  /** Over Pi's own reserve against the faux catalog's 128k window. */
+  const OVER_RESERVE = 200_000;
+  /**
+   * Under Pi's threshold (128,000 − 16,384) and over a 32,768-token one
+   * (128,000 − 32,768). What a bigger reserve is for: this conversation
+   * compacts only because the model was told to keep more room free.
+   */
+  const BETWEEN_RESERVES = 100_000;
+
+  const LIMIT = { providerId: PROVIDER_ID, modelId: MODEL_ID };
+
+  /** Two turns, the second measured at `occupied`, then a third message. */
+  function reaching(occupied: number, calls: ProviderCall[]): StreamFn {
+    return scriptedStream([
+      recording(calls, settles("first answer")),
+      recording(calls, settlesHolding("second answer", occupied)),
+      recording(calls, settles("## Goal\nsummarized")),
+      recording(calls, settles("third answer")),
+    ]);
+  }
+
+  /** Drive one Session to `occupied` under `policy`; report what it did. */
+  async function driveTo(
+    occupied: number,
+    policy: PiRuntimeHostOptions["compactionPolicy"],
+  ): Promise<{ calls: ProviderCall[]; compacted: CompactionObservation[] }> {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(reaching(occupied, calls)),
+      ...(policy === undefined ? {} : { compactionPolicy: policy }),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+    return { calls, compacted: compactions(attachment.observations) };
+  }
+
+  it("leaves a Session compacting at the executor's own reserve when nothing is configured", async () => {
+    // The baseline both halves of the next test are measured against: three
+    // turns, three calls, no summary — this occupancy is under Pi's threshold.
+    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, undefined);
+    expect(calls).toHaveLength(3);
+    expect(compacted).toEqual([]);
+  });
+
+  it("compacts earlier for a model told to keep more room free", async () => {
+    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
+      autoCompaction: true,
+      modelLimits: [{ ...LIMIT, reserveTokens: 32_768 }],
+    }));
+
+    // The same conversation as above, and the same measurement — only the
+    // reserve differs, and a fourth call is the summary it now buys.
+    expect(calls).toHaveLength(4);
+    expect(compacted).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    expect(calls[3]?.messages).toContain("compacted into the following summary");
+  });
+
+  it("limits only the model it names", async () => {
+    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
+      autoCompaction: true,
+      modelLimits: [
+        { providerId: PROVIDER_ID, modelId: "some-other-model", reserveTokens: 32_768 },
+      ],
+    }));
+
+    expect(calls).toHaveLength(3);
+    expect(compacted).toEqual([]);
+  });
+
+  it("ignores a reserve the model's own window cannot hold", async () => {
+    // The row a shrunken catalog window leaves behind — refused where it would
+    // be saved, so reading one back means it has gone stale. Ignored rather
+    // than honoured, because honouring it puts the threshold at or below zero:
+    // this Session would compact after its very first reply, and pay for a
+    // summary each time. It runs on the executor's own reserve instead, which
+    // this occupancy does not reach.
+    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
+      autoCompaction: true,
+      modelLimits: [{ ...LIMIT, reserveTokens: 128_000 }],
+    }));
+
+    expect(calls).toHaveLength(3);
+    expect(compacted).toEqual([]);
+  });
+
+  it("does not compact on its own when automatic compaction is switched off", async () => {
+    // Measured well over the reserve, and nothing happens: the switch is Pi's
+    // own `enabled`, which its threshold rule reads.
+    const { calls, compacted } = await driveTo(OVER_RESERVE, () => ({
+      autoCompaction: false,
+      modelLimits: [],
+    }));
+
+    expect(calls).toHaveLength(3);
+    expect(compacted).toEqual([]);
+  });
+
+  it("compacts under the policy configured now, not the one configured at attach", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    let autoCompaction = false;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settlesHolding("third answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("fourth answer")),
+        ]),
+      ),
+      compactionPolicy: () => ({ autoCompaction, modelLimits: [] }),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    expect(compactions(attachment.observations)).toEqual([]);
+
+    // A Session outlives the settings change that retunes it, which is the
+    // whole reason this is a callback rather than a value read at attach.
+    autoCompaction = true;
+    await handle.submitUserMessage("and again");
+
+    expect(calls).toHaveLength(5);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    await handle.close();
+  });
+
+  it("still recovers an overflowed turn with automatic compaction switched off", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => emit.fail("maximum context length exceeded")),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("recovered answer")),
+        ]),
+      ),
+      compactionPolicy: () => ({ autoCompaction: false, modelLimits: [] }),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await expect(handle.submitUserMessage("remember the marker")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    // The decision the switch does NOT make. Off means "do not interrupt me to
+    // make room"; a turn the provider has already refused is not being
+    // interrupted, and declining to compact it would trade a pause the person
+    // never sees for a Session that dead-ends.
+    //
+    // It also pins a fact about the executor: `enabled` is read by
+    // `shouldCompact` and by nothing else, so it never reaches this path. A Pi
+    // that taught `prepareCompaction` about it would fail here rather than
+    // quietly stop recovering overflowed Sessions.
+    expect(calls).toHaveLength(3);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "overflow" }),
+    ]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    expect(settledTexts(attachment.observations)).toEqual(["recovered answer"]);
+    await handle.close();
+  });
+});
+
 describe("autoRetryDelayMs", () => {
   it("doubles the wait up to a ceiling, jittered", () => {
     expect(autoRetryDelayMs(0)).toBeGreaterThanOrEqual(500);

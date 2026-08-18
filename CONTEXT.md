@@ -91,7 +91,10 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event.
+and each one is a Session Event. Only the threshold is policy: a profile-wide
+switch decides whether a Session compacts before it is asked to, and a model may
+be given its own reserve. Switching the threshold off never withholds the
+recovery an overflow triggers.
 _Avoid_: truncation, trimming history, pruning the transcript
 
 **Agent Runtime**:

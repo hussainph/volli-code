@@ -234,6 +234,13 @@ export interface PiAdapterOptions {
    * composition root's job, in the one place it already resolves the others.
    */
   utilityModel?: PiRuntimeHostOptions["utilityModel"];
+  /**
+   * The compaction policy every Session is run under — the global automatic
+   * switch and the per-model reserves. Read per compaction rather than per
+   * attach, for the reason {@link PiAdapterOptions.utilityModel} is: a Session
+   * outlives the settings change that retunes it.
+   */
+  compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -317,6 +324,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
     ...(options.utilityModel === undefined ? {} : { utilityModel: options.utilityModel }),
+    ...(options.compactionPolicy === undefined
+      ? {}
+      : { compactionPolicy: options.compactionPolicy }),
   });
 
   return {
