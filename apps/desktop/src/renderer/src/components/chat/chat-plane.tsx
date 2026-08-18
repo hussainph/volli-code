@@ -54,6 +54,7 @@ import {
   type ChatSegment,
 } from "@renderer/chat/activity";
 import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
+import { weaveCompactionBoundaries } from "@renderer/chat/compaction-boundary";
 import { sessionContextUsage } from "@renderer/chat/context-usage";
 import {
   composerAnswerPrompt,
@@ -68,6 +69,7 @@ import {
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
 import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
+import { CompactionBoundary } from "@renderer/components/chat/compaction-boundary-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -737,6 +739,19 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     React.useMemo(() => groupTurns(messages), [messages]),
     sameMessages,
   );
+  // The turns with the Session's compaction boundaries laid between them. Both
+  // inputs are held to their identity — the turn list by `useStableList`, the
+  // compactions by the fold that only replaces the array when one lands — so
+  // this recomputes when the conversation moves and not once per frame.
+  const rows = React.useMemo(
+    () => weaveCompactionBoundaries(turns, session.compactions),
+    [session.compactions, turns],
+  );
+  // Identity, not an index. A boundary between the turns means a turn's place in
+  // `rows` is no longer its place in `turns` — and the last ROW can be a
+  // boundary, which would leave the turn still being written with nothing
+  // saying so.
+  const liveTurn = working ? (turns.at(-1) ?? null) : null;
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
 
@@ -803,14 +818,21 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>
-                {turns.map((turn, index) => (
-                  <ChatTurn
-                    key={turn[0]?.id}
-                    messages={turn}
-                    context={turnContext}
-                    live={working && index === turns.length - 1}
-                  />
-                ))}
+                {rows.map((row) =>
+                  row.kind === "compaction" ? (
+                    <CompactionBoundary
+                      key={`compaction:${row.compaction.sequence}`}
+                      compaction={row.compaction}
+                    />
+                  ) : (
+                    <ChatTurn
+                      key={row.messages[0]?.id}
+                      messages={row.messages}
+                      context={turnContext}
+                      live={row.messages === liveTurn}
+                    />
+                  ),
+                )}
                 {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
               </ContentColumn>
             )}
