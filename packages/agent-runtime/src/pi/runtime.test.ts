@@ -37,10 +37,13 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
-import { autoRetryDelayMs, createPiAgentRuntime } from "./runtime";
+import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
+/** A second catalog entry, so "which model summarized" has a visible answer. */
+const UTILITY_MODEL_ID = "claude-utility-mini";
+const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
 
 // --- scripted model stream -------------------------------------------------
 //
@@ -52,6 +55,7 @@ type ScriptStep = (
   emit: EmitApi,
   context: Context,
   signal: AbortSignal | undefined,
+  model: Model<string>,
 ) => Promise<void> | void;
 
 interface EmitApi {
@@ -61,6 +65,8 @@ interface EmitApi {
   finish(): void;
   fail(message: string): void;
   cancel(): void;
+  /** What this reply leaves the model holding; the compaction threshold reads it. */
+  occupies(tokens: number): void;
 }
 
 function baseMessage(model: Model<string>): AssistantMessage {
@@ -141,6 +147,16 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
         stream.push({ type: "error", reason: "aborted", error: message });
         stream.end(message);
       },
+      occupies(tokens) {
+        message.usage = {
+          ...message.usage,
+          input: tokens,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: tokens,
+        };
+      },
     };
 
     void (async () => {
@@ -148,7 +164,7 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
       if (step === undefined) {
         throw new Error(`scriptedStream: no step for provider call ${call}`);
       }
-      await step(emit, context, options?.signal);
+      await step(emit, context, options?.signal, model as Model<string>);
     })().catch((error: unknown) => {
       emit.fail(error instanceof Error ? error.message : String(error));
     });
@@ -156,11 +172,16 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
   };
 }
 
-function modelsWithStream(stream: StreamFn): Models {
+function modelsWithStream(
+  stream: StreamFn,
+  catalog: readonly { id: string; reasoning?: boolean; contextWindow?: number }[] = [
+    { id: MODEL_ID, reasoning: true },
+  ],
+): Models {
   const faux = fauxProvider({
     api: "anthropic-messages",
     provider: PROVIDER_ID,
-    models: [{ id: MODEL_ID, reasoning: true }],
+    models: [...catalog],
   });
   const models = createModels();
   models.setProvider({
@@ -196,6 +217,32 @@ function settles(text: string): ScriptStep {
   return (emit) => {
     emit.text(text);
     emit.finish();
+  };
+}
+
+/** A reply that leaves the model holding `tokens` of measured context. */
+function settlesHolding(text: string, tokens: number): ScriptStep {
+  return (emit) => {
+    emit.occupies(tokens);
+    emit.text(text);
+    emit.finish();
+  };
+}
+
+/** What one provider call was made with. */
+interface ProviderCall {
+  model: string;
+  messages: string;
+}
+
+/** Retain what each provider call was made with, in call order. */
+function recording(calls: ProviderCall[], step: ScriptStep): ScriptStep {
+  return (emit, context, signal, model) => {
+    calls.push({
+      model: `${model.provider}/${model.id}`,
+      messages: JSON.stringify(context.messages),
+    });
+    return step(emit, context, signal, model);
   };
 }
 
@@ -3821,6 +3868,236 @@ describe("auto-retrying a dropped transport", () => {
       expect.objectContaining({ commandId: "command-follow-up" }),
     ]);
     await handle.close();
+  });
+});
+
+describe("compacting a context that reached its reserve", () => {
+  // The faux catalog reports a 128k window and Pi reserves 16,384 of it, so a
+  // reply measured at this much leaves less headroom than the reserve requires.
+  const OVER_RESERVE = 200_000;
+  /**
+   * A message long enough to fill Pi's recent-token budget on its own.
+   *
+   * `keepRecentTokens` is 20,000 and Pi estimates four characters to the token,
+   * so 90,000 characters is what makes the cut point land here rather than at
+   * the start of the conversation — which is the difference between a test that
+   * proves elision and one where everything is retained and nothing is proved.
+   */
+  const PASTED = "retained-paste ".repeat(6_000);
+
+  /** Two turns, the second measured over the reserve, then a third message. */
+  function overflowing(calls: ProviderCall[], summarization: ScriptStep): StreamFn {
+    return scriptedStream([
+      recording(calls, settles("first answer")),
+      recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+      recording(calls, summarization),
+      recording(calls, settles("third answer")),
+    ]);
+  }
+
+  function compactionEntries(sessionFilePath: string): Record<string, unknown>[] {
+    return readJsonl(sessionFilePath).filter((entry) => entry["type"] === "compaction");
+  }
+
+  it("summarizes the history away and sends Pi's summary in its place", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(overflowing(calls, settles("## Goal\nfinish the marker work"))),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    // The reply to the paste was measured over the reserve, so this message is
+    // the one that pays for compaction — inside a wait the user is already in.
+    await expect(handle.submitUserMessage("carry on")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    expect(calls).toHaveLength(4);
+    // The summarizer was given the history that is about to disappear...
+    expect(calls[2]?.messages).toContain("first answer");
+    // ...and the turn that followed was given the summary instead of it.
+    const turn = calls[3]?.messages ?? "";
+    expect(turn).toContain("compacted into the following summary");
+    expect(turn).toContain("finish the marker work");
+    expect(turn).not.toContain("first answer");
+    expect(turn).not.toContain("BEGIN TICKET BRIEF");
+    // What Pi's cut point retained is retained verbatim, not re-summarized.
+    expect(turn).toContain("retained-paste");
+    expect(turn).toContain("second answer");
+    expect(turn).toContain("carry on");
+    // No turn of its own: compaction is maintenance, not a unit of the
+    // conversation, and an interrupted one must raise no partial-turn Attention.
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+    ]);
+
+    // Linear, not branched, and nothing rewritten: one real compaction entry
+    // appended, with every pre-compaction entry still exactly where it was.
+    const sessionFilePath = handle.recovery!.sessionFilePath;
+    expect(compactionEntries(sessionFilePath)).toEqual([
+      expect.objectContaining({
+        type: "compaction",
+        summary: expect.stringContaining("finish the marker work"),
+        tokensBefore: expect.any(Number),
+        usage: expect.objectContaining({ input: expect.any(Number) }),
+      }),
+    ]);
+    expect(JSON.stringify(readJsonl(sessionFilePath))).toContain("first answer");
+    await handle.close();
+  });
+
+  it("does not resurrect the elided history when the Session is recovered", async () => {
+    const attachment = fixture();
+    const firstCalls: ProviderCall[] = [];
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(overflowing(firstCalls, settles("## Goal\nfinish the marker work"))),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    await firstHandle.submitUserMessage("remember the marker");
+    await firstHandle.submitUserMessage(PASTED);
+    await firstHandle.submitUserMessage("carry on");
+    const recovery = firstHandle.recovery;
+    await firstHandle.close();
+
+    // A crash and a relaunch: the sidecar is reopened and the live message array
+    // is rebuilt from it. A replay that did not know Pi's elision rule would
+    // hand the whole pre-compaction history back and undo the compaction here,
+    // silently — the Session would simply start overflowing again.
+    const recoveredCalls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(recoveredCalls, settles("after"))])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("and again");
+
+    const turn = recoveredCalls[0]?.messages ?? "";
+    expect(turn).toContain("compacted into the following summary");
+    expect(turn).toContain("finish the marker work");
+    expect(turn).not.toContain("first answer");
+    expect(turn).not.toContain("BEGIN TICKET BRIEF");
+    expect(turn).toContain("third answer");
+    // Recovery compacted nothing of its own: one entry, from the first run.
+    expect(compactionEntries(recovery!.sessionFilePath)).toHaveLength(1);
+    await secondHandle.close();
+  });
+
+  it("delivers the message anyway when summarization fails", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        overflowing(calls, (emit) => emit.fail("the summarizer is unhappy")),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    // Maintenance failed; the person's message is not held hostage to it. The
+    // turn runs on the context that was already there, which is the overflow
+    // that reactive compaction exists to catch.
+    await expect(handle.submitUserMessage("carry on")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    expect(calls[3]?.messages).toContain("first answer");
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("never compacts a model whose catalog reports no usable window", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("third answer")),
+        ]),
+        [{ id: MODEL_ID, reasoning: true, contextWindow: 0 }],
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+
+    // Three turns, three calls: no summarization was attempted at all.
+    expect(calls).toHaveLength(3);
+    expect(calls[2]?.messages).toContain("first answer");
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    await handle.close();
+  });
+
+  /** Drive one Session to the reserve and report which model each call used. */
+  async function modelsCalled(
+    utilityModel: PiRuntimeHostOptions["utilityModel"],
+  ): Promise<string[]> {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(overflowing(calls, settles("## Goal\nsummarized elsewhere")), [
+        { id: MODEL_ID, reasoning: true },
+        { id: UTILITY_MODEL_ID },
+      ]),
+      ...(utilityModel === undefined ? {} : { utilityModel }),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+    return calls.map((call) => call.model);
+  }
+
+  it("summarizes on the utility model the host names", async () => {
+    const utility = {
+      providerId: PROVIDER_ID,
+      modelId: UTILITY_MODEL_ID,
+      reasoningLevel: "off",
+    } as const;
+
+    expect(await modelsCalled(() => utility)).toEqual([
+      SESSION_MODEL,
+      SESSION_MODEL,
+      `${PROVIDER_ID}/${UTILITY_MODEL_ID}`,
+      SESSION_MODEL,
+    ]);
+  });
+
+  it("falls back to the Session's own model rather than not summarizing", async () => {
+    // Three ways to have no utility model — no host answer at all, a host with
+    // nothing configured, and a host naming a model this collection does not
+    // know — and one outcome: the summary is generated, on the model at hand.
+    const unknown = {
+      providerId: PROVIDER_ID,
+      modelId: "never-provisioned",
+      reasoningLevel: "off",
+    } as const;
+    const onlyTheSessionModel = Array.from({ length: 4 }, () => SESSION_MODEL);
+
+    expect(await modelsCalled(undefined)).toEqual(onlyTheSessionModel);
+    expect(await modelsCalled(() => null)).toEqual(onlyTheSessionModel);
+    expect(await modelsCalled(() => unknown)).toEqual(onlyTheSessionModel);
   });
 });
 

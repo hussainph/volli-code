@@ -227,6 +227,13 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The model the runtime's own background work — context compaction's summary
+   * — runs on. Purpose in, selection out: this module speaks Sessions, and
+   * mapping Model Access's `utility` purpose onto a stored default is the
+   * composition root's job, in the one place it already resolves the others.
+   */
+  utilityModel?: PiRuntimeHostOptions["utilityModel"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -309,6 +316,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),
+    ...(options.utilityModel === undefined ? {} : { utilityModel: options.utilityModel }),
   });
 
   return {

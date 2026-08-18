@@ -3,11 +3,13 @@
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import type {
-  AgentMessage,
-  AgentOptions,
-  CustomEntry,
-  MessageEntry,
+import {
+  convertToLlm,
+  DEFAULT_COMPACTION_SETTINGS,
+  type AgentMessage,
+  type AgentOptions,
+  type CustomEntry,
+  type MessageEntry,
 } from "@earendil-works/pi-agent-core";
 import {
   Agent,
@@ -17,8 +19,10 @@ import {
 } from "@earendil-works/pi-agent-core/node";
 import {
   getSupportedThinkingLevels,
+  type Api,
   type AssistantMessage,
   type CredentialStore,
+  type Model,
   type Models,
   type UserMessage,
 } from "@earendil-works/pi-ai";
@@ -27,6 +31,7 @@ import {
   type AgentRuntime,
   type AuthoritySnapshot,
   type DeliveryOutcome,
+  type ModelSelection,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -41,6 +46,15 @@ import {
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
+import {
+  compactionDue,
+  compactSession,
+  contextMessages,
+  contextWindowOf,
+  conversationPath,
+  occupiedContextTokens,
+  type ConversationReader,
+} from "./compaction";
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
@@ -72,6 +86,16 @@ export function autoRetryDelayMs(attempt: number): number {
   const backoff = Math.min(AUTO_RETRY_BASE_MS * 2 ** attempt, AUTO_RETRY_CEILING_MS);
   return backoff + Math.random() * AUTO_RETRY_JITTER_MS;
 }
+
+/**
+ * When a Session compacts and how much of itself it keeps.
+ *
+ * Pi's own defaults, held here by name rather than read inline so the settings
+ * that will make this configurable have one seam to replace. `enabled` is part
+ * of the rule, not a wrapper around it: `shouldCompact` reads it, so the global
+ * off switch lands on this value rather than on a second condition beside it.
+ */
+const compactionSettings = DEFAULT_COMPACTION_SETTINGS;
 
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
@@ -116,6 +140,21 @@ export interface PiRuntimeHostOptions {
    * Injectable so deterministic tests need not spend the real backoff.
    */
   retryBackoffMs?: (attempt: number) => number;
+  /**
+   * The model background work runs on, read at the moment it is needed.
+   *
+   * Model Access's `utility` purpose — "cost-efficient background work" —
+   * falling back to `global`, which is a resolution the composition root already
+   * owns: Role in, purpose out, in one place. A callback rather than a value
+   * because a Session outlives a settings change, and the next summary should
+   * run on the model that is configured now.
+   *
+   * Absent, or resolving to a model this collection does not know, falls back to
+   * the Session's own model. A summary generated on the expensive model is a
+   * cost surprise; a summary not generated at all is a Session that dead-ends,
+   * and between those two the fallback is not a close call.
+   */
+  utilityModel?: () => ModelSelection | null;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -129,6 +168,7 @@ interface PiRuntimeHost {
     identity: RuntimeSessionIdentity,
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
+  utilityModel: () => ModelSelection | null;
 }
 
 /**
@@ -166,6 +206,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     executionEnvFactory:
       options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
+    utilityModel: options.utilityModel ?? (() => null),
   };
   return {
     inspectModelAccess: (input) =>
@@ -568,20 +609,38 @@ async function attachSession(
         (entryId) => !settledAssistantEntryIds.has(entryId),
       ),
     ]);
-    const acceptedMessages = new Map(
-      recoveredMarkers.flatMap((marker) =>
-        marker.kind === "command-accepted" && marker.operation === "message.submit"
-          ? [[marker.recoveryCursor, marker.message] as const]
-          : [],
-      ),
+    /**
+     * How this sidecar's entries are read back as a conversation.
+     *
+     * Both halves matter and neither is Pi's business: a user message accepted
+     * through a durable command marker never became a message entry, and an
+     * assistant reply this attachment already judged unrecoverable must not be
+     * offered back to the model as if it had been said.
+     */
+    const conversationReader: ConversationReader = {
+      acceptedMessage: (entry) => {
+        const marker = recoveredObservation(entry);
+        return marker !== null &&
+          marker.kind === "command-accepted" &&
+          marker.operation === "message.submit"
+          ? marker.message
+          : undefined;
+      },
+      replayable: (entry) => recoverableMessage(entry) && !disagreedSettledEntryIds.has(entry.id),
+    };
+    /**
+     * The elided context, not the whole history — this is the landmine.
+     *
+     * Rebuilding the live message array by replaying every entry is correct only
+     * for a Session that has never compacted. Once a `CompactionEntry` exists,
+     * a replay that did not know about it would hand Pi the entire
+     * pre-compaction history back and silently undo the compaction on the first
+     * restart, with nothing anywhere saying so. {@link contextMessages} is Pi's
+     * own elision rule and is the only way messages are derived here.
+     */
+    const recoveredMessages = contextMessages(
+      conversationPath(recoveredEntries, conversationReader),
     );
-    const recoveredMessages = recoveredEntries.flatMap((entry) => {
-      const accepted = acceptedMessages.get(entry.id);
-      if (accepted !== undefined) return [accepted];
-      if (entry.type !== "message") return [];
-      if (!recoverableMessage(entry) || disagreedSettledEntryIds.has(entry.id)) return [];
-      return [entry.message];
-    });
     const activeAttentionReasons = new Set<AttentionObservation["reason"]>();
     const openTurnIds = new Set<string>();
     for (const observation of recoveredObservations) {
@@ -792,6 +851,16 @@ async function attachSession(
       streamFn: models.streamSimple.bind(models),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",
+      // Pi's harness converter, not the `Agent`'s default, and the difference is
+      // exactly one message role. The default keeps `user`, `assistant` and
+      // `toolResult` and DROPS everything else — including the
+      // `compactionSummary` message a compacted context begins with. Left on the
+      // default, compaction would appear to work: history would shrink, the
+      // window would clear, and the summary that was supposed to replace it
+      // would never reach the model. This converter frames it as the user
+      // message Pi's own harness sends. Every role Volli already produces
+      // converts identically under both.
+      convertToLlm,
       // `terminate` is left unset on purpose: Pi only ends the run early when
       // every finalized result in the batch asks for it, which is not what one
       // refused call means. A `stop` answer ends the turn by aborting instead,
@@ -892,6 +961,72 @@ async function attachSession(
     const settleRun = async (): Promise<void> => {
       await drainAutoRetries();
       await drainLateQueuedMessages();
+    };
+
+    /**
+     * The model the summary is generated on: Model Access's `utility` purpose,
+     * or this Session's own model when the host names none this collection has.
+     */
+    const summarizationModel = (): Model<Api> => {
+      const selection = host.utilityModel();
+      const utility =
+        selection === null ? undefined : models.getModel(selection.providerId, selection.modelId);
+      return utility ?? agent.state.model;
+    };
+
+    /**
+     * Make room for the turn that is about to start, if the last reply says the
+     * window is nearly spent.
+     *
+     * **Why here, and not when the previous turn ended.** The measurement is the
+     * same either way — it is the last reply's usage in both cases — but the
+     * multi-second freeze is not. Compacting at the end of a turn spends it
+     * after the transcript has already gone idle, which reads as an application
+     * that has stopped responding. Compacting at the head of the next message
+     * spends it inside a wait the person is already watching, where it is
+     * indistinguishable from a slow model. That is the whole reason compaction
+     * emits no turn of its own: the freeze it would need a spinner for is
+     * already inside one.
+     *
+     * Only the idle prompt path reaches this. A queued or steering message joins
+     * a run Pi is already streaming, where the context is fixed and rewriting it
+     * underneath would corrupt the turn in flight.
+     *
+     * A failed summarization changes nothing and stops nothing. The user's
+     * message still goes to the model on the context that was already there:
+     * this is maintenance, and refusing to deliver a message because maintenance
+     * failed would turn a recoverable Session into a stuck one. What the failure
+     * risks is a context-length refusal on the turn that follows, which is the
+     * dead end overflow recovery exists to retire.
+     */
+    const compactBeforeTurn = async (): Promise<void> => {
+      // Asked first because it is free. A model whose catalog reports no usable
+      // window can never trip the threshold, and the branch read below costs the
+      // whole history — there is no reason to pay it for an answer already known.
+      const contextWindow = contextWindowOf(agent.state.model);
+      if (contextWindow === undefined) return;
+      const path = conversationPath(
+        await sidecar.findEntriesOnBranch({ order: "oldestFirst" }),
+        conversationReader,
+      );
+      if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings)) return;
+      const outcome = await compactSession({
+        sidecar,
+        path,
+        models,
+        model: summarizationModel(),
+        settings: compactionSettings,
+        // The attachment's own lifetime bounds it, like every other provider
+        // call here. Nothing else can: no turn has started, so there is no turn
+        // to interrupt, and a person pressing stop before their message has been
+        // delivered is stopping something that has not begun.
+        signal: spec.signal,
+      });
+      if (outcome.kind !== "compacted") return;
+      // The elided context, from the same rule the replay path applies. Pi is
+      // idle here by construction, so this is the one moment the live array can
+      // be replaced without racing a run that is reading it.
+      agent.state.messages = outcome.messages;
     };
 
     unsubscribe = agent.subscribe(async (event) => {
@@ -1095,12 +1230,15 @@ async function attachSession(
           else agent.followUp(message);
           return { kind: "delivered", delivery };
         }
+        observationDelivery.consumeFailure();
+        // Before the message is composed, not after: compaction can change what
+        // the context holds, and the Brief is prepended on an empty one.
+        await compactBeforeTurn();
         const delivered =
           agent.state.messages.length === 0
             ? composeFirstUserMessage(spec.identity.role, spec.brief, text)
             : text;
         const message = queuedUserMessage(delivered, images);
-        observationDelivery.consumeFailure();
         pendingRunDelivery = {
           commandId: commandId ?? null,
           operation: "message.submit" as const,
