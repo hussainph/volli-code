@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -38,7 +38,6 @@ import {
   CHAT_PEEK_ENTRIES,
   composeProjectBrief,
   createAgentCommandService as createAgentCommandServiceBase,
-  DEFAULT_KICKOFF_MESSAGE,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
@@ -4351,5 +4350,175 @@ describe("session.start", () => {
         ],
       },
     });
+  });
+});
+
+describe("worktree scope, told honestly to the agent (VC-98)", () => {
+  function projectFixture(): void {
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+  }
+
+  it("tells a worktree-scoped ticket that one is coming, not to move the board", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: true }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    // The old sentence ("Move it to Doing to create one") sent agents to do
+    // something that has never materialized a worktree; VC-81's agent moved
+    // the ticket, saw nothing appear, and carried on in the main checkout.
+    expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    if (res.ok) throw new Error("expected a refusal");
+    expect(res.error.message).toBe(
+      "Ticket VC-1 has no worktree yet. One is created when a session starts for it.",
+    );
+    expect(res.error.message).not.toContain("Doing");
+  });
+
+  it("tells a main-checkout ticket that no worktree is coming at all", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.diff",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    if (res.ok) throw new Error("expected a refusal");
+    expect(res.error.message).toBe(
+      "Ticket VC-1 runs in the project's main checkout, so it has no worktree.",
+    );
+  });
+
+  it("warns a session working outside its ticket's worktree", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: "ticket-one",
+        ticketNumber: 1,
+        usesWorktree: true,
+        worktreePath: "/wt/VC-1",
+      }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.0.0" });
+
+    // The VC-81 shape: a Session that attached before the worktree existed, so
+    // it is still bound to the main checkout while the ticket claims isolation.
+    const res = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        warning:
+          "You are working in /repo/volli, which is outside VC-1's worktree at /wt/VC-1. Move your work there before continuing.",
+      },
+    });
+  });
+
+  it("stops warning once the agent has moved into the worktree", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: "ticket-one",
+        ticketNumber: 1,
+        usesWorktree: true,
+        worktreePath: "/wt/VC-1",
+      }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.0.0" });
+
+    // Recomputed from the caller's cwd every time rather than stored, so an
+    // agent that migrates its own work clears the warning by doing so — there
+    // is no flag left behind to go stale, and nothing here can track a cwd the
+    // agent drives through bash.
+    const res = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/wt/VC-1/packages/shared", env: { session: created.session.id } },
+    });
+
+    if (!res.ok) throw new Error("expected identify to succeed");
+    expect(res.data).not.toHaveProperty("warning");
+  });
+
+  it("never warns a ticket that has no worktree to be outside of", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.0.0" });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+
+    if (!res.ok) throw new Error("expected identify to succeed");
+    expect(res.data).not.toHaveProperty("warning");
   });
 });

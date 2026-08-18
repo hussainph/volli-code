@@ -22,6 +22,7 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   HiddenModelRef,
   ModelAccessModel,
@@ -29,12 +30,7 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import {
-  errorMessage,
-  readSkillResources,
-  visibleModels,
-  type PromptResource,
-} from "@volli/shared";
+import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -99,8 +95,8 @@ import {
   type SignInProviderOption,
 } from "@renderer/components/chat/chat-plane-model";
 import {
+  offerableModels,
   SessionComposer,
-  type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
 import {
@@ -208,6 +204,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     resolveInteraction,
     selectModel,
     submit,
+    dismissError,
   } = controller;
   const session = controller.session;
 
@@ -251,18 +248,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable = modelSelection !== null && catalogState !== "loading";
-  // Signed-in models only, minus the user's visibility curation. Pi's catalog
-  // is every provider it knows — around a thousand models against the handful
-  // this profile has credentials for — and a picker that lists the rest is a
-  // picker whose first "GPT-5.6 Luna" is whichever provider sorted first. What
-  // you cannot send to is not an option, and what you toggled off in Model
-  // Access is not one either (VC-53).
+  // What this picker may offer (VC-53), decided in one place because the
+  // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
-    () =>
-      visibleModels(
-        models.filter((model) => model.state === "available"),
-        hidden,
-      ).map((model) => composerModel(model, providers)),
+    () => offerableModels(models, providers, hidden),
     [hidden, models, providers],
   );
   const sessionModel = React.useMemo(
@@ -658,8 +647,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      // The transport latch is the surface's own state; retiring it is the
+      // reader's call, not a recovery (VC-97).
+      dismiss: () => dismissError(),
     }),
-    [liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -774,9 +766,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // One thing parks above the composer at a time; a pending
               // question outranks a list you can reopen by typing.
               interactionOpen={pending !== null}
-              // The card above draws no box of its own while this holds; this
-              // one is it. Both read the same rule off the same interaction —
-              // see `ComposerInteractionStack`.
+              // What this box's words will do, not where the answer belongs.
+              // The card above keeps its own field and is the affordance; this
+              // is the fallback that stops a question standing over the
+              // composer from making it a dead end (VC-68). It changes the
+              // placeholder and the control's name, never the behaviour.
               answering={answering}
               models={composerModels}
               selection={selection}
@@ -861,21 +855,6 @@ function useModelAccess(active: boolean): {
         catalogState: "pinned",
         catalogError: null,
       };
-}
-
-function composerModel(
-  model: ModelAccessModel,
-  providers: readonly ModelAccessProvider[],
-): ComposerModel {
-  return {
-    id: `${model.providerId}/${model.modelId}`,
-    providerId: model.providerId,
-    providerLabel:
-      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
-    modelId: model.modelId,
-    label: model.label,
-    reasoningLevels: model.reasoningLevels,
-  };
 }
 
 /* ---------------------------------------------------------------- running */
@@ -1005,6 +984,21 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           onClick={blocker.secondaryAction.act}
         >
           {blocker.secondaryAction.label}
+        </Button>
+      ) : null}
+      {/* The one row that reports this surface's own latch — Retry stays for
+          the recovery, and this retires the row when the reader has read it.
+          An icon, not a labeled button: it competes with nothing, and the row's
+          words are the retry's business, not its. */}
+      {blocker.dismiss ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0"
+          aria-label={blocker.dismiss.label}
+          onClick={blocker.dismiss.act}
+        >
+          <XIcon aria-hidden className="size-3" />
         </Button>
       ) : null}
     </div>

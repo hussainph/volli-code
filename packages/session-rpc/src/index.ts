@@ -21,6 +21,7 @@ import {
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelPurpose,
+  type ReasoningLevel,
   type RendererSessionEvent,
   type SessionPresentationProjection,
 } from "@volli/shared";
@@ -80,6 +81,21 @@ export interface SessionCreateInput {
    * Absent means none — injection is explicit selection, never ambient.
    */
   skills?: readonly string[];
+  /**
+   * An invocation-time model policy for THIS Session, merged onto the app
+   * default by the server and validated against Model Access before anything
+   * durable exists.
+   *
+   * The same parameter `volli session start --model/--reasoning` already
+   * carried, reaching the create door because a UI can now state it too: the
+   * New-ticket composer's Create & start picks a model and an effort for the
+   * Session it is about to open (VC-56). Absent means the configured default
+   * for the Role, which is what every other chat start still sends.
+   */
+  modelOverride?: {
+    model?: { providerId: string; modelId: string };
+    reasoningLevel?: ReasoningLevel;
+  };
 }
 
 export interface SessionAttachInput {
@@ -315,6 +331,18 @@ const modelSelectionSchema = z.object({
   modelId: nonEmptyString,
   reasoningLevel: z.enum(REASONING_LEVELS),
 });
+/**
+ * Both halves optional and both meaningful alone: a bare model keeps the
+ * default's level where the chosen model can run it, a bare level keeps the
+ * default model. The server owns that merge (`resolveModelSelection`) and the
+ * availability check behind it, so this edge only states the grammar.
+ */
+const modelOverrideSchema = z
+  .object({
+    model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).optional(),
+    reasoningLevel: z.enum(REASONING_LEVELS).optional(),
+  })
+  .optional();
 const modelPurposeSchema = z.enum(MODEL_PURPOSES);
 const modelAccessDefaultsSchema = z.object({
   global: modelSelectionSchema.nullable(),
@@ -550,6 +578,9 @@ export function createSessionRouter() {
             // that has to carry the skills: `attach` composes the prompt from
             // the record `create` wrote, and never sees this input.
             skills: skillSlugs,
+            // Same reason, for the same door: a Session's model policy is
+            // recorded by the create and never revisited by the attach.
+            modelOverride: modelOverrideSchema,
           }),
         )
         .mutation(async ({ ctx, input }) => {

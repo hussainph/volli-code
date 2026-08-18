@@ -1,58 +1,54 @@
 /**
- * RED-phase acceptance smoke for the composer's "Create & start" agent kickoff.
+ * Acceptance smoke for the composer's "Create & start" — the product's magic
+ * path, and after VC-56 a CHAT path rather than a terminal one.
  *
- * The kickoff button (data-testid="composer-kickoff") is the composer's
- * primary action. Its behaviour (per the ui/ticket-creation-fix spec):
- *   • accessible name starts with "Create & start" and carries the current
- *     harness label, e.g. "Create & start · Claude Code";
- *   • the "Terminal harness" picker — a chip in the metadata row, no longer a
- *     footer neighbour, since it describes the ticket rather than modifying
- *     this button (visible label = the active one) — opens a menu of Claude
- *     Code / Codex / OpenCode that switches which TUI the booted terminal
- *     launches; the button's accessible name is what still pairs the two;
- *   • clicking it creates the ticket DIRECTLY in Doing (regardless of the Status
- *     chip), navigates into the ticket detail view, creates + focuses a terminal
- *     session tab, and AUTO-LAUNCHES the harness CLI inside that session's shell
- *     with the ticket title+body as the initial prompt argument (default harness
- *     claude-code → the `claude` binary);
- *   • ⌘+Shift+Enter is the kickoff hotkey;
- *   • with "Create more" ON, kickoff still boots the agent (in the background) but
- *     keeps the composer open and does NOT navigate away.
+ * What the button does now (VC-56, subsuming VC-15):
+ *   • the composer offers no terminal harness anywhere — the picker that chose
+ *     which TUI a kickoff launched is gone with the launch it described;
+ *   • its footer names the model and effort the Session will run on, seeded
+ *     from the TICKET purpose's configured default (VC-53's Model Access
+ *     defaults), not the project one;
+ *   • pressing it (or ⇧⌘↵) creates the ticket DIRECTLY in Doing regardless of
+ *     the Status chip, opens the ticket workspace, and lands on a CHAT tab
+ *     whose agent is already working;
+ *   • with "Create more" ON the Session still starts, in the background, and
+ *     the composer stays open with no navigation.
  *
- * The terminal is a WebGPU canvas — its text isn't in the DOM — so we prove the
- * harness launched via the FAKE-HARNESS probe file (./lib/fake-harness.mjs): a
- * scratch `claude`/`codex`/`opencode` that records its argv, deterministically
- * shadowing the real ones through the PTY's login shell. We POLL that file and
- * assert the recorded binary + that its argv contains the ticket title AND body.
+ * HOW THE TURN PROVES THE BRIEF. Kickoff sends one stock instruction — "Begin
+ * work on this ticket. Your assignment is the Ticket Brief above." — and never
+ * re-sends the ticket's own prose, because a Ticket Session's agent is handed
+ * the Ticket Brief at attach. So this smoke puts its only instruction in the
+ * ticket BODY and asserts the reply obeys it: an agent that answers with the
+ * body's marker can only have read it off the Brief. That is also what keeps
+ * this probe cheap — one short reply, one billed turn, no loops.
  *
- * Written BEFORE the composer exists ⇒ the kickoff checks are EXPECTED TO FAIL
- * now (missing composer UI), cleanly — never by crashing. The fake-harness
- * shadow precheck passes today (it runs outside the app).
+ * Run:
+ *   pnpm run build                                    # dist/ + dist-electron/
+ *   node apps/desktop/e2e/composer-kickoff-smoke.mjs
  *
- *   Run:
- *     pnpm run build                                    # dist/ + dist-electron/
- *     node apps/desktop/e2e/composer-kickoff-smoke.mjs
- *
- * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
+ * MANUALLY-RUN (needs a display, the built app, and a real `~/.pi/agent/auth.json`
+ * with `openai-codex` credentials — it drives one live turn); NOT wired into `vp test`.
  */
-import { promises as fs } from "node:fs";
+import { join } from "node:path";
 
-import { buildFakeHarness, harnessEnv, runShadowSanityCheck } from "./lib/fake-harness.mjs";
 import {
+  activeTabLabel,
   assertProfileIsolated,
   columnHasCard,
   createRunner,
+  ensurePiAuthInto,
   goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
-  readFileSafe,
   readSeededProjects,
+  seedDefaultModel,
   seedProjects,
   sleep,
   tabStrip,
   TICKET_TAB_STRIP,
   typeIntoMonaco,
+  waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -62,9 +58,30 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch(
 const { attempt, summarize } = createRunner();
 
 const PROJECT = { id: "kickoff-project", name: "Kickoff Project", prefix: "KO" };
-const harness = await buildFakeHarness(scratch);
+// Pi's credential store reads `$HOME/.pi/agent/auth.json`; isolate it exactly
+// as the Pi smokes do rather than touching the developer's own profile.
+const fakeHome = join(scratch, "home");
 
-// ---- composer / detail helpers ---------------------------------------------
+/**
+ * The two defaults, deliberately different models.
+ *
+ * The composer must read the TICKET one. Seeding both with the same model would
+ * pass whichever it read, so `global` is pinned to something the row must NOT
+ * name. Both are checked against the live catalog by `seedDefaultModel`, which
+ * fails loudly (with what IS available) rather than silently picking another.
+ */
+const TICKET_MODEL = {
+  providerId: "openai-codex",
+  modelId: "gpt-5.6-luna",
+  reasoningLevel: "low",
+};
+const GLOBAL_MODEL = {
+  providerId: "openai-codex",
+  modelId: "gpt-5.3-codex-spark",
+  reasoningLevel: "low",
+};
+
+// ---- composer / workspace helpers ------------------------------------------
 
 const composer = (page) => page.locator('[data-testid="new-ticket-composer"]');
 const kickoffButton = (page) => page.locator('[data-testid="composer-kickoff"]');
@@ -88,6 +105,11 @@ async function closeAnyDialog(page) {
   await sleep(300);
 }
 
+/** Every tab in the ticket strip — never the details rail's page switcher. */
+function ticketTabs(page) {
+  return tabStrip(page, TICKET_TAB_STRIP).getByRole("tab");
+}
+
 /**
  * Detail view is open when the ticket tab strip has rendered tabs (the board
  * has none).
@@ -101,17 +123,12 @@ async function detailOpen(page) {
   return (await ticketTabs(page).count()) >= 1;
 }
 
-/** Every tab in the ticket strip — never the details rail's page switcher. */
-function ticketTabs(page) {
-  return tabStrip(page, TICKET_TAB_STRIP).getByRole("tab");
-}
-
 /**
  * Type title + body into the composer. The body is Monaco Document Mode, whose
  * input surface is a `native-edit-context` div rather than a textarea, so there
  * is nothing to `fill()` — click into the editor, then type, then wait for the
- * characters to land (see `typeIntoMonaco`: check 4 presses the kickoff hotkey
- * the instant this returns, and a body still in flight ships a truncated prompt).
+ * characters to land (see `typeIntoMonaco`: a hotkey pressed the instant this
+ * returns must not ship a truncated body).
  */
 async function fillTitleAndBody(page, title, body) {
   await titleInput(page).fill(title);
@@ -126,19 +143,11 @@ async function ticketsFor(page, projectId) {
   }, projectId);
 }
 
-/** Reset the shared probe file so each kickoff flow reads only its own launch. */
-async function resetProbe() {
-  await fs.rm(harness.probe, { force: true });
-}
-
 // ---- main ------------------------------------------------------------------
 
 async function main() {
-  const app = await launch({
-    dbPath,
-    userDataDir,
-    extraEnv: harnessEnv(harness),
-  });
+  await ensurePiAuthInto(fakeHome);
+  const app = await launch({ dbPath, userDataDir, extraEnv: { HOME: fakeHome } });
   try {
     await assertProfileIsolated(app, userDataDir);
     const page = await app.firstWindow();
@@ -152,253 +161,195 @@ async function main() {
     const projectId = byName[PROJECT.name]?.id;
     if (!projectId) throw new Error("seeded project missing after import");
 
-    // === 0. Precondition: the fake harness deterministically shadows the real one
-    // Runs OUTSIDE Electron (login shell + path_helper), so it passes today and
-    // proves the probe-based kickoff assertions below are trustworthy.
+    // === 0. Precondition: a Ticket default that is NOT the project default ===
+    let ticketModel = null;
     await attempt(
       0,
-      "Fake-harness shadow: zsh -lic resolves claude/codex/opencode to the scratch bin",
+      "Model Access: distinct project and Ticket defaults are recorded",
       async () => {
-        const results = await Promise.all(
-          harness.binaries.map((bin) => runShadowSanityCheck(harness, bin)),
-        );
-        const ok = results.every((r) => r.ok);
+        await seedDefaultModel(page, GLOBAL_MODEL, "global");
+        ticketModel = await seedDefaultModel(page, TICKET_MODEL, "ticket");
+        return { ok: true, detail: `ticket=${ticketModel.providerId}/${ticketModel.modelId}` };
+      },
+    );
+
+    // === 1. The composer offers a model + effort, and no terminal anywhere ====
+    await attempt(
+      1,
+      "Composer: the run row is seeded from the TICKET default, and no terminal harness control exists",
+      async () => {
+        const opened = await openComposerViaHeader(page);
+        if (!opened) return { ok: false, detail: "composer did not open" };
+
+        // The retired control, by both of the names it ever had.
+        const harness = await composer(page)
+          .getByRole("button", { name: /terminal harness/i })
+          .count();
+        const anyTerminalWord = await composer(page)
+          .getByText(/terminal/i)
+          .count();
+
+        // The model pill names the Ticket default's model, not the project's.
+        const modelPill = composer(page).getByRole("button", {
+          name: new RegExp(ticketModel.label, "i"),
+        });
+        const namesTicketModel = (await modelPill.count()) === 1;
+        const namesGlobalModel =
+          (await composer(page)
+            .getByRole("button", { name: new RegExp(GLOBAL_MODEL.modelId, "i") })
+            .count()) > 0;
+        // Effort rides beside it, carrying the seeded level in its name.
+        const effort = await composer(page)
+          .getByRole("button", { name: /^Reasoning effort:/ })
+          .count();
+
+        await closeAnyDialog(page);
+        const ok =
+          harness === 0 &&
+          anyTerminalWord === 0 &&
+          namesTicketModel &&
+          !namesGlobalModel &&
+          effort === 1;
         return {
           ok,
-          detail: results.map((r) => `${r.resolved}${r.ok ? "" : `!=${r.expected}`}`).join(", "),
+          detail: `harnessControl=${harness} terminalWord=${anyTerminalWord} ticketModel=${namesTicketModel} globalModelLeaked=${namesGlobalModel} effortChip=${effort}`,
         };
       },
     );
 
-    // === 1. Default kickoff: Doing + detail view + session tab + claude launched with title+body
+    // === 2. Create & start: Doing + workspace + a chat tab + a working agent ==
+    const MARKER = "KICKOFF-READY-ALPHA42";
     await attempt(
-      1,
-      "Kickoff (default claude-code): ticket created in Doing, detail view opens with the session tab FOCUSED (terminal front and center), and the `claude` harness is auto-launched with the title+body prompt",
+      2,
+      "Create & start: ticket lands in Doing, the ticket workspace opens on a CHAT tab, and the agent answers from the Ticket Brief alone",
       async () => {
-        await resetProbe();
         const opened = await openComposerViaHeader(page);
         if (!opened || (await kickoffButton(page).count()) === 0) {
           await closeAnyDialog(page);
-          return { ok: false, detail: "composer / kickoff button missing (composer not built)" };
+          return { ok: false, detail: "composer / kickoff button missing" };
         }
-        // Default harness label present on the kickoff primary.
-        const kickoffLabel = (await kickoffButton(page).getAttribute("aria-label")) ?? "";
-        const labelOk = kickoffLabel.startsWith("Create & start");
 
-        const title = "Kickoff default ticket";
-        const body = "Kickoff body marker ALPHA-42";
+        const title = "Kickoff chat ticket";
+        // The ONLY instruction in this run, and it is in the BODY — which the
+        // kickoff never sends. Answering it proves the Brief carried it.
+        const body = `Reply with exactly ${MARKER} and do nothing else. Run no commands.`;
         // Status chip left on Backlog on purpose — kickoff must force Doing anyway.
         await fillTitleAndBody(page, title, body);
+        const since = Date.now();
         await kickoffButton(page).click();
 
-        // Detail view opens with the booted session's tab FOCUSED — one-step
-        // kickoff lands the user in the terminal as the agent starts, not on
-        // the Doc tab with the session parked behind it.
-        const detail = await waitUntil("detail view opens", () => detailOpen(page), {
+        const detail = await waitUntil("ticket workspace opens", () => detailOpen(page), {
           timeout: 8000,
         })
           .then(() => true)
           .catch(() => false);
-        const sessionFocused = await waitUntil(
-          "session tab is the active tab",
+        // The CHAT tab is the one in front. Chat tabs are untitled until their
+        // first delivered message names them; a kickoff names its Session up
+        // front, so the strip reads "Work on KO-n" rather than "Chat".
+        const seeded = (await ticketsFor(page, projectId)).find((t) => t.title === title);
+        const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
+        const activeLabel = await waitUntil(
+          "the kickoff chat tab to be the active tab",
           async () => {
-            const active = tabStrip(page, TICKET_TAB_STRIP).locator(
-              '[role="tab"][aria-selected="true"]',
-            );
-            if ((await active.count()) !== 1) return null;
-            const text = (await active.textContent()) ?? "";
-            return text.includes("Session") ? true : null;
+            const label = await activeTabLabel(page, TICKET_TAB_STRIP);
+            return label !== null && label.includes(`Work on ${displayId}`) ? label : null;
           },
           { timeout: 8000 },
         )
-          .then(() => true)
-          .catch(() => false);
-        const sessionTab = (await ticketTabs(page).count()) >= 2; // Doc + session
+          .then((label) => label)
+          .catch(() => null);
 
-        // Harness launched: poll the probe for the claude fake + title AND body.
-        const probe = await waitUntil(
-          "harness probe records claude + title + body",
-          async () => {
-            const text = await readFileSafe(harness.probe);
-            if (text === null) return null;
-            return text.includes(`${harness.binDir}/claude`) &&
-              text.includes(title) &&
-              text.includes(body)
-              ? text
-              : null;
-          },
-          { timeout: 20000 },
-        )
-          .then(() => true)
-          .catch(() => false);
+        const { texts } = await waitForSettledReply(page, { since });
+        const answered = texts.some((text) => text.includes(MARKER));
 
-        // Ticket is in Doing (SQLite) and on the board's Doing column. The Doc
-        // tab (labeled with the display id) proves the detail belongs to the
-        // ticket we just created — checked while still inside the detail view.
-        const seeded = (await ticketsFor(page, projectId)).find((t) => t.title === title);
         const inDoingDb = seeded?.status === "doing";
-        const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
-        const docTab = seeded
-          ? (await ticketTabs(page).filter({ hasText: displayId }).count()) >= 1
-          : false;
         await goToBoard(page);
         const inDoingBoard = seeded ? await columnHasCard(page, "Doing", displayId) : false;
 
-        const ok =
-          labelOk &&
-          detail &&
-          sessionFocused &&
-          docTab &&
-          sessionTab &&
-          probe &&
-          inDoingDb &&
-          inDoingBoard;
+        const ok = detail && activeLabel !== null && answered && inDoingDb && inDoingBoard;
         return {
           ok,
-          detail: `label=${JSON.stringify(kickoffLabel)} detail=${detail} sessionFocused=${sessionFocused} docTab=${docTab} sessionTab=${sessionTab} probe=${probe} doingDb=${inDoingDb} doingBoard=${inDoingBoard}`,
+          detail: `workspace=${detail} activeTab=${JSON.stringify(activeLabel)} briefAnswered=${answered} doingDb=${inDoingDb} doingBoard=${inDoingBoard}`,
         };
       },
     );
 
-    // === 2. Harness picker: choosing Codex launches the `codex` fake binary ===
-    await attempt(
-      2,
-      'Terminal harness → "Codex": kickoff auto-launches the `codex` harness (probe records the codex fake binary)',
-      async () => {
-        await resetProbe();
-        await goToBoard(page);
-        const opened = await openComposerViaHeader(page);
-        if (!opened || (await kickoffButton(page).count()) === 0) {
-          await closeAnyDialog(page);
-          return { ok: false, detail: "composer / kickoff button missing (composer not built)" };
-        }
-        // Pick Codex from the "Terminal harness" caret menu.
-        await composer(page).getByRole("button", { name: "Terminal harness" }).click();
-        await sleep(200);
-        await page.getByRole("menuitem", { name: "Codex", exact: true }).click();
-        await sleep(200);
-        const label = (await kickoffButton(page).getAttribute("aria-label")) ?? "";
-        const labelHasCodex = label.includes("Codex");
-
-        const title = "Kickoff codex ticket";
-        const body = "Kickoff body marker BETA-7";
-        await fillTitleAndBody(page, title, body);
-        await kickoffButton(page).click();
-
-        const probe = await waitUntil(
-          "harness probe records codex + title + body",
-          async () => {
-            const text = await readFileSafe(harness.probe);
-            if (text === null) return null;
-            return text.includes(`${harness.binDir}/codex`) &&
-              !text.includes(`${harness.binDir}/claude`) &&
-              text.includes(title) &&
-              text.includes(body)
-              ? text
-              : null;
-          },
-          { timeout: 20000 },
-        )
-          .then(() => true)
-          .catch(() => false);
-
-        // The fake harness writes its probe before the renderer necessarily
-        // completes detail navigation. Synchronize on that UI transition so
-        // the next check cannot race a late board -> detail change.
-        const detail = await waitUntil(
-          "detail view opens after Codex kickoff",
-          () => detailOpen(page),
-          { timeout: 12000 },
-        )
-          .then(() => true)
-          .catch(() => false);
-
-        const ok = labelHasCodex && probe && detail;
-        return {
-          ok,
-          detail: `label=${JSON.stringify(label)} codexProbe=${probe} detail=${detail}`,
-        };
-      },
-    );
-
-    // === 3. Create-more + kickoff: agent boots in the BACKGROUND, no navigation
+    // === 3. Create-more ON: background start, composer stays put =============
     await attempt(
       3,
-      "Create-more ON + kickoff: the composer stays open and the app does NOT navigate to the detail view, but the harness still launches (background boot)",
+      "Create-more ON + kickoff: the Session starts in the background, the composer stays open, and nothing navigates",
       async () => {
-        await resetProbe();
         await goToBoard(page);
         const opened = await openComposerViaHeader(page);
         if (!opened || (await kickoffButton(page).count()) === 0) {
           await closeAnyDialog(page);
-          return { ok: false, detail: "composer / kickoff button missing (composer not built)" };
+          return { ok: false, detail: "composer / kickoff button missing" };
         }
         await composer(page).getByRole("switch", { name: "Create more" }).click();
 
         const title = "Kickoff background ticket";
-        const body = "Kickoff body marker GAMMA-9";
-        await fillTitleAndBody(page, title, body);
+        await fillTitleAndBody(page, title, "Reply with OK. Run no commands.");
         await kickoffButton(page).click();
 
-        const probe = await waitUntil(
-          "background harness launch recorded",
+        // The durable Session is the evidence, not a visible tab: nothing
+        // navigated, so there is no strip to read. Poll the ticket's own
+        // Session listing over the same IPC the rail reads.
+        const started = await waitUntil(
+          "a Session recorded against the background ticket",
           async () => {
-            const text = await readFileSafe(harness.probe);
-            return text !== null && text.includes(title) && text.includes(body) ? text : null;
+            const ticket = (await ticketsFor(page, projectId)).find((t) => t.title === title);
+            if (!ticket) return null;
+            const listed = await page.evaluate(
+              (id) => window.api.sessions.listForTicket({ ticketId: id }),
+              ticket.id,
+            );
+            return listed?.ok && listed.sessions.length > 0 ? listed.sessions : null;
           },
           { timeout: 20000 },
         )
           .then(() => true)
           .catch(() => false);
 
-        // Composer still open, no detail navigation.
         const stillOpen = (await composer(page).count()) === 1;
         const noDetail = !(await detailOpen(page));
         await closeAnyDialog(page);
 
-        const ok = probe && stillOpen && noDetail;
         return {
-          ok,
-          detail: `probe=${probe} composerStillOpen=${stillOpen} noDetailNav=${noDetail}`,
+          ok: started && stillOpen && noDetail,
+          detail: `sessionStarted=${started} composerStillOpen=${stillOpen} noNavigation=${noDetail}`,
         };
       },
     );
 
-    // === 4. ⌘+Shift+Enter is the kickoff hotkey ==============================
+    // === 4. ⇧⌘↵ is the kickoff chord =========================================
     await attempt(
       4,
-      "⌘+Shift+Enter kicks off: launches the harness and opens the detail view",
+      "⇧⌘↵ kicks off: the ticket workspace opens on the chat tab, same as the button",
       async () => {
-        await resetProbe();
         await goToBoard(page);
         const opened = await openComposerViaHeader(page);
         if (!opened || (await kickoffButton(page).count()) === 0) {
           await closeAnyDialog(page);
-          return { ok: false, detail: "composer / kickoff button missing (composer not built)" };
+          return { ok: false, detail: "composer / kickoff button missing" };
         }
-        const title = "Kickoff hotkey ticket";
-        const body = "Kickoff body marker DELTA-3";
-        await fillTitleAndBody(page, title, body);
+        const title = "Kickoff chord ticket";
+        await fillTitleAndBody(page, title, "Reply with OK. Run no commands.");
         await page.keyboard.press("Meta+Shift+Enter");
 
-        const probe = await waitUntil(
-          "hotkey harness launch recorded",
-          async () => {
-            const text = await readFileSafe(harness.probe);
-            return text !== null && text.includes(title) && text.includes(body) ? text : null;
-          },
-          { timeout: 20000 },
+        const detail = await waitUntil("ticket workspace opens after the chord", () =>
+          detailOpen(page),
         )
           .then(() => true)
           .catch(() => false);
-        const detail = await waitUntil("detail view opens after hotkey", () => detailOpen(page), {
-          timeout: 8000,
-        })
-          .then(() => true)
-          .catch(() => false);
+        const seeded = (await ticketsFor(page, projectId)).find((t) => t.title === title);
+        const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
+        const label = await activeTabLabel(page, TICKET_TAB_STRIP);
+        const onChat = label !== null && label.includes(`Work on ${displayId}`);
 
-        const ok = probe && detail;
-        return { ok, detail: `probe=${probe} detail=${detail}` };
+        return {
+          ok: detail && onChat,
+          detail: `workspace=${detail} activeTab=${JSON.stringify(label)}`,
+        };
       },
     );
   } finally {
