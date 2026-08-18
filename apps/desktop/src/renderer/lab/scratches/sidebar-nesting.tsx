@@ -78,6 +78,7 @@ import {
 import {
   ActiveBandRow,
   PreviousBandRow,
+  sessionGroupPanelId,
   TicketGroupRow,
 } from "@renderer/components/sidebar/session-band-row";
 import {
@@ -548,10 +549,14 @@ function PreviousBand({
               newestAt={entry.newestAt}
               now={now}
               open={openIds.has(entry.id)}
+              // The app reveals the selected row's group as well as marking it
+              // (`active-sessions.tsx`); here the mark stands alone, which is
+              // the state you get in the app by collapsing a group by hand.
+              selected={entry.rows.some((previous) => previous.id === selectedId)}
               onToggle={onToggle}
             />
             {openIds.has(entry.id) ? (
-              <SidebarMenuSub className={NEST_RULE}>
+              <SidebarMenuSub id={sessionGroupPanelId(entry.id)} className={NEST_RULE}>
                 {entry.rows.map((previous) => row(previous, false))}
               </SidebarMenuSub>
             ) : null}

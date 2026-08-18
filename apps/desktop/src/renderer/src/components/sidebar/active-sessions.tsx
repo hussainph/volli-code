@@ -14,7 +14,6 @@ import {
   buildActiveSessionListing,
   groupPreviousByTicket,
   isProjectSessionRowSelected,
->>>>>>> 07d6ef68 (VC-69: group Previous-band sessions under their ticket)
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -29,6 +28,7 @@ import {
 import {
   ActiveBandRow,
   PreviousBandRow,
+  sessionGroupPanelId,
   TicketGroupRow,
 } from "@renderer/components/sidebar/session-band-row";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
@@ -127,7 +127,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     (state) => state.byProject[project.id]?.expandedSessionGroups ?? EMPTY_EXPANDED,
   );
   const setSessionGroupExpanded = useWorkspaceStore((state) => state.setSessionGroupExpanded);
-  );
   // The project's Session rows, shared with the board's active-session
   // indicator and fed by `volli:session-activity` rather than by a timer —
   // see `stores/project-sessions.ts`. This component used to own both the
@@ -485,6 +484,41 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       activeTabId === row.target.tabId);
 
   /**
+   * The ticket entry holding the Session in front of you, when the Previous
+   * band is where that Session ended up.
+   *
+   * Asks {@link isSelected} rather than restating what makes a row current: a
+   * second copy of that predicate is how the group's mark and the row's own
+   * highlight would come to disagree about the same tab.
+   */
+  let selectedGroupId: string | null = null;
+  for (const entry of previousEntries) {
+    if (entry.kind !== "ticket" || !entry.rows.some(isSelected)) continue;
+    selectedGroupId = entry.id;
+    break;
+  }
+
+  /**
+   * Open that group. Rows arrive in this band ON THEIR OWN — a Session ages out
+   * of Active once its quiet window runs out, with nobody touching it — and
+   * `openTicketId`/`ticketTabs` are persisted while `expandedSessionGroups`
+   * deliberately is not. So without this, the tab you are looking at slides
+   * behind a closed disclosure half an hour after you last typed in it, and is
+   * behind one again on the first frame after every relaunch, with nothing in
+   * the sidebar marking where you are. Collapsed by default is the band's
+   * steady state; it was never meant to hide the thing in front of you.
+   *
+   * Keyed on the group id alone, so it fires when the selection MOVES rather
+   * than on every rebuild of the band — which is what lets a reader close the
+   * revealed group by hand and have it stay closed until they go somewhere else
+   * and come back.
+   */
+  React.useEffect(() => {
+    if (selectedGroupId === null) return;
+    setSessionGroupExpanded(project.id, selectedGroupId, true);
+  }, [selectedGroupId, project.id, setSessionGroupExpanded]);
+
+  /**
    * Where a row goes. A ticketed row reopens its exact session, or failing that
    * its ticket workspace.
    *
@@ -613,10 +647,14 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
                     newestAt={entry.newestAt}
                     now={ageNow}
                     open={expandedGroups.includes(entry.id)}
+                    selected={entry.id === selectedGroupId}
                     onToggle={toggleGroup}
                   />
                   {expandedGroups.includes(entry.id) ? (
-                    <SidebarMenuSub className={SESSION_GROUP_NEST}>
+                    <SidebarMenuSub
+                      id={sessionGroupPanelId(entry.id)}
+                      className={SESSION_GROUP_NEST}
+                    >
                       {entry.rows.map((row) => (
                         <PreviousBandRow
                           key={row.id}

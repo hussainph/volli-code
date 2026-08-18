@@ -41,6 +41,7 @@
  * in the app.
  */
 import * as React from "react";
+import { DEFAULT_COMPACTION_POLICY } from "@volli/shared";
 import type {
   HiddenModelRef,
   ModelAccessDefaults,
@@ -180,6 +181,8 @@ function labModelAccess(): ModelAccessClient {
       hidden = next;
       return Promise.resolve(hidden);
     },
+    compactionPolicy: () => Promise.resolve(DEFAULT_COMPACTION_POLICY),
+    setCompactionPolicy: (policy) => Promise.resolve(policy),
     beginSignIn: () => Promise.reject(new Error("Sign-in needs the main process")),
     signOut: () => Promise.reject(new Error("Sign-out needs the main process")),
   };
