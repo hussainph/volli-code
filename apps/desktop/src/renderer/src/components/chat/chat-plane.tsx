@@ -22,6 +22,7 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   HiddenModelRef,
   ModelAccessModel,
@@ -170,6 +171,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     resolveInteraction,
     selectModel,
     submit,
+    dismissError,
   } = controller;
   const session = controller.session;
 
@@ -620,8 +622,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      // The transport latch is the surface's own state; retiring it is the
+      // reader's call, not a recovery (VC-97).
+      dismiss: () => dismissError(),
     }),
-    [liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -734,9 +739,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // One thing parks above the composer at a time; a pending
               // question outranks a list you can reopen by typing.
               interactionOpen={pending !== null}
-              // The card above draws no box of its own while this holds; this
-              // one is it. Both read the same rule off the same interaction —
-              // see `ComposerInteractionStack`.
+              // What this box's words will do, not where the answer belongs.
+              // The card above keeps its own field and is the affordance; this
+              // is the fallback that stops a question standing over the
+              // composer from making it a dead end (VC-68). It changes the
+              // placeholder and the control's name, never the behaviour.
               answering={answering}
               models={composerModels}
               selection={selection}
@@ -965,6 +972,21 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           onClick={blocker.secondaryAction.act}
         >
           {blocker.secondaryAction.label}
+        </Button>
+      ) : null}
+      {/* The one row that reports this surface's own latch — Retry stays for
+          the recovery, and this retires the row when the reader has read it.
+          An icon, not a labeled button: it competes with nothing, and the row's
+          words are the retry's business, not its. */}
+      {blocker.dismiss ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0"
+          aria-label={blocker.dismiss.label}
+          onClick={blocker.dismiss.act}
+        >
+          <XIcon aria-hidden className="size-3" />
         </Button>
       ) : null}
     </div>
