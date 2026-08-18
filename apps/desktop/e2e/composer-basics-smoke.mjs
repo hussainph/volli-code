@@ -16,9 +16,13 @@
  *     worktree, which is what the footer's old Worktree switch bound; the
  *     destination chip is that same `usesWorktree` field named by what it
  *     produces). There is NO terminal-harness picker: it left with the terminal
- *     kickoff it described (VC-15/VC-56), and what replaced it — the model and
- *     effort a Create & start will run on — lives in the footer and is proved
- *     by composer-kickoff-smoke.mjs, which can seed a default model;
+ *     kickoff it described (VC-15/VC-56);
+ *   • a footer whose left rail carries the model a Create & start will run on.
+ *     A fresh profile has no default configured, so the pill reads "Model" and
+ *     no effort chip rides beside it — the half of the row provable without
+ *     seeding one. The seeded version, and the proof that the seed comes from
+ *     the TICKET purpose rather than the project one, is
+ *     composer-kickoff-smoke.mjs's;
  *   • a footer with a "Create more" switch, a secondary "Create" button, and
  *     the primary kickoff button (data-testid="composer-kickoff").
  *   • the dialog root carries data-testid="new-ticket-composer".
@@ -148,6 +152,26 @@ async function main() {
         const harnessChip = await composer(page)
           .getByRole("button", { name: "Terminal harness" })
           .count();
+        // What replaced it, in the state THIS smoke can reach: the profile is
+        // fresh, so `app_state` holds no default for any purpose and the run row
+        // has no selection to name. The pill is drawn anyway and reads "Model" —
+        // the point of the row is that a first-timer can SEE the composer picks
+        // one — and no effort chip rides beside it, because a level is only a
+        // choice once a model has been settled on.
+        //
+        // Enabled-ness is deliberately NOT asserted. This smoke does not isolate
+        // HOME (only the Pi ones do), so Electron inherits the developer's own
+        // `~/.pi/agent/auth.json` and Model Access answers with whatever that
+        // login can reach: a machine with Pi credentials gets a live catalog and
+        // an enabled pill, one without gets an empty catalog and a disabled one.
+        // Both are correct; pinning either would make this check pass or fail on
+        // a property of the machine rather than of the composer.
+        const modelPill = await composer(page)
+          .getByRole("button", { name: "Model", exact: true })
+          .count();
+        const effortChip = await composer(page)
+          .getByRole("button", { name: /^Reasoning effort:/ })
+          .count();
         // The branch relationship replaced the footer's Worktree switch: the
         // destination chip binds the same `usesWorktree` field, and the base
         // chip is shown only while that destination is a worktree.
@@ -176,6 +200,8 @@ async function main() {
           priorityChip === 1 &&
           labelsChip === 1 &&
           harnessChip === 0 &&
+          modelPill === 1 &&
+          effortChip === 0 &&
           baseChip === 1 &&
           destinationChip === 1 &&
           createMore === 1 &&
@@ -183,7 +209,7 @@ async function main() {
           kickoff === 1;
         return {
           ok,
-          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
+          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
         };
       },
     );
@@ -260,7 +286,12 @@ async function main() {
         // Labels chip → add "smoke".
         await composer(page).getByRole("button", { name: "Labels" }).click();
         await sleep(150);
-        await page.getByPlaceholder("Add label…").fill(label);
+        // "Search labels…", not "Add label…": VC-27 turned this into a picker
+        // over the project's own vocabulary (typing still CREATES one, which is
+        // what the Enter below commits) and renamed the field with it. This
+        // smoke is manually run, so nothing caught the rename — and the throw
+        // left the composer open, which is why checks 6-9 all failed behind it.
+        await page.getByPlaceholder("Search labels…").fill(label);
         await page.keyboard.press("Enter");
         await page.keyboard.press("Escape"); // close the label menu, keep the composer open
         // Title + markdown description.

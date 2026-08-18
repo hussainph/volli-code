@@ -34,6 +34,7 @@ import {
   ModelPill,
   offerableModels,
   type ComposerModel,
+  type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 
@@ -43,6 +44,16 @@ import { useModelAccessClient } from "@renderer/lib/model-access-client";
  * future reader think they were told apart.
  */
 const NO_MODELS: readonly ComposerModel[] = [];
+
+/**
+ * What the pill names before anything has been resolved.
+ *
+ * `modelPillLabel` reads an empty id as the word "Model", which is the chat
+ * composer's own answer to the same moment (`EMPTY_MODEL_SELECTION` in
+ * `chat-plane.tsx`) and the reason this is a blank selection rather than a
+ * separate placeholder component.
+ */
+const NO_SELECTION: ComposerModelSelection = { providerId: "", modelId: "", reasoningLevel: "" };
 
 export interface ComposerRun {
   models: readonly ComposerModel[];
@@ -104,17 +115,35 @@ export function useComposerRun(): ComposerRun {
 }
 
 /**
- * The pills. Nothing at all while there is no selection — a disabled pair
- * naming no model would be two controls explaining that a third surface is
- * unconfigured, and the start already says that where it can be acted on.
+ * The pills.
+ *
+ * THE MODEL PILL IS ALWAYS DRAWN, including before Model Access has resolved
+ * anything — where it reads "Model" and disables itself, because `ModelPill`
+ * already refuses an empty catalog. It used to render nothing at all in that
+ * state, on the reasoning that a disabled control naming no model is a control
+ * explaining that some other surface is unconfigured. Two things were wrong
+ * with that. It contradicts the pill's own home: the chat composer meets the
+ * identical moment with a disabled "Model", so the two surfaces this row exists
+ * to keep identical disagreed exactly where a first-run profile would see them.
+ * And it is the discoverability bug this ticket is about, aimed at the person
+ * least able to survive it — a first-timer with no default configured saw no
+ * evidence the composer chooses a model at all, then met a refusal that talked
+ * about one.
+ *
+ * The effort chip still comes and goes, and that asymmetry is the point: a model
+ * is a thing this row always HAS an answer for, even if the answer is "none
+ * yet", while effort is a choice that only exists once a model has offered more
+ * than one level to choose between.
  */
 export function ComposerRunRow({ run }: { run: ComposerRun }) {
   const { models, selection, setSelection } = run;
-  if (selection === null) return null;
   const stops =
-    models.find(
-      (model) => model.providerId === selection.providerId && model.modelId === selection.modelId,
-    )?.reasoningLevels ?? [];
+    selection === null
+      ? []
+      : (models.find(
+          (model) =>
+            model.providerId === selection.providerId && model.modelId === selection.modelId,
+        )?.reasoningLevels ?? []);
 
   return (
     <>
@@ -122,9 +151,11 @@ export function ComposerRunRow({ run }: { run: ComposerRun }) {
           model change can never leave a level behind that this one cannot run. */}
       <ModelPill
         models={models}
-        selection={selection}
+        selection={selection ?? NO_SELECTION}
         // Never disabled by an empty title: choosing what a ticket will run on
-        // is independent of whether the ticket is ready to be created.
+        // is independent of whether the ticket is ready to be created. The pill
+        // disables ITSELF on an empty catalog, which is the only state where
+        // there is nothing to pick.
         disabled={false}
         onChange={(next) => {
           // A level the wire grammar does not spell cannot be recorded, so a
@@ -135,7 +166,7 @@ export function ComposerRunRow({ run }: { run: ComposerRun }) {
       />
       {/* A model with one level has no decision in it, and a control naming one
           option is worse than no control — the chat composer's own rule. */}
-      {stops.length > 1 ? (
+      {selection !== null && stops.length > 1 ? (
         <EffortPill
           levels={stops}
           value={selection.reasoningLevel}
