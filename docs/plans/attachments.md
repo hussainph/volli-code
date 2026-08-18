@@ -212,6 +212,46 @@ screenshot has no path at all and therefore always snapshots.
 screenshot and pressing return without typing is an ordinary gesture, so that
 guard relaxes when the message carries image parts.
 
+### Inlinable is narrower than image (ship review)
+
+`isImageMime` (`image/*`) is presentation's predicate — what previews as a
+picture. What may be handed to a model is `isInlinableImageMime`
+(png/jpeg/gif/webp, Anthropic's documented set and the floor across
+providers), because Pi passes `mimeType` verbatim as the wire `media_type`.
+The gap matters: an inlined `image/svg+xml` would be refused by the provider,
+and since it already persisted into Pi's sidecar it would replay and fail
+every later turn — the exact wedge the budgets exist to prevent. So SVG/HEIC
+preview as images, materialize as files, reach the model as path refs, skip
+the 5 MB ceiling (they never enter history) and cost the session budget
+nothing.
+
+### A sent message renders its own attachments (ship review)
+
+The transcript draws a user turn's file parts as read-only thumbs from the
+message parts alone — `volli-blob:` URL, media type, file name; no fetch — so
+the record survives the attachment rows being removed later. `speaks` counts a
+`file` part as drawable, so an attachment-only message is a turn rather than
+an empty bubble.
+
+### The chat strip dies with the pane (ship review)
+
+A chat attachment links to the Session at attach time (that is what makes the
+budget refusable while the file is in hand), but until ⏎ carries it into a
+message, the strip's React state is the only pointer to that link. So
+unmounting or switching Sessions detaches whatever is still pending
+(`discardPending`, racing-safe via a synchronously-kept ref). Residue: a strip
+abandoned by quitting the app leaks its links until the Session is deleted —
+accepted as bounded, revisit if drafts ever persist attachments.
+
+### `volli:blob-attach` is a read-by-path primitive (ship review)
+
+The attach IPC takes an absolute `sourcePath` and reads it in main, and the
+protocol serves the bytes back — so a hostile renderer could exfiltrate any
+readable file. This matches the app's existing trust model (the renderer is
+our own code behind context isolation, and already holds broader read
+surfaces), but it is a wider door than it looks; noted so nobody mistakes it
+for an oversight.
+
 ## Work order
 
 1. **Shared model** — `Blob`, hash/path derivation, the materialization naming

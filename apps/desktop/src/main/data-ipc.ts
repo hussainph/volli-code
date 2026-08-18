@@ -585,10 +585,12 @@ export function registerDataIpcHandlers(
 
     "volli:blob-attach": async (input: BlobAttachInput): Promise<BlobAttachResult> => {
       try {
-        // The workspace an `@` ref resolves against is derived here rather than
-        // sent by the renderer: it is a fact about the Ticket's worktree and
-        // the project's checkout, and a renderer that guessed it wrong would
-        // silently turn repository files into frozen copies.
+        // The workspace an `@` ref resolves against is a fact about the
+        // Ticket's worktree and the project's checkout, so for an owned attach
+        // it is derived here — a renderer that guessed it wrong would silently
+        // turn repository files into frozen copies. The renderer supplies it
+        // only for an unowned attach (the new-Ticket composer), whose Ticket
+        // does not exist to derive from yet.
         const refRoot = input.refRoot ?? resolveRefRoot(db, input.owner);
         const outcome = await attachBlob(
           db,
