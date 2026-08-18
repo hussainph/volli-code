@@ -240,10 +240,15 @@ async function drag(page, sourceBox, target) {
   await sleep(500);
 }
 
-/** Click the Board nav item if present (nav is remembered per-workspace and defaults to Board, but re-assert after every reload to be robust). */
+/** Land on Home's Board tab (nav and tab are both remembered per-workspace and
+ *  both default to it, but re-assert after every reload to be robust). */
 async function goToBoard(page) {
-  const boardNav = page.getByRole("button", { name: "Board", exact: true });
-  if (await boardNav.count()) await boardNav.first().click();
+  const homeNav = page.getByRole("button", { name: "Home", exact: true });
+  if (await homeNav.count()) await homeNav.first().click();
+  const boardTab = page
+    .getByRole("tablist", { name: "Home tabs", exact: true })
+    .getByRole("tab", { name: "Board" });
+  if (await boardTab.count()) await boardTab.first().click();
   await sleep(500);
 }
 

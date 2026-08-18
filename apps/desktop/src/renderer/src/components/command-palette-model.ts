@@ -100,7 +100,7 @@ export function buildCommandPaletteItems(
     if (project === undefined) continue;
     const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);
     // A chat whose ticket disappeared has no ticket workspace to open. The
-    // scratch case is valid because `ticketId` is deliberately null there.
+    // ticketless case is valid because `ticketId` is deliberately null there.
     if (record.ticketId !== null && linked === undefined) continue;
     sessions.push({
       kind: "session",
@@ -111,7 +111,7 @@ export function buildCommandPaletteItems(
       title: residentChatTitles[record.sessionId] ?? record.title,
       scope:
         record.ticketId === null
-          ? { kind: "scratch", projectId: project.id }
+          ? { kind: "project", projectId: project.id }
           : { kind: "ticket", projectId: project.id, ticketId: record.ticketId },
       ticketDisplayId:
         linked === undefined

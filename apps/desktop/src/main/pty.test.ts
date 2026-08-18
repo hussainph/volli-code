@@ -274,7 +274,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Every session persists a durable record, so the manager needs a real,
   // migrated db. The workspace ("w") must be a real project row (FK), rooted at
-  // `root` so scratch cwds and resolved ticket cwds land inside the synced root.
+  // `root` so Project Session cwds and resolved ticket cwds land inside the synced root.
   testDb = openTestDb();
   project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
   insertProject(testDb.db, project);
@@ -2164,11 +2164,11 @@ describe("worktree ticket sessions", () => {
   });
 });
 
-describe("scratch session persistence", () => {
+describe("Project Session persistence", () => {
   it("persists a project-scoped record with ticketId null, no VOLLI_TICKET, but the artifacts env", async () => {
     const { sessionId } = await createSession();
 
-    // Scratch sessions get no VOLLI_TICKET, but DO get VOLLI_ARTIFACTS_DIR
+    // Project Sessions get no VOLLI_TICKET, but DO get VOLLI_ARTIFACTS_DIR
     // (decision #9) pointing at the project's main-repo .volli/artifacts.
     const env = lastSpawnEnv();
     expect(env["VOLLI_TICKET"]).toBeUndefined();
@@ -2187,7 +2187,7 @@ describe("scratch session persistence", () => {
     });
   });
 
-  it("ends a scratch record on exit without recording any ticket event", async () => {
+  it("ends a Project Session record on exit without recording any ticket event", async () => {
     const { sessionId, pty } = await createSession();
     pty.emitExit(0);
     await vi.waitFor(() =>

@@ -122,7 +122,7 @@ function isOptionalResume(value: unknown): value is { sessionId: string } | unde
 }
 
 /**
- * `undefined` (scratch session) or a `{ ticketId: string; kickoff?; resume? }`
+ * `undefined` (Project Session) or a `{ ticketId: string; kickoff?; resume? }`
  * object (ticket session). A malformed kickoff or resume shape rejects the whole
  * ticket.
  */

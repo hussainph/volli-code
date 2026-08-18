@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
@@ -9,6 +10,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import type { SkillReference } from "@volli/shared";
 
+import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
   runOnLivePanes,
@@ -27,24 +29,37 @@ import { Tab, TabStrip, tabStopIndex, type TabProps } from "@renderer/components
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 
 /**
- * What the scratch strip draws, per kind.
+ * What the Home strip draws, per kind.
+ *
+ * The `board` kind carries nothing at all: it is the permanent first tab, and
+ * every fact about it is a constant. It is the exact analogue of the ticket
+ * strip's always-present Body tab — same position, same permanence, same
+ * absence of a close — which is what makes Home read as the ticket workspace
+ * one scope up rather than as a new kind of thing.
  *
  * A terminal tab carries its whole store record — park state, panes and exit
  * codes are all read off it — while a chat tab carries the two facts a chat has
  * on a strip: its title and its liveness. `id` is the tab's identity in the
- * merged strip and in `sessionsActiveTab`; a chat's is `chat:`-prefixed
- * (`ticket-chat-tab.ts`), so the two id spaces never collide.
+ * merged strip and in `homeActiveTab`; a chat's is `chat:`-prefixed
+ * (`ticket-chat-tab.ts`) and the Board's is a bare word, so the three id spaces
+ * never collide.
  */
-export type SessionTabDescriptor =
+export type HomeTabDescriptor =
+  | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
   | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus };
 
-interface SessionTabsProps {
-  tabs: readonly SessionTabDescriptor[];
-  activeTabId: string | null;
-  onSelect(tab: SessionTabDescriptor): void;
-  onClose(tab: SessionTabDescriptor): void;
-  onRename(tab: SessionTabDescriptor, title: string): void;
+/** The Board tab, spelled once. */
+export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
+
+interface HomeTabStripProps {
+  tabs: readonly HomeTabDescriptor[];
+  activeTabId: string;
+  onSelect(tab: HomeTabDescriptor): void;
+  /** Never raised for the Board tab, which carries no close affordance. */
+  onClose(tab: HomeTabDescriptor): void;
+  /** Never raised for the Board tab, which is not renamable. */
+  onRename(tab: HomeTabDescriptor, title: string): void;
   onNewSession(): void;
   onNewChat(): void;
   /** The project's skills — the "Chat with skill" submenu's rows. */
@@ -56,10 +71,19 @@ interface SessionTabsProps {
 }
 
 /**
- * The scratch tab strip: the pill variant of `ui/tab-strip.tsx`, matching the
- * chrome band the sessions surface sits under. It holds both kinds of Session a
- * project can run without a ticket, terminals first and chats after, each in
- * the order it was opened. A trailing split control starts either; each tab
+ * Home's tab strip: the FOLDER variant of `ui/tab-strip.tsx`, the same drawing
+ * the ticket workspace uses and in the same place — the top edge of the content
+ * card, with the active tab bleeding one pixel past the strip's border so it
+ * fuses with the plane below. That is not a coincidence to be tidied away
+ * later: Home and a ticket workspace are the same object at two scopes, and
+ * drawing them alike is how the app says so without prose.
+ *
+ * (It was the PILL variant while this strip belonged to the Sessions page,
+ * where it floated above a surface it did not own. It owns this one.)
+ *
+ * The permanent Board tab leads, then both kinds of Session a project can run
+ * without a ticket — terminals first and chats after, each in the order it was
+ * opened. A trailing split control starts either; every tab but the Board
  * carries a hover-revealed close, a right-click menu, and double-click inline
  * rename.
  *
@@ -67,7 +91,7 @@ interface SessionTabsProps {
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
  * #51), and a chat Session holds none.
  */
-export function SessionTabs({
+export function HomeTabStrip({
   tabs,
   activeTabId,
   onSelect,
@@ -78,7 +102,7 @@ export function SessionTabs({
   skills,
   onNewChatWithSkill,
   creating,
-}: SessionTabsProps) {
+}: HomeTabStripProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const stop = tabStopIndex(
     tabs.length,
@@ -87,14 +111,14 @@ export function SessionTabs({
 
   return (
     <TabStrip
-      variant="pill"
-      label="Session tabs"
+      variant="folder"
+      label="Home tabs"
       actions={
         // The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
-        // (`lib/new-session-shortcut.ts`), and on this page that is this
-        // project's ticketless Sessions — exactly what this control mints.
-        // `align="end"` so the menu hangs back into the window rather than off
-        // its edge.
+        // (`lib/new-session-shortcut.ts`), and on Home that is this project's
+        // ticketless Sessions — exactly what this control mints, from the Board
+        // tab as well as from a Session tab. `align="end"` so the menu hangs
+        // back into the window rather than off its edge.
         <NewSessionControl
           disabled={creating}
           placement="strip"
@@ -108,12 +132,24 @@ export function SessionTabs({
       }
     >
       {tabs.map((descriptor, index) => {
-        // One set of callbacks for both kinds — what differs between them is
-        // what each tab DRAWS and what its menu offers, never how the strip
-        // reports a selection, a close, or a rename.
+        const active = descriptor.id === activeTabId;
+        const tabStop = index === stop;
+        if (descriptor.kind === "board") {
+          return (
+            <BoardTab
+              key={descriptor.id}
+              active={active}
+              tabStop={tabStop}
+              onSelect={() => onSelect(descriptor)}
+            />
+          );
+        }
+        // One set of callbacks for both Session kinds — what differs between
+        // them is what each tab DRAWS and what its menu offers, never how the
+        // strip reports a selection, a close, or a rename.
         const shared = {
-          active: descriptor.id === activeTabId,
-          tabStop: index === stop,
+          active,
+          tabStop,
           editing: editingId === descriptor.id,
           onClose: () => onClose(descriptor),
           onStartRename: () => setEditingId(descriptor.id),
@@ -141,6 +177,43 @@ export function SessionTabs({
         );
       })}
     </TabStrip>
+  );
+}
+
+/**
+ * The permanent first tab.
+ *
+ * No close, no rename, no context menu — there is nothing to offer about a tab
+ * that cannot go away, and an empty menu is worse than none. The Kanban glyph
+ * stays with the board rather than following the nav row: on the nav row it had
+ * to name a whole environment and stopped fitting, while here it names exactly
+ * one tab among Sessions and is the one item that is neither a chat nor a
+ * terminal. It stays outline like its neighbours — `fill` is a different
+ * drawing rather than a heavier one (CLAUDE.md), and position plus shape
+ * already say this tab is not one of the others.
+ */
+function BoardTab({
+  active,
+  tabStop,
+  onSelect,
+}: {
+  active: boolean;
+  tabStop: boolean;
+  onSelect(): void;
+}) {
+  return (
+    <Tab
+      label="Board"
+      active={active}
+      tabStop={tabStop}
+      closable={false}
+      onActivate={onSelect}
+      // size-3 and `bold`, the leading-glyph tier the chat bubble and the moon
+      // beside it already take: at 12px regular draws lighter than the label.
+      leading={
+        <KanbanIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+      }
+    />
   );
 }
 

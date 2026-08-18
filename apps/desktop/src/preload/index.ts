@@ -396,12 +396,12 @@ const api = {
     pathForFile: (file: File): string => webUtils.getPathForFile(file),
   },
   sessions: {
-    /** Every Session in a project (ticket-scoped and project-scoped scratch), newest first — a terminal or chat row per Session, never dropped. */
+    /** Every Session in a project (ticket-scoped and project-scoped), newest first — a terminal or chat row per Session, never dropped. */
     list: (input: ProjectIdInput): Promise<SessionsResult> => invoke("volli:session-list", input),
     /** A ticket's Session listing rows, newest first — backs the right-rail linked-sessions list. */
     listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
       invoke("volli:session-list-for-ticket", input),
-    /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
+    /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
     /**

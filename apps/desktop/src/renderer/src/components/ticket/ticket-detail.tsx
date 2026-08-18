@@ -121,7 +121,7 @@ function documentFileSource(identity: DocumentIdentity): FileSource {
 
 /**
  * The full-page ticket detail view (ticket-detail-mvp decision #1), rendered
- * by board-page.tsx in place of the board's content when a ticket is open —
+ * by home-surface.tsx in place of the board when a ticket is open —
  * the global sessions layer and sidebar stay mounted around it (they live
  * higher up the tree, in main-content.tsx/app-shell.tsx). Layout follows the
  * browser-window metaphor: ONE full-width Chrome-style tab row at the very top,
@@ -140,7 +140,7 @@ export function TicketDetail({
   ticket,
 }: {
   projectId: string;
-  /** Kept in the props contract for board-page; the PTY cwd now resolves in main. */
+  /** Kept in the props contract for Home; the PTY cwd now resolves in main. */
   projectPath: string;
   ticketPrefix: string;
   ticket: Ticket;
@@ -931,7 +931,7 @@ export function TicketDetail({
   // property dropdown or the label editor's text field can still dismiss
   // itself on Escape without also closing the whole view. Board's own
   // Escape-deselect listener is inert while this view is mounted — board.tsx
-  // isn't rendered at all (board-page.tsx swaps the two) — so the two never
+  // isn't rendered at all (home-surface.tsx swaps the two) — so the two never
   // fire off the same keypress.
   //
   // While terminal-focused, Escape is left entirely alone so it reaches the

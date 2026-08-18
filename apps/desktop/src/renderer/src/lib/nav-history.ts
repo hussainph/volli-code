@@ -56,15 +56,20 @@ export function sameSnapshot(a: NavSnapshot | null, b: NavSnapshot | null): bool
 }
 
 /**
- * The semantic parent of a full-page ticket detail is the selected project's
- * plain Board. This is derivable even when the detail was restored from
- * persisted state and the deliberately in-memory history starts empty.
+ * The semantic parent of a full-page ticket detail is Home's plain board. This
+ * is derivable even when the detail was restored from persisted state and the
+ * deliberately in-memory history starts empty.
+ *
+ * A {@link NavSnapshot} carries no Home tab, deliberately — ticket tabs are
+ * unrecorded too, and adding a tab axis would double every location. The
+ * user-visible consequence is that ⌘[ walks between pages and tickets but not
+ * between Home's own tabs (VC-54).
  */
 export function ticketParentSnapshot(snapshot: NavSnapshot): NavSnapshot | null {
-  if (snapshot.projectId === null || snapshot.nav !== "board" || snapshot.openTicketId === null) {
+  if (snapshot.projectId === null || snapshot.nav !== "home" || snapshot.openTicketId === null) {
     return null;
   }
-  return { projectId: snapshot.projectId, nav: "board", openTicketId: null };
+  return { projectId: snapshot.projectId, nav: "home", openTicketId: null };
 }
 
 /**

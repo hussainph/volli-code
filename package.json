@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && vp run -r typecheck",
     "test": "vp run -r test",
     "test:coverage": "vp run -r test:coverage",
-    "smoke:pi": "pnpm run build && node apps/desktop/e2e/pi-ticket-chat-smoke.mjs && node apps/desktop/e2e/pi-scratch-chat-smoke.mjs && node apps/desktop/e2e/pi-sessions-host-smoke.mjs",
+    "smoke:pi": "pnpm run build && node apps/desktop/e2e/pi-ticket-chat-smoke.mjs && node apps/desktop/e2e/pi-project-chat-smoke.mjs && node apps/desktop/e2e/pi-sessions-host-smoke.mjs",
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check"

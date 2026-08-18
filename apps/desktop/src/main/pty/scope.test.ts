@@ -124,7 +124,7 @@ describe("resolveScope", () => {
     expect(result).toMatchObject({ ok: true, scope: { title: "Session 2", resume: null } });
   });
 
-  it("numbers scratch Sessions through the scratch projection scope", async () => {
+  it("numbers Project Sessions through the project projection scope", async () => {
     const { project, control } = setup();
     await seedTerminal(control, {
       projectId: project.id,

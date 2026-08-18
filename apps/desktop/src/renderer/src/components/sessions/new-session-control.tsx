@@ -5,8 +5,8 @@
  * the exception exists, and right-click reaches the same two items wherever the
  * caret happens to be drawn. It replaces the two shapes this app used to have
  * for one job — a two-button Chat/Terminal cluster in the ticket surfaces and a
- * bare "+" menu on the Sessions strip — which cost the ticket a peer it does not
- * have and cost Sessions a click on the act it exists for.
+ * bare "+" menu on the project's own strip — which cost the ticket a peer it
+ * does not have and cost the project's strip a click on the act it exists for.
  *
  * The asymmetry it draws is one the code already has and neither shipped drawing
  * expressed: `@volli/agent-runtime` is the one structured executor, and a
@@ -101,7 +101,7 @@ export function NewSessionControl({
    * which, since the chords began resolving against the surface in front
    * (`lib/new-session-shortcut.ts`), is every mount that lives ON one of those
    * surfaces. A ticket's controls announce the chords because inside a ticket
-   * the chord mints a ticket Session; the Sessions strip announces them because
+   * the chord mints a ticket Session; Home's strip announces them because
    * on that page it mints a ticketless one. The flag survives rather than
    * becoming a constant because "a menu may only advertise a key that does what
    * the item does" is the rule, not "everything advertises": a control that ever

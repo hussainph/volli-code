@@ -793,10 +793,10 @@ describe("SessionEngine creation and explicit commands", () => {
     const ledger = createInMemorySessionLedger();
     const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
     const ticketFirst = await plane.createSession(createRequest("command-list-ticket-first"));
-    const scratch = await plane.createSession({
-      ...createRequest("command-list-scratch"),
+    const projectSession = await plane.createSession({
+      ...createRequest("command-list-project"),
       ticketId: null,
-      title: "Scratch Session",
+      title: "Project Session",
     });
     const ticketLater = await plane.createSession({
       ...createRequest("command-list-ticket-later"),
@@ -816,7 +816,7 @@ describe("SessionEngine creation and explicit commands", () => {
 
     const all = await plane.listSessions({ projectId: "project-1", scope: "all" });
     expect(all.map(({ session: listed }) => listed.id)).toEqual([
-      scratch.session.id,
+      projectSession.session.id,
       ticketLater.session.id,
       ticketFirst.session.id,
     ]);
@@ -841,13 +841,13 @@ describe("SessionEngine creation and explicit commands", () => {
       { session: { id: ticketFirst.session.id } },
     ]);
     await expect(
-      plane.listSessions({ projectId: "project-1", scope: "scratch" }),
-    ).resolves.toMatchObject([{ session: { id: scratch.session.id, ticketId: null } }]);
+      plane.listSessions({ projectId: "project-1", scope: "project" }),
+    ).resolves.toMatchObject([{ session: { id: projectSession.session.id, ticketId: null } }]);
     await expect(plane.countSessions({ projectId: "project-1", scope: "all" })).resolves.toBe(3);
     await expect(
       plane.countSessions({ projectId: "project-1", scope: "ticket", ticketId: "ticket-1" }),
     ).resolves.toBe(2);
-    await expect(plane.countSessions({ projectId: "project-1", scope: "scratch" })).resolves.toBe(
+    await expect(plane.countSessions({ projectId: "project-1", scope: "project" })).resolves.toBe(
       1,
     );
     await plane.submit({
@@ -863,8 +863,8 @@ describe("SessionEngine creation and explicit commands", () => {
       provenance: userProvenance,
     });
     await plane.submit({
-      commandId: "command-signal-scratch",
-      sessionId: scratch.session.id,
+      commandId: "command-signal-project",
+      sessionId: projectSession.session.id,
       intent: { kind: "session.signal", signal: "done", reason: "Not ticket scoped" },
       provenance: userProvenance,
     });
@@ -2815,9 +2815,9 @@ describe("InMemorySessionLedger", () => {
       title: "Older ticket",
       createdAt: 1,
     };
-    const scratch = {
-      ...sessionRecord("session-scratch"),
-      title: "Scratch",
+    const projectSession = {
+      ...sessionRecord("session-project"),
+      title: "Project chat",
       createdAt: 2,
     };
     const ticketLaterId = {
@@ -2838,14 +2838,20 @@ describe("InMemorySessionLedger", () => {
       createdAt: 4,
     };
     await ledger.transaction((transaction) => {
-      for (const session of [ticketOlder, scratch, ticketLaterId, ticketEarlierId, otherProject]) {
+      for (const session of [
+        ticketOlder,
+        projectSession,
+        ticketLaterId,
+        ticketEarlierId,
+        otherProject,
+      ]) {
         transaction.insertSession(session);
       }
       const all = transaction.listSessions({ projectId: "project-1", scope: "all" });
       expect(all.map((session) => session.id)).toEqual([
         ticketLaterId.id,
         ticketEarlierId.id,
-        scratch.id,
+        projectSession.id,
         ticketOlder.id,
       ]);
       expect(
@@ -2853,8 +2859,8 @@ describe("InMemorySessionLedger", () => {
           .listSessions({ projectId: "project-1", scope: "ticket", ticketId: "ticket-1" })
           .map((session) => session.id),
       ).toEqual([ticketLaterId.id, ticketEarlierId.id, ticketOlder.id]);
-      expect(transaction.listSessions({ projectId: "project-1", scope: "scratch" })).toEqual([
-        scratch,
+      expect(transaction.listSessions({ projectId: "project-1", scope: "project" })).toEqual([
+        projectSession,
       ]);
       all[0]!.title = "Mutated query result";
       expect(transaction.listSessions({ projectId: "project-1", scope: "all" })[0]?.title).toBe(

@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
 import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
-import { BoardPage } from "@renderer/components/pages/board-page";
+import { HomeSurface } from "@renderer/components/home/home-surface";
 import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { FilesPage } from "@renderer/components/pages/files-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
-import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
@@ -25,12 +24,12 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   const settingsSignInProviderId = useUiStore((state) => state.settingsSignInProviderId);
 
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
-  // The Sessions surface hosts live PTY terminals, so it is ALWAYS mounted and
-  // merely hidden via CSS — switching nav (Board/Files), switching projects, or
-  // opening Settings must not tear its terminals down. Board/Files/Settings are
-  // stateless, so they keep plain conditional rendering. `SessionsLayer` owns
-  // every terminal across all projects and toggles its own visibility.
-  const sessionsVisible = !settingsOpen && selected !== null && activeNav === "sessions";
+  // Home hosts the layer that owns every live PTY terminal in the app, so it is
+  // ALWAYS mounted and merely hidden via CSS — switching nav, switching
+  // projects, or opening Settings must not tear its terminals down. Files,
+  // Configure and Settings are stateless, so they keep plain conditional
+  // rendering.
+  const homeVisible = !settingsOpen && selected !== null && activeNav === "home";
 
   if (override !== undefined) {
     return <div className="relative flex min-h-0 flex-1 flex-col">{override}</div>;
@@ -38,7 +37,11 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <SessionsLayer visible={sessionsVisible} />
+      {/* Home renders its own strip, its board (or the ticket that has taken it
+          over) and its Session planes, in that DOM order, so the strip is the
+          top edge of whatever is below it. It is a fragment on purpose: it
+          shares this flex column rather than nesting one inside it. */}
+      <HomeSurface visible={homeVisible} />
       {
         settingsOpen ? (
           <SettingsPage
@@ -51,13 +54,11 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           <div className={cn("flex-1", EMPTY_PAGE)}>
             <p className="text-sm text-muted-foreground">Select a project</p>
           </div>
-        ) : activeNav === "board" ? (
-          <BoardPage />
         ) : activeNav === "files" ? (
           <FilesPage />
         ) : activeNav === "configure" ? (
           <ConfigurePage />
-        ) : null /* sessions: rendered by the always-mounted SessionsLayer above */
+        ) : null /* home: rendered by the always-mounted HomeSurface above */
       }
     </div>
   );

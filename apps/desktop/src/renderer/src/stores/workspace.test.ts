@@ -1,6 +1,7 @@
 import { DEFAULT_TICKET_SORT, EMPTY_FILE_WORKSPACE } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { TICKET_BODY_TAB_ID, isTicketBodyTabId } from "@renderer/components/ticket/ticket-body-tab";
 import { useBoardStore } from "./board";
 import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
@@ -38,34 +39,54 @@ describe("setNav", () => {
   it("tracks nav independently per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
-    store.getState().setNav("project-b", "sessions");
+    store.getState().setNav("project-b", "configure");
 
     expect(store.getState().byProject["project-a"]?.nav).toBe("files");
-    expect(store.getState().byProject["project-b"]?.nav).toBe("sessions");
+    expect(store.getState().byProject["project-b"]?.nav).toBe("configure");
   });
 
   it("keeps a project's nav across changes to other projects", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
-    store.getState().setNav("project-b", "board");
-    store.getState().setNav("project-b", "sessions");
+    store.getState().setNav("project-b", "home");
+    store.getState().setNav("project-b", "configure");
 
     expect(store.getState().byProject["project-a"]?.nav).toBe("files");
   });
 
-  it("shows the plain board when Board is selected from an open ticket", () => {
+  it("shows the plain board when Home is selected from inside a ticket", () => {
+    // Inside a ticket the nav is ALREADY "home", so clicking Home can only mean
+    // one thing — show me Home, which is the board (VC-54 decision 1).
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
-    store.getState().setNav("project-a", "board");
+    store.getState().setNav("project-a", "home");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
-      nav: "board",
+      nav: "home",
       openTicketId: null,
     });
   });
 
-  it("switches to Configure without clearing the open ticket (only Board does)", () => {
+  it("keeps the remembered ticket when Home is selected onto a Session tab", () => {
+    // The clear belongs to the BOARD tab, not to the nav item. With a Session
+    // tab in front the ticket is not on screen to be left, and the round trip
+    // Home \u2192 Files \u2192 Home must not quietly discard it.
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().setNav("project-a", "files");
+
+    store.getState().setNav("project-a", "home");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: "chat:c1",
+      openTicketId: "ticket-1",
+    });
+  });
+
+  it("switches to Configure without clearing the open ticket (only Home does)", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
@@ -164,63 +185,149 @@ describe("setBoardSort", () => {
   });
 });
 
-describe("setSessionsActiveTab", () => {
-  it("defaults to null for an untouched project", () => {
+describe("setHomeActiveTab", () => {
+  it("defaults to the Board tab for an untouched project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
 
-    expect(store.getState().byProject["project-a"]?.sessionsActiveTab ?? null).toBeNull();
+    expect(
+      store.getState().byProject["project-a"]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+    ).toBe(HOME_BOARD_TAB_ID);
   });
 
   it("tracks the active tab independently per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setSessionsActiveTab("project-a", "s1");
-    store.getState().setSessionsActiveTab("project-b", "chat:c1");
+    store.getState().setHomeActiveTab("project-a", "s1");
+    store.getState().setHomeActiveTab("project-b", "chat:c1");
 
-    expect(store.getState().byProject["project-a"]?.sessionsActiveTab).toBe("s1");
-    expect(store.getState().byProject["project-b"]?.sessionsActiveTab).toBe("chat:c1");
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("s1");
+    expect(store.getState().byProject["project-b"]?.homeActiveTab).toBe("chat:c1");
   });
 
-  it("clears via null", () => {
+  it("returns to the Board tab", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setSessionsActiveTab("project-a", "s1");
+    store.getState().setHomeActiveTab("project-a", "s1");
 
-    store.getState().setSessionsActiveTab("project-a", null);
+    store.getState().setHomeActiveTab("project-a", HOME_BOARD_TAB_ID);
 
-    expect(store.getState().byProject["project-a"]?.sessionsActiveTab).toBeNull();
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+  });
+
+  it("records the Board tab WITHOUT closing an open ticket \u2014 that is openHomeBoard's act", () => {
+    // The write-back in `home-surface.tsx` records whatever it derived, and the
+    // last Session tab closing derives the Board. If recording that also closed
+    // the ticket remembered behind it, closing a chat would silently discard
+    // the ticket the person was going back to.
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+
+    store.getState().setHomeActiveTab("project-a", HOME_BOARD_TAB_ID);
+
+    expect(store.getState().byProject["project-a"]?.openTicketId).toBe("ticket-1");
   });
 
   it("is a no-op (unchanged identity) when re-setting the same tab", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setSessionsActiveTab("project-a", "s1");
+    store.getState().setHomeActiveTab("project-a", "s1");
     const before = store.getState();
 
-    store.getState().setSessionsActiveTab("project-a", "s1");
+    store.getState().setHomeActiveTab("project-a", "s1");
 
     expect(store.getState()).toBe(before);
   });
 
-  it("is a no-op (unchanged identity) clearing an already-null tab on an untouched project", () => {
+  it("is a no-op (unchanged identity) re-recording the Board on an untouched project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     const before = store.getState();
 
-    store.getState().setSessionsActiveTab("project-a", null);
+    store.getState().setHomeActiveTab("project-a", HOME_BOARD_TAB_ID);
 
     expect(store.getState()).toBe(before);
   });
 
-  it("is never included in persisted output, even for a project with nothing else worth persisting", () => {
+  it("survives a relaunch, so Home reopens the Session that was in front", () => {
+    // The asymmetry this closes: a Ticket workspace kept its active Session
+    // across a relaunch and Home forgot every one of them.
+    const storage = createMemoryStorage();
+    createWorkspaceStore(storage).getState().setHomeActiveTab("project-a", "chat:c1");
+
+    const relaunched = createWorkspaceStore(storage);
+    void relaunched.persist.rehydrate();
+
+    expect(relaunched.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:c1");
+  });
+
+  it("sanitizes a rehydrated tab id of the wrong shape back to the Board", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({ state: { byProject: { "project-a": { homeActiveTab: 7 } } }, version: 1 }),
+    );
+    const store = createWorkspaceStore(storage);
+    void store.persist.rehydrate();
+
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+  });
+
+  it("earns a project no persisted record while it still names the Board", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
     store.getState().setBoardView("project-a", "list"); // earns project-a a spot in persisted output
-    store.getState().setSessionsActiveTab("project-a", "s1");
-    store.getState().setSessionsActiveTab("project-b", "s2"); // nothing else persisted for project-b
+    store.getState().setHomeActiveTab("project-b", HOME_BOARD_TAB_ID); // nothing worth persisting
 
     const raw = storage.getItem("volli:workspace");
     const parsed = JSON.parse(raw!) as {
       state: { byProject: Record<string, Record<string, unknown>> };
     };
     expect(Object.keys(parsed.state.byProject)).toEqual(["project-a"]);
-    expect(parsed.state.byProject["project-a"]).not.toHaveProperty("sessionsActiveTab");
+  });
+});
+
+describe("openHome", () => {
+  it("puts Home in front with a Session tab, leaving the remembered ticket alone", () => {
+    // Decision 1: a Home Session tab is its own place, and the ticket stays
+    // remembered behind it — the sidebar band, ⌘K and ⌘T all land here.
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().setNav("project-a", "files");
+
+    store.getState().openHome("project-a", "chat:c1");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: "chat:c1",
+      openTicketId: "ticket-1",
+    });
+  });
+
+  it("puts Home in front without an opinion about the tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().setNav("project-a", "configure");
+
+    store.getState().openHome("project-a");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: "chat:c1",
+    });
+  });
+});
+
+describe("openHomeBoard", () => {
+  it("means the plain board \u2014 exactly what the Board nav item meant", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().setNav("project-a", "files");
+
+    store.getState().openHomeBoard("project-a");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: HOME_BOARD_TAB_ID,
+      openTicketId: null,
+    });
   });
 });
 
@@ -272,20 +379,34 @@ describe("openTicketWorkspace", () => {
     useBoardStore.setState({ selectedByProject: {} });
   });
 
-  it("switches nav to Board even when the project's nav was elsewhere (composer kickoff from Files/Sessions regression)", () => {
+  it("switches nav to Home even when the project's nav was elsewhere (composer kickoff from Files regression)", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     // Simulate invoking Create-&-start (or any ticket-open action) while the
-    // user is on a non-Board nav — the app-wide "c" shortcut and the command
+    // user is on another page — the app-wide "c" shortcut and the command
     // palette both allow this. `openTicket` alone never touched nav, so the
-    // ticket detail it promises never rendered (main-content.tsx only shows
-    // it under nav === "board"); `openTicketWorkspace` must always land on
-    // Board regardless of the starting nav.
-    store.getState().setNav("project-a", "sessions");
+    // ticket detail it promises never rendered.
+    store.getState().setNav("project-a", "files");
 
     store.getState().openTicketWorkspace("project-a", "ticket-1");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
-      nav: "board",
+      nav: "home",
+      openTicketId: "ticket-1",
+    });
+  });
+
+  it("switches to Home's BOARD TAB, so a ticket opened from a Home chat is actually shown", () => {
+    // The VC-54 twin of the kickoff bug above: under Home, ticket detail renders
+    // only from the Board tab, so landing nav alone would leave the promised
+    // workspace behind the Session tab that was in front.
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openHome("project-a", "chat:c1");
+
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: HOME_BOARD_TAB_ID,
       openTicketId: "ticket-1",
     });
   });
@@ -350,7 +471,7 @@ describe("openTicketSession", () => {
     store.getState().openTicketSession("project-a", "ticket-1", "session-1", "session-2");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
-      nav: "board",
+      nav: "home",
       openTicketId: "ticket-1",
       ticketTabs: { "ticket-1": { files: [], active: "session-1" } },
     });
@@ -370,7 +491,7 @@ describe("openTicketSession", () => {
     store.getState().openTicketSession("project-a", "ticket-1", "session-1");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
-      nav: "board",
+      nav: "home",
       openTicketId: "ticket-1",
       ticketTabs: { "ticket-1": { files: [], active: "session-1" } },
     });
@@ -1623,7 +1744,7 @@ describe("forget", () => {
 
     expect(store.getState().byProject["project-a"]).toBeUndefined();
     expect(store.getState().byProject["project-a"] ?? DEFAULT_WORKSPACE_UI).toEqual({
-      nav: "board",
+      nav: "home",
       expandedDirs: [],
       boardView: "board",
       boardSort: DEFAULT_TICKET_SORT,
@@ -1632,20 +1753,20 @@ describe("forget", () => {
       ticketDiffViewStates: {},
       projectFiles: EMPTY_FILE_WORKSPACE,
       projectFileViewStates: {},
-      sessionsActiveTab: null,
+      homeActiveTab: HOME_BOARD_TAB_ID,
     });
   });
 
   it("leaves other projects untouched and is a no-op for unknown ids", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "sessions");
+    store.getState().setNav("project-a", "files");
 
     const before = store.getState().byProject;
     store.getState().forget("never-added");
     expect(store.getState().byProject).toBe(before);
 
     store.getState().forget("project-b");
-    expect(store.getState().byProject["project-a"]?.nav).toBe("sessions");
+    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
   });
 });
 
@@ -1665,6 +1786,7 @@ describe("persistence", () => {
     expect(Object.keys(parsed.state.byProject["project-a"]!).toSorted()).toEqual([
       "boardSort",
       "boardView",
+      "homeActiveTab",
       "openTicketId",
       "projectFileViewStates",
       "projectFiles",
@@ -1689,7 +1811,7 @@ describe("persistence", () => {
     expect(ui?.boardView).toBe("list");
     expect(ui?.boardSort).toEqual({ key: "priority", direction: "desc" });
     expect(ui?.openTicketId).toBe("ticket-1");
-    expect(ui?.nav).toBe("board");
+    expect(ui?.nav).toBe("home");
     expect(ui?.expandedDirs).toEqual([]);
   });
 
@@ -1811,7 +1933,7 @@ describe("rehydration sanitization (corrupt JSON)", () => {
 
 const snap = (
   projectId: string | null,
-  nav: NavKey = "board",
+  nav: NavKey = "home",
   openTicketId: string | null = null,
 ) => ({
   projectId,
@@ -1828,13 +1950,13 @@ describe("navHistory", () => {
   it("records organic navigations and steps back/forward over them", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().recordNav(snap("a"));
-    store.getState().recordNav(snap("a", "sessions"));
+    store.getState().recordNav(snap("a", "files"));
     store.getState().recordNav(snap("b"));
 
-    expect(store.getState().stepNavBack()).toEqual(snap("a", "sessions"));
+    expect(store.getState().stepNavBack()).toEqual(snap("a", "files"));
     expect(store.getState().stepNavBack()).toEqual(snap("a"));
     expect(store.getState().stepNavBack()).toBeNull();
-    expect(store.getState().stepNavForward()).toEqual(snap("a", "sessions"));
+    expect(store.getState().stepNavForward()).toEqual(snap("a", "files"));
   });
 
   it("stepNavForward returns null and leaves history unchanged when the forward stack is empty", () => {

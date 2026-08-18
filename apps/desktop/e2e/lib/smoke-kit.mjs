@@ -1233,8 +1233,13 @@ export async function goToBoard(page) {
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     if (!(await boardReady.isVisible().catch(() => false))) {
-      const boardNav = page.getByRole("button", { name: "Board", exact: true });
-      if (await boardNav.count()) await boardNav.first().click();
+      // Two steps since VC-54: the nav item selects HOME, and Home's permanent
+      // first tab is the Board. The nav item alone lands on whichever Home tab
+      // was last in front, which may be a Project Session.
+      const homeNav = page.getByRole("button", { name: "Home", exact: true });
+      if (await homeNav.count()) await homeNav.first().click();
+      const boardTab = tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: "Board" });
+      if (await boardTab.count()) await boardTab.first().click();
     }
 
     const visible = await waitUntil(`board view attempt ${attempt}`, () => boardReady.isVisible(), {
@@ -1271,9 +1276,9 @@ export async function startTerminalSession(scope) {
 
 // ---- tab strips ------------------------------------------------------------
 
-/** The accessible name each tab strip announces (`ticket-tabs.tsx`, `session-tabs.tsx`). */
+/** The accessible name each tab strip announces (`ticket-tabs.tsx`, `home/home-tab-strip.tsx`). */
 export const TICKET_TAB_STRIP = "Ticket tabs";
-export const SESSION_TAB_STRIP = "Session tabs";
+export const HOME_TAB_STRIP = "Home tabs";
 
 /**
  * One named tab strip's tablist.

@@ -1,13 +1,13 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKETLESS
- * (scratch) chat, against the BUILT app — the ticketless twin of
+ * (Project Session) chat, against the BUILT app — the ticketless twin of
  * `pi-ticket-chat-smoke.mjs`. Project Sessions attached OpenCode until commit
  * 49a62640 moved them onto the same Pi runtime a ticket chat uses
  * (`apps/desktop/src/main/session-runtime/project-sessions.ts`), and commit
  * 0f0e7007 gave them the ticket composer's model semantics
  * (`chat-plane.tsx` dropped its ticket/project "pinned" carve-out) — so the
  * retired `session-chat-smoke.mjs`'s fake-`opencode`-binary proof of the
- * scratch-chat lifecycle no longer has anything to attach to. This is that
+ * Project-Session chat lifecycle no longer has anything to attach to. This is that
  * proof, rebuilt on the real thing: there is no fake server anywhere here,
  * and this smoke drives ONE real turn against a real provider, billed to a
  * ChatGPT subscription ($0 marginal — keep it to one short prompt, never loop
@@ -34,7 +34,7 @@
  * ticket chat's does (check 3) — the "born ticketless" carve-outs that used
  * to hide it are gone.
  *
- * A scratch chat's open TAB is not itself durable — its Session is — so
+ * A Project Session chat's open TAB is not itself durable — its Session is — so
  * "the session resumes" after a relaunch is a sidebar-row click, not an
  * auto-reopened tab (same finding the retired smoke made). Check 6 proves
  * that adopts the SAME conversation from durable data, with no live executor
@@ -45,7 +45,7 @@
  *
  * Run:
  *   pnpm run build
- *   node apps/desktop/e2e/pi-scratch-chat-smoke.mjs
+ *   node apps/desktop/e2e/pi-project-chat-smoke.mjs
  *
  * MANUALLY-RUN (needs a display, the built app, and a real
  * `~/.pi/agent/auth.json` with `openai-codex` credentials); NOT wired into
@@ -68,7 +68,7 @@ import {
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
-  SESSION_TAB_STRIP,
+  HOME_TAB_STRIP,
   sleep,
   stopButton,
   tabStrip,
@@ -76,7 +76,7 @@ import {
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
-const PROJECT = { id: "pi-scratch-chat-project", name: "Pi Scratch Chat", prefix: "SC" };
+const PROJECT = { id: "pi-project-chat-project", name: "Pi Project Chat", prefix: "SC" };
 // Kept at or under 48 characters, on purpose: `autoTitleFromMessage`
 // (chat/rename.ts) keeps a first line of 48 characters or fewer verbatim as
 // the Session's title, so this prompt IS the title once delivered — no
@@ -84,22 +84,22 @@ const PROJECT = { id: "pi-scratch-chat-project", name: "Pi Scratch Chat", prefix
 // this smoke failing to find its own tab after the first message lands.
 const PROMPT_TEXT = "Reply with one short sentence, please.";
 
-const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-scratch-chat-smoke-");
+const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-project-chat-smoke-");
 // Isolates Pi's own credential/config lookups from the developer's real
 // profile — the same posture VOLLI_WORKTREE_HOME_DIR takes for worktrees.
 const fakeHome = join(scratch, "home");
 const { attempt, summarize } = createRunner();
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-scratch-chat-evidence");
+const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-project-chat-evidence");
 
 async function captureFailureEvidence(page, mainOut, mainErr, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
   const slug = label.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   await page
-    .screenshot({ path: join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.png`), fullPage: true })
+    .screenshot({ path: join(EVIDENCE_DIR, `pi-project-chat-${slug}.png`), fullPage: true })
     .catch(() => {});
   await fs.writeFile(
-    join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`),
+    join(EVIDENCE_DIR, `pi-project-chat-${slug}.log`),
     [
       `=== ${label} ===`,
       "",
@@ -112,18 +112,18 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
     ].join("\n"),
     "utf8",
   );
-  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.png`)}`);
-  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`)}`);
+  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-project-chat-${slug}.png`)}`);
+  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-project-chat-${slug}.log`)}`);
 }
 
-/** Navigate to Sessions and wait for its tab strip to mount — the first
- *  reveal auto-opens a structured chat (the default model is already seeded
- *  by check 1, so the create lands), which is the ≥1 tab waited on here. */
-async function goToSessions(page) {
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+/** Navigate to Home and wait for its tab strip to mount. */
+async function goToHome(page) {
+  await page.getByRole("button", { name: "Home", exact: true }).click();
   await waitUntil(
-    "the Sessions tab strip to mount",
-    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
+    "Home's tab strip to mount",
+    // >= 1 is the permanent Board tab alone: nothing auto-opens any more
+    // (VC-54 scope 2), so the Session below is created by an explicit press.
+    async () => (await tabStrip(page, HOME_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
 }
@@ -148,7 +148,7 @@ async function userMessageTexts(page) {
 
 /**
  * A project sidebar row (either band) whose visible text includes `text` — a
- * scratch chat's open tab does not survive a relaunch on its own (unlike a
+ * Project Session chat's open tab does not survive a relaunch on its own (unlike a
  * ticket's, which the adopt path restores from the recorded active tab);
  * reopening one is a sidebar-row click, the same path a person uses.
  */
@@ -173,7 +173,7 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
 
-    const projectPath = await makeGitRepo(scratch, "pi-scratch-chat-");
+    const projectPath = await makeGitRepo(scratch, "pi-project-chat-");
     await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
     await goToBoard(page);
     const { byName } = await readSeededProjects(page);
@@ -192,10 +192,10 @@ async function main() {
 
     await attempt(
       2,
-      "the Sessions strip's own Chat control creates a ticketless (scratch) chat tab",
+      "Home's own Chat control creates a ticketless (Project Session) chat tab",
       async () => {
-        await goToSessions(page);
-        chatTabLabel = await openNewChatTab(page, SESSION_TAB_STRIP);
+        await goToHome(page);
+        chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
         return { ok: chatTabLabel !== null, detail: chatTabLabel };
       },
     );
@@ -263,7 +263,7 @@ async function main() {
         // `#autoTitle`), so the neutral `Chat` fallback captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
         // is called.
-        chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
+        chatTabLabel = await activeTabLabel(page, HOME_TAB_STRIP);
         return {
           ok: settled.texts.length > 0 && chatTabLabel !== null,
           detail:
@@ -291,7 +291,7 @@ async function main() {
 
       await attempt(
         6,
-        "after relaunch, the sidebar reopens the scratch chat and resumes BOTH messages from durable data, no live attach",
+        "after relaunch, the sidebar reopens the Project Session chat and resumes BOTH messages from durable data, no live attach",
         async () => {
           const row = sidebarRow(page2, chatTabLabel);
           await waitUntil(

@@ -389,11 +389,11 @@ export interface VolliDataIpcContract {
   /** Attaches Blobs that were imported before their Ticket existed. */
   "volli:blob-link-drafts": { args: [input: BlobLinkDraftsInput]; result: BlobLinksResult };
 
-  /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
+  /** Every durable session record in a project (ticket-scoped and project-scoped), newest first. */
   "volli:session-list": { args: [input: ProjectIdInput]; result: SessionsResult };
   /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
-  /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
+  /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
@@ -1251,7 +1251,7 @@ export interface SessionsInterruptedEvent {
 export interface HarnessEventNotice {
   sessionId: string;
   projectId: string;
-  /** The ticket this session drives, or `null` for a scratch session. */
+  /** The ticket this session drives, or `null` for a Project Session. */
   ticketId: string | null;
   harnessId: HarnessId;
   event: HarnessEvent;
@@ -1299,7 +1299,7 @@ export interface SessionHarnessNotice {
   /** The FULL session id — this addresses live renderer state, not a human reader. */
   sessionId: string;
   projectId: string;
-  /** The ticket this session drives, or `null` for a scratch session. */
+  /** The ticket this session drives, or `null` for a Project Session. */
   ticketId: string | null;
   /** The harness now running there. The session's LAUNCH harness is unchanged. */
   harnessId: HarnessId;
@@ -1359,7 +1359,7 @@ export interface SessionStartedNotice {
  */
 export interface SessionActivityNotice {
   projectId: string;
-  /** The ticket this Session drives, or `null` for a project-scoped scratch Session. */
+  /** The ticket this Session drives, or `null` for a Project Session. */
   ticketId: string | null;
   row: SessionListingRow;
 }

@@ -8,6 +8,7 @@
  * hook beside it (`hooks/use-new-session-shortcut.ts`) is left holding nothing
  * but the listener and the store reads.
  */
+import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { MONACO_SURFACE_SELECTOR } from "@renderer/lib/monaco-surface";
 import type { NavKey } from "@renderer/stores/workspace";
 
@@ -103,8 +104,14 @@ export function isNewSessionGuardedTarget(target: unknown): boolean {
 /** The chrome facts a chord resolves against, read at press time. */
 export interface NewSessionChrome {
   selectedProjectId: string | null;
-  /** The selected project's nav page. Ticket detail is a STATE of `board`. */
+  /** The selected project's nav page. Ticket detail is a STATE of `home`. */
   nav: NavKey;
+  /**
+   * Which Home tab is in front (`home-tabs.ts`). Together with `nav` this is
+   * what tells "the ticket is on screen" from "the ticket is merely remembered"
+   * — see {@link newSessionLandingForChrome}.
+   */
+  homeActiveTab: string;
   /** App-wide Settings is chrome layered OVER the workspace, not a nav page. */
   settingsOpen: boolean;
   /** The global New-ticket dialog — modal, and layered over the workspace too. */
@@ -119,10 +126,10 @@ export interface NewSessionLanding {
   projectId: string;
   /**
    * The ticket that owns it, or `null` for one of the project's ticketless
-   * Sessions. Not "unknown" — it is the durable fact `scratchScope` carries.
+   * Project Sessions. Not "unknown" — it is the durable fact `projectScope` carries.
    */
   ticketId: string | null;
-  /** The page to move to, or `null` to stay put. */
+  /** The page to move to (only ever `"home"`), or `null` to stay put. */
   navigateTo: NavKey | null;
 }
 
@@ -141,15 +148,20 @@ export interface NewSessionLanding {
  * canonical first window. Under that reading the chord has ONE meaning and the
  * owner is simply read off the surface, which is also how every other create
  * verb in this app already behaves — the ticket's control mints a ticket
- * Session, the Sessions page's control mints a project one, and neither asks.
+ * Session, Home's strip control mints a project one, and neither asks.
  *
  * "In front of you" is resolved exactly as `terminalFocusTargetForChrome`
- * resolves it, and that agreement is the point: `board` + an `openTicketId`, with
- * no modal layered over the top. `setNav` deliberately does NOT clear
- * `openTicketId` (stores/workspace.ts), so a ticket you opened stays open behind
- * the Files, Sessions and Configure pages — without the nav gate, pressing ⌘T on
- * the Sessions page would silently mint a Session onto a ticket that is nowhere
- * on screen, which is the failure the old decision was actually afraid of.
+ * resolves it, and that agreement is the point: `home` + Home's BOARD TAB in
+ * front + an `openTicketId`, with no modal layered over the top.
+ *
+ * The Board-tab half of that is not belt-and-braces, and it is the fact VC-54
+ * moved. `openTicketId` survives leaving the ticket — across Files and
+ * Configure, and across Home's own Session tabs, which deliberately keep the
+ * ticket remembered behind them (decision 1). So `openTicketId != null` is true
+ * in three places where the ticket is nowhere on screen, and without this gate
+ * ⌘T pressed on a Home chat tab would silently mint a Ticket Session onto it.
+ * The rule the app can state in one line: a ticket is on screen exactly when
+ * Home's Board tab is the one in front.
  *
  * The modal gate is the WHOLE chord, not the ticket branch of it, and that is
  * where it differs in shape from the nav gate. Settings and the New-ticket dialog
@@ -164,18 +176,24 @@ export interface NewSessionLanding {
  *
  * What follows for the menus: a chord hint belongs in any menu whose items
  * resolve the way this does, and now BOTH do — the ticket strip's control and
- * the Sessions strip's control each start what the chord starts, from the
+ * the Home strip's control each start what the chord starts, from the
  * surface the chord reads. See `NewSessionControl`.
  *
  * A ticketless Session has no worktree, so it runs in the project's main
  * checkout. That is the honest reading of "a Session that belongs to no ticket"
- * and is what the Sessions surface has always minted.
+ * and is what Home has always minted.
  *
  * Returning the landing spot rather than performing it keeps this pure and
  * unit-testable in the node environment, the way `selectRailMode` already hands
  * its caller a chrome transition instead of committing one. `navigateTo: null`
- * means stay put — pressing ⌘T inside a ticket, or while already on Sessions,
- * must not re-nav.
+ * means stay put — pressing ⌘T inside a ticket, or while already on Home, must
+ * not re-nav.
+ *
+ * The CALLER applies `navigateTo` through `openHome`, not `setNav`
+ * (`hooks/use-new-session-shortcut.ts`). `setNav("home")` means "show me Home",
+ * which is the board, and clears a ticket the Board tab was holding; a chord
+ * whose whole job is to start a Session must not also throw a ticket away on
+ * the way there.
  */
 export function newSessionLandingForChrome(chrome: NewSessionChrome): NewSessionLanding | null {
   // No project selected: nothing exists that could own a Session, and inventing
@@ -184,14 +202,11 @@ export function newSessionLandingForChrome(chrome: NewSessionChrome): NewSession
   if (projectId === null) return null;
   // Modal chrome owns the keyboard while it is up.
   if (chrome.settingsOpen || chrome.newTicketOpen) return null;
-  if (chrome.nav === "board" && chrome.openTicketId !== null) {
+  const openTicketId = chrome.openTicketId;
+  if (chrome.nav === "home" && isHomeBoardTab(chrome.homeActiveTab) && openTicketId !== null) {
     // The ticket is already the surface in front, so the tab appears where the
     // user is looking without moving the page under them.
-    return { projectId, ticketId: chrome.openTicketId, navigateTo: null };
+    return { projectId, ticketId: openTicketId, navigateTo: null };
   }
-  return {
-    projectId,
-    ticketId: null,
-    navigateTo: chrome.nav === "sessions" ? null : "sessions",
-  };
+  return { projectId, ticketId: null, navigateTo: chrome.nav === "home" ? null : "home" };
 }

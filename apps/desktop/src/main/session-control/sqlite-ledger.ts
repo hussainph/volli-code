@@ -93,7 +93,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     const scope =
       query.scope === "ticket"
         ? " AND ticket_id = @ticketId"
-        : query.scope === "scratch"
+        : query.scope === "project"
           ? " AND ticket_id IS NULL"
           : "";
     const rows = this.db
@@ -112,7 +112,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     const scope =
       query.scope === "ticket"
         ? " AND ticket_id = @ticketId"
-        : query.scope === "scratch"
+        : query.scope === "project"
           ? " AND ticket_id IS NULL"
           : "";
     const row = this.db

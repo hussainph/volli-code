@@ -131,7 +131,7 @@ export interface ExportTicketEvent {
 export interface ExportSession {
   id: string;
   projectId: string;
-  /** `null` for a project-scoped scratch session. */
+  /** `null` for a Project Session. */
   ticketId: string | null;
   title: string | null;
   createdAt: number;

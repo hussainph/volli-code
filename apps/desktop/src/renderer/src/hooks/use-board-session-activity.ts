@@ -39,7 +39,7 @@ const EMPTY_ACTIVITY: BoardSessionActivity = { byTicket: {}, nextBoundaryAt: nul
  * can name, under `useShallow`, makes an irrelevant bump yield the same object.
  * The raw numbers ride through untouched — this narrows the SUBSCRIPTION, not
  * the input. `active-session-listing.ts`'s `listingOutputStamps` is the same
- * move for the sidebar; it is not reused because it also walks a scratch
+ * move for the sidebar; it is not reused because it also walks a project Session
  * container, which has no card on any board.
  */
 function boardOutputStamps(

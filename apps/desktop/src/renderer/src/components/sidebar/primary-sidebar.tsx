@@ -50,7 +50,9 @@ export function PrimarySidebar() {
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
-  const sessionsVisible = !settingsOpen && (activeNav === "board" || activeNav === "sessions");
+  // The Session bands ride with Home, which is the one page their rows navigate
+  // into — both a ticket workspace and a Project Session are reached from there.
+  const sessionsVisible = !settingsOpen && activeNav === "home";
 
   return (
     <div className="relative h-full w-full overflow-hidden">

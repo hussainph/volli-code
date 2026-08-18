@@ -31,8 +31,8 @@ import type { HarnessAdapter } from "./types";
  * Volli's own session contract, as inherited from an OUTER Volli.
  *
  * The layers above re-set what this session needs, so dropping these costs
- * nothing — and what they do NOT re-set is exactly the problem. A scratch
- * session sets no `VOLLI_TICKET`, so an inherited one survives and every `volli`
+ * nothing — and what they do NOT re-set is exactly the problem. A Project
+ * Session sets no `VOLLI_TICKET`, so an inherited one survives and every `volli`
  * call in that terminal files its work against the outer window's ticket;
  * `VOLLI_SOCKET` inherited from another running Volli points the CLI at a
  * different app's planner entirely.

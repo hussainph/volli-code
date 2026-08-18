@@ -22,7 +22,7 @@ interface RemoveProjectDialogProps {
 }
 
 /**
- * The live pane ids removing `projectId` would kill: its scratch sessions PLUS
+ * The live pane ids removing `projectId` would kill: its Project Sessions PLUS
  * every ticket session whose scope belongs to it (mirrors
  * `killProjectTicketSessions`'s enumeration). Only panes still live (no exit
  * code) — an exited pane has no PTY left to end.

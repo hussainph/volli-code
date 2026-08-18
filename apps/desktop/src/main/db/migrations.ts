@@ -113,7 +113,7 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
  * existing column is touched:
  *  - `sessions`: a durable trace + resume seed for a terminal session,
  *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
- *    project-scoped scratch session (no board involvement); `ON DELETE
+ *    Project Session (no board involvement); `ON DELETE
  *    CASCADE` off `project_id` and `ON DELETE SET NULL` off `ticket_id` mean
  *    a session outlives an archived-then-deleted ticket, purely as
  *    project-level history.

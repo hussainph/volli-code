@@ -547,7 +547,7 @@ function projectForCreate(
 /**
  * The display id of the ticket an actor's session is itself working, for the
  * "via VC-9's session" attribution. `null` when the actor has no
- * session ticket (a scratch session) or it no longer resolves.
+ * session ticket (a Project Session) or it no longer resolves.
  */
 function actorSessionTicketDisplay(
   db: Database.Database,
@@ -1485,7 +1485,7 @@ export function createAgentCommandService(
             const ticketProject = ticket ? projectById.get(ticket.projectId) : undefined;
             return {
               id: shortSessionId(session.id),
-              kind: session.ticketId ? "ticket" : "scratch",
+              kind: session.ticketId ? "ticket" : "project",
               status: session.endedAt === null ? "running" : "exited",
               ticket:
                 ticket && ticketProject

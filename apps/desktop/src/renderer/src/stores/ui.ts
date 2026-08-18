@@ -105,9 +105,9 @@ export interface TerminalFocusTarget {
   projectId: string;
   /**
    * The ticket that owns the Session, or `null` for one of the project's
-   * ticketless Sessions — the Sessions page hosts terminals too, and a PTY there
+   * ticketless Sessions — Home hosts terminals too, and a PTY there
    * fills a canvas exactly as well as one under a ticket. Not "unknown": it is
-   * the same durable fact `scratchScope` carries, and it is what the two
+   * the same durable fact `projectScope` carries, and it is what the two
    * `clearTerminalFocus*` guards below discriminate on.
    */
   ticketId: string | null;
@@ -271,7 +271,7 @@ interface UiState {
    *
    * A ticketless target (`ticketId: null`) is cleared too, and that is right
    * rather than incidental: a ticket has just come to the front, so a terminal
-   * on the project's Sessions page is by definition no longer the thing on
+   * on one of Home's own Session tabs is by definition no longer the thing on
    * screen.
    */
   clearTerminalFocusUnlessTicket(ticketId: string): void;

@@ -10,7 +10,7 @@ import { toast } from "sonner";
 
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { scratchScope, ticketScope } from "@renderer/stores/sessions";
+import { projectScope, ticketScope } from "@renderer/stores/sessions";
 import { bootChatSession, terminalCreateRequest } from "./session-create";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -71,7 +71,7 @@ describe("bootChatSession", () => {
     stubChatStore(create);
 
     await bootChatSession(
-      { kind: "scratch", projectId: "p1" },
+      { kind: "project", projectId: "p1" },
       {
         land: () => true,
       },
@@ -184,7 +184,7 @@ describe("terminalCreateRequest", () => {
   });
 
   it("invents no Ticket for a scratch scope", () => {
-    expect(terminalCreateRequest(scratchScope(PROJECT.id), PROJECT.path, "tab")).toEqual({
+    expect(terminalCreateRequest(projectScope(PROJECT.id), PROJECT.path, "tab")).toEqual({
       workspaceId: PROJECT.id,
       cwd: PROJECT.path,
       cols: 80,

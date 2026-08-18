@@ -1,7 +1,6 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ChatsCircleIcon } from "@phosphor-icons/react/dist/csr/ChatsCircle";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
+import { HouseIcon } from "@phosphor-icons/react/dist/csr/House";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 
 import {
@@ -15,17 +14,23 @@ import { useUiStore } from "@renderer/stores/ui";
 import type { NavKey } from "@renderer/stores/workspace";
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: PhosphorIcon }> = [
-  { key: "board", label: "Board", icon: KanbanIcon },
-  // The plural chat glyph, not TerminalWindow: the page lands on a structured
-  // chat (sessions-layer.tsx's first-visit auto-open) and holds many Sessions;
-  // a terminal is the companion kind, one caret away, and the kind glyphs
-  // (ChatCircle/TerminalWindow, session-band-row.tsx) stay per-row vocabulary.
-  { key: "sessions", label: "Sessions", icon: ChatsCircleIcon },
+  // Not Kanban any more. The row used to name a board and now names a tabbed
+  // environment whose board is one tab of several, so the glyph has to name the
+  // PLACE rather than the first thing in it — the board keeps Kanban on its own
+  // tab, where it is the exception among Session tabs and still means a board.
+  { key: "home", label: "Home", icon: HouseIcon },
   { key: "files", label: "Files", icon: FoldersIcon },
   { key: "configure", label: "Configure", icon: SlidersHorizontalIcon },
 ];
 
-/** Primary feature navigation: Board / Sessions / Files / Configure. App-wide Settings lives in the sidebar footer. */
+/**
+ * Primary feature navigation: Home / Files / Configure. App-wide Settings lives
+ * in the sidebar footer.
+ *
+ * Three rows, not four: the Sessions page is gone, and its Sessions live inside
+ * Home as tabs (VC-54). Files and Configure deliberately stay OUT of Home — the
+ * guardrail on this shape is that Home must not become a junk drawer.
+ */
 export function NavList() {
   const [activeNav, setActiveNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);

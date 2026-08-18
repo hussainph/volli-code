@@ -1,8 +1,8 @@
 import * as React from "react";
 
 import {
-  startScratchChat,
-  startScratchTerminal,
+  startProjectChat,
+  startProjectTerminal,
   startTicketChat,
   startTicketTerminal,
 } from "@renderer/components/sessions/session-create";
@@ -61,6 +61,7 @@ export function useNewSessionShortcut(): void {
       const landing = newSessionLandingForChrome({
         selectedProjectId,
         nav: ui?.nav ?? DEFAULT_WORKSPACE_UI.nav,
+        homeActiveTab: ui?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
         settingsOpen,
         newTicketOpen,
         openTicketId: ui?.openTicketId ?? null,
@@ -72,15 +73,21 @@ export function useNewSessionShortcut(): void {
       // in front, so the tab appears where the user is looking rather than
       // behind a page they then have to find. A ticket landing never navigates
       // — the ticket IS the surface in front.
-      if (landing.navigateTo !== null) workspace.setNav(landing.projectId, landing.navigateTo);
+      //
+      // `openHome`, not `setNav`: selecting Home means "show me Home", which is
+      // the board, and clears a ticket the Board tab was holding. A chord whose
+      // whole job is to start a Session must not also throw a ticket away on
+      // the way there — and the boot below records the new tab, so the strip
+      // lands on it either way.
+      if (landing.navigateTo !== null) workspace.openHome(landing.projectId);
       const { projectId, ticketId } = landing;
       // One call per cell of the same 2×2 the controls draw, and every one of
       // them is the exact function the matching control calls (session-create.ts)
       // — the chord and the button cannot start different things.
       void (ticketId === null
         ? kind === "chat"
-          ? startScratchChat(projectId)
-          : startScratchTerminal(projectId)
+          ? startProjectChat(projectId)
+          : startProjectTerminal(projectId)
         : kind === "chat"
           ? startTicketChat(projectId, ticketId)
           : startTicketTerminal(projectId, ticketId));

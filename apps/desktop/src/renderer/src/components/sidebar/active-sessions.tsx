@@ -4,9 +4,10 @@ import { errorMessage, type LatestSessionSignal, type Project, type Ticket } fro
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
+import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import {
   buildActiveSessionListing,
-  isScratchRowSelected,
+  isProjectSessionRowSelected,
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -31,7 +32,7 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
@@ -96,10 +97,9 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   );
   const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
-  const setNav = useWorkspaceStore((state) => state.setNav);
-  const setSessionsActiveTab = useWorkspaceStore((state) => state.setSessionsActiveTab);
-  const sessionsActiveTab = useWorkspaceStore(
-    (state) => state.byProject[project.id]?.sessionsActiveTab ?? null,
+  const openHome = useWorkspaceStore((state) => state.openHome);
+  const homeActiveTab = useWorkspaceStore(
+    (state) => state.byProject[project.id]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
   );
   // The project's Session rows, shared with the board's active-session
   // indicator and fed by `volli:session-activity` rather than by a timer —
@@ -156,15 +156,15 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
         lastOutputAt: state.lastOutputAt,
         containers: state.byOwner,
         ticketIds: projectTicketIds,
-        scratchOwnerId: project.id,
+        projectOwnerId: project.id,
       }),
     ),
   );
-  // The project's SCRATCH container. The store files every container in one
-  // flat map keyed by `ownerKey` — a ticketId for ticket Sessions, the project
-  // id for scratch ones — and the listing model walks the map by ticket, so
+  // The project's OWN container. The store files every container in one
+  // flat map keyed by `ownerKey` — a ticketId for Ticket Sessions, the project
+  // id for Project Sessions — and the listing model walks the map by ticket, so
   // this one has to be handed over on its own key or its live tabs are invisible.
-  const scratchContainer = containers[project.id];
+  const projectContainer = containers[project.id];
   // Which of this project's Sessions are live on this surface — the key the one
   // fetch below re-reads the durable listing on. Both kinds count: a chat has no
   // PTY pane to name, so a signature made of panes alone left a streaming chat
@@ -176,7 +176,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           container.tabs
             .filter(
               (tab) =>
-                (tab.scope.kind === "scratch" && tab.scope.projectId === project.id) ||
+                (tab.scope.kind === "project" && tab.scope.projectId === project.id) ||
                 (tab.scope.kind === "ticket" &&
                   tab.scope.projectId === project.id &&
                   projectTicketIds.has(tab.scope.ticketId)),
@@ -336,7 +336,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       buildActiveSessionListing({
         tickets,
         containers,
-        scratchContainer,
+        projectContainer,
         signalsByTicket,
         records,
         chatSessions: titledChatSessions,
@@ -355,7 +355,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [
       tickets,
       containers,
-      scratchContainer,
+      projectContainer,
       signalsByTicket,
       records,
       titledChatSessions,
@@ -422,10 +422,11 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   }, [nextAgeChange, ageNow]);
 
   // Which ticket the main view is actually SHOWING. Ticket detail renders only
-  // under the Board nav, and leaving for Sessions or Files deliberately keeps
-  // `openTicketId` set so returning lands where you were — so a remembered
-  // ticket is not a ticket on screen, and only one of those can light a row.
-  const shownTicketId = nav === "board" ? openTicketId : null;
+  // from Home's BOARD TAB, and leaving for Files, Configure or one of Home's own
+  // Session tabs deliberately keeps `openTicketId` set so returning lands where
+  // you were — so a remembered ticket is not a ticket on screen, and only one of
+  // those can light a row.
+  const shownTicketId = nav === "home" && isHomeBoardTab(homeActiveTab) ? openTicketId : null;
   const activeTabId =
     shownTicketId === null ? null : (ticketTabs[shownTicketId]?.active ?? TICKET_BODY_TAB_ID);
 
@@ -439,7 +440,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * tab is gone; it is never the tab in front of you.
    */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    isScratchRowSelected(row, nav === "sessions", scratchContainer, sessionsActiveTab) ||
+    isProjectSessionRowSelected(row, nav === "home", projectContainer, homeActiveTab) ||
     (row.ticket !== null &&
       shownTicketId === row.ticket.id &&
       row.target !== null &&
@@ -450,11 +451,14 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * its ticket workspace.
    *
    * A TICKETLESS row has no ticket workspace to open — both terminal and chat
-   * targets land on the project's Sessions page instead, naming their tab in
-   * `sessionsActiveTab` (workspace.ts), which that page's strip reads to bring
-   * it forward. A ticketless chat is additionally adopted and given a tab under
-   * the project's owner key, the same two calls the ticketed chat case below
-   * makes — the tab has to exist before the strip can put it in front.
+   * targets land on HOME instead, through `openHome`, which switches the page
+   * and names the tab in one write. That seam deliberately leaves `openTicketId`
+   * alone: a Home Session tab is its own place and keeps the ticket remembered
+   * behind it (VC-54 decision 1), so reaching a chat from here never costs you
+   * the ticket you were in. A ticketless chat is additionally adopted and given
+   * a tab under the project's owner key, the same two calls the ticketed chat
+   * case below makes — the tab has to exist before the strip can put it in
+   * front.
    *
    * Stable across renders, and handed to every row AS IS rather than wrapped in
    * a per-row closure: both band rows are memoised, and a fresh handler per row
@@ -470,14 +474,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           const sessions = useSessionsStore.getState();
           sessions.setActiveSession(project.id, target.tabId);
           sessions.setActivePane(project.id, target.tabId, target.paneId);
-          setSessionsActiveTab(project.id, target.tabId);
+          openHome(project.id, target.tabId);
         } else if (target?.kind === "chat") {
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(target.sessionId);
           chat.openChatTab(project.id, target.sessionId);
-          setSessionsActiveTab(project.id, target.tabId);
+          openHome(project.id, target.tabId);
+        } else {
+          // No target at all — a Session whose tab is gone. Home is still where
+          // it would live, so go there and leave the strip as it was.
+          openHome(project.id);
         }
-        setNav(project.id, "sessions");
         return;
       }
       const target = row.target;
@@ -498,7 +505,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       }
       openTicketSession(project.id, ticket.id, target.tabId, target.paneId);
     },
-    [project.id, setNav, setSessionsActiveTab, openTicketSession, openTicketWorkspace],
+    [project.id, openHome, openTicketSession, openTicketWorkspace],
   );
 
   return (

@@ -34,7 +34,7 @@ export function usePromptTemplates(projectId: string | null): PromptSupply {
     let live = true;
     setSupply(NO_SUPPLY);
     // No project selected is not a project that failed to load: some mounts
-    // (the Sessions surface with nothing selected) legitimately have no id.
+    // (Home with nothing selected) legitimately have no id.
     if (projectId === null) return undefined;
     void (async () => {
       try {

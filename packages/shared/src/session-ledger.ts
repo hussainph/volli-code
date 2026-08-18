@@ -847,7 +847,7 @@ export interface GetSessionQuery {
 export type ListSessionsQuery =
   | { projectId: string; scope: "all" }
   | { projectId: string; scope: "ticket"; ticketId: string }
-  | { projectId: string; scope: "scratch" };
+  | { projectId: string; scope: "project" };
 
 /** One project-wide, bounded sidebar read over explicit Session outcome facts. */
 export interface ListLatestTicketSignalsQuery {
@@ -919,8 +919,8 @@ export interface SessionProjection {
    * a later fact can change. `sessions.ticket_id` is `ON DELETE SET NULL`
    * (deleting a ticket orphans its sessions into `session.ticketId === null`
    * ones), so `session.ticketId === null && !bornTicketless` is exactly an
-   * orphan: a scratch session and an orphaned one both read `ticketId: null`
-   * today, but only the scratch one was ever meant to.
+   * orphan: a Project Session and an orphaned one both read `ticketId: null`
+   * today, but only the Project Session was ever meant to.
    */
   bornTicketless: boolean;
 }

@@ -9,18 +9,20 @@
  * single delete no matter how many fields the record grows.
  *
  * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, `openTicketId`,
- * `ticketTabs`, the Diff-tab view-state map (`ticketDiffViewStates`), and the
- * Project Files pair (`projectFiles` + `projectFileViewStates`) survive
- * relaunch (they're deliberate per-project state — a view preference, the
- * ticket-detail-mvp decision that the open ticket persists across restart,
- * decision #3, Diff tabs landing where you left them after lazy content
- * reload, issue #109, or the Project Files workspace that must resume where
- * you left it, decisions #55/#56), while `nav` and `expandedDirs` stay
- * session-only — nav resetting to Board on relaunch is a settled decision
- * (see ui.ts's history) and now applies per workspace. The partialize below
- * prunes each record down to that persisted set; merge rehydrates them back
- * over `DEFAULT_WORKSPACE_UI`, sanitizing stale values so old localStorage can
- * never smuggle in an invalid view/sort/ticket id — or an unusable tab record.
+ * `ticketTabs`, `homeActiveTab`, the Diff-tab view-state map
+ * (`ticketDiffViewStates`), and the Project Files pair (`projectFiles` +
+ * `projectFileViewStates`) survive relaunch (they're deliberate per-project
+ * state — a view preference, the ticket-detail-mvp decision that the open
+ * ticket persists across restart, decision #3, the Home tab that was in front
+ * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
+ * Diff tabs landing where you left them after lazy content reload, issue #109,
+ * or the Project Files workspace that must resume where you left it, decisions
+ * #55/#56), while `nav` and `expandedDirs` stay session-only — nav resetting to
+ * Home on relaunch is a settled decision (see ui.ts's history) and now applies
+ * per workspace. The partialize below prunes each record down to that persisted
+ * set; merge rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale
+ * values so old localStorage can never smuggle in an invalid view/sort/ticket
+ * id — or an unusable tab record.
  *
  * What is persisted for Project Files / Diff tabs is deliberately only
  * IDENTITY (relPath) and the editor's own opaque view state: file CONTENTS are
@@ -45,6 +47,11 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 import {
+  HOME_BOARD_TAB_ID,
+  isHomeBoardTab,
+  sanitizeHomeActiveTab,
+} from "@renderer/components/home/home-tabs";
+import {
   TICKET_BODY_TAB_ID,
   normalizeTicketBodyTabId,
 } from "@renderer/components/ticket/ticket-body-tab";
@@ -62,12 +69,16 @@ import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
 /**
- * The per-workspace nav pages (NAV_ITEMS). `configure` holds the selected
- * project's scoped settings (base branch, setup command, worktrees); app-wide
- * Settings is separate chrome — see stores/ui.ts. Ticket detail is a child of
- * `board`, so only Board selection clears `openTicketId` (see setNav).
+ * The per-workspace nav pages (NAV_ITEMS). `home` is the tabbed environment
+ * that holds the permanent Board tab plus the project's own Sessions (VC-54);
+ * `configure` holds the selected project's scoped settings (base branch, setup
+ * command, worktrees); app-wide Settings is separate chrome — see stores/ui.ts.
+ * Ticket detail is a state of Home's BOARD TAB, so only a Home selection made
+ * while that tab is in front clears `openTicketId` (see setNav).
+ *
+ * `nav` is not persisted, so renaming the keys needs no migration.
  */
-export type NavKey = "board" | "sessions" | "files" | "configure";
+export type NavKey = "home" | "files" | "configure";
 
 /** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";
@@ -151,19 +162,27 @@ export interface WorkspaceUiState {
    */
   projectFileViewStates: Record<string, unknown>;
   /**
-   * Which tab is in front on the project's Sessions scratch surface. Holds a
-   * terminal session id or a `chat:<sessionId>` id, the same mixed id space
-   * `ticketTabs[].active` uses. Session-only: what it points at
-   * (chat-sessions.ts's `openTabs`) isn't persisted either, so there's nothing
-   * durable for this to survive relaunch alongside — `sessions-layer.tsx`
-   * re-derives it from the merged strip on every render and writes back what
-   * it derived.
+   * Which tab is in front on Home. {@link HOME_BOARD_TAB_ID} for the permanent
+   * Board tab, else a terminal session id or a `chat:<sessionId>` id — the same
+   * mixed id space `ticketTabs[].active` uses, which the bare word cannot
+   * collide with (both others are UUID-shaped).
+   *
+   * PERSISTED, and that is the whole of VC-54's scope 4. What it points at is
+   * resident (`chat-sessions.ts`'s `openTabs`), so this is not a receipt for
+   * live state — it is the one durable fact needed to put the same Session back
+   * in front on relaunch, exactly as a Ticket workspace's `ticketTabs[].active`
+   * already did. A stale id is never repaired at boot: `home-tabs.ts`'s
+   * `resolveHomeTabs` asks the project's durable Session listing first, so
+   * "not hydrated yet" can never be mistaken for "gone".
+   *
+   * Terminals deliberately do NOT come back — a PTY dies with the app, exactly
+   * as it does for a Ticket. Full strip restoration is VC-105.
    */
-  sessionsActiveTab: string | null;
+  homeActiveTab: string;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
-  nav: "board",
+  nav: "home",
   expandedDirs: [],
   boardView: "board",
   boardSort: DEFAULT_TICKET_SORT,
@@ -172,7 +191,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   ticketDiffViewStates: {},
   projectFiles: EMPTY_FILE_WORKSPACE,
   projectFileViewStates: {},
-  sessionsActiveTab: null,
+  homeActiveTab: HOME_BOARD_TAB_ID,
 };
 
 /** The active-tab id of the always-present Ticket Body tab — the fallback when a
@@ -265,14 +284,45 @@ interface WorkspaceState {
    * starts empty on every relaunch and never reaches persisted storage.
    */
   navHistory: NavHistory;
-  /** Select a top-level page. Selecting Board exits any open ticket detail. */
+  /**
+   * Select a top-level page. Selecting Home while its Board tab is in front
+   * exits any open ticket detail — see the action for why that condition is the
+   * whole of the rule.
+   */
   setNav(projectId: string, nav: NavKey): void;
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
-  /** Sets which tab is in front on the project's Sessions surface; `null`
-   * clears the selection. */
-  setSessionsActiveTab(projectId: string, tabId: string | null): void;
+  /**
+   * Records which tab is in front on Home. A plain record and nothing else —
+   * `home-surface.tsx` writes back whatever it derived, and the derivation
+   * lands on the Board tab whenever the last Session tab closes. If that write
+   * also closed the open ticket, closing a chat would discard the ticket
+   * remembered behind it. {@link WorkspaceState.openHomeBoard} is where
+   * "the Board tab means the plain board" lives.
+   */
+  setHomeActiveTab(projectId: string, tabId: string): void;
+  /**
+   * THE seam for "Home is now in front", optionally bringing `tabId` forward.
+   *
+   * Never touches `openTicketId`, and that is the point: a Home Session tab is
+   * its own place with the ticket remembered behind it (VC-54 decision 1), so
+   * the sidebar's bands, ⌘K and ⌘T can all put a Session in front without any
+   * of them silently throwing a ticket away. Every surface that means "show
+   * this Project Session" routes through here rather than pairing `setNav` with
+   * `setHomeActiveTab` itself — which would also flash one frame of Home with
+   * the OLD tab in front.
+   */
+  openHome(projectId: string, tabId?: string): void;
+  /**
+   * The permanent Board tab's own act: Home, the Board tab, no open ticket.
+   *
+   * Exactly the semantics the Board NAV ITEM carried before Home existed, which
+   * is what makes this a zero-regression mapping. It is the one tab that
+   * discards state rather than preserving it (VC-54 decision 2, accepted cost);
+   * the ticket is one ⌘[ or one card click away.
+   */
+  openHomeBoard(projectId: string): void;
   /**
    * Opens `ticketId`'s full-page detail view for `projectId` (rendered in
    * place of the board — see components/ticket/ticket-detail.tsx) and selects
@@ -283,10 +333,11 @@ interface WorkspaceState {
   /**
    * THE navigation-intent seam: makes `ticketId`'s workspace visible right
    * now, no matter where the project's nav currently is. Switches this
-   * project onto the Board nav (ticket detail only renders there —
-   * main-content.tsx — so a caller that skips this step can set
-   * `openTicketId` while nav stays on Files/Sessions and the promised detail
-   * view never appears; this was the composer kickoff bug), opens the
+   * project onto Home AND onto Home's Board tab (ticket detail renders only
+   * there — `home-surface.tsx` — so a caller that skips either step can set
+   * `openTicketId` while nav stays on Files, or while a Home Session tab is in
+   * front, and the promised detail view never appears; the nav half was the
+   * composer kickoff bug, and the tab half is its VC-54 twin), opens the
    * ticket's full-page detail, and selects the same ticket in the board
    * store (same ordering `openTicketSession` below already used internally).
    *
@@ -443,6 +494,7 @@ type PersistedWorkspaceUi = Pick<
   | "ticketDiffViewStates"
   | "projectFiles"
   | "projectFileViewStates"
+  | "homeActiveTab"
 >;
 
 interface PersistedWorkspaceState {
@@ -622,6 +674,10 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     ticketDiffViewStates: sanitizeTicketDiffViewStates(persisted.ticketDiffViewStates, ticketTabs),
     projectFiles,
     projectFileViewStates: sanitizeFileViewStates(persisted.projectFileViewStates, projectFiles),
+    // Shape only. Whether the id still names a Session is asked LIVE, against
+    // the project's durable listing (`home-tabs.ts`) — a boot-time guess here
+    // could only be the "not hydrated yet reads as gone" bug.
+    homeActiveTab: sanitizeHomeActiveTab(persisted.homeActiveTab),
   };
 }
 
@@ -635,7 +691,8 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     Object.keys(ui.ticketTabs).length === 0 &&
     Object.keys(ui.ticketDiffViewStates).length === 0 &&
     ui.projectFiles.tabs.length === 0 &&
-    Object.keys(ui.projectFileViewStates).length === 0
+    Object.keys(ui.projectFileViewStates).length === 0 &&
+    ui.homeActiveTab === DEFAULT_WORKSPACE_UI.homeActiveTab
   );
 }
 
@@ -680,16 +737,26 @@ export function createWorkspaceStore(storage?: StateStorage) {
         navHistory: EMPTY_NAV_HISTORY,
 
         setNav(projectId, nav) {
-          // Ticket detail is a child of Board, not a separate top-level nav
-          // key. A deliberate Board selection must therefore mean the plain
-          // board even when `nav` is already "board".
-          set((state) =>
-            patchWorkspace(
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            // Ticket detail is a state of Home's BOARD TAB, not a separate
+            // top-level nav key — so a deliberate Home selection means the plain
+            // board even when `nav` is already "home", which is the only reason
+            // clicking Home from inside a ticket does anything at all.
+            //
+            // Gated on the Board tab being in front rather than applied to
+            // every Home selection, because the clear belongs to that TAB
+            // (decision 2), not to the nav item. With a Session tab in front the
+            // ticket is not on screen to be left, and the ordinary round trip
+            // Home → Files → Home would otherwise discard it for nothing
+            // visible.
+            const clearsTicket = nav === "home" && isHomeBoardTab(current.homeActiveTab);
+            return patchWorkspace(
               state,
               projectId,
-              nav === "board" ? { nav, openTicketId: null } : { nav },
-            ),
-          );
+              clearsTicket ? { nav, openTicketId: null } : { nav },
+            );
+          });
         },
 
         setDirExpanded(projectId, dirPath, expanded) {
@@ -712,16 +779,45 @@ export function createWorkspaceStore(storage?: StateStorage) {
           set((state) => patchWorkspace(state, projectId, { boardSort: sort }));
         },
 
-        setSessionsActiveTab(projectId, tabId) {
+        setHomeActiveTab(projectId, tabId) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            if (current.sessionsActiveTab === tabId) return state;
-            return patchWorkspace(state, projectId, { sessionsActiveTab: tabId });
+            if (current.homeActiveTab === tabId) return state;
+            return patchWorkspace(state, projectId, { homeActiveTab: tabId });
           });
         },
 
+        openHome(projectId, tabId) {
+          set((state) =>
+            patchWorkspace(
+              state,
+              projectId,
+              tabId === undefined ? { nav: "home" } : { nav: "home", homeActiveTab: tabId },
+            ),
+          );
+        },
+
+        openHomeBoard(projectId) {
+          set((state) =>
+            patchWorkspace(state, projectId, {
+              nav: "home",
+              homeActiveTab: HOME_BOARD_TAB_ID,
+              openTicketId: null,
+            }),
+          );
+        },
+
         openTicket(projectId, ticketId) {
-          set((state) => patchWorkspace(state, projectId, { openTicketId: ticketId }));
+          // The Board tab too: `openTicketId` alone renders nothing while a Home
+          // Session tab is in front (`home-surface.tsx`). Nav is deliberately
+          // NOT touched here — that is `openTicketWorkspace`'s job, and the
+          // difference between the two is exactly which promise each makes.
+          set((state) =>
+            patchWorkspace(state, projectId, {
+              homeActiveTab: HOME_BOARD_TAB_ID,
+              openTicketId: ticketId,
+            }),
+          );
           // Cross-store orchestration lives here (same precedent as
           // projects.ts's removeProject touching board/workspace directly):
           // opening a ticket always selects its card too, so returning to the
@@ -734,13 +830,17 @@ export function createWorkspaceStore(storage?: StateStorage) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const tabId = opts?.tabId;
-            if (tabId === undefined) {
-              return patchWorkspace(state, projectId, { nav: "board", openTicketId: ticketId });
-            }
+            // Home AND its Board tab: a ticket takes Home over from that tab and
+            // from no other, so both halves are the promise this seam makes.
+            const surface = {
+              nav: "home",
+              homeActiveTab: HOME_BOARD_TAB_ID,
+              openTicketId: ticketId,
+            } as const;
+            if (tabId === undefined) return patchWorkspace(state, projectId, surface);
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             return patchWorkspace(state, projectId, {
-              nav: "board",
-              openTicketId: ticketId,
+              ...surface,
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: { ...existing, active: tabId },
@@ -1032,6 +1132,9 @@ export function createWorkspaceStore(storage?: StateStorage) {
                   ticketDiffViewStates: ui.ticketDiffViewStates,
                   projectFiles: ui.projectFiles,
                   projectFileViewStates: ui.projectFileViewStates,
+                  // The Home tab that was in front — an id, never the Session
+                  // behind it, which is recovered from its own durable record.
+                  homeActiveTab: ui.homeActiveTab,
                 },
               ]),
           ),

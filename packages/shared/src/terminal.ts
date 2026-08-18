@@ -23,7 +23,7 @@ export interface CreateTerminalSessionRequest {
    * its project from the db (never trusting anything else from the renderer),
    * runs the PTY at the project root with `VOLLI_TICKET`/`VOLLI_ARTIFACTS_DIR`
    * injected, and persists a ticket-scoped {@link SessionRecord}. Absent = a
-   * project-scoped scratch session (`ticketId` null).
+   * Project Session (`ticketId` null).
    *
    * `kickoff`, when present, makes main auto-launch the harness CLI inside the
    * freshly-spawned shell with `prompt` as its initial prompt argument (the
