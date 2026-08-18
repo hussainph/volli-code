@@ -480,5 +480,10 @@ export const MonacoDocumentEditor = React.forwardRef<
     );
   }
 
-  return <div ref={hostRef} className={cn(DOCUMENT_MODE_CLASS, className)} />;
+  // `style` lands on the host because the host IS the editor's layout box: a
+  // caller's `maxHeight` has to clamp THIS element for `clientHeight` (what
+  // `fitToContent` lays the editor into) to read as the clamped box. React only
+  // ever writes the keys it sees here, so the imperative `height` that
+  // `fitToContent` sets is left alone across re-renders.
+  return <div ref={hostRef} className={cn(DOCUMENT_MODE_CLASS, className)} style={style} />;
 });
