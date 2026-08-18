@@ -1,6 +1,6 @@
 /**
  * Files navigator — the Calm Stack's files page
- * (lab/scratches/ticket-right-sidebar.tsx `FilesPanel`).
+ * (the retired ticket-right-sidebar lab scratch's `FilesPanel`).
  *
  * A titled header over ONE flat list (decision #46, #53/#54 — never a deep
  * tree). The scratch retires the two uppercase section captions the icon-mode

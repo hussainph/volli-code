@@ -1,6 +1,6 @@
 /**
  * The pieces the Calm Stack's pages share
- * (lab/scratches/ticket-right-sidebar.tsx: `RowActions`, `PausedBanner`,
+ * (the retired ticket-right-sidebar lab scratch: `RowActions`, `PausedBanner`,
  * `ScenarioState`, `DiffTotals`).
  *
  * They live here rather than in one panel because the scratch draws each of

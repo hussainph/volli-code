@@ -1,6 +1,6 @@
 /**
  * The Now page's repository card — the Calm Stack's one worktree surface
- * (lab/scratches/ticket-right-sidebar.tsx `EnvironmentSummary`).
+ * (the retired ticket-right-sidebar lab scratch's `EnvironmentSummary`).
  *
  * Three stacked rows inside one framed card, in the order a person asks about
  * them: what changed (and a way into the Diffs page), which branch it is on
@@ -157,7 +157,7 @@ interface PendingCommit {
 
 /**
  * The gate in front of the card's irreversible verbs
- * (lab/scratches/ticket-right-sidebar.tsx `CommitDialog`). A press of "Commit &
+ * (the retired ticket-right-sidebar lab scratch's `CommitDialog`). A press of "Commit &
  * create draft PR" — or of the menu's "Commit" — writes a commit; there is no
  * undo in this app for that, and every other verb the card offers is either
  * repeatable (push) or a link (View PR). So the commit verbs — and only they —

@@ -49,11 +49,12 @@
  * is legible through a halo, so nothing caps it.
  *
  * TWO MOTION IDEAS WERE TRIED IN THE LAB AND ONE MORE WAS REJECTED THERE.
- * `lab/scratches/composer-redesign.tsx` mounted three CSS-only variants over
- * this exact component, hung off attributes it already publishes. **Grip** (the
- * handle swelling and taking a halo while held) and **Cascade** (the notches
- * dealt in left to right on open) are shipped below and no longer have toggles.
- * **Ignite** — every notch flaring as the wash crosses it — stays in the lab: it
+ * The composer-redesign lab scratch (retired; git history) mounted three
+ * CSS-only variants over this exact component, hung off attributes it already
+ * publishes. **Grip** (the handle swelling and taking a halo while held) and
+ * **Cascade** (the notches dealt in left to right on open) are shipped below
+ * and no longer have toggles. **Ignite** — every notch flaring as the wash
+ * crosses it — was rejected and retired with the scratch: it
  * fires on a *sweep*, so dragging through five stops set off five flares in a
  * row, and a control that sparkles while you use it is decorating the gesture
  * rather than reporting it. All three obeyed the same house rules the shipped

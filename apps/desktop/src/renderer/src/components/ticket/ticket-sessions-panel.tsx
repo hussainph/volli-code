@@ -125,7 +125,7 @@ function RowStatus({ state, children }: { state: StatusDotState; children: React
  * like three cards to inspect; the roster's job is to be read down in a glance,
  * so the border only appears under the pointer and the kind moved off the
  * second line and into the leading glyph
- * (lab/scratches/ticket-right-sidebar.tsx: `SessionRows`).
+ * (the retired ticket-right-sidebar lab scratch: `SessionRows`).
  *
  * That glyph is `ChatCircle`/`TerminalWindow` — the pair the sidebar's session
  * bands, the tab strip and the new-session menu all already use for the two
@@ -338,8 +338,8 @@ function SessionList({
  * primitive existed so History and a Details drawer could stack as siblings;
  * Details folded into the repository card and the properties fold, and one
  * caller was left dragging the old icon-mode rail's chrome — a seam the Calm
- * Stack draws nowhere (lab/scratches/ticket-right-sidebar.tsx has no drawer, no
- * collapsible and no full-bleed rule in the rail at all). Both sections now
+ * Stack draws nowhere (the retired ticket-right-sidebar scratch had no drawer,
+ * no collapsible and no full-bleed rule in the rail at all). Both sections now
  * inset with the column (`RAIL_PANEL_INSET`) instead of a hardcoded `px-4`, so
  * the rail's edge is one straight line at every width.
  *
