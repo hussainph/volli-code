@@ -45,6 +45,8 @@ import {
   type TicketRecencyWatchOwner,
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
+import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
+import { useAttachments } from "@renderer/hooks/use-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
@@ -203,6 +205,30 @@ export function TicketDetail({
     (state) => state.clearTerminalFocusUnlessTicket,
   );
   const closeGuard = useCloseGuard();
+  /**
+   * The Ticket's attachment strip, owned HERE rather than in the Files rail
+   * that draws it (VC-106).
+   *
+   * Two surfaces attach to one Ticket: the rail, and the Body tab a file gets
+   * dropped on. Left in the rail, its state would be the only copy, so a drop
+   * on the Body would attach a file the rail could not show until it remounted
+   * — and the rail unmounts when it is collapsed, which is exactly when a
+   * person drops on the Body instead. One owner above both, one list.
+   */
+  const ticketAttachments = useAttachments({
+    owner: { ticketId: ticket.id },
+    onError: (message) => toastError(message),
+  });
+  const resetAttachments = ticketAttachments.reset;
+  React.useEffect(() => {
+    let cancelled = false;
+    void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
+      if (!cancelled && result.ok) resetAttachments(result.blobs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [resetAttachments, ticket.id]);
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
     reduceTicketRecencyOwner,
     EMPTY_TICKET_RECENCY_OWNER_STATE,
@@ -978,7 +1004,16 @@ export function TicketDetail({
               )}
             >
               {activeTab.kind === "body" ? (
-                <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+                <div
+                  // The Body tab is a drop target: this is where the Ticket is
+                  // written, so a file dragged onto it attaches to the Ticket.
+                  // Scoped to this tab rather than the whole detail view on
+                  // purpose — a capture handler on the root would fire before
+                  // the embedded chat composer's own and steal drops meant for
+                  // the conversation.
+                  {...fileAttachHandlers((picked) => void ticketAttachments.attachFiles(picked))}
+                  className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+                >
                   <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} />
                 </div>
               ) : null}
@@ -1062,6 +1097,7 @@ export function TicketDetail({
                 filesContent={
                   <TicketFilesPanel
                     ticket={ticket}
+                    handle={ticketAttachments}
                     onPreviewFile={previewFileFromRail}
                     onPinFile={pinFileFromRail}
                   />
