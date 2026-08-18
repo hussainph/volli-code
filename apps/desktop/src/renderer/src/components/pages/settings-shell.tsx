@@ -164,9 +164,10 @@ export function SettingsSection({
  * picker it has handed back to the app-wide choice.
  *
  * Here rather than beside its one caller: Configure's Appearance category draws
- * it from four sections that inherit independently — canvas, mode, editor theme,
- * terminal theme — and the whole point of the idiom is that every inheriting
- * section looks the same.
+ * it from four surfaces that inherit independently — mode and canvas, which
+ * share the App theme section and carry a scope switch per row, plus editor
+ * theme and terminal theme, which are a section each — and the whole point of
+ * the idiom is that every inheriting surface looks the same.
  */
 export function InheritNote({ children }: { children: ReactNode }) {
   return <p className="text-ui leading-5 text-muted-foreground">{children}</p>;
