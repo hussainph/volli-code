@@ -30,12 +30,7 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import {
-  errorMessage,
-  readSkillResources,
-  visibleModels,
-  type PromptResource,
-} from "@volli/shared";
+import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -100,8 +95,8 @@ import {
   type SignInProviderOption,
 } from "@renderer/components/chat/chat-plane-model";
 import {
+  offerableModels,
   SessionComposer,
-  type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
 import {
@@ -215,18 +210,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable = modelSelection !== null && catalogState !== "loading";
-  // Signed-in models only, minus the user's visibility curation. Pi's catalog
-  // is every provider it knows — around a thousand models against the handful
-  // this profile has credentials for — and a picker that lists the rest is a
-  // picker whose first "GPT-5.6 Luna" is whichever provider sorted first. What
-  // you cannot send to is not an option, and what you toggled off in Model
-  // Access is not one either (VC-53).
+  // What this picker may offer (VC-53), decided in one place because the
+  // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
-    () =>
-      visibleModels(
-        models.filter((model) => model.state === "available"),
-        hidden,
-      ).map((model) => composerModel(model, providers)),
+    () => offerableModels(models, providers, hidden),
     [hidden, models, providers],
   );
   const sessionModel = React.useMemo(
@@ -828,21 +815,6 @@ function useModelAccess(active: boolean): {
         catalogState: "pinned",
         catalogError: null,
       };
-}
-
-function composerModel(
-  model: ModelAccessModel,
-  providers: readonly ModelAccessProvider[],
-): ComposerModel {
-  return {
-    id: `${model.providerId}/${model.modelId}`,
-    providerId: model.providerId,
-    providerLabel:
-      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
-    modelId: model.modelId,
-    label: model.label,
-    reasoningLevels: model.reasoningLevels,
-  };
 }
 
 /* ---------------------------------------------------------------- running */

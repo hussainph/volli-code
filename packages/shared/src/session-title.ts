@@ -19,13 +19,33 @@ export function autoTitleFromMessage(text: string): string | null {
   return null;
 }
 
+/**
+ * The opening turn a Ticket Session is started with when nobody dictated one.
+ *
+ * A fresh structured Session idles until its first message — the Runtime Brief
+ * is prepended to the FIRST delivered message, not sent on attach — so this is
+ * what makes the agent begin as the Session opens. It says nothing the Brief
+ * does not already guarantee is above it, which is why the same sentence serves
+ * both doors that start a Ticket Session without an instruction: the socket's
+ * `volli session start` and the composer's Create & start.
+ *
+ * Shared rather than declared at each door, and here rather than beside either
+ * of them, because {@link autoTitleFromKickoff} is written AGAINST this
+ * sentence: it recognises the stock kickoff and names the Session after the
+ * ticket instead of after the instruction. Two copies of the string would let
+ * one door drift and start titling its Sessions "Begin work on this ticket…".
+ */
+export const DEFAULT_KICKOFF_MESSAGE =
+  "Begin work on this ticket. Your assignment is the Ticket Brief above.";
+
 const STAGE_AND_TICKET =
   /^(?:please\s+)?(validate|verify|implement|review|plan|test|fix|investigate|design|document|research|triage)\b[\s:,-]*(?:the\s+)?(?:ticket\s+)?([a-z][a-z0-9]*-\d+)\b/i;
 
 /**
- * A title for a CLI kickoff. Explicit stage-and-ticket requests become the
- * compact orchestration shape (for example `Validate VC-52`); the stock
- * kickoff falls back to the started ticket rather than naming the instruction.
+ * A title for a kickoff turn. Explicit stage-and-ticket requests become the
+ * compact orchestration shape (for example `Validate VC-52`); the stock kickoff
+ * ({@link DEFAULT_KICKOFF_MESSAGE}) falls back to the started ticket rather than
+ * naming the instruction.
  */
 export function autoTitleFromKickoff(kickoff: string, ticketDisplayId: string): string {
   const firstLine = autoTitleFromMessage(kickoff);

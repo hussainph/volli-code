@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -38,7 +38,6 @@ import {
   CHAT_PEEK_ENTRIES,
   composeProjectBrief,
   createAgentCommandService as createAgentCommandServiceBase,
-  DEFAULT_KICKOFF_MESSAGE,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";

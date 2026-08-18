@@ -343,6 +343,12 @@ export interface ChatSessionTransport {
     title: string | null;
     /** Skill slugs to inject at attach time. Absent means none. */
     skills?: readonly string[];
+    /**
+     * This Session's model policy, when the surface opening it picked one.
+     * Absent means the configured default for the Role, which is what every
+     * surface but the New-ticket composer's Create & start sends (VC-56).
+     */
+    model?: ModelSelection;
   }): Promise<{ sessionId: string }>;
   attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
@@ -370,6 +376,19 @@ export function browserChatTransport(): ChatSessionTransport {
         ticketId: input.ticketId,
         title: input.title,
         ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
+        // A picked model reaches the wire as the OVERRIDE it is: the server
+        // merges it onto the app default for the Role and refuses one Model
+        // Access cannot honor, exactly as it does for `volli session start
+        // --model`. Splitting the selection here rather than in the store keeps
+        // the shape difference at the one boundary that has it.
+        ...(input.model === undefined
+          ? {}
+          : {
+              modelOverride: {
+                model: { providerId: input.model.providerId, modelId: input.model.modelId },
+                reasoningLevel: input.model.reasoningLevel,
+              },
+            }),
       }),
     attachSession: (input) =>
       rpc.sessions.attach.mutate({

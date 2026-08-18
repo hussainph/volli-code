@@ -148,8 +148,19 @@ export function worktreeHomeFor(dbPath, extraEnv = {}) {
  * @param {Record<string,string>} [extraEnv]
  */
 export function launchEnvFor(dbPath, extraEnv = {}) {
+  // The inherited environment, minus the addressing an OUTER Volli session
+  // donates. An agent runs these probes from inside a live session, so its own
+  // `VOLLI_SESSION` / `VOLLI_TICKET` sit in `process.env` naming rows in the
+  // DEVELOPER's database; handed to the scratch app they address a Session it
+  // cannot know, and anything the app injects them into (a PTY's environment,
+  // the `volli` CLI a harness calls there) inherits the wrong addressing.
+  // Scrubbed from the INHERITED half only, so the probes that mean one still
+  // set it through `extraEnv` below.
+  const inherited = { ...process.env };
+  delete inherited.VOLLI_SESSION;
+  delete inherited.VOLLI_TICKET;
   const env = {
-    ...process.env,
+    ...inherited,
     VOLLI_DB_PATH: dbPath,
     VOLLI_SKIP_CLOSE_CONFIRM: "1",
     // The background CLI/skills install (VC-52) writes into the real home by
@@ -724,60 +735,76 @@ function forgetOnExit(dir) {
  * back to the first-available pick, which would put the misreporting straight
  * back.
  *
+ * WHICH default: `purpose` (VC-53). `global` is orchestration and the base
+ * every other purpose falls back to, so seeding it alone is what a probe that
+ * just needs SOME Session to start wants. A probe about Ticket Sessions
+ * specifically — the composer's Create & start reads the `ticket` purpose —
+ * seeds that one too, and seeding both with different models is how it proves
+ * which one a surface read.
+ *
  * @param {import("playwright-core").Page} page
  * @param {{providerId:string, modelId:string, reasoningLevel?:string}|null} [pin]
+ * @param {"global"|"ticket"|"utility"} [purpose]
  * @returns {Promise<{providerId:string, modelId:string, reasoningLevel:string, label:string}>}
  */
-export async function seedDefaultModel(page, pin = null) {
-  const result = await page.evaluate(async (pinned) => {
-    const inspected = await window.api.sessionRpc.request({
-      procedure: "modelAccess.inspect",
-      input: {},
-    });
-    if (!inspected.ok) return { ok: false, error: inspected };
-    const models = inspected.data.models ?? [];
-    const available = models
-      .filter((candidate) => candidate.state === "available")
-      .map((candidate) => `${candidate.providerId}/${candidate.modelId}`);
-    const model = pinned
-      ? models.find(
-          (candidate) =>
-            candidate.providerId === pinned.providerId && candidate.modelId === pinned.modelId,
-        )
-      : models.find((candidate) => candidate.state === "available");
-    if (!model || (pinned && model.state !== "available")) {
-      return {
-        ok: false,
-        error: {
-          message: pinned
-            ? `pinned model ${pinned.providerId}/${pinned.modelId} is ${model?.state ?? "absent from the live catalog"}`
-            : "no available model in the live catalog",
-          available,
-        },
+export async function seedDefaultModel(page, pin = null, purpose = "global") {
+  const result = await page.evaluate(
+    async ({ pinned, forPurpose }) => {
+      const inspected = await window.api.sessionRpc.request({
+        procedure: "modelAccess.inspect",
+        input: {},
+      });
+      if (!inspected.ok) return { ok: false, error: inspected };
+      const models = inspected.data.models ?? [];
+      const available = models
+        .filter((candidate) => candidate.state === "available")
+        .map((candidate) => `${candidate.providerId}/${candidate.modelId}`);
+      const model = pinned
+        ? models.find(
+            (candidate) =>
+              candidate.providerId === pinned.providerId && candidate.modelId === pinned.modelId,
+          )
+        : models.find((candidate) => candidate.state === "available");
+      if (!model || (pinned && model.state !== "available")) {
+        return {
+          ok: false,
+          error: {
+            message: pinned
+              ? `pinned model ${pinned.providerId}/${pinned.modelId} is ${model?.state ?? "absent from the live catalog"}`
+              : "no available model in the live catalog",
+            available,
+          },
+        };
+      }
+      const reasoningLevel = pinned?.reasoningLevel ?? model.reasoningLevels.at(-1) ?? "off";
+      if (!model.reasoningLevels.includes(reasoningLevel)) {
+        return {
+          ok: false,
+          error: {
+            message: `${model.providerId}/${model.modelId} does not support reasoning level ${reasoningLevel}`,
+            supported: model.reasoningLevels,
+          },
+        };
+      }
+      const selection = {
+        providerId: model.providerId,
+        modelId: model.modelId,
+        reasoningLevel,
       };
-    }
-    const reasoningLevel = pinned?.reasoningLevel ?? model.reasoningLevels.at(-1) ?? "off";
-    if (!model.reasoningLevels.includes(reasoningLevel)) {
-      return {
-        ok: false,
-        error: {
-          message: `${model.providerId}/${model.modelId} does not support reasoning level ${reasoningLevel}`,
-          supported: model.reasoningLevels,
-        },
-      };
-    }
-    const selection = {
-      providerId: model.providerId,
-      modelId: model.modelId,
-      reasoningLevel,
-    };
-    const saved = await window.api.sessionRpc.request({
-      procedure: "modelAccess.setDefault",
-      input: selection,
-    });
-    if (!saved.ok) return { ok: false, error: saved };
-    return { ok: true, selection: { ...selection, label: model.label } };
-  }, pin);
+      const saved = await window.api.sessionRpc.request({
+        procedure: "modelAccess.setDefault",
+        // `{ purpose, selection }`, which is what the edge has taken since
+        // purposes landed. Passing the bare selection made every call here a
+        // BAD_REQUEST, and since a `catch`-free `evaluate` reported it as a
+        // seeding failure rather than as a schema mismatch, it read as "no
+        // credentials" for as long as it was wrong.
+        input: { purpose: forPurpose, selection },
+      });
+      if (!saved.ok) return { ok: false, error: saved };
+      return { ok: true, selection: { ...selection, label: model.label } };
+    },
+    { pinned: pin, forPurpose: purpose },
+  );
   if (!result.ok) {
     throw new Error(`seedDefaultModel failed: ${JSON.stringify(result.error)}`);
   }

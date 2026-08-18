@@ -11,6 +11,7 @@ import {
   attachmentsSectionInput,
   composeAttachmentsSection,
   composeTicketPrompt,
+  DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
   doctorSummary,
   effectiveHarnessId,
@@ -158,18 +159,6 @@ export function composeTicketBrief(input: {
 export function composeProjectBrief(input: { project: Pick<Project, "path"> }): string {
   return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
 }
-
-/**
- * The kickoff turn `session.start` submits when the caller sends no `-m`.
- *
- * A fresh structured Session idles until its first message — the Runtime Brief
- * is prepended to the FIRST delivered message, not sent on attach — so this is
- * what makes the agent begin as the session opens. Deliberately the manual,
- * one-off shape of an Automation sending its Instructions; the wording assumes
- * only what the Brief guarantees is above it.
- */
-export const DEFAULT_KICKOFF_MESSAGE =
-  "Begin work on this ticket. Your assignment is the Ticket Brief above.";
 
 /**
  * How many transcript messages a chat `session peek` shows when the caller

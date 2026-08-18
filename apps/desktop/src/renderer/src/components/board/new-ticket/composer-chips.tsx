@@ -1,4 +1,3 @@
-import type { HarnessId } from "@volli/shared";
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -13,7 +12,6 @@ import {
   type ComposerBranchRowProps,
 } from "@renderer/components/board/new-ticket/composer-branch";
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
-import { ComposerHarnessChip } from "@renderer/components/board/new-ticket/composer-harness";
 import { ComposerLabels } from "@renderer/components/board/new-ticket/composer-labels";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { Button } from "@renderer/components/ui/button";
@@ -96,13 +94,23 @@ function PriorityChip({
 
 /**
  * The composer's metadata row: what the ticket IS on the left — Status,
- * Priority, Labels, the terminal harness — and where its work will HAPPEN on
- * the right, as one `base → destination` statement.
+ * Priority, Labels — and where its work will HAPPEN on the right, as one
+ * `base → destination` statement.
  *
  * The split is the point. Everything on the left describes the ticket; the
  * right names the git ground it lands on, and the two never interleave, so the
- * row can be read as two thoughts instead of six controls. All of it is local
+ * row can be read as two thoughts instead of five controls. All of it is local
  * state — nothing is persisted until the ticket is created.
+ *
+ * AND IT IS ONE ROW, which it had stopped being. The terminal-harness chip used
+ * to sit at the end of the left group; at the composer's own width its ~110px
+ * pushed the `base → destination` pair past the wrap, so the row's two thoughts
+ * were rendered as two LINES with the second one right-aligned under the first
+ * — which reads as a layout accident rather than a split. The chip is gone with
+ * the terminal kickoff it described (VC-15/VC-56) and its successor, the model +
+ * effort pair, belongs to the ACT of creating rather than to the ticket, so it
+ * sits in the footer beside the button that consults it (`composer-footer.tsx`).
+ * Keep this row's left group short enough that the pair stays beside it.
  *
  * The branch half arrives as ONE `branch` prop rather than five loose ones.
  * This row does not read or decide anything about a base; passing the pair's
@@ -117,8 +125,6 @@ export function ComposerChips({
   onPriorityChange,
   labels,
   onLabelsChange,
-  harnessId,
-  onHarnessChange,
   branch,
 }: {
   projectId: string;
@@ -128,8 +134,6 @@ export function ComposerChips({
   onPriorityChange: (priority: TicketPriority) => void;
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
-  harnessId: HarnessId;
-  onHarnessChange: (harnessId: HarnessId) => void;
   branch: ComposerBranchRowProps;
 }) {
   return (
@@ -137,7 +141,6 @@ export function ComposerChips({
       <StatusChip status={status} onChange={onStatusChange} />
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />
-      <ComposerHarnessChip harnessId={harnessId} onChange={onHarnessChange} />
       <ComposerBranchRow {...branch} />
     </div>
   );
