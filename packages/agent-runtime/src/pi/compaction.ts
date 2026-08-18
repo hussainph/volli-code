@@ -39,6 +39,7 @@
 
 import {
   buildSessionContext,
+  calculateContextTokens,
   compact,
   estimateTokens,
   getLastAssistantUsage,
@@ -75,16 +76,26 @@ export function contextWindowOf(model: { readonly contextWindow: number }): numb
 /**
  * The context the model was actually holding when it last answered.
  *
- * The same four fields the transcript records per message (`usageOf`), summed:
- * cache reads and writes are prompt tokens the model held, and counting `input`
- * alone understates a cached turn to the point of uselessness. Pi's
- * `getLastAssistantUsage` picks the message — newest first, skipping the aborted
- * and errored replies whose usage describes a request that never completed.
+ * Two of Pi's own functions and nothing between them: `getLastAssistantUsage`
+ * picks the message — newest first, skipping the aborted and errored replies
+ * whose usage describes a request that never completed — and
+ * `calculateContextTokens` reads the occupancy off it, preferring the
+ * provider's own `totalTokens` and falling back to the four fields the
+ * transcript records per message (`usageOf`) summed. Cache reads and writes
+ * belong in that sum: they are prompt tokens the model held, and counting
+ * `input` alone understates a cached turn to the point of uselessness.
+ *
+ * Summing the four here by hand would be close enough to look right and would
+ * still be a second rule. It is the one Pi applies to compute the
+ * `tokensBefore` this feature reports, so a hand-rolled sum would put the
+ * number that DECIDES to compact and the number that DESCRIBES the compaction
+ * on different definitions of one quantity — agreeing for every provider that
+ * totals the way we assumed, and silently disagreeing for the first that does
+ * not.
  */
 export function occupiedContextTokens(path: readonly Entry[]): number | undefined {
   const usage = getLastAssistantUsage([...path]);
-  if (usage === undefined) return undefined;
-  return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  return usage === undefined ? undefined : calculateContextTokens(usage);
 }
 
 /**

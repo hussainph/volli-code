@@ -11,7 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { ExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import {
+  JsonlSessionRepo,
+  NodeExecutionEnv,
+  type ExecutionEnv,
+} from "@earendil-works/pi-agent-core/node";
 import {
   createAssistantMessageEventStream,
   createModels,
@@ -4064,6 +4068,61 @@ describe("compacting a context that reached its reserve", () => {
     await secondHandle.close();
   });
 
+  it("reads the branch on recovery, not everything the file happens to hold", async () => {
+    // The elision rule takes the LAST compaction in the array it is handed. Off
+    // a flat file read that is last-WRITTEN; only off the branch is it
+    // last-on-this-path. Nothing forks a lane today, so this pins the read
+    // itself: an entry parked off the branch must not reach the replay, or the
+    // day something does fork, the resurrected history comes back silently.
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(overflowing([], settles("## Goal\nfinish the marker work"))),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    const recovery = handle.recovery;
+    await handle.close();
+
+    // A second lane, holding a later compaction that this Session's branch
+    // never went through. A file-order read would elide against THIS one.
+    const sidecars = new JsonlSessionRepo({
+      fs: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
+      sessionsRoot: attachment.sessionDataDir,
+    });
+    const found = (await sidecars.list({ cwd: attachment.worktreePath })).find(
+      (candidate) => candidate.id === recovery!.sessionId,
+    );
+    const sidecar = await sidecars.open(found!);
+    await sidecar.createLane("sibling", null);
+    await sidecar.appendEntry(
+      {
+        type: "compaction",
+        id: sidecar.idGenerator.next(),
+        summary: "SIBLING-BRANCH-SUMMARY",
+        retainedTail: [],
+        tokensBefore: 1,
+      },
+      "sibling",
+    );
+
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after"))])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("and again");
+
+    const turn = calls[0]?.messages ?? "";
+    expect(turn).toContain("finish the marker work");
+    expect(turn).not.toContain("SIBLING-BRANCH-SUMMARY");
+    expect(turn).not.toContain("first answer");
+    await secondHandle.close();
+  });
+
   it("delivers the message anyway when summarization fails", async () => {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
@@ -4849,6 +4908,207 @@ describe("compacting because somebody asked", () => {
       reason: "closed",
       message: "This attachment is closed.",
     });
+  });
+
+  it("never lets a message delivered mid-summary be overwritten by it", async () => {
+    // The failure this guards is silent, which is why it is pinned here rather
+    // than left to the `isStreaming` check: that check is separated from the
+    // line that replaces the message array by a provider call, so a turn that
+    // starts inside the summary is one the returning compaction would overwrite
+    // — the message and its reply gone from the model's context while both stay
+    // in the ledger and on screen, with nothing anywhere saying so.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation(calls, async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+
+    const compacting = handle.compact();
+    await summarizing.promise;
+    // Submitted while the summary is still in flight. It must not be lost, and
+    // it must not be refused either: maintenance nobody asked for does not get
+    // to cost someone their message.
+    const submitting = handle.submitUserMessage("SECOND-MESSAGE-MARKER");
+    release.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
+    await expect(submitting).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+
+    // The turn went out on the compacted context — it waited for it — and the
+    // compaction did not erase it afterwards.
+    const turn = calls[3]?.messages ?? "";
+    expect(turn).toContain("compacted into the following summary");
+    expect(turn).toContain("SECOND-MESSAGE-MARKER");
+    expect(turn).not.toContain("first answer");
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it("refuses a second request while the first is still summarizing", async () => {
+    // Two summaries on one context would bill twice and append twice, and the
+    // second would summarize a history the first had already replaced. The
+    // answer is the one this handle already gives for a context that is not
+    // free — asked synchronously, so it cannot go stale.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation(calls, async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+
+    const first = handle.compact();
+    await summarizing.promise;
+    await expect(handle.compact()).resolves.toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      // Its own sentence: this Session is idle, and being told a turn is running
+      // would send the reader looking for one that is not there.
+      message: "This context is already being compacted.",
+    });
+    release.resolve();
+    await expect(first).resolves.toEqual({ kind: "compacted" });
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it("refuses a message that waited out a compaction into a closed attachment", async () => {
+    // The wait is the point: a delivery parked behind a compaction resumes into
+    // a world that moved while it was parked, so every question it asked before
+    // the wait has to be asked again. Closure is the one that changes the answer
+    // from "send it" to "there is nothing to send it to".
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation(calls, async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+
+    const compacting = handle.compact();
+    await summarizing.promise;
+    const submitting = handle.submitUserMessage("never sent");
+    await handle.close();
+    release.resolve();
+    await compacting;
+
+    await expect(submitting).resolves.toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+    // Never composed, so never delivered: three calls, none of them a fourth turn.
+    expect(calls).toHaveLength(3);
+  });
+
+  it("frees the next delivery when a compaction fails outright", async () => {
+    // A compaction that throws rather than reporting an outcome still has to
+    // release the context it took. If it did not, the promise every later
+    // delivery waits on would never settle and the Session would be wedged by
+    // its own maintenance — silently, and for good.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    let policyReadable = false;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settles("second answer")),
+        ]),
+      ),
+      compactionPolicy: () => {
+        if (!policyReadable) throw new Error("the policy store is unreadable");
+        return { autoCompaction: true, modelLimits: [] };
+      },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+
+    await expect(handle.compact()).rejects.toThrow("the policy store is unreadable");
+
+    // The context is free again, so the next message goes exactly as it would
+    // have if nobody had ever asked.
+    policyReadable = true;
+    await expect(handle.submitUserMessage("carry on")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+    expect(calls).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("delivers the message anyway when threshold maintenance throws", async () => {
+    // A summary the provider refuses is already an outcome. A read or an append
+    // that throws is not, and before it was caught it reached the caller as a
+    // refused message — the one thing this path promises never to do.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settlesHolding("first answer", 200_000)),
+          recording(calls, settles("second answer")),
+        ]),
+      ),
+      compactionPolicy: () => {
+        throw new Error("the policy store is unreadable");
+      },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+
+    // Over the reserve, so maintenance runs and throws. The message still goes.
+    await expect(handle.submitUserMessage("carry on")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+    expect(calls).toHaveLength(2);
+    // Not swallowed: every attempt lands on the ledger as the failure it is.
+    // One per delivery, because maintenance is genuinely failing each time and
+    // a Session that says so once and then goes quiet would be the same silence
+    // this event exists to break.
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "failed", reason: "threshold" }),
+      expect.objectContaining({ state: "failed", reason: "threshold" }),
+    ]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    await handle.close();
   });
 });
 
