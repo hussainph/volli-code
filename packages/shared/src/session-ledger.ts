@@ -710,6 +710,20 @@ export type SessionCommandIntent =
   | { kind: "executor.interrupt"; attachmentId: string }
   /** Retry the last failed executor run without duplicating its submitted message. */
   | { kind: "executor.retry"; attachmentId: string }
+  /**
+   * Summarize this Session's context now, on explicit request — the third
+   * reason a Context Compaction happens, and the only one a person chose.
+   *
+   * A command rather than a message, because it is what a command is for: it
+   * says what a person meant, it is durable before anything acts on it, and it
+   * comes back as a receipt. The other two reasons need no command; nobody
+   * asked for them.
+   *
+   * `instructions` is free text for the summarizer — what to keep, what
+   * matters — and null when none was given. Never parsed into arguments: the
+   * words go to a model, not into a template.
+   */
+  | { kind: "context.compact"; attachmentId: string; instructions: string | null }
   | { kind: "message.submit"; reference: TranscriptReference }
   | {
       kind: "interaction.resolve";
@@ -756,6 +770,7 @@ export type CommandReceiptResult =
   | { kind: "executor.stop.requested"; sessionId: string }
   | { kind: "executor.interrupted"; sessionId: string }
   | { kind: "executor.retried"; sessionId: string }
+  | { kind: "context.compacted"; sessionId: string }
   | { kind: "message.submitted"; sessionId: string }
   | { kind: "interaction.resolved"; sessionId: string };
 

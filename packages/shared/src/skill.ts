@@ -50,6 +50,7 @@
  * Node import into the other's world.
  */
 import type { PromptResource } from "./agent-runtime";
+import { isComposerVerbName } from "./composer-verb";
 import { isPromptResource } from "./prompt-resource";
 import type { PromptTemplate } from "./prompt-template";
 
@@ -157,6 +158,9 @@ export function isSkillName(value: string): boolean {
  * command also uses can never be invoked. Offering its row anyway would be
  * offering a control that does something other than what it says; dropping it
  * here keeps the list honest. Name-sorted, like every list the picker holds.
+ *
+ * A built-in verb's name is taken too, and by something neither of these
+ * lists can outrank — `composer-verb.ts` says why that one goes the other way.
  */
 export function visibleSkills(
   skills: readonly SkillReference[],
@@ -164,7 +168,7 @@ export function visibleSkills(
 ): readonly SkillReference[] {
   const taken = new Set(templates.map((template) => template.name));
   return skills
-    .filter((skill) => !taken.has(skill.name))
+    .filter((skill) => !taken.has(skill.name) && !isComposerVerbName(skill.name))
     .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 

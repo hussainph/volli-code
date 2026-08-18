@@ -1292,6 +1292,57 @@ describe("Session tRPC router", () => {
     expect("attachmentId" in fixture.calls.command.at(-1)!.command).toBe(false);
   });
 
+  it("passes an explicit compaction, with or without instructions", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "compact-command",
+      sessionId: "session-1",
+      command: { kind: "context.compact", instructions: "keep the API work" },
+    });
+    await caller.session.command({
+      commandId: "bare-compact-command",
+      sessionId: "session-1",
+      command: { kind: "context.compact" },
+    });
+
+    expect(fixture.calls.command.slice(-2)).toEqual([
+      {
+        commandId: "compact-command",
+        sessionId: "session-1",
+        command: { kind: "context.compact", instructions: "keep the API work" },
+      },
+      {
+        commandId: "bare-compact-command",
+        sessionId: "session-1",
+        command: { kind: "context.compact" },
+      },
+    ]);
+  });
+
+  it("refuses compaction instructions too long to be a summarizer's brief", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // These words are headed for the call meant to RECLAIM the window; an
+    // unbounded brief is a way to spend it instead.
+    await expect(
+      caller.session.command({
+        commandId: "overlong-compact",
+        sessionId: "session-1",
+        command: { kind: "context.compact", instructions: "x".repeat(4001) },
+      }),
+    ).rejects.toThrow();
+    expect(fixture.calls.command).toEqual([]);
+  });
+
   it("passes a durable model selection without adapter or profile identity", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

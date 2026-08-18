@@ -816,6 +816,31 @@ describe("composerPress", () => {
     });
     expect(composerPress(ask([askPrompt()]), "   ")).toEqual({ kind: "message" });
   });
+
+  it("is a compaction when the whole draft is the verb", () => {
+    expect(composerPress(null, "/compact")).toEqual({ kind: "compact", instructions: null });
+    // What the picker leaves in the box, and what someone types after it.
+    expect(composerPress(null, "/compact ")).toEqual({ kind: "compact", instructions: null });
+    expect(composerPress(null, "/compact keep the API work")).toEqual({
+      kind: "compact",
+      instructions: "keep the API work",
+    });
+  });
+
+  it("is a message wherever the verb does not own the whole draft", () => {
+    // The grammar and its reasons are `composer-verb.ts`'s. What is pinned
+    // here is that a draft it refuses still goes somewhere: claiming this
+    // would send nothing and silently drop the sentence around the verb.
+    expect(composerPress(null, "please /compact and carry on")).toEqual({ kind: "message" });
+    expect(composerPress(null, "/compacted")).toEqual({ kind: "message" });
+  });
+
+  it("lets a standing question outrank the verb", () => {
+    // The surface has already said twice that this box is answering: it is
+    // renamed Answer and the `/` picker is shut. A Session waiting on a
+    // question is mid-turn anyway, where a compaction would be refused.
+    expect(composerPress(ask([askPrompt()]), "/compact")).toMatchObject({ kind: "answer" });
+  });
 });
 
 describe("messageRoute", () => {

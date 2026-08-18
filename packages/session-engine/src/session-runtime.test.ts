@@ -1370,6 +1370,89 @@ describe("SessionRuntime native adapter contract", () => {
     expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
   });
 
+  it("records and dispatches an explicit compaction to the live attachment", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    const compacted = await runtime.command({
+      commandId: "compact-1",
+      sessionId,
+      command: { kind: "context.compact", instructions: "keep the API work" },
+    });
+
+    expect(adapter.commands.at(-1)).toEqual({
+      kind: "context.compact",
+      commandId: "compact-1",
+      sessionId,
+      attachmentId,
+      instructions: "keep the API work",
+    });
+    expect(compacted).toMatchObject({
+      command: {
+        intent: { kind: "context.compact", attachmentId, instructions: "keep the API work" },
+      },
+      receipt: { status: "accepted", result: { kind: "context.compacted" } },
+    });
+
+    // Idempotent on the command id, like every other adapter-bound command:
+    // a resent `/compact` must not summarize the Session twice.
+    await runtime.command({
+      commandId: "compact-1",
+      sessionId,
+      command: { kind: "context.compact", attachmentId, instructions: "keep the API work" },
+    });
+    expect(adapter.commands.filter(({ kind }) => kind === "context.compact")).toHaveLength(1);
+
+    // The instructions are part of the intent, so the same id carrying
+    // different words is a different command and is refused rather than
+    // silently answered with the first one's receipt.
+    await expect(
+      runtime.command({
+        commandId: "compact-1",
+        sessionId,
+        command: { kind: "context.compact", attachmentId, instructions: "something else" },
+      }),
+    ).rejects.toThrow("already accepted with different intent");
+  });
+
+  it("records no instructions as null rather than inventing an empty request", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await runtime.command({
+      commandId: "compact-bare",
+      sessionId,
+      command: { kind: "context.compact" },
+    });
+
+    expect(adapter.commands.at(-1)).toMatchObject({
+      kind: "context.compact",
+      instructions: null,
+    });
+  });
+
+  it("refuses a compaction addressed to no executor at all", async () => {
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        title: "Never attached",
+      },
+    });
+
+    await expect(
+      runtime.command({
+        commandId: "compact-nowhere",
+        sessionId: created.sessionId,
+        command: { kind: "context.compact" },
+      }),
+    ).rejects.toBeInstanceOf(SessionRuntimeConflictError);
+  });
+
   it("keeps recovery Attention when replaying an old accepted retry", async () => {
     const first = composition();
     const sessionId = await createAndAttach(first.runtime);
@@ -1650,6 +1733,41 @@ describe("SessionRuntime native adapter contract", () => {
         commandId: "retry-location-unavailable",
         sessionId,
         command: { kind: "executor.retry", attachmentId },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable" },
+    });
+  });
+
+  it("settles a cold compaction when its durable directory is unavailable", async () => {
+    let unavailable = false;
+    const locations: SessionLocationResolver = {
+      resolve: async () => ({ directory: "/projects/fake", venue }),
+      prepare: async () => ({ directory: "/projects/fake", venue }),
+      reaffirm: async () => {
+        if (unavailable) throw new Error("worktree is missing");
+      },
+    };
+    const first = composition({ locations });
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    unavailable = true;
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      locations,
+      runtimeIdPrefix: "compact-location-",
+    });
+
+    // The same road every adapter-bound command takes: a cold binding is
+    // resumed before it is addressed, and a location that will not come back
+    // settles the command rather than leaving the request hanging.
+    await expect(
+      recovered.runtime.command({
+        commandId: "compact-location-unavailable",
+        sessionId,
+        command: { kind: "context.compact", attachmentId },
       }),
     ).resolves.toMatchObject({
       receipt: { status: "rejected", code: "location_unavailable" },

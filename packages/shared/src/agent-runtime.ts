@@ -563,8 +563,8 @@ export interface TurnObservation {
  * held in step by the one place that can see both — `pi/runtime.ts` checks this
  * list against Pi's type — rather than by an import this package may not have.
  *
- * `manual` has no producer until the `/compact` verb exists, and is declared
- * now so the vocabulary is settled once instead of widened three times.
+ * All three have producers: the reserve threshold, the overflow a provider
+ * refused, and the `/compact` verb a person typed.
  */
 export const COMPACTION_REASONS = ["threshold", "overflow", "manual"] as const;
 
@@ -746,6 +746,29 @@ export type ModelSelectionOutcome =
       message: string;
     };
 
+/**
+ * Observable outcome of one EXPLICIT compaction request.
+ *
+ * The threshold and overflow paths need no such answer: nobody asked them, so
+ * a compaction that found nothing to do is nothing to report, and only the
+ * durable {@link CompactionObservation} records what happened. A person who
+ * typed `/compact` did ask, and every way of not compacting has to reach them
+ * — which is why `nothing-to-compact` and `summary-failed` are refusals here
+ * rather than a quiet `false`.
+ *
+ * `summary-failed` overlaps a `CompactionObservation` deliberately. The
+ * observation is the durable fact and the refusal is the answer to the
+ * request; the same failure is both, exactly as a refused message is both a
+ * receipt and a transcript row.
+ */
+export type CompactionRequestOutcome =
+  | { kind: "compacted" }
+  | {
+      kind: "rejected";
+      reason: "busy-unsupported" | "closed" | "nothing-to-compact" | "summary-failed";
+      message: string;
+    };
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
@@ -767,6 +790,14 @@ export interface RuntimeAttachmentHandle {
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
   /** Retry the last failed run without duplicating its user message. */
   retry(commandId?: string): Promise<DeliveryOutcome>;
+  /**
+   * Compact this Session's context now, because someone asked.
+   *
+   * The third producer of a {@link CompactionObservation} and the only one
+   * with a caller waiting on it. `instructions` is free text handed to the
+   * summarizer — what to keep, what matters — and is prose, never arguments.
+   */
+  compact(instructions?: string): Promise<CompactionRequestOutcome>;
   /** Abort the current run and settle the resulting state honestly. */
   interrupt(): Promise<void>;
   /** Release local resources; the Session and its history remain. */

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import { COMPACT_VERB } from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
@@ -429,6 +430,22 @@ describe("what a composed message actually sends", () => {
     expect(submitComposer({ value: "/ship" })).toBe("/ship");
   });
 
+  // The composer performs no verb: it hands the text on untouched and the
+  // plane's `composerPress` claims it. What matters here is that it arrives
+  // claimable — a `/compact` expanded into some prompt body would be a
+  // compaction request quietly sent to the model as a message.
+  it("sends a verb's draft through as typed, even against a template of that name", () => {
+    const shadowing = [
+      ...TEMPLATES,
+      { name: "compact", description: "my own prompt", content: "Please summarize this chat." },
+    ];
+
+    expect(submitComposer({ value: "/compact", promptTemplates: shadowing })).toBe("/compact");
+    expect(
+      submitComposer({ value: "/compact keep the API work", promptTemplates: shadowing }),
+    ).toBe("/compact keep the API work");
+  });
+
   // VC-49: a skill reference is never rewritten into the body. The text keeps
   // the slash reference — mid-sentence included — and the resolved body
   // travels beside it as a message-scoped resource.
@@ -585,6 +602,31 @@ describe("the picker card", () => {
     const html = renderPicker(pickerState({ rows: [] }));
 
     expect(html).toContain("No match");
+  });
+
+  it("heads a verb row Actions, apart from the rows that only write text", () => {
+    const html = renderPicker(
+      pickerState({
+        rows: [
+          {
+            kind: "verb",
+            value: "verb:compact",
+            label: "/compact",
+            detail: COMPACT_VERB.description,
+            verb: COMPACT_VERB,
+          },
+          ...pickerState().rows,
+        ],
+      }),
+    );
+
+    // Two headings, and the verb's comes first — the flat row order and the
+    // visual one have to agree or the arrow keys walk a different list. The
+    // `>heading<` form is deliberate: the card's own aria-label says
+    // "Commands" for the whole `/` mode and would otherwise win the race.
+    expect(html).toContain(">Actions<");
+    expect(html).toContain("/compact");
+    expect(html.indexOf(">Actions<")).toBeLessThan(html.indexOf(">Commands<"));
   });
 });
 

@@ -199,6 +199,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
+    compactContext,
     dequeueClaimed,
     enqueue,
     cancelInteraction,
@@ -644,10 +645,41 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   );
 
   /**
+   * The press that sends nothing.
+   *
+   * `/compact` is a request the runtime performs, so it takes none of
+   * {@link dispatch}'s road: there is no message to hold, nothing for the
+   * strip to hand back, and a durable copy of it already exists as the command
+   * itself. The words still leave the box on the press, because they have
+   * stopped being a draft — and they come back if nothing took them, which is
+   * the composer's standing promise and the reason a refusal here is never
+   * just a red line. Every way this does not happen is a refusal, including
+   * the two that are not failures: a turn still running, and a history with
+   * nothing left to summarize.
+   *
+   * Returned only over an empty box: a refusal that arrives after the reader
+   * has started typing again must not overwrite what they are writing.
+   */
+  const compactNow = React.useCallback(
+    (instructions: string | null) => {
+      const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
+      setDraft(sessionId, "");
+      void compactContext(instructions).then((accepted) => {
+        if (accepted) return;
+        if ((useChatDraftsStore.getState().drafts[sessionId]?.text ?? "") === "") {
+          setDraft(sessionId, typed);
+        }
+      });
+    },
+    [compactContext, sessionId, setDraft],
+  );
+
+  /**
    * One press of the composer, and the one place it is decided what that press
    * was.
    *
-   * The rule is `composerAnswer`'s and the reasons are there. What is here is
+   * The rules are `composerAnswer`'s and `composer-verb.ts`'s and the reasons
+   * are there; the order between them is `composerPress`'s. What is here is
    * the fallback, and it is the one that used to be the only behaviour: a
    * message, which while a turn is live joins the release queue. That is right
    * for words typed alongside a running turn and was a dead end for words typed
@@ -658,9 +690,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     (text: string, intent: ComposerIntent) => {
       const press = composerPress(pendingRef.current, text);
       if (press.kind === "answer") answerTyped(press.interactionId, press.submission, text);
+      else if (press.kind === "compact") compactNow(press.instructions);
       else send(text, intent);
     },
-    [answerTyped, send],
+    [answerTyped, compactNow, send],
   );
 
   const withdraw = React.useCallback(

@@ -38,6 +38,7 @@ export type RendererSessionCommand =
       | { kind: "model.select" }
       | { kind: "executor.interrupt" }
       | { kind: "executor.retry" }
+      | { kind: "context.compact" }
       | { kind: "interaction.resolve" }
     >;
 
@@ -492,6 +493,14 @@ const commandSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("executor.interrupt"), attachmentId: nonEmptyString.optional() }),
   z.object({ kind: z.literal("executor.retry"), attachmentId: nonEmptyString.optional() }),
+  z.object({
+    kind: z.literal("context.compact"),
+    attachmentId: nonEmptyString.optional(),
+    // Bounded like every other free string this edge takes: these words are
+    // headed for a summarization prompt, and an unbounded one is a way to
+    // spend a Session's whole window on the call meant to reclaim it.
+    instructions: z.string().max(4000).nullable().optional(),
+  }),
   z.object({
     kind: z.literal("interaction.resolve"),
     interactionId: nonEmptyString,

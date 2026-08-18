@@ -211,7 +211,7 @@ export interface CompactionInput {
   model: Model<Api>;
   /** The executor's rule, already resolved from the configured policy. */
   settings: CompactionSettings;
-  /** Extra focus for the summary. Unused until the manual verb exists. */
+  /** Extra focus for the summary. Only an explicit request carries any. */
   customInstructions?: string;
   signal?: AbortSignal;
 }

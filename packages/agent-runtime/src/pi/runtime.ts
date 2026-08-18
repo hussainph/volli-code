@@ -40,6 +40,7 @@ import {
   type CompactionObservation,
   type CompactionPolicy,
   type CompactionReason,
+  type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ModelSelection,
   type RuntimeAttachmentHandle,
@@ -64,6 +65,7 @@ import {
   conversationPath,
   estimatedContextTokens,
   occupiedContextTokens,
+  type CompactionOutcome,
   type ConversationReader,
 } from "./compaction";
 import { AuthorityEscalation } from "./escalation";
@@ -1099,10 +1101,13 @@ async function attachSession(
     /**
      * Summarize this Session's history and say so, whichever way it goes.
      *
-     * One mechanism for every reason a context is compacted, so the threshold
-     * path, the overflow path and the manual verb that will follow cannot drift
-     * into three behaviours or three event shapes. What differs between them is
-     * only when they are called and what they do with the answer.
+     * One mechanism for every reason a context is compacted — the threshold,
+     * the overflow, and the person who typed `/compact` — so three producers
+     * cannot drift into three behaviours or three event shapes. What differs
+     * between them is only when they are called and what they do with the
+     * answer, which is why the answer is Pi's own outcome rather than a
+     * boolean: two callers only need to know whether the context changed, and
+     * the one with a person waiting on it needs to know which way it did not.
      *
      * The failure is reported rather than swallowed and reported rather than
      * raised as an Attention. Nothing is blocked by it — the message that paid
@@ -1110,11 +1115,14 @@ async function attachSession(
      * the next turn may well be refused for context length, and a refusal with
      * no record of the summary that was tried first reads as arbitrary.
      */
-    const compactContext = async (
-      reason: CompactionReason,
-      path: readonly Entry[],
-      signal: AbortSignal | undefined,
-    ): Promise<boolean> => {
+    const compactContext = async (input: {
+      reason: CompactionReason;
+      path: readonly Entry[];
+      signal: AbortSignal | undefined;
+      /** What to keep, in the requester's words. Only a person supplies these. */
+      instructions?: string;
+    }): Promise<CompactionOutcome> => {
+      const { reason, path, signal, instructions } = input;
       const outcome = await compactSession({
         sidecar,
         path,
@@ -1122,11 +1130,12 @@ async function attachSession(
         model: summarizationModel(),
         settings: compactionSettings(),
         ...(signal === undefined ? {} : { signal }),
+        ...(instructions === undefined ? {} : { customInstructions: instructions }),
       });
       // Pi found nothing to compact — an empty history, or one already ending in
       // a summary. Nothing happened, so nothing is reported: the caller that
       // needed this to work is the one that has something to say about it.
-      if (outcome.kind === "skipped") return false;
+      if (outcome.kind === "skipped") return outcome;
       if (outcome.kind === "compacted") {
         // The elided context, from the same rule the replay path applies. Pi
         // holds no run that is reading this array: the threshold path runs while
@@ -1151,7 +1160,7 @@ async function attachSession(
             : { kind: "compaction", state: "failed", reason, message: outcome.message },
         ),
       );
-      return outcome.kind === "compacted";
+      return outcome;
     };
 
     /**
@@ -1191,7 +1200,7 @@ async function attachSession(
       // here. Nothing else can: no turn has started, so there is no turn to
       // interrupt, and a person pressing stop before their message has been
       // delivered is stopping something that has not begun.
-      await compactContext("threshold", path, spec.signal);
+      await compactContext({ reason: "threshold", path, signal: spec.signal });
     };
 
     /**
@@ -1230,7 +1239,12 @@ async function attachSession(
       // The run's own signal, not the attachment's: a person pressing stop
       // during the summary is stopping this turn, and the summary is now the
       // only part of it still running.
-      return compactContext("overflow", await conversationBranch(), signal);
+      const outcome = await compactContext({
+        reason: "overflow",
+        path: await conversationBranch(),
+        signal,
+      });
+      return outcome.kind === "compacted";
     };
 
     unsubscribe = agent.subscribe(async (event, runSignal) => {
@@ -1541,6 +1555,61 @@ async function attachSession(
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
         return outcome;
+      },
+
+      /**
+       * The third producer of a compaction, and the only one anybody asked
+       * for.
+       *
+       * It runs the same {@link compactContext} the other two run, on the same
+       * durable path, and emits the same observation with `manual` on it. What
+       * is new here is only that someone is waiting for an answer, so every
+       * way of not compacting becomes a refusal with a reason rather than a
+       * fact filed to the ledger and nothing else.
+       *
+       * **Refused while Pi is running, never queued.** Rewriting the context
+       * under a live turn corrupts the turn in flight, which is why both
+       * automatic paths only ever run when Pi is idle. Queueing it instead
+       * would answer a different question than the one asked: by the time the
+       * turn ended the reply would already be in the context, so what ran
+       * would not be the compaction the person requested when they requested
+       * it. A refusal they can act on — stop the turn, or wait — is the honest
+       * answer.
+       *
+       * **The switch does not reach here.** `autoCompaction` is Pi's
+       * `enabled`, read by `shouldCompact` and by nothing else, so switching
+       * it off cannot block this any more than it blocks overflow recovery.
+       * That is the behaviour this wants: off means "do not interrupt me to
+       * make room", and a person typing `/compact` is not being interrupted.
+       *
+       * The attachment's own signal bounds it, like {@link compactBeforeTurn}:
+       * no turn is running, so there is no turn whose stop could mean this.
+       */
+      async compact(instructions): Promise<CompactionRequestOutcome> {
+        if (closed || cancelled) {
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        if (agent.state.isStreaming) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The context cannot be compacted while Pi is running.",
+          };
+        }
+        const outcome = await compactContext({
+          reason: "manual",
+          path: await conversationBranch(),
+          signal: spec.signal,
+          ...(instructions === undefined ? {} : { instructions }),
+        });
+        if (outcome.kind === "compacted") return { kind: "compacted" };
+        return outcome.kind === "skipped"
+          ? {
+              kind: "rejected",
+              reason: "nothing-to-compact",
+              message: "There is nothing left to summarize.",
+            }
+          : { kind: "rejected", reason: "summary-failed", message: outcome.message };
       },
 
       async interrupt(): Promise<void> {

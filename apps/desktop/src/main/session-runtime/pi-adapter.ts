@@ -82,6 +82,7 @@ import {
   errorMessage,
   readSkillResources,
   type AgentRuntime,
+  type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ModelSelection,
   type ModelSelectionOutcome,
@@ -270,6 +271,23 @@ const MODEL_SELECTION_REJECTION_CODES = {
   "model-unavailable": "PI_MODEL_UNAVAILABLE",
   "reasoning-unsupported": "PI_REASONING_UNSUPPORTED",
 } as const satisfies Record<Extract<ModelSelectionOutcome, { kind: "rejected" }>["reason"], string>;
+
+/**
+ * Every way an explicit compaction does not happen, as a code the receipt
+ * carries. Two of them are not failures at all — a context with nothing left
+ * to summarize, and a summary the provider would not produce — and they are
+ * refusals here for the reason `CompactionRequestOutcome` gives: a person
+ * asked, so every answer has to be one.
+ */
+const COMPACTION_REJECTION_CODES = {
+  "busy-unsupported": "PI_BUSY",
+  closed: "PI_ATTACHMENT_CLOSED",
+  "nothing-to-compact": "PI_NOTHING_TO_COMPACT",
+  "summary-failed": "PI_COMPACTION_FAILED",
+} as const satisfies Record<
+  Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
+  string
+>;
 
 function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
   if (spec.continuity !== "native_resume") return undefined;
@@ -617,6 +635,23 @@ class PiBinding implements BindingHandle {
           return outcome.kind === "delivered"
             ? this.#accepted(command.commandId)
             : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
+        } catch (error) {
+          return this.#unknown(command.commandId, error);
+        }
+      case "context.compact":
+        try {
+          // The compaction itself is announced by the runtime, as the same
+          // Session Event its two automatic siblings emit. What comes back
+          // here is only whether the request was served, which is this
+          // receipt's whole job.
+          const outcome = await handle.compact(command.instructions ?? undefined);
+          return outcome.kind === "compacted"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(
+                command.commandId,
+                COMPACTION_REJECTION_CODES[outcome.reason],
+                outcome.message,
+              );
         } catch (error) {
           return this.#unknown(command.commandId, error);
         }

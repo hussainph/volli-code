@@ -17,7 +17,7 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { REASONING_LEVELS } from "@volli/shared";
+import { findComposerVerb, REASONING_LEVELS } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { composerAnswer, type InteractionSubmission } from "@renderer/chat/interaction";
@@ -179,33 +179,51 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 /**
  * What one press of the composer turns out to have been.
  *
- * Two things, and only the first of them is new: a message is what every press
- * has always been, and an answer is what a press becomes while a question is
- * standing open above the box that can take its words
- * ({@link composerAnswer}, which owns the rule and the reasons).
+ * Three things, and a message is still what every press is unless something
+ * more specific claims it. An **answer** is what a press becomes while a
+ * question is standing open above the box that can take its words
+ * ({@link composerAnswer}, which owns the rule and the reasons). A **verb** is
+ * what a draft that is nothing but `/compact` becomes: an operation the client
+ * runs, with no message sent at all (`composer-verb.ts`).
  *
  * It is a decision rather than a mode, and that distinction is the whole
  * design: the composer is not put into an answering state that a reader has to
  * leave, and no press is ever refused for being the wrong kind. What the words
  * are is read off the request that is open at the moment they are sent, and
- * where they are not an answer they are a message — which is exactly what the
- * surface did before, and remains the road for everything a question cannot
- * take: a permission waiting on a verdict, a walk through several questions, a
- * model that asked for one of its own listed answers.
+ * where they are neither an answer nor a verb they are a message — which is
+ * exactly what the surface did before, and remains the road for everything a
+ * question cannot take: a permission waiting on a verdict, a walk through
+ * several questions, a model that asked for one of its own listed answers.
+ *
+ * **A standing question outranks a verb**, and the surface has already said so
+ * twice by the time this is asked: the box is renamed to Answer and the `/`
+ * picker is shut, so a `/compact` typed in that state was typed at a question,
+ * not chosen from a list. It is also the arm that gives way harmlessly —
+ * `composerAnswer` only claims a press for a question that takes free text at
+ * all, and a Session waiting on one is mid-turn, where an explicit compaction
+ * would be refused anyway.
  */
 export type ComposerPress =
   | { kind: "answer"; interactionId: string; submission: InteractionSubmission }
+  | { kind: "compact"; instructions: string | null }
   | { kind: "message" };
 
 export function composerPress(
   pending: RendererSessionInteraction | null,
   text: string,
 ): ComposerPress {
-  if (pending === null) return { kind: "message" };
-  const submission = composerAnswer(pending, text);
-  return submission === null
-    ? { kind: "message" }
-    : { kind: "answer", interactionId: pending.id, submission };
+  const submission = pending === null ? null : composerAnswer(pending, text);
+  if (submission !== null && pending !== null) {
+    return { kind: "answer", interactionId: pending.id, submission };
+  }
+  const invocation = findComposerVerb(text);
+  if (invocation === null) return { kind: "message" };
+  // Switched rather than assumed: `ComposerVerbName` is closed, so a second
+  // verb stops this compiling instead of being quietly compacted.
+  switch (invocation.verb.name) {
+    case "compact":
+      return { kind: "compact", instructions: invocation.instructions };
+  }
 }
 
 export type HeldDispatchOutcome = "delivered" | "recorded" | "refused" | "held";

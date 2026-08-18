@@ -107,6 +107,8 @@ export interface SessionController {
   retryRuntime(): Promise<boolean>;
   /** Clears the error band — see {@link ChatSessionClient.dismissError}. */
   dismissError(): void;
+  /** Summarize the context now, on explicit request. False means it did not. */
+  compactContext(instructions: string | null): Promise<boolean>;
   close(): void;
 }
 
@@ -210,6 +212,8 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
     dismissError: () => {
       getChatClient(sessionId)?.dismissError();
     },
+    compactContext: (instructions) =>
+      getChatClient(sessionId)?.compactContext(instructions) ?? refused,
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

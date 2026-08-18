@@ -35,6 +35,7 @@
  * the same rule `file-ref.ts` follows for `@path`.
  */
 import type { PromptResource } from "./agent-runtime";
+import { isComposerVerbName } from "./composer-verb";
 import { skillPromptResource, type SkillReference } from "./skill";
 
 /**
@@ -277,6 +278,11 @@ export interface ExpandedInvocation {
  * An unknown command is deliberately NOT an error: the harness is perfectly
  * able to read a sentence that mentions a slash, and swallowing it would lose
  * the message.
+ *
+ * A built-in VERB's name resolves to neither, whatever the two lists hold —
+ * see `composer-verb.ts`. Nothing is expanded and nothing is dropped: the text
+ * passes through exactly as typed, which is what leaves the press free to run
+ * the operation instead of sending a message.
  */
 export function expandCommandInvocation(
   text: string,
@@ -289,6 +295,12 @@ export function expandCommandInvocation(
   for (const invocation of findCommandInvocations(text)) {
     // Consumed already: this candidate sits inside a known command's arguments.
     if (invocation.start < cursor) continue;
+    // A reserved name expands to nothing, so a `commands/compact.md` a user
+    // happens to have cannot quietly turn the verb into a message. Checked
+    // here rather than by pre-filtering the arrays, because this function is
+    // the submit-time authority and a caller that forgot to filter would be a
+    // caller that disagreed with the picker.
+    if (isComposerVerbName(invocation.name)) continue;
     const template = templates.find((candidate) => candidate.name === invocation.name);
     const skill =
       template === undefined

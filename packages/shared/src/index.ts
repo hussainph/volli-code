@@ -24,6 +24,7 @@ export * from "./ticket-sort";
 export * from "./project-identity";
 export * from "./prompt-template";
 export * from "./prompt-resource";
+export * from "./composer-verb";
 export * from "./skill";
 export * from "./tag-color";
 export * from "./label";

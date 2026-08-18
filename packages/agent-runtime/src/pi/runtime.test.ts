@@ -4642,6 +4642,216 @@ describe("the compaction policy a Session is run under", () => {
   });
 });
 
+describe("compacting because somebody asked", () => {
+  /** Two ordinary turns, then whatever the summarization call does. */
+  function conversation(calls: ProviderCall[], summarization: ScriptStep): StreamFn {
+    return scriptedStream([
+      recording(calls, settles("first answer")),
+      recording(calls, settles("second answer")),
+      recording(calls, summarization),
+      recording(calls, settles("third answer")),
+    ]);
+  }
+
+  it("summarizes a context nowhere near its threshold, and says so with `manual`", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(conversation(calls, settles("## Goal\nfinish the marker work"))),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    // Nothing measured this Session anywhere near the reserve — the threshold
+    // path would not have fired. An explicit request is not a threshold.
+    await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+
+    // The same durable entry the other two producers write, and the same
+    // linear, additive history behind it.
+    const entries = compactionEntries(handle.recovery!.sessionFilePath);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        type: "compaction",
+        summary: expect.stringContaining("finish the marker work"),
+      }),
+    ]);
+    expect(JSON.stringify(readJsonl(handle.recovery!.sessionFilePath))).toContain("first answer");
+
+    // One event shape, three producers — only the reason differs.
+    expect(compactions(attachment.observations)).toEqual([
+      {
+        kind: "compaction",
+        state: "compacted",
+        reason: "manual",
+        entryId: entries[0]?.["id"],
+        tokensBefore: expect.any(Number),
+        tokensAfter: expect.any(Number),
+        occurredAt: expect.any(Number),
+        recoveryCursor: expect.any(String),
+      },
+    ]);
+
+    // And no turn of its own, exactly like the other two: an interrupted
+    // compaction must raise no partial-turn Attention on recovery.
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+    ]);
+
+    // The next turn goes out on the summary, not on what it replaced.
+    await handle.submitUserMessage("carry on");
+    const turn = calls[3]?.messages ?? "";
+    expect(turn).toContain("compacted into the following summary");
+    expect(turn).not.toContain("first answer");
+    await handle.close();
+  });
+
+  it("hands the requester's own words to the summarizer", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized to order"))),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await expect(handle.compact("keep every mention of the marker file")).resolves.toEqual({
+      kind: "compacted",
+    });
+
+    // Prose, carried to the summarization call as written — the one thing the
+    // manual path adds to a mechanism the other two already share.
+    expect(calls[2]?.messages).toContain("keep every mention of the marker file");
+    await handle.close();
+  });
+
+  it("refuses while Pi is running rather than rewriting a live turn's context", async () => {
+    const attachment = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([haltOnAbort("thinking about it", () => streaming.resolve())]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const delivery = handle.submitUserMessage("remember the marker");
+    await streaming.promise;
+
+    // Not queued and not honoured. Compacting under a streaming turn corrupts
+    // the turn in flight; queueing would run a different compaction than the
+    // one asked for, against a context the finished turn has already changed.
+    await expect(handle.compact()).resolves.toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "The context cannot be compacted while Pi is running.",
+    });
+    expect(compactions(attachment.observations)).toEqual([]);
+
+    await handle.interrupt();
+    await delivery;
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    await handle.close();
+  });
+
+  it("answers a Session with nothing left to summarize instead of going quiet", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized"))),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    // Nothing has been said at all: Pi finds no cut point. The automatic paths
+    // report nothing here because nobody asked them; this one was asked.
+    await expect(handle.compact()).resolves.toEqual({
+      kind: "rejected",
+      reason: "nothing-to-compact",
+      message: "There is nothing left to summarize.",
+    });
+    expect(calls).toEqual([]);
+    expect(compactions(attachment.observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("reports a summary the provider refused, and records it too", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation(calls, (emit) => emit.fail("the summarizer is unhappy")),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+
+    // Both, because they are two different readers: the durable observation is
+    // the Session's record, and the refusal is the answer to the person who
+    // asked. Neither is an Attention — nothing is blocked by a summary that
+    // did not happen.
+    await expect(handle.compact()).resolves.toEqual({
+      kind: "rejected",
+      reason: "summary-failed",
+      message: expect.stringContaining("the summarizer is unhappy"),
+    });
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "failed", reason: "manual" }),
+    ]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    await handle.close();
+  });
+
+  it("compacts on request with automatic compaction switched off", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized anyway"))),
+      compactionPolicy: () => ({ autoCompaction: false, modelLimits: [] }),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+
+    // The switch means "do not interrupt me to make room". A person typing
+    // `/compact` is not being interrupted, so it never reaches this path — the
+    // same fact about Pi's `enabled` that keeps overflow recovery alive.
+    await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "manual" }),
+    ]);
+    await handle.close();
+  });
+
+  it("refuses once the attachment is closed", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("first answer")])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.close();
+
+    await expect(handle.compact()).resolves.toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+  });
+});
+
 describe("autoRetryDelayMs", () => {
   it("doubles the wait up to a ceiling, jittered", () => {
     expect(autoRetryDelayMs(0)).toBeGreaterThanOrEqual(500);

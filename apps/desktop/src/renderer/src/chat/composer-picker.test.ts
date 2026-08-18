@@ -11,9 +11,11 @@ import {
   movePickerActive,
   rankCommandCompletions,
   rankSkillCompletions,
+  rankVerbCompletions,
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "./composer-picker";
+import { COMPACT_VERB, COMPOSER_VERBS } from "@volli/shared";
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
@@ -275,6 +277,37 @@ describe("rankSkillCompletions", () => {
   });
 });
 
+describe("rankVerbCompletions", () => {
+  it("offers the verb by name, with a value no template row can answer to", () => {
+    expect(rankVerbCompletions({ query: "comp", verbs: COMPOSER_VERBS })).toMatchObject([
+      { kind: "verb", value: "verb:compact", label: "/compact", verb: COMPACT_VERB },
+    ]);
+  });
+
+  it("matches the description at the lowest tier, like every other row", () => {
+    expect(
+      rankVerbCompletions({ query: "summarize", verbs: COMPOSER_VERBS }).map((row) => row.value),
+    ).toEqual(["verb:compact"]);
+    expect(rankVerbCompletions({ query: "nothing here", verbs: COMPOSER_VERBS })).toEqual([]);
+  });
+
+  it("ranks a name that merely contains the query below a prefix match", () => {
+    const other = { name: "compact" as const, description: "" };
+    const rows = rankVerbCompletions({
+      query: "pact",
+      verbs: [other, { ...other, name: "compact" as const }],
+    });
+
+    expect(rows.map((row) => row.label)).toEqual(["/compact", "/compact"]);
+  });
+
+  it("offers nothing when the Session is running one", () => {
+    // The composer hands an empty list mid-turn: a compaction is refused while
+    // Pi is streaming, and a row naming a refusal is worse than no row.
+    expect(rankVerbCompletions({ query: "", verbs: [] })).toEqual([]);
+  });
+});
+
 describe("composerPickerRows", () => {
   it("ranks templates for a command token", () => {
     const rows = composerPickerRows({
@@ -309,6 +342,41 @@ describe("composerPickerRows", () => {
     });
 
     expect(rows.map((row) => row.value)).toEqual(["review", "preview", "skill:revisions"]);
+  });
+
+  it("leads with the verbs, in the order the card's headings read", () => {
+    const rows = composerPickerRows({
+      mode: "command",
+      query: "",
+      templates: TEMPLATES,
+      skills: [skill({ name: "revisions" })],
+      verbs: COMPOSER_VERBS,
+      files: FILES,
+    });
+
+    expect(rows.map((row) => row.value)).toEqual([
+      "verb:compact",
+      "preview",
+      "review",
+      "ship",
+      "skill:revisions",
+    ]);
+  });
+
+  it("drops a template and a skill whose name the verb has taken", () => {
+    const rows = composerPickerRows({
+      mode: "command",
+      query: "compact",
+      templates: [...TEMPLATES, template({ name: "compact", description: "my own prompt" })],
+      skills: [skill({ name: "compact", description: "my own skill" })],
+      verbs: COMPOSER_VERBS,
+      files: FILES,
+    });
+
+    // One name, one meaning, and the verb wins it. Both shadowed rows are gone
+    // before ranking, exactly as `expandCommandInvocation` refuses both names
+    // at submit — which is what keeps the offer and the press agreed.
+    expect(rows.map((row) => row.value)).toEqual(["verb:compact"]);
   });
 
   it("ranks whatever query it is handed, which is how it may lag the caret", () => {
@@ -472,6 +540,27 @@ describe("applyPickerRow", () => {
     expect(applyPickerRow({ text, state, row: commandRow("review") })).toEqual({
       text: "/review args",
       caret: 7,
+    });
+  });
+
+  it("stages `/compact ` for a verb, which is the invocation and not an expansion of it", () => {
+    const state = pick("/comp");
+    if (state === null) throw new Error("expected an open picker");
+    const row: ComposerPickerRow = {
+      kind: "verb",
+      value: "verb:compact",
+      label: "/compact",
+      detail: COMPACT_VERB.description,
+      verb: COMPACT_VERB,
+    };
+
+    // The text this writes is the text submit reads back as the verb — nothing
+    // expands it, and no message is sent — and the space is where instructions
+    // go. A row that expanded to some prompt body here would be the exact
+    // failure the module header warns about.
+    expect(applyPickerRow({ text: "/comp", state, row })).toEqual({
+      text: "/compact ",
+      caret: 9,
     });
   });
 

@@ -347,6 +347,8 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       { kind: "executor.stop", attachmentId: "attachment-1" },
       { kind: "executor.interrupt", attachmentId: "attachment-1" },
       { kind: "executor.retry", attachmentId: "attachment-1" },
+      { kind: "context.compact", attachmentId: "attachment-1", instructions: "keep the API work" },
+      { kind: "context.compact", attachmentId: "attachment-1", instructions: null },
       {
         kind: "message.submit",
         reference: { id: "sha256:m", mediaType: null, digest: null },

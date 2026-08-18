@@ -230,6 +230,26 @@ describe("expandCommandInvocation", () => {
     });
   });
 
+  it("never expands a built-in verb's name, whoever claims it", () => {
+    const own = template({ name: "compact", content: "Please summarize this chat." });
+    const installed = {
+      name: "compact",
+      description: "Shadowed by the verb",
+      body: "never delivered",
+      userInvokeOnly: false,
+      root: ".agents/skills/compact",
+    };
+
+    // The one that matters: a `commands/compact.md` on disk must not turn the
+    // verb into a message. Nothing is expanded, nothing rides beside it, and
+    // the text reaches the press exactly as typed, where `composerPress`
+    // claims it and runs the compaction instead.
+    expect(expandCommandInvocation("/compact keep the API work", [own], [installed])).toEqual({
+      text: "/compact keep the API work",
+      resources: [],
+    });
+  });
+
   it("passes ordinary prose through untouched", () => {
     expect(expandCommandInvocation("just a message", templates).text).toBe("just a message");
   });

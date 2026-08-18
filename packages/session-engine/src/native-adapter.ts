@@ -69,6 +69,14 @@ export type HarnessCommand =
       attachmentId: string;
     }
   | {
+      kind: "context.compact";
+      commandId: string;
+      sessionId: string;
+      attachmentId: string;
+      /** Free text for the summarizer, or null. Prose, never arguments. */
+      instructions: string | null;
+    }
+  | {
       kind: "interaction.resolve";
       commandId: string;
       sessionId: string;

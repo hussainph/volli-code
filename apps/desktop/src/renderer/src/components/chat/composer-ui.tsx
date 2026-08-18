@@ -59,9 +59,11 @@ import {
   PromptInputTools,
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import {
+  COMPOSER_VERBS,
   expandCommandInvocation,
   visibleModels,
   type HiddenModelRef,
+  type ComposerVerb,
   type IndexedFile,
   type ModelAccessModel,
   type ModelAccessProvider,
@@ -190,6 +192,12 @@ const NO_TEMPLATES: readonly PromptTemplate[] = [];
 const NO_SKILLS: readonly SkillReference[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
 const NO_ATTACHMENTS: readonly BlobLinkView[] = [];
+/**
+ * The two verb supplies, both module constants, because the picker's ranking
+ * memo takes this as a dependency and a fresh array per render would rank the
+ * whole file index again on every keystroke.
+ */
+const NO_VERBS: readonly ComposerVerb[] = [];
 
 /**
  * MEMOIZED, and this is the boundary that keeps typing off the stream's clock.
@@ -282,6 +290,12 @@ export const SessionComposer = React.memo(function SessionComposer({
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
       skills={skills}
+      // Offered only while the Session is idle. A verb RUNS — it is not queued
+      // and it does not join a turn in flight — so mid-turn it would be a row
+      // naming something the runtime is about to refuse. Typing it anyway
+      // still reaches the runtime and still gets that refusal, in words; what
+      // the list does not do is invite it.
+      verbs={working ? NO_VERBS : COMPOSER_VERBS}
       files={files}
       onFilePickerOpen={onFilePickerOpen}
       textareaRef={textareaRef}
@@ -650,6 +664,7 @@ function ComposerPickerStack({
   interactionOpen: boolean;
   promptTemplates: readonly PromptTemplate[];
   skills: readonly SkillReference[];
+  verbs: readonly ComposerVerb[];
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
@@ -806,11 +821,13 @@ function useComposerPicker(input: {
   interactionOpen: boolean;
   promptTemplates: readonly PromptTemplate[];
   skills: readonly SkillReference[];
+  verbs: readonly ComposerVerb[];
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
 }): ComposerPickerHandle {
-  const { value, onValueChange, ready, interactionOpen, promptTemplates, skills, files } = input;
+  const { value, onValueChange, ready, interactionOpen, promptTemplates, skills, verbs, files } =
+    input;
   const [caret, setCaret] = React.useState(0);
   const [active, setActive] = React.useState("");
   const [dismissed, setDismissed] = React.useState<ComposerPickerDismissal | null>(null);
@@ -892,9 +909,10 @@ function useComposerPicker(input: {
             query: deferredQuery,
             templates: promptTemplates,
             skills,
+            verbs,
             files,
           }),
-    [deferredQuery, files, mode, promptTemplates, skills],
+    [deferredQuery, files, mode, promptTemplates, skills, verbs],
   );
   // Rebuilt every render on purpose: the token half moves with the caret, so
   // this object is genuinely new whenever it is different, and nothing holds it

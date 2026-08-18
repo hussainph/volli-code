@@ -1198,6 +1198,58 @@ describe("retryRuntime", () => {
   });
 });
 
+describe("compactContext", () => {
+  it("sends an explicit compaction, carrying instructions only when there are any", async () => {
+    const { client, rpc, sessionId } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+    });
+
+    await expect(client.compactContext("keep the API work")).resolves.toBe(true);
+    await expect(client.compactContext(null)).resolves.toBe(true);
+
+    expect(rpc.commands).toEqual([
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: {
+          kind: "context.compact",
+          attachmentId: "attach-1",
+          instructions: "keep the API work",
+        },
+      },
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: { kind: "context.compact", attachmentId: "attach-1" },
+      },
+    ]);
+    // Absent, not present-and-undefined: the ledger asserts strict JSON, and
+    // structured clone would have carried the key across.
+    expect("instructions" in rpc.commands.at(-1)!.command).toBe(false);
+  });
+
+  it("settles a refusal onto the Session, because somebody asked", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => REFUSED;
+    });
+
+    // The whole difference between this and the two compactions nobody asked
+    // for: a reason that reaches a person, rather than a fact filed away.
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe("Compact: Pi is unavailable");
+  });
+
+  it("refuses a compaction when the Session has no live attachment", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor(null);
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(rpc.commands).toEqual([]);
+  });
+});
+
 describe("selectModel", () => {
   it("records a per-Session override without runtime identity", async () => {
     const { client, rpc, sessionId } = await adopted((fake) => {

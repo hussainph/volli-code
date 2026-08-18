@@ -807,6 +807,12 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
     case "executor.interrupt":
     case "executor.retry":
       return { kind, attachmentId: readString(row.attachmentId, `${context}.attachmentId`) };
+    case "context.compact":
+      return {
+        kind,
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        instructions: readNullableString(row.instructions, `${context}.instructions`),
+      };
     case "message.submit":
       return {
         kind,
@@ -955,6 +961,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "executor.stop.requested",
       "executor.interrupted",
       "executor.retried",
+      "context.compacted",
       "message.submitted",
       "interaction.resolved",
     ],
