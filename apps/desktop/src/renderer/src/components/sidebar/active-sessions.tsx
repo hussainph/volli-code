@@ -6,7 +6,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
 import {
   buildActiveSessionListing,
-  isScratchRowSelected,
+  isProjectSessionRowSelected,
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -156,15 +156,15 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
         lastOutputAt: state.lastOutputAt,
         containers: state.byOwner,
         ticketIds: projectTicketIds,
-        scratchOwnerId: project.id,
+        projectOwnerId: project.id,
       }),
     ),
   );
-  // The project's SCRATCH container. The store files every container in one
-  // flat map keyed by `ownerKey` — a ticketId for ticket Sessions, the project
-  // id for scratch ones — and the listing model walks the map by ticket, so
+  // The project's OWN container. The store files every container in one
+  // flat map keyed by `ownerKey` — a ticketId for Ticket Sessions, the project
+  // id for Project Sessions — and the listing model walks the map by ticket, so
   // this one has to be handed over on its own key or its live tabs are invisible.
-  const scratchContainer = containers[project.id];
+  const projectContainer = containers[project.id];
   // Which of this project's Sessions are live on this surface — the key the one
   // fetch below re-reads the durable listing on. Both kinds count: a chat has no
   // PTY pane to name, so a signature made of panes alone left a streaming chat
@@ -176,7 +176,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           container.tabs
             .filter(
               (tab) =>
-                (tab.scope.kind === "scratch" && tab.scope.projectId === project.id) ||
+                (tab.scope.kind === "project" && tab.scope.projectId === project.id) ||
                 (tab.scope.kind === "ticket" &&
                   tab.scope.projectId === project.id &&
                   projectTicketIds.has(tab.scope.ticketId)),
@@ -336,7 +336,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       buildActiveSessionListing({
         tickets,
         containers,
-        scratchContainer,
+        projectContainer,
         signalsByTicket,
         records,
         chatSessions: titledChatSessions,
@@ -355,7 +355,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [
       tickets,
       containers,
-      scratchContainer,
+      projectContainer,
       signalsByTicket,
       records,
       titledChatSessions,
@@ -439,7 +439,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * tab is gone; it is never the tab in front of you.
    */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    isScratchRowSelected(row, nav === "sessions", scratchContainer, sessionsActiveTab) ||
+    isProjectSessionRowSelected(row, nav === "sessions", projectContainer, sessionsActiveTab) ||
     (row.ticket !== null &&
       shownTicketId === row.ticket.id &&
       row.target !== null &&

@@ -2,7 +2,7 @@
  * The terminal-shaped view of a Session: the trace and resume seed for a
  * terminal, distinct from its live in-memory PTY state
  * (`TerminalEngine`/renderer `stores/sessions.ts`). `ticketId: null` means a
- * project-scoped scratch session (CONTEXT.md's "Scratch session") — main
+ * Project Session (CONTEXT.md's "Project Session") — main
  * checkout, no worktree, no board involvement, still recorded.
  * `harnessSessionId` is reserved for the harness's own resume UUID
  * (claude/codex `--resume` seed) — filled in later by hooks/the volli CLI,
@@ -73,7 +73,7 @@ export function isSessionPlacement(value: unknown): value is SessionPlacement {
 export interface SessionRecord {
   id: string;
   projectId: string;
-  /** `null` means a project-scoped scratch session — no ticket, no board involvement. */
+  /** `null` means a Project Session — no ticket, no board involvement. */
   ticketId: string | null;
   /**
    * What the session was LAUNCHED with — durable history, never overwritten.
@@ -126,7 +126,7 @@ export interface SessionRecord {
    * Whether this Session was ticketless AT BIRTH, never later orphaned into
    * it: `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a ticket
    * leaves `ticketId: null` behind too. `ticketId === null && !bornTicketless`
-   * is exactly that orphan case — a scratch session earns the sidebar's
+   * is exactly that orphan case — a Project Session earns the sidebar's
    * cleanup exemption; an orphan should not silently inherit it.
    */
   bornTicketless: boolean;
@@ -158,7 +158,7 @@ export interface ChatSessionRecord {
   sessionId: string;
   title: string;
   projectId: string;
-  /** `null` means a project-scoped scratch session — no ticket, no board involvement. */
+  /** `null` means a Project Session — no ticket, no board involvement. */
   ticketId: string | null;
   /** Epoch milliseconds. */
   createdAt: number;
@@ -252,7 +252,7 @@ export interface CreateSessionInput {
   /** Opaque UUID supplied by the caller — kept out of this function so it stays pure/deterministic. */
   id: string;
   projectId: string;
-  /** Defaults to `null` (project-scoped scratch session). */
+  /** Defaults to `null` (Project Session). */
   ticketId?: string | null;
   harnessId: HarnessId;
   launchKind: SessionLaunchKind;

@@ -2,7 +2,7 @@ import type { ChatSessionRecord, Project, Ticket } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildCommandPaletteItems } from "./command-palette-model";
-import { scratchScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
+import { projectScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
 
 function project(id: string, name: string, ticketPrefix: string): Project {
   return {
@@ -87,7 +87,7 @@ describe("buildCommandPaletteItems", () => {
     ]);
   });
 
-  it("lists multiple live tabs per ticket plus scratch sessions", () => {
+  it("lists multiple live tabs per ticket plus Project Sessions", () => {
     const alpha = project("p1", "Alpha", "ALP");
     const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
     const scope = ticketScope(alpha.id, linked.id);
@@ -113,11 +113,11 @@ describe("buildCommandPaletteItems", () => {
           },
         ),
         [alpha.id]: container({
-          sessionId: "scratch",
-          title: "Scratch terminal",
-          scope: scratchScope(alpha.id),
-          layout: { kind: "pane", sessionId: "scratch", exitCode: null },
-          activePaneId: "scratch",
+          sessionId: "project-session",
+          title: "Project terminal",
+          scope: projectScope(alpha.id),
+          layout: { kind: "pane", sessionId: "project-session", exitCode: null },
+          activePaneId: "project-session",
         }),
       },
       alpha.id,
@@ -125,12 +125,12 @@ describe("buildCommandPaletteItems", () => {
 
     expect(result.sessions.map((item) => item.title)).toEqual([
       "Claude review",
-      "Scratch terminal",
+      "Project terminal",
       "Test runner",
     ]);
     expect(result.sessions.find((item) => item.sessionId === "s1")?.ticketDisplayId).toBe("ALP-1");
     expect(
-      result.sessions.find((item) => item.sessionId === "scratch")?.ticketDisplayId,
+      result.sessions.find((item) => item.sessionId === "project-session")?.ticketDisplayId,
     ).toBeNull();
   });
 

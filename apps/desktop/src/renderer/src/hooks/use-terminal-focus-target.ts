@@ -52,7 +52,7 @@ function selectTicketTabId(
 }
 
 /** The Sessions page's active tab — null for a project that has never had one. */
-function selectScratchTabId(state: WorkspaceState, projectId: string | null): string | null {
+function selectProjectTabId(state: WorkspaceState, projectId: string | null): string | null {
   if (projectId === null) return null;
   return state.byProject[projectId]?.sessionsActiveTab ?? null;
 }
@@ -91,10 +91,10 @@ export function readTerminalFocusChrome(): TerminalFocusChrome {
       openTicketId,
       selectTicketTabId(workspace, selectedProjectId, openTicketId),
     ),
-    scratchSessionId: selectTerminalSessionId(
+    projectSessionId: selectTerminalSessionId(
       sessions,
       selectedProjectId,
-      selectScratchTabId(workspace, selectedProjectId),
+      selectProjectTabId(workspace, selectedProjectId),
     ),
   };
 }
@@ -123,12 +123,12 @@ export function useTerminalFocusTarget(): TerminalFocusTarget | null {
   const ticketTabId = useWorkspaceStore((state) =>
     selectTicketTabId(state, selectedProjectId, openTicketId),
   );
-  const scratchTabId = useWorkspaceStore((state) => selectScratchTabId(state, selectedProjectId));
+  const projectTabId = useWorkspaceStore((state) => selectProjectTabId(state, selectedProjectId));
   const ticketSessionId = useSessionsStore((state) =>
     selectTerminalSessionId(state, openTicketId, ticketTabId),
   );
-  const scratchSessionId = useSessionsStore((state) =>
-    selectTerminalSessionId(state, selectedProjectId, scratchTabId),
+  const projectSessionId = useSessionsStore((state) =>
+    selectTerminalSessionId(state, selectedProjectId, projectTabId),
   );
 
   return terminalFocusTargetForChrome({
@@ -137,6 +137,6 @@ export function useTerminalFocusTarget(): TerminalFocusTarget | null {
     settingsOpen,
     openTicketId,
     ticketSessionId,
-    scratchSessionId,
+    projectSessionId,
   });
 }

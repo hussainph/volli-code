@@ -119,7 +119,7 @@ export interface NewSessionLanding {
   projectId: string;
   /**
    * The ticket that owns it, or `null` for one of the project's ticketless
-   * Sessions. Not "unknown" — it is the durable fact `scratchScope` carries.
+   * Sessions. Not "unknown" — it is the durable fact `projectScope` carries.
    */
   ticketId: string | null;
   /** The page to move to, or `null` to stay put. */

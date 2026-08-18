@@ -114,7 +114,7 @@ export interface ActiveSessionRow {
   id: string;
   /**
    * The ticket this row belongs to, or `null` for a ticketless Session — a
-   * project scratch Session, or one whose ticket has left the board.
+   * project Project Session, or one whose ticket has left the board.
    */
   ticket: Ticket | null;
   title: string;
@@ -149,7 +149,7 @@ export interface ActiveSessionRow {
 }
 
 /**
- * Whether a ticketless row — a scratch terminal pane or a ticketless chat —
+ * Whether a ticketless row — a project terminal pane or a ticketless chat —
  * names the tab currently in front on the Sessions surface.
  *
  * A terminal target additionally has to name the split pane in front, since a
@@ -163,10 +163,10 @@ export interface ActiveSessionRow {
  * has to check that a chat is not the thing covering it — otherwise the
  * terminal the chat plane is painted over lights up beside the chat.
  */
-export function isScratchRowSelected(
+export function isProjectSessionRowSelected(
   row: ActiveSessionRow | PreviousSessionRow,
   sessionsVisible: boolean,
-  scratchContainer: SessionContainer | undefined,
+  projectContainer: SessionContainer | undefined,
   sessionsActiveTab: string | null,
 ): boolean {
   if (!sessionsVisible || row.ticket !== null) return false;
@@ -174,8 +174,8 @@ export function isScratchRowSelected(
   if (target?.kind === "chat") return sessionsActiveTab === target.tabId;
   if (target?.kind !== "terminal") return false;
   if (sessionsActiveTab !== null && parseChatTabId(sessionsActiveTab) !== null) return false;
-  if (scratchContainer?.activeSessionId !== target.tabId) return false;
-  const activeTab = scratchContainer.tabs.find(({ sessionId }) => sessionId === target.tabId);
+  if (projectContainer?.activeSessionId !== target.tabId) return false;
+  const activeTab = projectContainer.tabs.find(({ sessionId }) => sessionId === target.tabId);
   return activeTab?.activePaneId === target.paneId;
 }
 
@@ -202,8 +202,8 @@ export function listingOutputStamps(input: {
   containers: Readonly<Record<string, SessionContainer>>;
   /** The project's ticket ids — the container keys its ticket Sessions live under. */
   ticketIds: Iterable<string>;
-  /** The project's own id, which is the container key its scratch Sessions live under. */
-  scratchOwnerId: string;
+  /** The project's own id, which is the container key its Project Sessions live under. */
+  projectOwnerId: string;
 }): Record<string, number> {
   const stamps: Record<string, number> = {};
   const take = (sessionId: string): void => {
@@ -221,7 +221,7 @@ export function listingOutputStamps(input: {
     }
   };
   for (const ticketId of input.ticketIds) takeContainer(ticketId);
-  takeContainer(input.scratchOwnerId);
+  takeContainer(input.projectOwnerId);
   return stamps;
 }
 
@@ -281,16 +281,16 @@ export interface BuildActiveSessionListingInput {
   signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
   /**
-   * The project's scratch container — Sessions started outside any ticket.
+   * The project's project container — Sessions started outside any ticket.
    *
    * It arrives on its own key because {@link BuildActiveSessionListingInput.containers}
-   * is walked BY TICKET, while the store files a scratch container in that same
-   * flat map under the PROJECT's id (`ownerKey`: projectId for scratch, ticketId
-   * for ticket). A live scratch terminal therefore sat under a key no ticket
+   * is walked BY TICKET, while the store files a project container in that same
+   * flat map under the PROJECT's id (`ownerKey`: projectId for a project Session, ticketId
+   * for ticket). A live project terminal therefore sat under a key no ticket
    * loop would ever ask for, and reached neither band — only its ended siblings
    * got in, via the durable records below. Absent reads as none.
    */
-  scratchContainer?: SessionContainer;
+  projectContainer?: SessionContainer;
   /**
    * Chat Sessions across this project — structured Sessions with no terminal
    * attachment. They carry their own activity and recency, so they join both
@@ -440,7 +440,7 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
 
 /** The facts a cleanup rule may consult. Nothing here is derived from how a row renders. */
 export interface SessionCleanupFacts {
-  /** The Session's own ticket id; `null` for a ticketless (scratch) Session. */
+  /** The Session's own ticket id; `null` for a ticketless Session. */
   ticketId: string | null;
   /** That ticket as the board currently knows it; `null` once it is no longer there. */
   ticket: Ticket | null;
@@ -548,7 +548,7 @@ function activeGroup(
  *
  *   1. every ticket's live tabs, plus the Needs-Review promotion that hands one
  *      of them the ticket's latest attention signal, plus its exited tabs; then
- *      the project's scratch container's tabs on the same terms, ticketless;
+ *      the project's project container's tabs on the same terms, ticketless;
  *   2. durable terminal records and chat Sessions, which is where ended and
  *      ticketless Sessions enter;
  *   3. cleanup, filtering, ordering and the boundary clock.
@@ -574,7 +574,7 @@ export function buildActiveSessionListing(
 
   /**
    * How recently a terminal row did anything, when no quiet stamp can say. A
-   * ticket dates its own rows; a scratch tab has no ticket to borrow from and
+   * ticket dates its own rows; a project Session tab has no ticket to borrow from and
    * falls back to the Session's own newest durable fact, then to 0 — a sort key
    * we could not establish, never a stamp invented from `now`.
    */
@@ -584,10 +584,10 @@ export function buildActiveSessionListing(
   /**
    * Whether a terminal row's Session was born without a ticket. The durable
    * record answers wherever we have one; otherwise a `null` ticket here means
-   * the row came out of the SCRATCH container, and a scratch container holding
+   * the row came out of the PROJECT container, and a project container holding
    * a pane is itself proof of ticketless birth — the store files it under
-   * `ownerKey({kind: "scratch"})`, a key only a Session created with no ticket
-   * can ever land on. This matters because a live scratch pane's record is
+   * `ownerKey({kind: "project"})`, a key only a Session created with no ticket
+   * can ever land on. This matters because a live project Session pane's record is
    * routinely absent from `records` (that listing leads with ended Sessions),
    * and defaulting to `false` there would strip the cleanup exemption from
    * exactly the rows {@link isCleanupExempt} exists to protect.
@@ -723,17 +723,17 @@ export function buildActiveSessionListing(
     }
   }
 
-  // 1b. The project's scratch container, on exactly the terms a ticket's tabs
-  // get. A scratch Session has no ticket, so it can never be the Needs-Review
+  // 1b. The project's project container, on exactly the terms a ticket's tabs
+  // get. A Project Session has no ticket, so it can never be the Needs-Review
   // promotion; but it is a terminal the user started and is watching, and a
-  // band that omits it is wrong about what is running. Ended scratch Sessions
+  // band that omits it is wrong about what is running. Ended Project Sessions
   // already arrived through the durable records below; this is the live half
   // that had no route in.
-  const scratchTabs = input.scratchContainer?.tabs ?? [];
-  for (const tab of scratchTabs) {
+  const projectSessionTabs = input.projectContainer?.tabs ?? [];
+  for (const tab of projectSessionTabs) {
     for (const pane of sessionPanes(tab.layout)) mountedPaneIds.add(pane.sessionId);
   }
-  for (const tab of scratchTabs) {
+  for (const tab of projectSessionTabs) {
     const subject = tabSubject(tab, input);
     if (subject.activity === "exited") {
       fileExitedTab(tab, null);

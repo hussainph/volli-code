@@ -107,7 +107,7 @@ export interface TerminalFocusTarget {
    * The ticket that owns the Session, or `null` for one of the project's
    * ticketless Sessions — the Sessions page hosts terminals too, and a PTY there
    * fills a canvas exactly as well as one under a ticket. Not "unknown": it is
-   * the same durable fact `scratchScope` carries, and it is what the two
+   * the same durable fact `projectScope` carries, and it is what the two
    * `clearTerminalFocus*` guards below discriminate on.
    */
   ticketId: string | null;

@@ -1,6 +1,6 @@
 /**
  * G1 — the interview dry run, scripted, against the BUILT app: a fresh Python
- * project, one scratch chat, and TEN consecutive real Pi turns that mirror the
+ * project, one Project Session chat, and TEN consecutive real Pi turns that mirror the
  * Mars-rover pairing exercise (small prompts, tests-first, one design
  * question) — then a relaunch that must render the whole exchange from
  * durable data.
@@ -37,7 +37,7 @@
  * verdicts come from files on disk, independent command reruns, and the
  * doctor evidence — prose style already cost this smoke one false FAIL.
  *
- * The chat is a Sessions-strip scratch chat on purpose: a ticketless Session
+ * The chat is a Sessions-strip Project Session chat on purpose: a ticketless Session
  * executes in the selected project's own directory (`location.ts`), which is
  * exactly the shape of the pairing round — one repo, one chat, no worktree
  * indirection.
@@ -239,7 +239,7 @@ async function main() {
 
     await attempt(
       1,
-      "seed the app default model and open a scratch chat on the project",
+      "seed the app default model and open a Project Session chat on the project",
       async () => {
         const defaultModel = await seedDefaultModel(page);
         await goToSessions(page);

@@ -35,7 +35,7 @@ function chrome(overrides: Partial<TerminalFocusChrome> = {}): TerminalFocusChro
     settingsOpen: false,
     openTicketId: "t1",
     ticketSessionId: "s1",
-    scratchSessionId: "scratch1",
+    projectSessionId: "proj-term-1",
     ...overrides,
   };
 }
@@ -98,7 +98,7 @@ describe("terminalFocusTargetForChrome", () => {
     expect(terminalFocusTargetForChrome(chrome({ nav: "sessions" }))).toEqual({
       projectId: "p1",
       ticketId: null,
-      sessionId: "scratch1",
+      sessionId: "proj-term-1",
     });
   });
 
@@ -108,7 +108,7 @@ describe("terminalFocusTargetForChrome", () => {
     // terminal nobody can see.
     expect(terminalFocusTargetForChrome(chrome({ ticketSessionId: null }))).toBeNull();
     expect(
-      terminalFocusTargetForChrome(chrome({ nav: "sessions", scratchSessionId: null })),
+      terminalFocusTargetForChrome(chrome({ nav: "sessions", projectSessionId: null })),
     ).toBeNull();
   });
 

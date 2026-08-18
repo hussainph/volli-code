@@ -14,7 +14,7 @@ import {
   encodeProjectsUiState,
   useProjectsStore,
 } from "./projects";
-import { scratchScope, ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
+import { projectScope, ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
 import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
@@ -477,7 +477,7 @@ describe("removeProject", () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useSessionsStore.getState().addSession(scratchScope(only.id), "s1", shellLaunch("Terminal 1"));
+    useSessionsStore.getState().addSession(projectScope(only.id), "s1", shellLaunch("Terminal 1"));
 
     await store.getState().removeProject(only.id);
 

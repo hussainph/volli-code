@@ -151,7 +151,7 @@ export interface WorkspaceUiState {
    */
   projectFileViewStates: Record<string, unknown>;
   /**
-   * Which tab is in front on the project's Sessions scratch surface. Holds a
+   * Which tab is in front on the project's Sessions Project Session surface. Holds a
    * terminal session id or a `chat:<sessionId>` id, the same mixed id space
    * `ticketTabs[].active` uses. Session-only: what it points at
    * (chat-sessions.ts's `openTabs`) isn't persisted either, so there's nothing

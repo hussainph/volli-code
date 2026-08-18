@@ -1,8 +1,8 @@
 import * as React from "react";
 
 import {
-  startScratchChat,
-  startScratchTerminal,
+  startProjectChat,
+  startProjectTerminal,
   startTicketChat,
   startTicketTerminal,
 } from "@renderer/components/sessions/session-create";
@@ -79,8 +79,8 @@ export function useNewSessionShortcut(): void {
       // — the chord and the button cannot start different things.
       void (ticketId === null
         ? kind === "chat"
-          ? startScratchChat(projectId)
-          : startScratchTerminal(projectId)
+          ? startProjectChat(projectId)
+          : startProjectTerminal(projectId)
         : kind === "chat"
           ? startTicketChat(projectId, ticketId)
           : startTicketTerminal(projectId, ticketId));

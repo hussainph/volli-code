@@ -159,7 +159,7 @@ function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason
  * sortable by eye, so it takes the slot; the harness moves to the row's
  * `title`, where a question asked about ONE row belongs.
  *
- * A ticketless row — a project scratch Session, or one whose ticket has left
+ * A ticketless row — a project Project Session, or one whose ticket has left
  * the board — has no column to name and keeps its source. That is also the one
  * place `Chat · Live` still earns its keep: with no status to say it better,
  * whether the attachment is still open is the only thing worth saying.

@@ -70,7 +70,7 @@ export interface TerminalFocusChrome {
    */
   ticketSessionId: string | null;
   /** The live terminal Session the SESSIONS page's active tab names, else null. */
-  scratchSessionId: string | null;
+  projectSessionId: string | null;
 }
 
 /**
@@ -104,10 +104,10 @@ export function terminalFocusTargetForChrome(
     return { projectId, ticketId: chrome.openTicketId, sessionId: chrome.ticketSessionId };
   }
   if (chrome.nav === "sessions") {
-    if (chrome.scratchSessionId === null) return null;
+    if (chrome.projectSessionId === null) return null;
     // ticketId null is not "unknown": it is the durable fact that this Session
-    // belongs to no ticket, the same reading `scratchScope` already carries.
-    return { projectId, ticketId: null, sessionId: chrome.scratchSessionId };
+    // belongs to no ticket, the same reading `projectScope` already carries.
+    return { projectId, ticketId: null, sessionId: chrome.projectSessionId };
   }
   return null;
 }

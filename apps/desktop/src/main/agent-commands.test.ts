@@ -1401,7 +1401,10 @@ describe("agent command service", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-    insertSession(ctx.db, testSession("project-one", null, { id: sessionId, title: "Scratch" }));
+    insertSession(
+      ctx.db,
+      testSession("project-one", null, { id: sessionId, title: "Project chat" }),
+    );
     const observed: Array<{ sessionId: string; lines: number }> = [];
     const notifications: Array<{ title: string; message: string }> = [];
     const service = createAgentCommandService({
@@ -1864,7 +1867,7 @@ describe("agent command service", () => {
     expect(listed).not.toHaveBeenCalled();
   });
 
-  it("records scratch-session signals in the ledger and requires session context", async () => {
+  it("records Project-Session signals in the ledger and requires session context", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,

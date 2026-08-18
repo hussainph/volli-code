@@ -1083,7 +1083,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   it("session-list-for-ticket scopes to just that ticket", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
-    insertSession(ctx.db, testSession(projectId, null, { id: "scratch" }));
+    insertSession(ctx.db, testSession(projectId, null, { id: "project-session" }));
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "scoped" }));
 
     const result = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {

@@ -449,7 +449,7 @@ async function main() {
     );
 
     // === 6. Second tab in A: caret → two tabs, each its own live shell ======
-    // The scratch strip's control is a split button (press = chat, caret = the
+    // The Project Session strip's control is a split button (press = chat, caret = the
     // kinds); this flow boots the terminal kind, so it takes the caret — the
     // same gesture startTerminalTab encodes. Tab 2 becomes active on create.
     await startTerminalTab(page, 2);

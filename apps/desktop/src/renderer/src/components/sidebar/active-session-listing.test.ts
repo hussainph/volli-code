@@ -24,7 +24,7 @@ import {
 import {
   ACTIVE_QUIET_WINDOW_MS,
   buildActiveSessionListing,
-  isScratchRowSelected,
+  isProjectSessionRowSelected,
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
@@ -116,19 +116,19 @@ function container(activeSessionId: string | null, tabs: ReturnType<typeof paneT
   return { activeSessionId, tabs };
 }
 
-/** A single-pane SCRATCH tab: no ticket, filed in the store under the project id. */
-function scratchTab(sessionId: string, title: string, exitCode: number | null = null) {
+/** A single-pane PROJECT-SESSION tab: no ticket, filed in the store under the project id. */
+function projectSessionTab(sessionId: string, title: string, exitCode: number | null = null) {
   return {
     sessionId,
     title,
-    scope: { kind: "scratch", projectId: "p1" } as const,
+    scope: { kind: "project", projectId: "p1" } as const,
     layout: { kind: "pane", sessionId, exitCode } as const,
     activePaneId: sessionId,
   };
 }
 
 /** The store's container for those tabs — the shared `container()` is typed to ticket tabs. */
-function scratchOf(tabs: ReturnType<typeof scratchTab>[]) {
+function projectSessionsOf(tabs: ReturnType<typeof projectSessionTab>[]) {
   return { activeSessionId: tabs[0]?.sessionId ?? null, tabs };
 }
 
@@ -781,15 +781,15 @@ describe("buildActiveSessionListing — chat Sessions", () => {
   });
 });
 
-describe("buildActiveSessionListing — the scratch container", () => {
-  it("selects only the scratch terminal pane that is actually in front", () => {
-    const scratchState = scratchOf([
-      scratchTab("scratch-1", "First"),
-      scratchTab("scratch-2", "Second"),
+describe("buildActiveSessionListing — the project container", () => {
+  it("selects only the project terminal pane that is actually in front", () => {
+    const projectState = projectSessionsOf([
+      projectSessionTab("proj-1", "First"),
+      projectSessionTab("proj-2", "Second"),
     ]);
-    scratchState.activeSessionId = "scratch-2";
+    projectState.activeSessionId = "proj-2";
     const row = {
-      id: "terminal:scratch-2",
+      id: "terminal:proj-2",
       ticket: null,
       title: "Second",
       source: "Terminal",
@@ -797,37 +797,39 @@ describe("buildActiveSessionListing — the scratch container", () => {
       activitySource: "inferred",
       attention: null,
       waitingOn: null,
-      target: { kind: "terminal", tabId: "scratch-2", paneId: "scratch-2" },
+      target: { kind: "terminal", tabId: "proj-2", paneId: "proj-2" },
     } satisfies ActiveSessionRow;
 
-    expect(isScratchRowSelected(row, true, scratchState, null)).toBe(true);
-    expect(isScratchRowSelected(row, false, scratchState, null)).toBe(false);
+    expect(isProjectSessionRowSelected(row, true, projectState, null)).toBe(true);
+    expect(isProjectSessionRowSelected(row, false, projectState, null)).toBe(false);
     expect(
-      isScratchRowSelected(
-        { ...row, target: { kind: "terminal", tabId: "scratch-1", paneId: "scratch-1" } },
+      isProjectSessionRowSelected(
+        { ...row, target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" } },
         true,
-        scratchState,
+        projectState,
         null,
       ),
     ).toBe(false);
     expect(
-      isScratchRowSelected(
-        { ...row, target: { kind: "chat", tabId: "chat:scratch-2", sessionId: "scratch-2" } },
+      isProjectSessionRowSelected(
+        { ...row, target: { kind: "chat", tabId: "chat:proj-2", sessionId: "proj-2" } },
         true,
-        scratchState,
+        projectState,
         null,
       ),
     ).toBe(false);
     // A row with no target at all — a Session whose tab is gone — is never
     // the tab in front of you, whatever else is true.
-    expect(isScratchRowSelected({ ...row, target: null }, true, scratchState, null)).toBe(false);
+    expect(isProjectSessionRowSelected({ ...row, target: null }, true, projectState, null)).toBe(
+      false,
+    );
   });
 
   it("selects a ticketless chat row only when its tab is the one in front on Sessions", () => {
     const chatRow = {
       id: "chat:chat-1",
       ticket: null,
-      title: "Scratch chat",
+      title: "Project chat",
       source: "Chat",
       activity: "idle",
       activitySource: "reported",
@@ -837,23 +839,23 @@ describe("buildActiveSessionListing — the scratch container", () => {
     } satisfies ActiveSessionRow;
 
     // Its own tab is the one activated from Sessions.
-    expect(isScratchRowSelected(chatRow, true, undefined, "chat:chat-1")).toBe(true);
+    expect(isProjectSessionRowSelected(chatRow, true, undefined, "chat:chat-1")).toBe(true);
     // Sessions isn't the surface in front.
-    expect(isScratchRowSelected(chatRow, false, undefined, "chat:chat-1")).toBe(false);
+    expect(isProjectSessionRowSelected(chatRow, false, undefined, "chat:chat-1")).toBe(false);
     // A different tab was last activated from Sessions.
-    expect(isScratchRowSelected(chatRow, true, undefined, "chat:chat-2")).toBe(false);
+    expect(isProjectSessionRowSelected(chatRow, true, undefined, "chat:chat-2")).toBe(false);
     // Nothing has been activated from Sessions yet.
-    expect(isScratchRowSelected(chatRow, true, undefined, null)).toBe(false);
+    expect(isProjectSessionRowSelected(chatRow, true, undefined, null)).toBe(false);
   });
 
   it("darkens the terminal row a chat tab is covering", () => {
     // Selecting a chat tab leaves the terminal container's activeSessionId
-    // where it was, so both ledgers still name scratch-1 — only the chat is
+    // where it was, so both ledgers still name proj-1 — only the chat is
     // actually on screen.
-    const scratchState = scratchOf([scratchTab("scratch-1", "First")]);
-    scratchState.activeSessionId = "scratch-1";
+    const projectState = projectSessionsOf([projectSessionTab("proj-1", "First")]);
+    projectState.activeSessionId = "proj-1";
     const terminalRow = {
-      id: "terminal:scratch-1",
+      id: "terminal:proj-1",
       ticket: null,
       title: "First",
       source: "Terminal",
@@ -861,25 +863,25 @@ describe("buildActiveSessionListing — the scratch container", () => {
       activitySource: "inferred",
       attention: null,
       waitingOn: null,
-      target: { kind: "terminal", tabId: "scratch-1", paneId: "scratch-1" },
+      target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" },
     } satisfies ActiveSessionRow;
 
-    expect(isScratchRowSelected(terminalRow, true, scratchState, "chat:chat-1")).toBe(false);
+    expect(isProjectSessionRowSelected(terminalRow, true, projectState, "chat:chat-1")).toBe(false);
     // The terminal tab back in front lights it again.
-    expect(isScratchRowSelected(terminalRow, true, scratchState, "scratch-1")).toBe(true);
+    expect(isProjectSessionRowSelected(terminalRow, true, projectState, "proj-1")).toBe(true);
     // A malformed `chat:` id names no Session, so it covers nothing.
-    expect(isScratchRowSelected(terminalRow, true, scratchState, "chat:")).toBe(true);
+    expect(isProjectSessionRowSelected(terminalRow, true, projectState, "chat:")).toBe(true);
   });
 
-  it("lists a live scratch terminal in Active, with no ticket", () => {
+  it("lists a live project terminal in Active, with no ticket", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      projectContainer: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]),
       signalsByTicket: {},
       records: [],
-      lastOutputAt: { "scratch-1": now - 1_000 },
+      lastOutputAt: { "proj-1": now - 1_000 },
       parkState: {},
       harness: {},
       now,
@@ -889,42 +891,42 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.active[0]?.ticket).toBeNull();
     expect(result.active[0]?.target).toEqual({
       kind: "terminal",
-      tabId: "scratch-1",
-      paneId: "scratch-1",
+      tabId: "proj-1",
+      paneId: "proj-1",
     });
     expect(result.previous).toEqual([]);
   });
 
   // The regression this whole pass exists for: `containers` is walked by
-  // ticket, so before the scratch container arrived on its own key a live
-  // scratch terminal reached neither band.
-  it("reaches no band for a live scratch terminal handed over only under the project key", () => {
+  // ticket, so before the project container arrived on its own key a live
+  // project terminal reached neither band.
+  it("reaches no band for a live project terminal handed over only under the project key", () => {
     const now = 10_000_000;
-    const withoutScratch = buildActiveSessionListing({
+    const withoutProjectSessions = buildActiveSessionListing({
       tickets: [],
-      // The store's real shape: one flat map, scratch keyed by PROJECT id.
-      containers: { p1: scratchOf([scratchTab("scratch-1", "Poke at the repo")]) },
+      // The store's real shape: one flat map, project Sessions keyed by PROJECT id.
+      containers: { p1: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]) },
       signalsByTicket: {},
       records: [],
-      lastOutputAt: { "scratch-1": now - 1_000 },
+      lastOutputAt: { "proj-1": now - 1_000 },
       parkState: {},
       harness: {},
       now,
     });
 
-    expect(withoutScratch.active).toEqual([]);
-    expect(withoutScratch.previous).toEqual([]);
+    expect(withoutProjectSessions.active).toEqual([]);
+    expect(withoutProjectSessions.previous).toEqual([]);
   });
 
-  it("drops a quiet scratch terminal into Previous once the window closes", () => {
+  it("drops a quiet project terminal into Previous once the window closes", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      projectContainer: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]),
       signalsByTicket: {},
       records: [],
-      lastOutputAt: { "scratch-1": now - ACTIVE_QUIET_WINDOW_MS - 1 },
+      lastOutputAt: { "proj-1": now - ACTIVE_QUIET_WINDOW_MS - 1 },
       parkState: {},
       harness: {},
       now,
@@ -936,19 +938,19 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.previous[0]?.kind).toBe("terminal");
   });
 
-  // A scratch container holding the pane is the proof of ticketless birth, so
+  // A project container holding the pane is the proof of ticketless birth, so
   // the exemption survives the record being absent from the listing entirely —
   // which is the normal case for a pane that has not ended.
-  it("exempts a scratch row from cleanup even with no durable record to ask", () => {
+  it("exempts a project Session row from cleanup even with no durable record to ask", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      projectContainer: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]),
       signalsByTicket: {},
       records: [],
       // Far past PREVIOUS_MAX_AGE_MS: a ticketed row this old is cleaned away.
-      lastOutputAt: { "scratch-1": now - PREVIOUS_MAX_AGE_MS - 1 },
+      lastOutputAt: { "proj-1": now - PREVIOUS_MAX_AGE_MS - 1 },
       parkState: {},
       harness: {},
       now,
@@ -958,18 +960,18 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.previous[0]?.cleaned).toBe(false);
   });
 
-  it("files an exited scratch tab into Previous, still reachable and still exempt", () => {
+  it("files an exited project Session tab into Previous, still reachable and still exempt", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([
-        scratchTab("scratch-1", "Poke at the repo", 0),
-        scratchTab("scratch-2", "Still going"),
+      projectContainer: projectSessionsOf([
+        projectSessionTab("proj-1", "Poke at the repo", 0),
+        projectSessionTab("proj-2", "Still going"),
       ]),
       signalsByTicket: {},
       records: [],
-      lastOutputAt: { "scratch-1": now - PREVIOUS_MAX_AGE_MS - 1, "scratch-2": now - 1_000 },
+      lastOutputAt: { "proj-1": now - PREVIOUS_MAX_AGE_MS - 1, "proj-2": now - 1_000 },
       parkState: {},
       harness: {},
       now,
@@ -980,30 +982,30 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.previous[0]?.cleaned).toBe(false);
     expect(result.previous[0]?.target).toEqual({
       kind: "terminal",
-      tabId: "scratch-1",
-      paneId: "scratch-1",
+      tabId: "proj-1",
+      paneId: "proj-1",
     });
   });
 
-  // The mounted pane wins: a live scratch tab and its own durable record are
+  // The mounted pane wins: a live project Session tab and its own durable record are
   // one Session, and Previous must not grow a second row for it.
-  it("never doubles a scratch Session that also has a durable record", () => {
+  it("never doubles a Project Session that also has a durable record", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      projectContainer: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]),
       signalsByTicket: {},
       records: [
         record({
-          id: "scratch-1",
+          id: "proj-1",
           ticketId: null,
           title: "Poke at the repo",
           endedAt: now - 5_000,
           bornTicketless: true,
         }),
       ],
-      lastOutputAt: { "scratch-1": now - 1_000 },
+      lastOutputAt: { "proj-1": now - 1_000 },
       parkState: {},
       harness: {},
       now,
@@ -1014,23 +1016,23 @@ describe("buildActiveSessionListing — the scratch container", () => {
   });
 
   // The post-relaunch case, with no ticket to borrow a date from: `lastOutputAt`
-  // died with the window, so a scratch tab is datable only through its own
+  // died with the window, so a project Session tab is datable only through its own
   // record's newest durable fact, and otherwise not at all. Both stay in Active
   // (the module's documented bias), and the one that can be dated sorts above
   // the one that cannot — 0 is "we could not establish this", never `now`.
-  it("dates an unstamped scratch row by its record, and keeps an undatable one anyway", () => {
+  it("dates an unstamped project Session row by its record, and keeps an undatable one anyway", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([
-        scratchTab("scratch-undatable", "Nothing can date this"),
-        scratchTab("scratch-dated", "Dated by its record"),
+      projectContainer: projectSessionsOf([
+        projectSessionTab("proj-undatable", "Nothing can date this"),
+        projectSessionTab("proj-dated", "Dated by its record"),
       ]),
       signalsByTicket: {},
       records: [
         record({
-          id: "scratch-dated",
+          id: "proj-dated",
           ticketId: null,
           title: "Dated by its record",
           endedAt: null,
@@ -1048,24 +1050,24 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.previous).toEqual([]);
   });
 
-  // A scratch Session can never be the Needs-Review promotion (it has no
+  // A Project Session can never be the Needs-Review promotion (it has no
   // ticket and no column), so the hook channel is its ONLY route to an
   // attention — and a ticketless row is the one row with no board card to raise
   // the flag instead.
-  it("raises a hook-declared wait on a scratch terminal, and pins it to the top", () => {
+  it("raises a hook-declared wait on a project terminal, and pins it to the top", () => {
     const now = 100_000;
     const result = buildActiveSessionListing({
       tickets: [],
       containers: {},
-      scratchContainer: scratchOf([
-        scratchTab("scratch-quiet", "Just sitting there"),
-        scratchTab("scratch-asking", "Asking for something"),
+      projectContainer: projectSessionsOf([
+        projectSessionTab("proj-quiet", "Just sitting there"),
+        projectSessionTab("proj-asking", "Asking for something"),
       ]),
       signalsByTicket: {},
       records: [],
-      lastOutputAt: { "scratch-quiet": now - 500, "scratch-asking": now - 1_000 },
+      lastOutputAt: { "proj-quiet": now - 500, "proj-asking": now - 1_000 },
       parkState: {},
-      harness: { "scratch-asking": reporting("input.needed") },
+      harness: { "proj-asking": reporting("input.needed") },
       now,
     });
 
@@ -1075,22 +1077,22 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.active[0]?.ticket).toBeNull();
   });
 
-  it("lists a scratch Session without letting a bare Doing ticket in beside it", () => {
+  it("lists a Project Session without letting a bare Doing ticket in beside it", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
-      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      projectContainer: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]),
       signalsByTicket: {},
       records: [],
-      lastOutputAt: { "scratch-1": now - 1_000 },
+      lastOutputAt: { "proj-1": now - 1_000 },
       parkState: {},
       harness: {},
       now,
     });
 
     // The Doing ticket has no Session of its own, so it has no row — and the
-    // scratch row stands for itself, not for the board.
+    // project Session row stands for itself, not for the board.
     expect(titles(result.active)).toEqual(["Poke at the repo"]);
   });
 });
@@ -1186,13 +1188,13 @@ describe("buildActiveSessionListing — the Previous band", () => {
       containers: {},
       signalsByTicket: {},
       records: [
-        record({ id: "r1", ticketId: null, title: "Scratch terminal", endedAt: now - 1_000 }),
+        record({ id: "r1", ticketId: null, title: "Project terminal", endedAt: now - 1_000 }),
       ],
       chatSessions: [
         chatSession({
           sessionId: "c1",
           ticketId: null,
-          title: "Scratch chat",
+          title: "Project chat",
           activity: "working",
           lastActivityAt: now - 500,
         }),
@@ -1203,8 +1205,8 @@ describe("buildActiveSessionListing — the Previous band", () => {
       now,
     });
 
-    expect(result.active).toMatchObject([{ title: "Scratch chat", ticket: null }]);
-    expect(result.previous).toMatchObject([{ title: "Scratch terminal", ticket: null }]);
+    expect(result.active).toMatchObject([{ title: "Project chat", ticket: null }]);
+    expect(result.previous).toMatchObject([{ title: "Project terminal", ticket: null }]);
   });
 });
 
@@ -1234,7 +1236,7 @@ describe("buildActiveSessionListing — cleanup", () => {
 
   it("(a) cleans a Session whose ticket has left the board", () => {
     expect(isConcludedBusiness({ ...cleanupFacts, ticket: null })).toBe(true);
-    // A born-scratch Session never had a board row to lose.
+    // A born-Project Session never had a board row to lose.
     expect(
       isConcludedBusiness({
         ...cleanupFacts,
@@ -1371,14 +1373,14 @@ describe("buildActiveSessionListing — cleanup", () => {
       tickets: [],
       containers: {},
       signalsByTicket: {},
-      records: [record({ id: "r1", ticketId: null, title: "Ancient scratch", endedAt: 1 })],
+      records: [record({ id: "r1", ticketId: null, title: "Ancient project Session", endedAt: 1 })],
       lastOutputAt: {},
       parkState: {},
       harness: {},
       now,
     });
 
-    expect(titles(result.previous)).toEqual(["Ancient scratch"]);
+    expect(titles(result.previous)).toEqual(["Ancient project Session"]);
   });
 
   it("never cleans a Session whose terminal is still attached", () => {
@@ -1744,13 +1746,13 @@ describe("listingOutputStamps", () => {
         lastOutputAt: stamps,
         containers: {
           t1: container("s1", [paneTab("s1", "Ticket run")]),
-          p1: scratchOf([scratchTab("s2", "Scratch run")]),
+          p1: projectSessionsOf([projectSessionTab("s2", "Project run")]),
           // A container this project's listing never asks for: another
-          // project's scratch key. Its bump must not reach these bands.
-          p2: scratchOf([scratchTab("other-project", "Elsewhere")]),
+          // project's own key. Its bump must not reach these bands.
+          p2: projectSessionsOf([projectSessionTab("other-project", "Elsewhere")]),
         },
         ticketIds: ["t1"],
-        scratchOwnerId: "p1",
+        projectOwnerId: "p1",
       }),
     ).toEqual({ s1: 10, s2: 20 });
   });
@@ -1776,7 +1778,7 @@ describe("listingOutputStamps", () => {
         lastOutputAt: stamps,
         containers: { t1: { activeSessionId: "s1", tabs: [split] } },
         ticketIds: ["t1"],
-        scratchOwnerId: "p1",
+        projectOwnerId: "p1",
       }),
     ).toEqual({ s1: 10, s2: 20, "split-leaf": 40 });
   });
@@ -1787,7 +1789,7 @@ describe("listingOutputStamps", () => {
         lastOutputAt: {},
         containers: { t1: container("s1", [paneTab("s1", "Never printed")]) },
         ticketIds: ["t1", "t-no-container"],
-        scratchOwnerId: "p1",
+        projectOwnerId: "p1",
       }),
     ).toEqual({});
   });

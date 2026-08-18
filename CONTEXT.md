@@ -50,7 +50,9 @@ Project Sessions orchestrate project work; Ticket Sessions execute with explicit
 Ticket and worktree context; Subagent Sessions perform a bounded delegation and
 remain durable children of the Session that created them. Role determines the
 default context, tool bundle, and authority policy, not a separate Session type.
-_Avoid_: harness mode, agent mode, plan mode
+A Project Session runs on the Main checkout with no worktree and no board
+involvement, and is recorded in Session history exactly as a Ticket Session is.
+_Avoid_: harness mode, agent mode, plan mode, scratch session
 
 **Authority Snapshot**:
 The durable policy granted to one Session when it starts: which actions are
@@ -265,10 +267,7 @@ The ticket-scoped body of source changes relative to its base branch, including 
 _Avoid_: artifact, diff (when referring to the whole body of work)
 
 **Main checkout**:
-The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Scratch sessions and worktree-opt-out tickets run here.
-
-**Scratch session**:
-A ticket-less terminal session in a project's Sessions surface — main checkout, no worktree, no board involvement — still recorded in session history.
+The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
 Who a ticket event is attributed to: `user`, `session`, or `automation`. The app derives this from how the mutation arrived; callers never self-declare it.

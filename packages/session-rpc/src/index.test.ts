@@ -996,7 +996,7 @@ describe("Session tRPC router", () => {
       operationId: "operation-2",
       projectId: "project-1",
       ticketId: null,
-      title: "Scratch",
+      title: "Project chat",
     });
 
     expect(ticket).toEqual({ sessionId: "session-1" });
@@ -1008,7 +1008,12 @@ describe("Session tRPC router", () => {
       ],
       [
         "create",
-        { operationId: "operation-2", projectId: "project-1", ticketId: null, title: "Scratch" },
+        {
+          operationId: "operation-2",
+          projectId: "project-1",
+          ticketId: null,
+          title: "Project chat",
+        },
       ],
     ]);
     expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);

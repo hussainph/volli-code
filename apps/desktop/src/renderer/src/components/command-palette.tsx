@@ -182,7 +182,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             {items.sessions.map((item) => {
               const context =
                 item.ticketDisplayId === null
-                  ? `${item.projectName} · Scratch`
+                  ? `${item.projectName} · Project Session`
                   : `${item.ticketDisplayId} · ${item.ticketTitle}`;
               return (
                 <Command.Item

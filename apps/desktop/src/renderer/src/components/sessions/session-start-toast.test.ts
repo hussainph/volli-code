@@ -34,7 +34,7 @@ describe("sessionStartToastModel", () => {
     );
   });
 
-  it("still announces a scratch session's start without inventing a ticket", () => {
+  it("still announces a Project Session's start without inventing a ticket", () => {
     expect(sessionStartToastModel(notice({ actor: "session" })).message).toBe(
       "An agent session started a session on VC-4",
     );

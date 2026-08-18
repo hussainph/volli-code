@@ -19,7 +19,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
   ownerKey,
-  scratchScope,
+  projectScope,
   ticketScope,
   useSessionsStore,
   type SessionLaunch,
@@ -360,23 +360,23 @@ function abandonChat(sessionId: string): void {
  * so a fresh terminal opened while another tab was recorded would otherwise land
  * behind it — the chord would look like it had done nothing at all.
  */
-export async function startScratchTerminal(projectId: string): Promise<void> {
-  const sessionId = await createTerminalSession(scratchScope(projectId));
+export async function startProjectTerminal(projectId: string): Promise<void> {
+  const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return;
   useWorkspaceStore.getState().setSessionsActiveTab(projectId, sessionId);
 }
 
 /**
- * The chat half of {@link startScratchTerminal}.
+ * The chat half of {@link startProjectTerminal}.
  *
  * The Session starts untitled. Its first delivered message supplies the name;
  * until then the strip's neutral `Chat` fallback is all the UI shows.
  */
-export async function startScratchChat(
+export async function startProjectChat(
   projectId: string,
   skills?: readonly string[],
 ): Promise<void> {
-  await bootChatSession(scratchScope(projectId), {
+  await bootChatSession(projectScope(projectId), {
     skills,
     land: (sessionId) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
@@ -393,7 +393,7 @@ export async function startScratchChat(
 /**
  * Start one of a TICKET's Sessions and put its tab in front.
  *
- * The ticket half of {@link startScratchTerminal}, and it exists for the same
+ * The ticket half of {@link startProjectTerminal}, and it exists for the same
  * reason: ⌘T / ⌥⌘T resolve against what is on screen now
  * (`lib/new-session-shortcut.ts`), so inside a ticket the chord has to land a
  * Session exactly where the ticket's own control lands one. A chord that opened

@@ -12,8 +12,8 @@ import { SessionSplitLayout } from "@renderer/components/sessions/session-split-
 import { TicketTerminalOverlay } from "@renderer/components/sessions/ticket-terminal-host";
 import {
   createTerminalSplit,
-  startScratchChat,
-  startScratchTerminal,
+  startProjectChat,
+  startProjectTerminal,
 } from "@renderer/components/sessions/session-create";
 import {
   ModelAccessFirstRun,
@@ -97,7 +97,7 @@ interface SessionsLayerProps {
  * visibility — no terminal is ever unmounted incidentally (CLAUDE.md).
  *
  * Two regions: the SCRATCH surface (a tab strip + split trees for the selected
- * project's scratch sessions, hidden with `visible`), and the resident
+ * project's Project Sessions, hidden with `visible`), and the resident
  * {@link TicketTerminalOverlay} (positioned over the ticket detail's plane when
  * a ticket session tab is active). Both read the one unified store.
  */
@@ -205,7 +205,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   useNewSessionShortcut();
 
   const createScratch = React.useCallback((projectId: string) => {
-    void startScratchTerminal(projectId);
+    void startProjectTerminal(projectId);
   }, []);
 
   /**
@@ -216,12 +216,12 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
    * project's own runtime preferences when it mounts.
    */
   const createChat = React.useCallback((projectId: string) => {
-    void startScratchChat(projectId);
+    void startProjectChat(projectId);
   }, []);
 
   /** The attach-time route's start control: one named skill, one new chat. */
   const createChatWithSkill = React.useCallback((projectId: string, name: string) => {
-    void startScratchChat(projectId, [name]);
+    void startProjectChat(projectId, [name]);
   }, []);
 
   const selectedId = selected?.id ?? null;
@@ -237,7 +237,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
    * A chat's slice is replaced on every folded frame batch, and this layer hosts
    * every live terminal in the app, so it subscribes to what a tab OPENING or
    * CLOSING changes and nothing else. The title and lifecycle that move per
-   * token are read one level down, in {@link ScratchTabs}, so a streamed word
+   * token are read one level down, in {@link ProjectSessionTabs}, so a streamed word
    * repaints the strip and no terminal.
    */
   const openChatIds = useChatSessionsStore(
@@ -281,7 +281,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // owes the same invariant a ticket's detail view owes for its own: the target
   // must keep naming the terminal that is actually in front.
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
-  const scratchFocused =
+  const projectSessionFocused =
     terminalFocusTarget !== null &&
     terminalFocusTarget.ticketId === null &&
     terminalFocusTarget.projectId === selectedId &&
@@ -295,9 +295,9 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // never be left holding one around a terminal nobody can see.
   React.useEffect(() => {
     if (terminalFocusTarget === null || terminalFocusTarget.ticketId !== null) return;
-    if (visible && scratchFocused) return;
+    if (visible && projectSessionFocused) return;
     useUiStore.getState().setTerminalFocusTarget(null);
-  }, [terminalFocusTarget, scratchFocused, visible]);
+  }, [terminalFocusTarget, projectSessionFocused, visible]);
 
   // The receipt for what was derived, and the only write of it: a tab that
   // closed under the recorded id is answered by re-deriving, never by repairing
@@ -427,8 +427,8 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
             of terminal focus is that the terminal gets every pixel below the
             band, and a strip that stayed would be this surface disagreeing with
             the other one about what "focus" means. */}
-        {selected && !scratchFocused && (
-          <ScratchTabs
+        {selected && !projectSessionFocused && (
+          <ProjectSessionTabs
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
             activeTabId={activeTabId}
@@ -481,7 +481,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
               selected project's active tab is visible, the rest stay mounted. */}
           {Object.entries(byOwner).flatMap(([ownerId, container]) =>
             container.tabs
-              .filter((tab) => tab.scope.kind === "scratch")
+              .filter((tab) => tab.scope.kind === "project")
               .map((tab) => (
                 <SessionSplitLayout
                   key={tab.sessionId}
@@ -587,7 +587,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
  * every folded batch, while shallow equality over strings costs nothing when
  * neither moved.
  */
-function ScratchTabs({
+function ProjectSessionTabs({
   terminalTabs,
   chatIds,
   activeTabId,

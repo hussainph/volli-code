@@ -124,7 +124,7 @@ export function buildBoardSessionActivity(
   }
 
   for (const record of input.chatSessions) {
-    // A ticketless chat is a project scratch Session; it has no card to light.
+    // A ticketless chat is a project Project Session; it has no card to light.
     if (record.ticketId === null) continue;
     mark(record.ticketId, record.activity);
   }
