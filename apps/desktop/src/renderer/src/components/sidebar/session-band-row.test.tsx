@@ -17,8 +17,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { Ticket } from "@volli/shared";
 
-import type { ActiveSessionRow } from "./active-session-listing";
-import { ActiveBandRow } from "./session-band-row";
+import type { ActiveSessionRow, PreviousSessionRow } from "./active-session-listing";
+import { ActiveBandRow, PreviousBandRow, TicketGroupRow } from "./session-band-row";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 
 const ticket: Ticket = {
@@ -127,5 +127,96 @@ describe("ActiveBandRow", () => {
       row({ activity: "waiting", attention: { signal: "waiting", reason: null } }),
     );
     expect(stateLine(waiting)).toBe("Waiting for you");
+  });
+});
+
+/**
+ * The ticket entry the Previous band collapses onto, and the one thing a child
+ * row gives up to sit under it (VC-69).
+ */
+describe("TicketGroupRow", () => {
+  function renderGroup(count: number, open: boolean): string {
+    return renderToStaticMarkup(
+      <SidebarProvider>
+        <TicketGroupRow
+          ticket={ticket}
+          ticketPrefix="VC"
+          count={count}
+          newestAt={0}
+          now={60_000}
+          open={open}
+          onToggle={() => {}}
+        />
+      </SidebarProvider>,
+    );
+  }
+
+  it("names the ticket and how many sessions are behind it", () => {
+    const markup = renderGroup(5, false);
+
+    expect(markup).toContain("VC-7");
+    expect(markup).toContain("Nav sidebar");
+    expect(markup).toContain(">5<");
+  });
+
+  it("draws the count even at one, so a stack is never invisible", () => {
+    // Every ticket gets one of these rows, so the count is the only mark that
+    // separates a ticket hiding six sessions from one hiding a single session.
+    expect(renderGroup(1, false)).toContain(">1<");
+  });
+
+  it("carries no status dot in either state — attention never reaches this band", () => {
+    // A Session needing a human is pinned to Active for as long as it is
+    // asking, so nothing behind a collapsed ticket here can be waiting.
+    expect(renderGroup(3, false)).not.toContain('data-slot="status-dot"');
+    expect(renderGroup(3, true)).not.toContain('data-slot="status-dot"');
+  });
+
+  it("announces its disclosure state and turns only the caret", () => {
+    expect(renderGroup(2, false)).toContain('aria-expanded="false"');
+
+    const open = renderGroup(2, true);
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain("rotate-90");
+  });
+});
+
+describe("PreviousBandRow identity", () => {
+  const previous: PreviousSessionRow = {
+    id: "session:s1",
+    ticket,
+    title: "Review fixes",
+    kind: "chat",
+    endedOrQuietAt: 0,
+    target: null,
+    cleaned: false,
+  };
+
+  function renderPrevious(showIdentity?: boolean): string {
+    return renderToStaticMarkup(
+      <SidebarProvider>
+        <PreviousBandRow
+          row={previous}
+          ticketPrefix="VC"
+          now={60_000}
+          selected={false}
+          onSelect={() => {}}
+          showIdentity={showIdentity}
+        />
+      </SidebarProvider>,
+    );
+  }
+
+  it("draws its ticket id when standing on its own", () => {
+    expect(renderPrevious()).toContain("VC-7");
+  });
+
+  it("drops the id under a ticket entry, which already said it", () => {
+    const markup = renderPrevious(false);
+
+    expect(markup).not.toContain("VC-7");
+    // Only the identity goes: the row keeps its title and its kind glyph.
+    expect(markup).toContain("Review fixes");
+    expect(markup).toContain('aria-label="Chat"');
   });
 });

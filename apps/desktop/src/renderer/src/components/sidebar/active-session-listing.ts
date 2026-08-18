@@ -258,6 +258,101 @@ export interface PreviousSessionRow {
   cleaned: boolean;
 }
 
+/**
+ * The Previous band's rows, arranged the way it draws them: one entry per
+ * ticket, plus a bare entry for each session that has no ticket to sit under.
+ *
+ * **Only Previous is grouped, and that is a decision rather than a first
+ * step** (VC-69). Grouping Active was prototyped and rejected: same-ticket
+ * concurrency is rare there (a typical Active band is a handful of rows on as
+ * many different tickets), so a parent row is usually a container for one
+ * child, and it puts a disclosure in front of a destination that is currently
+ * one click away — on the one surface whose whole job is to be the fastest in
+ * the app. Telling two live sessions on one ticket apart is a peeking problem,
+ * not a hierarchy problem, and belongs to hover-peek (VC-30).
+ *
+ * What that buys, beyond the click: **no entry here ever carries an attention
+ * cue, and none has to.** A Session needing a human is pinned to Active for as
+ * long as it is asking ({@link activeGroup} short-circuits the quiet window on
+ * `attention`), so nothing behind a collapsed ticket can be waiting on anyone.
+ * A dot on a ticket entry would be a signal that is structurally always the
+ * same, which is the kind of mark that teaches a reader to stop looking.
+ */
+export type PreviousListingEntry =
+  | {
+      kind: "session";
+      /** Stable across rebuilds: the row's own id. */
+      id: string;
+      row: PreviousSessionRow;
+    }
+  | {
+      kind: "ticket";
+      /** Stable across rebuilds: the ticket's id, which is also the expansion key. */
+      id: string;
+      ticket: Ticket;
+      /** This ticket's sessions, newest first. Never empty. */
+      rows: PreviousSessionRow[];
+      /**
+       * The newest child's stamp — the recency a collapsed entry stands in for,
+       * and the reason the entry does not have to be expanded to be placed.
+       */
+      newestAt: number;
+    };
+
+/**
+ * Arranges an already-built Previous band into {@link PreviousListingEntry}s.
+ *
+ * Separate from {@link buildActiveSessionListing} rather than a field on it,
+ * because it is a pure rearrangement of that function's own output: the band
+ * has already been cleaned, filtered and sorted, and grouping must not be able
+ * to change which rows survive or which order they are in. Keeping it a second
+ * function is what makes that guarantee checkable — this one cannot see any of
+ * the inputs those decisions were made from.
+ *
+ * **Order comes from first appearance, and that is the whole ordering rule.**
+ * The band arrives sorted by recency, so a ticket lands at the rank of its most
+ * recent session and its children are already newest-first. No second
+ * comparator, and no way for the two orders to disagree.
+ *
+ * **Every ticket gets an entry, including one with a single session.** Skipping
+ * those was tried and reverted: it saves nothing in the collapsed steady state
+ * — one unparented session row and one single-session ticket row are both one
+ * row — and it costs a band whose top level is sometimes a ticket and sometimes
+ * a session. A uniform field is worth the rows it costs when expanded.
+ *
+ * Ticketless (project) sessions are never grouped with each other: they have no
+ * ticket in common, only the absence of one, so they stay top-level as their
+ * own `session` entries — which is also what VC-54's Home taxonomy asks for.
+ */
+export function groupPreviousByTicket(rows: readonly PreviousSessionRow[]): PreviousListingEntry[] {
+  const entries: PreviousListingEntry[] = [];
+  const byTicket = new Map<string, Extract<PreviousListingEntry, { kind: "ticket" }>>();
+  for (const row of rows) {
+    const ticket = row.ticket;
+    if (ticket === null) {
+      entries.push({ kind: "session", id: row.id, row });
+      continue;
+    }
+    const existing = byTicket.get(ticket.id);
+    if (existing === undefined) {
+      const entry: Extract<PreviousListingEntry, { kind: "ticket" }> = {
+        kind: "ticket",
+        id: ticket.id,
+        ticket,
+        rows: [row],
+        // The first row of a recency-sorted band IS the newest for this ticket,
+        // so this is read once and never maximised over the rest.
+        newestAt: row.endedOrQuietAt,
+      };
+      byTicket.set(ticket.id, entry);
+      entries.push(entry);
+      continue;
+    }
+    existing.rows.push(row);
+  }
+  return entries;
+}
+
 export interface ActiveSessionListing {
   active: ActiveSessionRow[];
   previous: PreviousSessionRow[];
