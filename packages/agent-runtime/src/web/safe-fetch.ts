@@ -25,6 +25,7 @@ import {
   admitWebTarget,
   classifyWebAddress,
   type AdmittedWebTarget,
+  type RuntimeWebDocument,
   type WebScheme,
   type WebTargetRuleId,
 } from "@volli/shared";
@@ -171,15 +172,15 @@ export type WebRequestOpener = (scheme: WebScheme, options: WebRequestOptions) =
 export const openWebRequest: WebRequestOpener = (scheme, options) =>
   scheme === "https" ? httpsRequest(options) : httpRequest(options);
 
-/** What one successful read returns. */
-export interface SafeWebFetchResult {
-  requestedUrl: string;
-  finalUrl: string;
-  origin: string;
-  contentType: "html" | "text" | "markdown";
-  text: string;
-  truncated: boolean;
-}
+/**
+ * What one successful read returns.
+ *
+ * The shape is declared in `@volli/shared` as {@link RuntimeWebDocument},
+ * because the Session spec offers this document as a port and that package owns
+ * the spec. One declaration, two names: the runtime keeps its own word for it,
+ * and neither side can drift from the other.
+ */
+export type SafeWebFetchResult = RuntimeWebDocument;
 
 /** The narrow port the runtime is given. One URL in, one bounded document out. */
 export interface SafeWebFetch {

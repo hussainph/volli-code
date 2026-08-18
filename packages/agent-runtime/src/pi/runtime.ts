@@ -45,7 +45,7 @@ import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
 import { piOwnedModelAccess } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { createAskUserTool, createPiTools } from "./tools";
+import { createAskUserTool, createPiTools, createWebFetchTool } from "./tools";
 import {
   attentionReasonFor,
   classifyAssistantMessage,
@@ -609,6 +609,11 @@ async function attachSession(
     // that is absent cannot be called, where one wired to nothing would be
     // called and then fail, and the model would learn that from the failure.
     if (spec.askUser !== undefined) tools.push(createAskUserTool(spec.askUser, spec.signal));
+    // The same rule for the same reason. A Session handed no web boundary is
+    // handed no way to ask for one: the absent port is what makes the network
+    // unreachable from here, not a refusal the model would have to be told
+    // about after reaching for it.
+    if (spec.webFetch !== undefined) tools.push(createWebFetchTool(spec.webFetch, spec.signal));
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;

@@ -362,6 +362,33 @@ export interface RuntimeAskUserRequest {
   allowOther?: boolean;
 }
 
+/**
+ * One bounded web document, as the boundary that read it describes it.
+ *
+ * Declared here rather than beside the sockets because {@link SessionRuntimeSpec}
+ * is where the port is offered, and this package may not import the one that
+ * owns DNS and TLS. `@volli/agent-runtime` names the same type
+ * `SafeWebFetchResult`; there is one declaration so the two cannot drift.
+ *
+ * Everything here is a fact the fetcher established, and none of it is the
+ * page's to state: {@link origin} and {@link finalUrl} are read off the request
+ * Volli made, not off the bytes that came back, which is what makes them usable
+ * as provenance in front of text that may be trying to claim otherwise.
+ */
+export interface RuntimeWebDocument {
+  /** The URL that was asked for, canonical as admission normalized it. */
+  requestedUrl: string;
+  /** The URL the bytes came from. Equal to {@link requestedUrl} while no redirect is followed. */
+  finalUrl: string;
+  /** Scheme, host and port of the final URL. */
+  origin: string;
+  contentType: "html" | "text" | "markdown";
+  /** The document's text, already inside the boundary's own character bound. */
+  text: string;
+  /** Whether the boundary cut the text short of the document's end. */
+  truncated: boolean;
+}
+
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
@@ -462,6 +489,26 @@ export interface SessionRuntimeSpec {
     request: RuntimeAskUserRequest,
     signal: AbortSignal,
   ) => Promise<SessionInteractionResolution>;
+  /**
+   * Read one public web document, through a boundary this Session does not own.
+   *
+   * Optional on the same terms as {@link askUser}, and for the same reason: its
+   * absence is what decides whether the model is offered a web tool at all. A
+   * Session given no boundary has no way to reach the network through the
+   * runtime, rather than a tool that fails on use.
+   *
+   * One URL in and one bounded document out is the whole of the contract. There
+   * is deliberately no header, host, port, method or redirect policy a caller
+   * could state: every one of those is a decision the boundary makes for itself,
+   * and a port that accepted them would be a port through which the model could
+   * negotiate its own safety.
+   *
+   * `signal` withdraws the read, and a host must honour it — the runtime stops
+   * waiting either way. A rejection means the read did not happen: a refusal
+   * carries a rule the runtime turns into text the model can act on, and
+   * anything else is a host that could not answer and fails the call.
+   */
+  webFetch?: (input: { url: string; signal: AbortSignal }) => Promise<RuntimeWebDocument>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }
