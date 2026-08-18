@@ -231,6 +231,17 @@ export const Board = React.memo(function Board({
   // nothing: this reads the PROJECT's tickets, so a filter that hides them all
   // still leaves the columns (and the collapsed rail) standing. See BoardEmpty.
   const boardEmpty = storeTickets.length === 0;
+  // ...and nothing else on the canvas to say it around. The invitation stands IN
+  // PLACE OF the collapsed rail, so it may only appear when that rail is the
+  // whole of what would otherwise be drawn.
+  //
+  // The case that separates the two: expanding an empty column (the rail's own
+  // affordance) opens an inline composer in it, and the board can empty behind
+  // that composer — archive the last card while typing in another column. On
+  // `boardEmpty` alone the invitation would appear BESIDE the open composer,
+  // and replacing the columns outright would delete what was being typed.
+  // Keyed on the columns actually shown, neither can happen.
+  const boardBare = boardEmpty && shown.length === 0;
 
   const handleSelect = React.useCallback(
     (ticketId: string | null) => selectTicket(projectId, ticketId),
@@ -361,7 +372,7 @@ export const Board = React.memo(function Board({
                 panning ? "cursor-grabbing select-none" : "cursor-grab",
               )}
             >
-              {boardEmpty ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
+              {boardBare ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
               {shown.map((status) => (
                 <BoardColumn
                   key={status}
@@ -384,7 +395,7 @@ export const Board = React.memo(function Board({
                   animateEnter={boardMounted.current}
                 />
               ))}
-              {boardEmpty ? null : (
+              {boardBare ? null : (
                 <CollapsedColumnRail
                   statuses={hidden}
                   dragActive={drag !== null}
