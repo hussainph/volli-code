@@ -32,6 +32,7 @@ import {
 import {
   COMPACTION_REASONS,
   DEFAULT_COMPACTION_POLICY,
+  errorMessage,
   isActivityKind,
   isUsableCompactionReserve,
   modelCompactionReserve,
@@ -623,8 +624,16 @@ async function attachSession(
     const sidecarMetadata = await sidecar.getMetadata();
     sidecarPath = sidecarMetadata.path;
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
+    // The BRANCH, not the file. Today these are the same entries — this runtime
+    // writes one lane and never forks — but they stop being the same the moment
+    // anything does, and what reads this now is the elision rule, which takes
+    // the LAST compaction in the array it is handed. Off a flat file read that
+    // is last-written; only off the branch is it last-on-this-path. Asking the
+    // same question the live path asks (`conversationBranch`) is what keeps a
+    // future sibling branch from quietly resurrecting elided history — the one
+    // failure this ticket exists to prevent.
     const recoveredEntries = inputRecovery
-      ? await sidecar.findEntries({ order: "oldestFirst" })
+      ? await sidecar.findEntriesOnBranch({ order: "oldestFirst" })
       : [];
     const recoveredMarkers = recoveredEntries
       .filter((entry): entry is CustomEntry => entry.type === "custom")
@@ -793,6 +802,31 @@ async function attachSession(
      * one, and a turn resumed in place carries on spending the same one.
      */
     let overflowRecoveryUsed = false;
+    /**
+     * Whether something already owns the live context, and what to wait for.
+     *
+     * A compaction does not extend `agent.state.messages`, it REPLACES it, so
+     * it is exclusive with anything that reads or extends the same array. The
+     * `isStreaming` checks around it are not enough on their own: each is a
+     * check-then-act with a multi-second provider call in the middle, and a
+     * turn that starts inside that gap is one the returning summary would
+     * overwrite — dropping a delivered message and its reply from the context
+     * while both stay on screen and in the ledger, which is the worst shape a
+     * bug can have here because nothing surfaces it.
+     *
+     * Two halves because the two callers need different answers. A delivery
+     * WAITS: refusing someone's message because maintenance is running would
+     * be a worse answer than taking a moment longer to accept it. An explicit
+     * compaction REFUSES, which is the answer {@link RuntimeAttachmentHandle}
+     * already documents for a context that is not free — so it needs the fact
+     * synchronously, before it awaits anything.
+     *
+     * The overflow path is deliberately outside this. It runs inside its own
+     * run's `agent_end`, where `isStreaming` is still set, so every other path
+     * has already been turned away by the check it does first.
+     */
+    let contextRewrite: Promise<void> = Promise.resolve();
+    let rewritingContext = false;
     /** Set only while a backoff is being waited out; see {@link interruptTurn}. */
     let cancelBackoff: (() => void) | undefined;
     type PendingMessageDelivery = {
@@ -1099,6 +1133,29 @@ async function attachSession(
       );
 
     /**
+     * Own the live context for the whole of `operation` — see {@link
+     * contextRewrite}.
+     *
+     * Both halves are set before the first await and cleared after the last
+     * one, so a caller that asks either question between them gets the same
+     * answer. The promise swallows the failure it publishes: a waiter is
+     * waiting to find the context settled, not to inherit why it is.
+     */
+    const rewritingTheContext = async <T>(operation: () => Promise<T>): Promise<T> => {
+      rewritingContext = true;
+      const running = operation();
+      contextRewrite = running.then(
+        () => undefined,
+        () => undefined,
+      );
+      try {
+        return await running;
+      } finally {
+        rewritingContext = false;
+      }
+    };
+
+    /**
      * Summarize this Session's history and say so, whichever way it goes.
      *
      * One mechanism for every reason a context is compacted — the threshold,
@@ -1137,9 +1194,18 @@ async function attachSession(
       // needed this to work is the one that has something to say about it.
       if (outcome.kind === "skipped") return outcome;
       if (outcome.kind === "compacted") {
-        // The elided context, from the same rule the replay path applies. Pi
-        // holds no run that is reading this array: the threshold path runs while
-        // it is idle, and the overflow path runs after its loop has ended.
+        // The elided context, from the same rule the replay path applies.
+        //
+        // Replacing this array is safe only because every caller has made it
+        // so, and none of them by the `isStreaming` check alone: that check is
+        // separated from this line by a provider call, and what it answered
+        // before is not what it would answer now. The threshold path holds
+        // {@link contextRewrite} across both, the manual path holds it and
+        // refuses rather than waits, and the overflow path runs inside its own
+        // run's `agent_end`, where every other caller has already been turned
+        // away. Take that away and a turn started mid-summary is one this line
+        // overwrites — its message and its reply gone from the model's context
+        // while both remain in the ledger and on screen.
         agent.state.messages = outcome.messages;
       }
       await commitObservation(
@@ -1183,10 +1249,20 @@ async function attachSession(
      * cannot be the only compaction there is, and why a run that spends the
      * window on its own tool traffic is {@link recoverFromFailure}'s to catch.
      *
-     * A failed summarization changes nothing and stops nothing. The user's
+     * A failed compaction changes nothing and stops nothing. The user's
      * message still goes to the model on the context that was already there:
      * this is maintenance, and refusing to deliver a message because maintenance
      * failed would turn a recoverable Session into a stuck one.
+     *
+     * That holds for every way it can fail, not just the summary call. A
+     * provider that refuses to summarize is already reported as an outcome, but
+     * the reads and the append around it can throw, and an exception here would
+     * reach the caller as a REFUSED MESSAGE — the one thing this path promises
+     * never to do, failing in the way a person would least connect to the cause.
+     * So the throw is turned into the failure this already knows how to say.
+     * Nothing is swallowed: it lands on the ledger as `context.compaction_failed`
+     * and draws its own line in the transcript, exactly as a refused summary
+     * does.
      */
     const compactBeforeTurn = async (): Promise<void> => {
       // Asked first because it is free. A model whose catalog reports no usable
@@ -1194,13 +1270,29 @@ async function attachSession(
       // whole history — there is no reason to pay it for an answer already known.
       const contextWindow = contextWindowOf(agent.state.model);
       if (contextWindow === undefined) return;
-      const path = await conversationBranch();
-      if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings())) return;
-      // The attachment's own lifetime bounds it, like every other provider call
-      // here. Nothing else can: no turn has started, so there is no turn to
-      // interrupt, and a person pressing stop before their message has been
-      // delivered is stopping something that has not begun.
-      await compactContext({ reason: "threshold", path, signal: spec.signal });
+      try {
+        const path = await conversationBranch();
+        if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings()))
+          return;
+        // The attachment's own lifetime bounds it, like every other provider
+        // call here. Nothing else can: no turn has started, so there is no turn
+        // to interrupt, and a person pressing stop before their message has been
+        // delivered is stopping something that has not begun.
+        await compactContext({ reason: "threshold", path, signal: spec.signal });
+      } catch (error) {
+        // Reported through the channel a refused summary already uses. If THIS
+        // throws the sidecar itself is unwritable, which is not a maintenance
+        // failure to absorb — it is the attachment's own durability gone, and it
+        // belongs to the caller that can still say so.
+        await commitObservation(
+          await persistObservation({
+            kind: "compaction",
+            state: "failed",
+            reason: "threshold",
+            message: sanitizeDiagnostic(errorMessage(error)),
+          }),
+        );
+      }
     };
 
     /**
@@ -1441,6 +1533,15 @@ async function attachSession(
             message: "Pi does not support replacing the active turn.",
           };
         }
+        // Wait out a compaction already rewriting the very array this delivery
+        // is about to be composed against — see {@link contextRewrite}. Waited
+        // on rather than refused: maintenance nobody asked for must not cost
+        // someone their message. Every question below is asked after it,
+        // because the answers can change while it is held.
+        await contextRewrite;
+        if (closed || cancelled) {
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
         if (agent.state.isStreaming) {
           const message = queuedUserMessage(text, images);
           const pending = {
@@ -1456,8 +1557,12 @@ async function attachSession(
         }
         observationDelivery.consumeFailure();
         // Before the message is composed, not after: compaction can change what
-        // the context holds, and the Brief is prepended on an empty one.
-        await compactBeforeTurn();
+        // the context holds, and the Brief is prepended on an empty one. Held
+        // as a rewrite so an explicit `/compact` arriving meanwhile is refused
+        // rather than admitted onto a context this turn is already composing
+        // against; everything from here to `prompt` is synchronous, so there is
+        // no gap between releasing it and Pi owning the array itself.
+        await rewritingTheContext(compactBeforeTurn);
         const delivered =
           agent.state.messages.length === 0
             ? composeFirstUserMessage(spec.identity.role, spec.brief, text)
@@ -1589,6 +1694,15 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
+        // Two ways for the context not to be free, and they are one question
+        // asked of two owners: Pi is consuming the array, or a compaction is
+        // already replacing it. Asked synchronously, before anything is
+        // awaited, so the answer cannot go stale between the check and the act
+        // — which is the whole failure this guard exists to prevent.
+        //
+        // One refusal, two sentences. A person told "while Pi is running" about
+        // a Session that is plainly idle would go looking for a turn that is not
+        // there; the wait they are actually in is a summary, and it ends.
         if (agent.state.isStreaming) {
           return {
             kind: "rejected",
@@ -1596,12 +1710,21 @@ async function attachSession(
             message: "The context cannot be compacted while Pi is running.",
           };
         }
-        const outcome = await compactContext({
-          reason: "manual",
-          path: await conversationBranch(),
-          signal: spec.signal,
-          ...(instructions === undefined ? {} : { instructions }),
-        });
+        if (rewritingContext) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "This context is already being compacted.",
+          };
+        }
+        const outcome = await rewritingTheContext(async () =>
+          compactContext({
+            reason: "manual",
+            path: await conversationBranch(),
+            signal: spec.signal,
+            ...(instructions === undefined ? {} : { instructions }),
+          }),
+        );
         if (outcome.kind === "compacted") return { kind: "compacted" };
         return outcome.kind === "skipped"
           ? {

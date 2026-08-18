@@ -567,9 +567,20 @@ class DefaultSessionRuntime implements SessionRuntime {
       return existing.promise;
     }
 
+    // Every command that touches what the executor will next be sent, so none
+    // of them can be deciding it at the same time. `context.compact` is here
+    // for a sharper reason than the two beside it: it REPLACES the executor's
+    // message array rather than extending it, and a message admitted while its
+    // summary was still running would be a turn the returning compaction
+    // overwrote — the message and its reply gone from the model's context
+    // while both remain in the ledger and on screen. Unlike a message, a
+    // compaction holds this tail for its whole run, because it is not finished
+    // when it starts and there is no earlier moment that is safe.
     const serializesAdmission =
       "sessionId" in request &&
-      (request.command.kind === "message.submit" || request.command.kind === "model.select");
+      (request.command.kind === "message.submit" ||
+        request.command.kind === "model.select" ||
+        request.command.kind === "context.compact");
     const previous =
       "sessionId" in request ? this.#sessionAdmissionTails.get(request.sessionId) : null;
     const admission =

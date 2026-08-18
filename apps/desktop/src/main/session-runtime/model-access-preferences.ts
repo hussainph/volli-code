@@ -176,7 +176,9 @@ export function readCompactionPolicy(db: Database.Database): CompactionPolicy {
       typeof autoCompaction === "boolean"
         ? autoCompaction
         : DEFAULT_COMPACTION_POLICY.autoCompaction,
-    modelLimits: Array.isArray(modelLimits) ? modelLimits.flatMap(sanitizeCompactionLimit) : [],
+    modelLimits: Array.isArray(modelLimits)
+      ? modelLimits.flatMap(sanitizeCompactionLimit)
+      : DEFAULT_COMPACTION_POLICY.modelLimits,
   };
 }
 
