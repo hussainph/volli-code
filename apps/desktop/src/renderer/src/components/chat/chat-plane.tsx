@@ -133,6 +133,8 @@ import {
   type HeldMessage,
 } from "@renderer/stores/chat-drafts";
 import { useAttachments } from "@renderer/hooks/use-attachments";
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { transcriptAttachments } from "@renderer/components/attachments/attachment-model";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -1099,16 +1101,30 @@ export const ChatTurn = React.memo(function ChatTurn({
     () => (role === "assistant" ? segmentTurn(messages) : null),
     [messages, role],
   );
-  // A user message is prose only; the assistant path owns every other shape.
+  // A user message is prose and attachment thumbs; the assistant path owns
+  // every other shape. Whitespace-only text parts are dropped rather than
+  // drawn: an attachment-only message still carries the empty text part the
+  // composer always writes, and rendering it would open a blank line above
+  // the thumbs it was sent with.
   const prose = React.useMemo<readonly { key: string; text: string }[]>(
     () =>
       role === "assistant"
         ? []
         : messages.flatMap((message) =>
             message.parts.flatMap((part, index) =>
-              part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
+              part.type === "text" && part.text.trim().length > 0
+                ? [{ key: `${message.id}:${index}`, text: part.text }]
+                : [],
             ),
           ),
+    [messages, role],
+  );
+  // The files this turn was sent with (VC-50), drawn from the message parts
+  // alone — no fetch, so the thumbs survive the attachment rows being removed
+  // later. Read-only: a sent message is a record, not an editable strip.
+  const attachedFiles = React.useMemo(
+    () =>
+      role === "user" ? messages.flatMap((message) => transcriptAttachments(message.parts)) : [],
     [messages, role],
   );
   const copyableText = React.useMemo(() => messageCopyText(messages), [messages]);
@@ -1139,6 +1155,13 @@ export const ChatTurn = React.memo(function ChatTurn({
   return (
     <Message from={role} className="relative max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+        {/* Thumbs above the words, matching the composer the message left from. */}
+        {attachedFiles.length > 0 ? (
+          <AttachmentStrip
+            attachments={attachedFiles}
+            {...(prose.length > 0 ? { className: "pb-3" } : {})}
+          />
+        ) : null}
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (

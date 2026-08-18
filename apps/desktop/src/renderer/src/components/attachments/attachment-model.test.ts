@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
+import { blobUrl } from "@volli/shared";
 
-import { fileTypeLabel, formatFileSize, thumbKind } from "./attachment-model";
+import {
+  fileTypeLabel,
+  formatFileSize,
+  thumbKind,
+  transcriptAttachments,
+} from "./attachment-model";
 
 describe("thumbKind", () => {
   it("previews an image as itself and stands in for everything else", () => {
@@ -28,6 +34,65 @@ describe("formatFileSize", () => {
   it("says nothing for a size that is not one", () => {
     expect(formatFileSize(Number.NaN)).toBe("");
     expect(formatFileSize(-1)).toBe("");
+  });
+});
+
+describe("transcriptAttachments", () => {
+  const HASH = "a".repeat(64);
+  const OTHER = "b".repeat(64);
+
+  it("reads a sent message's file parts into thumbnail views, with no fetch to disagree with", () => {
+    expect(
+      transcriptAttachments([
+        { type: "text" },
+        { type: "file", url: blobUrl(HASH), mediaType: "image/png", filename: "shot.png" },
+        { type: "file", url: blobUrl(OTHER), mediaType: "application/pdf", filename: "spec.pdf" },
+      ]),
+    ).toEqual([
+      {
+        linkId: null,
+        blobHash: HASH,
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: Number.NaN,
+      },
+      {
+        linkId: null,
+        blobHash: OTHER,
+        label: "spec.pdf",
+        originalName: "spec.pdf",
+        mime: "application/pdf",
+        sizeBytes: Number.NaN,
+      },
+    ]);
+  });
+
+  it("skips parts that are not volli-blob file parts, rather than failing the ones that are", () => {
+    expect(
+      transcriptAttachments([
+        { type: "file", url: "https://example.com/a.png" },
+        { type: "file" },
+        { type: "reasoning" },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("draws one thumb per Blob however many parts name it — the strip keys rows by hash", () => {
+    const parts = [
+      { type: "file", url: blobUrl(HASH), filename: "shot.png" },
+      { type: "file", url: blobUrl(HASH), filename: "shot.png" },
+    ];
+    expect(transcriptAttachments(parts)).toHaveLength(1);
+  });
+
+  it("never renders a nameless or typeless thumb", () => {
+    const [view] = transcriptAttachments([{ type: "file", url: blobUrl(HASH) }]);
+    expect(view).toMatchObject({
+      label: "attachment",
+      originalName: "attachment",
+      mime: "application/octet-stream",
+    });
   });
 });
 
