@@ -100,6 +100,7 @@ import {
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+import type { SessionWebPorts } from "../web/ports";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /**
@@ -225,6 +226,21 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The web ports this profile's Web Access setting amounts to, resolved once
+   * per attachment.
+   *
+   * Optional, and its absence means a Session is offered no web tool — the same
+   * thing an answer of `{}` means, because a profile that configured no
+   * provider and a build that wired no resolver are the same situation from the
+   * model's side. Main implements it over the settings owner, which is the only
+   * thing in the app that reads the stored credential.
+   *
+   * Called at attach, not per turn: what a Session may reach is pinned when it
+   * starts, exactly as its Authority Snapshot would be, so a Settings change
+   * never lands mid-turn.
+   */
+  resolveWebPorts?: () => SessionWebPorts;
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   now?: () => number;
@@ -344,7 +360,14 @@ function piNativeAdapter(
           "configuration_invalid",
         );
       }
-      const binding = new PiBinding({ spec, sink, context, recovery, now });
+      const binding = new PiBinding({
+        spec,
+        sink,
+        context,
+        recovery,
+        now,
+        web: options.resolveWebPorts?.() ?? {},
+      });
       try {
         binding.bind(await runtime.startSession(binding.runtimeSpec()));
       } catch (error) {
@@ -417,6 +440,8 @@ interface PiBindingOptions {
   context: PiRuntimeContext;
   recovery: RuntimeRecoveryRef | undefined;
   now: () => number;
+  /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
+  web: SessionWebPorts;
 }
 
 class PiBinding implements BindingHandle {
@@ -425,6 +450,7 @@ class PiBinding implements BindingHandle {
   readonly #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
+  readonly #web: SessionWebPorts;
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
@@ -451,6 +477,7 @@ class PiBinding implements BindingHandle {
     this.#context = options.context;
     this.#recovery = options.recovery;
     this.#now = options.now;
+    this.#web = options.web;
   }
 
   get native(): SessionNativeReference {
@@ -496,6 +523,12 @@ class PiBinding implements BindingHandle {
       // desktop Session always has somewhere to put a question, because the
       // chat surface asking it is the same surface that started the turn.
       askUser: (request, signal) => this.#askUser(request, signal),
+      // The web ports are the opposite case and spread rather than assigned, so
+      // a profile with no Web Access configured produces a spec with no
+      // `webFetch` and no `webSearch` FIELD — not one set to undefined. The
+      // runtime registers each tool on the field's presence, so absence is what
+      // keeps the network out of a Session's vocabulary entirely.
+      ...this.#web,
     };
   }
 

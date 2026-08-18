@@ -128,6 +128,8 @@ import type {
   UpdateStateResult,
   UpdateUiState,
   VolliInvokeContract,
+  WebAccessProvider,
+  WebAccessResult,
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
@@ -499,6 +501,32 @@ const api = {
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
     },
+  },
+  /**
+   * Bring-your-own web search. Its own door beside `modelAccess`, for the same
+   * reason that one has one: `setKey` carries an API key, and the instrumented
+   * Session RPC wire is not where a secret belongs.
+   *
+   * One direction only. A key goes in; every call answers with the same
+   * settings view, in which a key is three words about its state and never a
+   * value. There is no call here that reads one back.
+   */
+  webAccess: {
+    /** The current setting — provider, instance URL, and whether a key is held. */
+    get: (): Promise<WebAccessResult> => invoke("volli:web-access-get"),
+    /** Chooses the provider; the SearXNG URL is judged by policy before it is stored. */
+    setProvider: (
+      provider: WebAccessProvider,
+      searxngUrl: string | null,
+    ): Promise<WebAccessResult> => invoke("volli:web-access-set-provider", provider, searxngUrl),
+    /**
+     * Stores the Brave key. The one outbound secret in the app after sign-in,
+     * and one-way: main encrypts it with the OS keychain and it is never read
+     * back, echoed, or put in an error string.
+     */
+    setKey: (key: string): Promise<WebAccessResult> => invoke("volli:web-access-set-key", key),
+    /** Forgets the stored key. The provider choice is left alone. */
+    clearKey: (): Promise<WebAccessResult> => invoke("volli:web-access-clear-key"),
   },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>

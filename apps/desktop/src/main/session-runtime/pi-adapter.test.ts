@@ -427,6 +427,65 @@ describe("Pi native adapter attach", () => {
     expect(runtime.spec.promptResources).toEqual(resources);
   });
 
+  it("offers no web tool to a Session whose profile configured none", async () => {
+    const { runtime } = await attached();
+
+    // Absent rather than present-and-refusing, exactly as `authority` is
+    // omitted rather than neutered: a field the spec does not carry is a tool
+    // the runtime never registers, so the model is not told the web exists.
+    expect("webFetch" in runtime.spec).toBe(false);
+    expect("webSearch" in runtime.spec).toBe(false);
+  });
+
+  it("offers nothing when the resolver answers with no ports", async () => {
+    const { runtime } = await attached({ resolveWebPorts: () => ({}) });
+
+    expect("webFetch" in runtime.spec).toBe(false);
+    expect("webSearch" in runtime.spec).toBe(false);
+  });
+
+  it("hands a configured profile's ports to the Session, calls and all", async () => {
+    const asked: unknown[] = [];
+    const { runtime } = await attached({
+      resolveWebPorts: () => ({
+        webFetch: async (input) => {
+          asked.push({ fetch: input.url });
+          return {
+            requestedUrl: input.url,
+            finalUrl: input.url,
+            origin: new URL(input.url).origin,
+            contentType: "text",
+            text: "a page",
+            truncated: false,
+          };
+        },
+        webSearch: async (input) => {
+          asked.push({ search: input.query });
+          return { provider: "brave", query: input.query, references: [], truncated: false };
+        },
+      }),
+    });
+
+    const signal = new AbortController().signal;
+    await runtime.spec.webFetch?.({ url: "https://example.com/", signal });
+    await runtime.spec.webSearch?.({ query: "electron safeStorage", signal });
+
+    expect(asked).toEqual([{ fetch: "https://example.com/" }, { search: "electron safeStorage" }]);
+  });
+
+  it("resolves the ports once per attachment rather than per turn", async () => {
+    let resolutions = 0;
+    const { runtime } = await attached({
+      resolveWebPorts: () => {
+        resolutions += 1;
+        return {};
+      },
+    });
+
+    expect(runtime.specs).toHaveLength(1);
+    expect(resolutions).toBe(1);
+  });
+
   it("passes the injected model collection and session directory to the runtime factory", async () => {
     const seen: { sessionDataDir: string; models: unknown }[] = [];
     const models = { getModel: () => undefined } as unknown as NonNullable<

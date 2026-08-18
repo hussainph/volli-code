@@ -614,6 +614,45 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
   CHECK (runtime_preferences IS NULL OR json_valid(runtime_preferences));
 `;
 
+/**
+ * Migration 020: the two homes Web Access needs, deliberately apart.
+ *
+ * **`secrets` holds ciphertext and nothing else.** One row per named secret,
+ * the name being Volli's own constant rather than anything a caller composes,
+ * and the payload being whatever the OS keychain handed back through Electron's
+ * `safeStorage`. It is its own table for one reason worth stating: the settings
+ * beside it are read by surfaces that answer the renderer, and a secret sharing
+ * their row is a secret one careless `SELECT *` puts on screen. Nothing here is
+ * readable without the key material the OS holds, so a copied `volli.db` is not
+ * a copied credential.
+ *
+ * **`app_state` was the obvious home for the settings and is the wrong one.**
+ * Every row of it rides the `volli:data-bootstrap` payload to the renderer, and
+ * `volli:app-state-set` lets the renderer write any key it likes with any string
+ * it likes. A provider endpoint that could be written that way would be an
+ * endpoint that never passed `admitSearchEndpoint`, which is the check that
+ * makes a self-hosted URL safe to have at all. So the settings live in their own
+ * main-owned table, reachable only through the validating channel.
+ *
+ * One row, pinned by the `id = 1` check: this is a profile-wide setting, and a
+ * table that could hold two of them is a table someone has to write a
+ * tie-breaker for.
+ */
+const MIGRATION_020_WEB_ACCESS = `
+CREATE TABLE secrets (
+  name       TEXT PRIMARY KEY,
+  ciphertext BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE web_access_settings (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  provider    TEXT NOT NULL CHECK (provider IN ('off', 'brave', 'searxng')),
+  searxng_url TEXT,
+  updated_at  INTEGER NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -701,6 +740,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 19,
     name: "projects.runtime_preferences — the per-project override of the global runtime record",
     sql: MIGRATION_019_PROJECT_RUNTIME_PREFERENCES,
+  },
+  {
+    version: 20,
+    name: "web access — the BYO search provider setting, and ciphertext kept apart from it",
+    sql: MIGRATION_020_WEB_ACCESS,
   },
 ];
 
