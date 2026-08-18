@@ -163,6 +163,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/blob-attach.ts",
         "**/src/main/blob-collect.ts",
         "**/src/main/blob-protocol.ts",
+        "**/src/main/turn-attachments.ts",
         "**/src/main/ipc.ts",
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",

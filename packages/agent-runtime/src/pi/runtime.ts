@@ -31,6 +31,7 @@ import {
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
   type RuntimeFailure,
+  type RuntimeImageInput,
   type SettledMessageObservation,
   type AttentionObservation,
   type RuntimeSessionIdentity,
@@ -178,8 +179,35 @@ function durableMessage(message: AgentMessage): AgentMessage {
   return JSON.parse(JSON.stringify(message)) as AgentMessage;
 }
 
-function queuedUserMessage(text: string): UserMessage {
-  return { role: "user", content: text, timestamp: Date.now() };
+/**
+ * The user message Pi is handed.
+ *
+ * Plain text stays a plain string rather than a one-element block array: that
+ * is the shape every existing Session's sidecar already holds, and Pi's own
+ * `contentText` treats the two identically, so widening only when there is
+ * genuinely an image to carry keeps existing transcripts byte-identical.
+ *
+ * Images ride alongside the text as `ImageContent`, which is the only form a
+ * model can actually look at (VC-50). They persist into Pi's recovery sidecar
+ * with the message, which is exactly why attaching is bounded by a per-image
+ * ceiling AND a per-session budget upstream — see `docs/plans/attachments.md`.
+ */
+function queuedUserMessage(text: string, images: readonly RuntimeImageInput[] = []): UserMessage {
+  if (images.length === 0) {
+    return { role: "user", content: text, timestamp: Date.now() };
+  }
+  return {
+    role: "user",
+    content: [
+      { type: "text", text },
+      ...images.map((image) => ({
+        type: "image" as const,
+        data: image.data,
+        mimeType: image.mimeType,
+      })),
+    ],
+    timestamp: Date.now(),
+  };
 }
 
 const FAILED_ASSISTANT_STOP_REASONS = [
@@ -1015,7 +1043,12 @@ async function attachSession(
     abortListener = onAbort;
 
     const handle: RuntimeAttachmentHandle = {
-      async submitUserMessage(text, delivery = "queue", commandId): Promise<DeliveryOutcome> {
+      async submitUserMessage(
+        text,
+        delivery = "queue",
+        commandId,
+        images = [],
+      ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
@@ -1027,7 +1060,7 @@ async function attachSession(
           };
         }
         if (agent.state.isStreaming) {
-          const message = queuedUserMessage(text);
+          const message = queuedUserMessage(text, images);
           const pending = {
             commandId: commandId ?? null,
             operation: "message.submit" as const,
@@ -1043,7 +1076,7 @@ async function attachSession(
           agent.state.messages.length === 0
             ? composeFirstUserMessage(spec.identity.role, spec.brief, text)
             : text;
-        const message = queuedUserMessage(delivered);
+        const message = queuedUserMessage(delivered, images);
         observationDelivery.consumeFailure();
         pendingRunDelivery = {
           commandId: commandId ?? null,

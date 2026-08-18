@@ -14,6 +14,7 @@
  * facts; an executor states what happened and never what to record.
  */
 
+import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
@@ -683,6 +684,16 @@ export interface RuntimeAttachmentHandle {
     text: string,
     delivery?: RuntimeMessageDelivery,
     commandId?: string,
+    /**
+     * Images to send as content alongside `text`, for this turn (VC-50).
+     *
+     * Trailing and optional so every existing caller is untouched, and
+     * separate from `text` because they are not interchangeable: a runtime
+     * that cannot take images can ignore this and still deliver the message.
+     * The bytes live only as long as the call — what persists is the
+     * `volli-blob:` reference in the message parts.
+     */
+    images?: readonly RuntimeImageInput[],
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;

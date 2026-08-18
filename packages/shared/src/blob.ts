@@ -178,6 +178,32 @@ export interface BlobLinkView {
 }
 
 /**
+ * One image handed to a model as input for a single turn.
+ *
+ * `data` is raw base64 with no `data:` prefix, matching Pi's `ImageContent`.
+ * This value is built at send time and thrown away after; it is never written
+ * to `session_events`, the transcript artifact, or anywhere else durable. The
+ * durable record of an attached image is its `volli-blob:` hash, which is a
+ * few dozen bytes and cannot grow a conversation the way a replayed base64
+ * block can.
+ */
+export interface RuntimeImageInput {
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * The little of an AI SDK `UIMessage` that attachment handling actually reads.
+ *
+ * Structural rather than the real `UIMessage`, so main-process modules can be
+ * tested without the `ai` package and so a part shape this build does not know
+ * about travels through untouched instead of failing a parse.
+ */
+export interface UIMessageLike {
+  parts: readonly { type: string; url?: string; mediaType?: string; filename?: string }[];
+}
+
+/**
  * What attaching a file should actually do, given where it came from.
  *
  * Attach and the `@path` picker overlap on repository files, and they are not

@@ -160,6 +160,7 @@ import {
   resolvePackagedRendererAsset,
 } from "./app-protocol";
 import { collectUnlinkedBlobs } from "./blob-collect";
+import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
@@ -635,6 +636,13 @@ app.whenReady().then(async () => {
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
+          // A turn's attachments (VC-50): materialize them into the Session's
+          // tree so the agent can open any of them by path, and read images
+          // back as base64 so the model can actually see them. Injected here
+          // because the adapter deliberately knows nothing about the database
+          // or the Blob store.
+          prepareTurnAttachments: (message, owner) =>
+            prepareTurnAttachments(dbHandle.db, blobsRoot(app.getPath("userData")), message, owner),
           // Makes `volli` and every detected toolchain resolve inside a
           // structured Session's shell tool whether or not the background
           // install's `~/.local/bin/volli` link is reachable yet — the same
