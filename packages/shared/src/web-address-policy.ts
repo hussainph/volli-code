@@ -44,8 +44,11 @@ function refuse(cls: WebAddressClass, reason: string): WebAddressVerdict {
   return { outcome: "refuse", class: cls, reason };
 }
 
+/** A dotted-quad IPv4 address, expanded. Four octets, never a different count. */
+type Ipv4Octets = readonly [number, number, number, number];
+
 /** Parse dotted-quad IPv4 into its four octets, or nothing if it is not one. */
-function ipv4Octets(address: string): readonly number[] | undefined {
+function ipv4Octets(address: string): Ipv4Octets | undefined {
   const parts = address.split(".");
   if (parts.length !== 4) return undefined;
   const octets: number[] = [];
@@ -58,12 +61,15 @@ function ipv4Octets(address: string): readonly number[] | undefined {
     if (value > 255) return undefined;
     octets.push(value);
   }
-  return octets;
+  // Four in, four out: the length was checked above and every part either
+  // pushed one octet or returned. The assertion carries that fact into the
+  // type so no reader below needs a fallback that cannot happen.
+  return octets as unknown as Ipv4Octets;
 }
 
 /** Classify a dotted-quad IPv4 address against the IANA special-purpose registry. */
-function classifyIpv4(octets: readonly number[]): WebAddressVerdict {
-  const [a = 0, b = 0] = octets;
+function classifyIpv4(octets: Ipv4Octets): WebAddressVerdict {
+  const [a, b] = octets;
   if (a === 0) return refuse("unspecified", "0.0.0.0/8 is not a routable destination.");
   if (a === 127) return refuse("loopback", "127.0.0.0/8 is this machine.");
   if (a === 10) return refuse("private-use", "10.0.0.0/8 is a private network.");
@@ -82,6 +88,16 @@ function classifyIpv4(octets: readonly number[]): WebAddressVerdict {
 }
 
 /**
+ * An expanded IPv6 address: exactly eight 16-bit groups, never fewer.
+ *
+ * A tuple rather than an array because the length is an invariant this module
+ * establishes and then depends on. Spelled as `number[]`, every read below needs
+ * a `?? 0` that can never fire, which is a fallback the tests cannot reach and a
+ * reader cannot tell from a real one.
+ */
+type Ipv6Groups = readonly [number, number, number, number, number, number, number, number];
+
+/**
  * Expand an IPv6 address into its eight 16-bit groups.
  *
  * Handles the two spellings that matter for policy: `::` zero-compression, and
@@ -90,11 +106,15 @@ function classifyIpv4(octets: readonly number[]): WebAddressVerdict {
  * `fe80::1%en0` is still link-local, and reading it as unparsable would file a
  * clear link-local refusal under the wrong name.
  */
-function ipv6Groups(address: string): readonly number[] | undefined {
-  const zoned = address.split("%")[0] ?? "";
+function ipv6Groups(address: string): Ipv6Groups | undefined {
+  // `slice` rather than `split`, so every piece below is a string by
+  // construction and none of them needs a fallback that cannot fire.
+  const zone = address.indexOf("%");
+  const zoned = zone === -1 ? address : address.slice(0, zone);
   if (!zoned.includes(":")) return undefined;
-  const halves = zoned.split("::");
-  if (halves.length > 2) return undefined;
+  const compressedAt = zoned.indexOf("::");
+  // A second `::` makes the address ambiguous about where the zeros went.
+  if (compressedAt !== -1 && zoned.indexOf("::", compressedAt + 1) !== -1) return undefined;
 
   const parseSide = (side: string): number[] | undefined => {
     if (side === "") return [];
@@ -104,8 +124,8 @@ function ipv6Groups(address: string): readonly number[] | undefined {
       if (index === parts.length - 1 && part.includes(".")) {
         const octets = ipv4Octets(part);
         if (octets === undefined) return undefined;
-        groups.push(((octets[0] ?? 0) << 8) | (octets[1] ?? 0));
-        groups.push(((octets[2] ?? 0) << 8) | (octets[3] ?? 0));
+        groups.push((octets[0] << 8) | octets[1]);
+        groups.push((octets[2] << 8) | octets[3]);
         continue;
       }
       if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return undefined;
@@ -114,30 +134,40 @@ function ipv6Groups(address: string): readonly number[] | undefined {
     return groups;
   };
 
-  const head = parseSide(halves[0] ?? "");
-  const tail = halves.length === 2 ? parseSide(halves[1] ?? "") : [];
+  const head = parseSide(compressedAt === -1 ? zoned : zoned.slice(0, compressedAt));
+  const tail = compressedAt === -1 ? [] : parseSide(zoned.slice(compressedAt + 2));
   if (head === undefined || tail === undefined) return undefined;
 
-  if (halves.length === 1) return head.length === 8 ? head : undefined;
-  const missing = 8 - head.length - tail.length;
-  if (missing < 1) return undefined;
-  return [...head, ...Array<number>(missing).fill(0), ...tail];
+  // One `::` stands for at least one zero group, so the two sides together must
+  // leave a gap; without it, the address had to spell all eight itself.
+  if (compressedAt === -1) {
+    if (head.length !== 8) return undefined;
+  } else if (head.length + tail.length > 7) return undefined;
+
+  // Filled from both ends into a tuple that is eight wide from the start, so the
+  // length is true by construction rather than by a check nothing can fail.
+  const groups: [number, number, number, number, number, number, number, number] = [
+    0, 0, 0, 0, 0, 0, 0, 0,
+  ];
+  for (const [index, group] of head.entries()) groups[index] = group;
+  for (const [index, group] of tail.entries()) groups[8 - tail.length + index] = group;
+  return groups;
 }
 
 /** Classify eight expanded IPv6 groups against the IANA special-purpose registry. */
-function classifyIpv6(groups: readonly number[]): WebAddressVerdict {
-  const [g0 = 0, g1 = 0] = groups;
+function classifyIpv6(groups: Ipv6Groups): WebAddressVerdict {
+  const [g0, g1] = groups;
   const leadingZero = groups.slice(0, 5).every((group) => group === 0);
 
   // An IPv4 destination in IPv6 clothing. Both the mapped (`::ffff:a.b.c.d`)
   // and the deprecated compatible (`::a.b.c.d`) forms reach an IPv4 host, so
   // the IPv4 policy has to be the one that answers for them.
   if (leadingZero && (groups[5] === 0xffff || groups[5] === 0)) {
-    const embedded = [
-      ((groups[6] ?? 0) >> 8) & 0xff,
-      (groups[6] ?? 0) & 0xff,
-      ((groups[7] ?? 0) >> 8) & 0xff,
-      (groups[7] ?? 0) & 0xff,
+    const embedded: Ipv4Octets = [
+      (groups[6] >> 8) & 0xff,
+      groups[6] & 0xff,
+      (groups[7] >> 8) & 0xff,
+      groups[7] & 0xff,
     ];
     const allZero = groups.every((group) => group === 0);
     if (allZero) return refuse("unspecified", ":: is not a routable destination.");
@@ -154,7 +184,7 @@ function classifyIpv6(groups: readonly number[]): WebAddressVerdict {
     return refuse("unique-local", "fc00::/7 is a private network, and hosts cloud metadata.");
   if (g0 === 0x2001 && g1 === 0x0db8)
     return refuse("documentation", "2001:db8::/32 is reserved for documentation.");
-  if (g0 === 0x0064 && g1 === 0xff9b && (groups[2] ?? 0) === 1)
+  if (g0 === 0x0064 && g1 === 0xff9b && groups[2] === 1)
     return refuse("reserved", "64:ff9b:1::/48 is local-use translation space.");
   return { outcome: "public" };
 }

@@ -34,6 +34,9 @@ describe("web address classification", () => {
     ["100.64.0.1", "carrier-grade-nat"],
     ["192.0.0.1", "protocol-assignment"],
     ["198.18.0.1", "benchmarking"],
+    // 198.18.0.0/15 spans both 198.18 and 198.19; only testing the first half
+    // would leave the upper one admitted.
+    ["198.19.255.254", "benchmarking"],
     ["224.0.0.1", "multicast"],
     ["255.255.255.255", "multicast"],
   ])("refuses %s as %s", (address, cls) => {
@@ -63,12 +66,43 @@ describe("web address classification", () => {
     ["fd00:ec2::254", "unique-local"],
     ["ff02::1", "multicast"],
     ["2001:db8::1", "documentation"],
+    // 64:ff9b:1::/48 is local-use IPv4/IPv6 translation space. Its sibling
+    // 64:ff9b::/96 is globally reachable, so the third group is what separates
+    // a refusal from an ordinary public address.
+    ["64:ff9b:1::1", "reserved"],
+    ["64:ff9b:1:abcd::1", "reserved"],
+    // `::/96` below the IPv4-compatible range: not loopback, not unspecified,
+    // and not an address anything should be dialling either.
+    ["::2", "reserved"],
+    ["::ffff", "reserved"],
   ])("refuses IPv6 %s as %s", (address, cls) => {
     expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
   });
 
-  it.each(["2606:4700:4700::1111", "2001:4860:4860::8888"])("admits public IPv6 %s", (address) => {
+  it.each([
+    "2606:4700:4700::1111",
+    "2001:4860:4860::8888",
+    // Spelled out in full, with no `::` at all. Every other IPv6 case here uses
+    // compression, so without this one the uncompressed path is never walked.
+    "2606:4700:4700:0000:0000:0000:0000:1111",
+    "2a00:1450:4009:0815:0000:0000:0000:200e",
+  ])("admits public IPv6 %s", (address) => {
     expect(classifyWebAddress(address)).toEqual({ outcome: "public" });
+  });
+
+  it("reads loopback and link-local spelled out in full, without compression", () => {
+    expect(classifyWebAddress("0000:0000:0000:0000:0000:0000:0000:0001")).toMatchObject({
+      class: "loopback",
+    });
+    expect(classifyWebAddress("fe80:0000:0000:0000:0000:0000:0000:0001")).toMatchObject({
+      class: "link-local",
+    });
+  });
+
+  it("reads a scoped link-local address as link-local, not as unparsable", () => {
+    // `%en0` is how a link-local address is actually written on a Mac. Refusing
+    // it as unreadable would file a clear link-local refusal under the wrong name.
+    expect(classifyWebAddress("fe80::1%en0")).toMatchObject({ class: "link-local" });
   });
 
   /**
@@ -95,4 +129,28 @@ describe("web address classification", () => {
       expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse" });
     },
   );
+
+  /**
+   * Malformed IPv6 is refused rather than padded into something classifiable.
+   * An address that is short of eight groups without a `::` to say where the
+   * zeros went is ambiguous, and guessing would mean classifying an address
+   * nobody wrote.
+   */
+  it.each([
+    ["1:2:3:4:5:6:7", "seven groups and no ::"],
+    ["1:2:3:4:5:6:7:8:9", "nine groups"],
+    ["1:2:3:4::5:6:7:8", ":: that stands for nothing"],
+    ["1::2::3", "two ::"],
+    ["12345::1", "a group wider than 16 bits"],
+    ["::fffg", "a non-hex digit"],
+    // A trailing dotted quad is how IPv4 rides inside IPv6, so a malformed one
+    // has to fail the whole address rather than the four octets quietly.
+    ["::ffff:999.1.1.1", "an out-of-range embedded octet"],
+    ["::ffff:1.2.3", "a short embedded quad"],
+  ])("refuses malformed IPv6 %s (%s)", (address) => {
+    expect(classifyWebAddress(address)).toMatchObject({
+      outcome: "refuse",
+      class: "unparsable",
+    });
+  });
 });

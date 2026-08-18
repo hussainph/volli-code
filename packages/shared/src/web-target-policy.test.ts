@@ -16,6 +16,21 @@ describe("web target admission", () => {
   });
 
   /**
+   * Fails closed at the very first step. A string the URL parser cannot read is
+   * refused rather than passed along in the hope that something downstream will
+   * make sense of it — the model supplies this argument, so it can be anything.
+   */
+  it.each(["", "not a url", "http://", "://example.com", "   "])(
+    "refuses %o, which does not parse as a URL at all",
+    (input) => {
+      expect(admitWebTarget(input)).toMatchObject({
+        outcome: "refuse",
+        rule: "target.unparsable",
+      });
+    },
+  );
+
+  /**
    * The refusal that makes the rest of the policy meaningful: everything below
    * reasons about hosts and addresses, and a scheme that never resolves a host
    * would walk straight past all of it. `file:` and `data:` read local bytes
