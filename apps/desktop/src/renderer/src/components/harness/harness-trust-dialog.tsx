@@ -87,7 +87,7 @@ export function HarnessTrustDialog() {
               boundary, stated once. The command line below is the subject of
               the sentence, not an illustration of it. */}
           <AlertDialogDescription>
-            Volli will run this command every time a session starts this harness.
+            Volli runs this command each time you start a Session with this harness.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="flex flex-col gap-2">

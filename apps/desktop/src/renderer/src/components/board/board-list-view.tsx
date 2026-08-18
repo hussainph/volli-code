@@ -273,7 +273,7 @@ export function BoardListView({
   if (shownStatuses.length === 0 && emptyDropStatuses.length === 0) {
     return (
       <div className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-sm text-muted-foreground">No tickets match</p>
+        <p className="text-sm text-muted-foreground">No tickets match the current filters.</p>
       </div>
     );
   }

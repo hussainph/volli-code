@@ -186,7 +186,7 @@ export function TicketChangesList({
         tone="positive"
         layout="stack"
         icon={CheckCircleIcon}
-        title="No changes vs base"
+        title="No changes from base"
         detail="The branch is up to date."
         data-testid="ticket-changes-empty"
         className={RAIL_PANEL_MARGIN}
@@ -436,8 +436,14 @@ export function TicketChangesPanel({
   if (ticket.worktreePath === null) {
     return (
       <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-ui text-muted-foreground/70">Move this ticket to Doing to start one</p>
+        <p className="text-ui font-medium text-muted-foreground">
+          {ticket.usesWorktree ? "Worktree not created" : "Project checkout in use"}
+        </p>
+        <p className="text-ui text-muted-foreground/70">
+          {ticket.usesWorktree
+            ? "Start a Session to create it."
+            : "This ticket has no separate worktree."}
+        </p>
       </div>
     );
   }

@@ -39,7 +39,9 @@ export function ConfigurePage() {
             <SlidersHorizontalIcon className="size-5 text-muted-foreground" />
           </div>
           <h1 className="text-heading font-semibold">Nothing to configure</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">Select a project first.</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Select a project to configure it.
+          </p>
         </div>
       </div>
     );
@@ -62,8 +64,7 @@ export function ConfigurePage() {
       key: "appearance",
       label: "Appearance",
       icon: PaletteIcon,
-      description:
-        "Theming for this project only. Every surface inherits the app-wide choice until you say otherwise.",
+      description: "Override app-wide theme settings for this project.",
       content: <ProjectAppearanceSettings project={project} />,
     },
     {
@@ -125,7 +126,7 @@ function BaseBranchField({
     <SettingsRow
       label="Default base branch"
       htmlFor="project-base-branch"
-      description="New worktrees branch from here."
+      description="New worktrees use this branch as their base."
     >
       <Input
         id="project-base-branch"
@@ -175,7 +176,7 @@ function SetupCommandField({
     <SettingsRow
       label="Setup command"
       htmlFor="project-setup-command"
-      description="Runs once, right after the worktree is created."
+      description="Runs once after Volli creates the worktree."
     >
       <Input
         id="project-setup-command"
@@ -210,14 +211,15 @@ function CopySetInfo() {
   return (
     <SettingsSection title="Copied files" icon={TreeStructureIcon}>
       <p className="text-ui leading-5 text-muted-foreground">
-        By default: <code className="rounded-sm bg-muted px-1 py-1 font-mono">.env*</code> and{" "}
+        Volli copies <code className="rounded-sm bg-muted px-1 py-1 font-mono">.env*</code> and{" "}
         <code className="rounded-sm bg-muted px-1 py-1 font-mono">.claude/settings.local.json</code>
-        .
+        by default.
       </p>
       <p className="mt-2 text-ui leading-5 text-muted-foreground">
-        Add a <code className="rounded-sm bg-muted px-1 py-1 font-mono">.worktreeinclude</code> at
-        the repo root to change the set. Gitignore syntax;{" "}
-        <code className="rounded-sm bg-muted px-1 py-1 font-mono">!</code> negates.
+        Add a <code className="rounded-sm bg-muted px-1 py-1 font-mono">.worktreeinclude</code> file
+        at the repository root to change the copy set. It uses gitignore syntax.{" "}
+        <code className="rounded-sm bg-muted px-1 py-1 font-mono">!</code> suppresses an earlier
+        pattern.
       </p>
     </SettingsSection>
   );

@@ -549,7 +549,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           <SessionBandFilterMenu filter={filter} onChange={setFilter} />
         </SessionBandHeader>
         {listing.previous.length === 0 ? (
-          <p className={EMPTY_INLINE}>Nothing yet</p>
+          <p className={EMPTY_INLINE}>No previous sessions</p>
         ) : (
           <SidebarMenu>
             {listing.previous.map((row) => (

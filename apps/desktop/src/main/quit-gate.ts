@@ -95,12 +95,12 @@ export function planUnsavedQuit(input: {
 /** The dialog's detail line: what is about to be lost, named while that stays readable. */
 export function quitConfirmDetail(names: readonly string[]): string {
   if (names.length === 1) {
-    return `${names[0]} has unsaved changes. Quitting will discard them.`;
+    return `You have unsaved changes in ${names[0]}. Quitting discards them.`;
   }
   const shown = names.slice(0, MAX_NAMED_FILES).join(", ");
   const remaining = names.length - MAX_NAMED_FILES;
   const list = remaining > 0 ? `${shown}, and ${remaining} more` : shown;
-  return `${names.length} files have unsaved changes (${list}). Quitting will discard them.`;
+  return `${names.length} files have unsaved changes (${list}). Quitting discards them.`;
 }
 
 /**

@@ -40,7 +40,7 @@ describe("Notice", () => {
 
   it("tints the block only for a fault", () => {
     const error = renderToStaticMarkup(<Notice tone="error" title="Worktree setup failed." />);
-    const positive = renderToStaticMarkup(<Notice tone="positive" title="No changes vs base" />);
+    const positive = renderToStaticMarkup(<Notice tone="positive" title="No changes from base" />);
 
     expect(error).toContain("bg-destructive/10");
     expect(error).toContain("text-destructive");
@@ -51,7 +51,7 @@ describe("Notice", () => {
   it("lifts a title out of the block's ink only when a detail sits under it", () => {
     const alone = renderToStaticMarkup(<Notice title="Changed elsewhere." />);
     const withDetail = renderToStaticMarkup(
-      <Notice title="No changes vs base" detail="The branch is up to date." />,
+      <Notice title="No changes from base" detail="The branch is up to date." />,
     );
     const fault = renderToStaticMarkup(
       <Notice tone="error" title="Read failed" detail="missing on disk" />,

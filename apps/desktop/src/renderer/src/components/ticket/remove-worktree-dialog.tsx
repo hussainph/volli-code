@@ -105,7 +105,9 @@ export function RemoveWorktreeDialog({
             {step === "confirm" ? "Remove worktree?" : "Worktree has uncommitted work"}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {step === "confirm" ? "The branch is kept. Only the folder is removed." : dirtyReason}
+            {step === "confirm"
+              ? "Volli keeps the branch and removes only the worktree folder."
+              : dirtyReason}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

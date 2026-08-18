@@ -774,7 +774,7 @@ export function FileView({
   return (
     <div className={cn("flex-1", EMPTY_PAGE, "gap-4")}>
       <FolderOpenIcon className="size-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
+      <p className="text-sm text-muted-foreground">Volli can&apos;t preview {name} here.</p>
       <Button size="sm" variant="secondary" onClick={() => void handleReveal()}>
         <FolderOpenIcon />
         Reveal in Finder

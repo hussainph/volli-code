@@ -224,7 +224,7 @@ function CommitGateDialog({
             aria-label="Commit message"
             value={message}
             onChange={(event) => setMessage(event.target.value)}
-            placeholder="Commit message (blank generates one)"
+            placeholder="Leave blank to generate a commit message"
           />
           <label className="flex w-fit items-center gap-2 text-ui text-foreground">
             <input
@@ -240,7 +240,7 @@ function CommitGateDialog({
           {/* The one line this dialog is allowed (CLAUDE.md: irreversible
               confirms). It names the boundary — git can undo this, Volli
               cannot — which is the whole reason the gate exists. */}
-          <p className="text-ui text-muted-foreground">Volli can't undo a commit.</p>
+          <p className="text-ui text-muted-foreground">Volli can&apos;t undo a commit.</p>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
@@ -925,7 +925,7 @@ export function TicketRepositorySummary({
   const loadingChanges = hasWorktree && diff === null && fault === null;
   const changesLabel = !hasWorktree
     ? ticket.usesWorktree
-      ? "New worktree on first session"
+      ? "New worktree on first Session"
       : "Runs in the main checkout"
     : diff === null
       ? // Never got a snapshot: the banner below carries the fault and its

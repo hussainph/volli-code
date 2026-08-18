@@ -144,7 +144,7 @@ describe("CanvasEditor", () => {
     const html = render(STRANDING, "light");
 
     expect(html).toContain('data-testid="canvas-contrast-stranded"');
-    expect(html).toContain("Sidebar nav can&#x27;t reach its contrast floor");
+    expect(html).toContain("Sidebar nav does not meet its contrast floor");
   });
 
   // A blocked state earns one line and one action (AGENTS.md, UI copy). The
@@ -174,7 +174,7 @@ describe("CanvasEditor", () => {
     const html = render(STRANDING, "light");
 
     expect(html).toContain('data-testid="canvas-contrast-ease"');
-    expect(html).toContain("Ease vibrancy to");
+    expect(html).toContain("Set vibrancy to");
   });
 
   it("raises no alarm for the same canvas in dark, where the ladder has room", () => {

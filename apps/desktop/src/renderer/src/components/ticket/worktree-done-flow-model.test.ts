@@ -97,11 +97,11 @@ describe("resolveDoneFlow — primary action", () => {
     );
   });
 
-  it("is a disabled 'Create draft PR' with 'No changes vs base yet' when clean and even with base", () => {
+  it("is a disabled 'Create draft PR' with 'No changes from base yet' when clean and even with base", () => {
     const { primary } = view(status({ aheadOfBase: 0 }), null);
     expect(primary.kind).toBe("create-pr");
     expect(primary.disabled).toBe(true);
-    expect(primary.reason).toBe("No changes vs base yet");
+    expect(primary.reason).toBe("No changes from base yet");
   });
 
   it("is a disabled 'Create draft PR' with 'Base branch not resolved' when the base is unknown", () => {

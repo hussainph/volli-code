@@ -48,7 +48,7 @@ export function FileSaveGuardDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Save changes to {name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            {name} has unsaved changes. Closing it without saving discards them.
+            You have unsaved changes in {name}. Closing it without saving discards them.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

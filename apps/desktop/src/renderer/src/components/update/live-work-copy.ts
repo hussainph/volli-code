@@ -32,27 +32,27 @@ export function liveWorkLines(work: LiveWork): string[] {
     const names = Array.from(new Set(work.busyCommands)).join(", ");
     lines.push(
       work.busyCommands.length === 1
-        ? `1 terminal is running “${names}” — restarting will end it.`
-        : `${work.busyCommands.length} terminals are running foreground work (${names}) — restarting will end them.`,
+        ? `1 terminal is running “${names}”. Restarting ends it.`
+        : `${work.busyCommands.length} terminals are running foreground work (${names}). Restarting ends them.`,
     );
   }
 
   if (work.openAgentSessions > 0) {
     lines.push(
       work.openAgentSessions === 1
-        ? "1 agent Session has a turn open — restarting will interrupt it."
-        : `${work.openAgentSessions} agent Sessions have turns open — restarting will interrupt them.`,
+        ? "1 agent Session has a turn open. Restarting interrupts it."
+        : `${work.openAgentSessions} agent Sessions have turns open. Restarting interrupts them.`,
     );
   }
 
   if (work.unsavedDrafts.length === 1) {
-    lines.push(`“${work.unsavedDrafts[0]}” has unsaved changes — restarting will discard them.`);
+    lines.push(`“${work.unsavedDrafts[0]}” has unsaved changes. Restarting discards them.`);
   } else if (work.unsavedDrafts.length > 1) {
     const shown = work.unsavedDrafts.slice(0, MAX_NAMED_FILES).join(", ");
     const remaining = work.unsavedDrafts.length - MAX_NAMED_FILES;
     const list = remaining > 0 ? `${shown}, and ${remaining} more` : shown;
     lines.push(
-      `${work.unsavedDrafts.length} files have unsaved changes (${list}) — restarting will discard them.`,
+      `${work.unsavedDrafts.length} files have unsaved changes (${list}). Restarting discards them.`,
     );
   }
 

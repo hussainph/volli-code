@@ -13,7 +13,7 @@
  * THREE TONES, NOT FOUR. `error` tints the whole block, because a fault has to
  * be legible before it is read. Everything else leaves the block quiet and lets
  * the mark carry the meaning — which is what `positive` is: a neutral surface
- * with a green check, exactly as the Diffs page's "No changes vs base" card
+ * with a green check, exactly as the Diffs page's "No changes from base" card
  * already drew it. The audit proposed a fourth, `waiting`, and no site in the
  * app has ever drawn one differently from `neutral`: the chat plane's waiting
  * blocker is a muted block with a clock in it, and the clock is the caller's

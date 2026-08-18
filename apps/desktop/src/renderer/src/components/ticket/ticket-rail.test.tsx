@@ -160,7 +160,7 @@ describe("TicketRail's repository card before the first read lands", () => {
     // everywhere. The row now states the scoping while it still matters.
     const html = render(ticketWithoutWorktree);
 
-    expect(html).toContain('aria-label="New worktree on first session, show Diffs"');
+    expect(html).toContain('aria-label="New worktree on first Session, show Diffs"');
     expect(html).not.toContain("No worktree yet");
     expect(html).not.toContain("No changes");
     expect(html).not.toContain('data-testid="ticket-repository-changes-loading"');

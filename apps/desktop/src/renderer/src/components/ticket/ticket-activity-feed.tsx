@@ -245,7 +245,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
               <AlertDialogContent size="sm">
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete comment?</AlertDialogTitle>
-                  <AlertDialogDescription>This can’t be undone.</AlertDialogDescription>
+                  <AlertDialogDescription>You can&apos;t undo this.</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>

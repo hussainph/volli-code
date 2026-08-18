@@ -170,7 +170,7 @@ function ArchiveList({ project }: { project: Project }) {
     <>
       <DialogHeader>
         <DialogTitle>Archive</DialogTitle>
-        <DialogDescription>Archived tickets in {project.name}</DialogDescription>
+        <DialogDescription>Tickets archived in {project.name}.</DialogDescription>
       </DialogHeader>
       {/* `undefined` = not loaded yet (a fetch is in flight); `[]` = loaded,
           genuinely empty. Distinguishing them avoids flashing "empty" before
@@ -217,7 +217,7 @@ function ArchiveList({ project }: { project: Project }) {
             <AlertDialogTitle>Delete permanently?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingDelete
-                ? `${displayTicketId(project.ticketPrefix, pendingDelete.ticketNumber)} “${pendingDelete.title}” and its full history will be permanently deleted. This can’t be undone.`
+                ? `This permanently deletes ${displayTicketId(project.ticketPrefix, pendingDelete.ticketNumber)} “${pendingDelete.title}” and its full history. You can’t undo this.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>

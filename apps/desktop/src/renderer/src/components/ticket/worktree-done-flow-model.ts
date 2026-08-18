@@ -75,7 +75,7 @@ export interface DoneFlowView {
 
 // Disabled-reason copy — one source of truth so the view and tests agree.
 const REASON_LOADING = "Loading…";
-const REASON_NO_CHANGES = "No changes vs base yet";
+const REASON_NO_CHANGES = "No changes from base yet";
 const REASON_BASE_UNRESOLVED = "Base branch not resolved";
 const REASON_SEQUENCER = "Merge in progress. Finish it in the terminal.";
 const REASON_CLEAN_TREE = "Working tree clean";

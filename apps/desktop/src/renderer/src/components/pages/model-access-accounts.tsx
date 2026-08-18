@@ -406,7 +406,7 @@ function SignInPromptView({
         </label>
         <Select disabled={answering} onValueChange={onAnswer}>
           <SelectTrigger id={inputId} className="w-full">
-            <SelectValue placeholder="Choose" />
+            <SelectValue placeholder="Choose an option" />
           </SelectTrigger>
           <SelectContent>
             {prompt.options.map((option) => (

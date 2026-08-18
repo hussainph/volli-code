@@ -80,13 +80,13 @@ describe("planUnsavedQuit", () => {
 describe("quitConfirmDetail", () => {
   it("names the single unsaved file", () => {
     expect(quitConfirmDetail(["train.py"])).toBe(
-      "train.py has unsaved changes. Quitting will discard them.",
+      "You have unsaved changes in train.py. Quitting discards them.",
     );
   });
 
   it("counts and lists a handful", () => {
     expect(quitConfirmDetail(["train.py", "model.py"])).toBe(
-      "2 files have unsaved changes (train.py, model.py). Quitting will discard them.",
+      "2 files have unsaved changes (train.py, model.py). Quitting discards them.",
     );
   });
 
@@ -94,7 +94,7 @@ describe("quitConfirmDetail", () => {
   it("truncates a long list", () => {
     const names = ["a.py", "b.py", "c.py", "d.py", "e.py", "f.py"];
     expect(quitConfirmDetail(names)).toBe(
-      "6 files have unsaved changes (a.py, b.py, c.py, d.py, and 2 more). Quitting will discard them.",
+      "6 files have unsaved changes (a.py, b.py, c.py, d.py, and 2 more). Quitting discards them.",
     );
   });
 });

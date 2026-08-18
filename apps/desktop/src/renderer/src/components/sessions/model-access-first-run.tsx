@@ -99,7 +99,9 @@ export function ModelAccessFirstRun() {
     <>
       <CpuIcon className="size-8 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">
-        {signedIn ? "Choose a default model to start." : "Connect a model provider to start."}
+        {signedIn
+          ? "Choose a default model to start a Session."
+          : "Sign in to a model provider to start a Session."}
       </p>
       <div className="flex items-center gap-2">
         {!signedIn && signInOptions.length > 0 ? (

@@ -100,7 +100,7 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
       <SettingsSection title={project.name}>
         {/* A note and a button are not a row, so nothing else spaces them. */}
         <div className="flex flex-col items-start gap-2">
-          <InheritNote>Loading this project&rsquo;s appearance…</InheritNote>
+          <InheritNote>Loading project appearance…</InheritNote>
           <Button
             variant="outline"
             size="sm"
@@ -191,7 +191,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
     >
       {choice.kind === "inherit" ? (
         <div data-testid="project-appearance-canvas-inherit">
-          <InheritNote>Following app-wide canvas.</InheritNote>
+          <InheritNote>Following the app-wide canvas.</InheritNote>
         </div>
       ) : (
         <>

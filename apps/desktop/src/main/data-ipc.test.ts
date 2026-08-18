@@ -1189,7 +1189,8 @@ describe("volli:worktree-remove", () => {
   it("surfaces a dirty-worktree refusal as a typed error", async () => {
     vi.mocked(removeWorktree).mockResolvedValue({
       ok: false,
-      error: "Worktree has uncommitted work (dirty). Confirm removal to discard it.",
+      error:
+        "Worktree has uncommitted work (dirty). Confirm to remove it and discard its local work.",
     });
 
     const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
@@ -1199,7 +1200,8 @@ describe("volli:worktree-remove", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Worktree has uncommitted work (dirty). Confirm removal to discard it.",
+      error:
+        "Worktree has uncommitted work (dirty). Confirm to remove it and discard its local work.",
     });
   });
 

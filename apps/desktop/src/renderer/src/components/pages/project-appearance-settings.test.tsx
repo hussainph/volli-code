@@ -33,7 +33,7 @@ describe("Configure → Appearance", () => {
     // on "Loading…" for as long as it stays open, with nothing to press.
     const html = renderToStaticMarkup(<ProjectAppearanceSettings project={project} />);
 
-    expect(html).toContain("Loading this project");
+    expect(html).toContain("Loading project appearance");
     expect(html).toContain("Retry");
     expect(html).toContain("Voltaic");
   });

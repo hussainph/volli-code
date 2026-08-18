@@ -850,7 +850,7 @@ function FloorReading({ reading }: { reading: CanvasFloorReading }) {
         </span>{" "}
         <span className="text-muted-foreground/70">
           {reading.capped
-            ? `— at this canvas's ceiling, ${lcLabel(reading.shortfall)} under a floor of ${lcLabel(reading.floor)}`
+            ? `at this canvas's ceiling, ${lcLabel(reading.shortfall)} below a floor of ${lcLabel(reading.floor)}`
             : `of ${lcLabel(reading.floor)}`}
         </span>
       </span>
@@ -914,10 +914,10 @@ function ContrastReport({
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">
               {report.stranded.length === 1
-                ? `${report.stranded[0].what} can't reach its contrast floor on this canvas.`
+                ? `${report.stranded[0].what} does not meet its contrast floor on this canvas.`
                 : `${report.stranded
                     .map((reading) => reading.what.toLowerCase())
-                    .join(" and ")} can't reach their contrast floors on this canvas.`}
+                    .join(" and ")} do not meet their contrast floors on this canvas.`}
             </p>
             {eased === null ? null : (
               <Button
@@ -928,7 +928,7 @@ function ContrastReport({
                 data-testid="canvas-contrast-ease"
               >
                 <SlidersHorizontalIcon />
-                Ease vibrancy to {percentLabel(eased)}
+                Set vibrancy to {percentLabel(eased)}
               </Button>
             )}
           </div>

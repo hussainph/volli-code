@@ -247,9 +247,18 @@ export function TicketFilesPanel({
   if (ticket.worktreePath === null && nav.referenced.length === 0) {
     return (
       <div data-testid="ticket-files-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
+        <p className="text-ui font-medium text-muted-foreground">
+          {ticket.usesWorktree ? "Worktree not created" : "Project checkout in use"}
+        </p>
         <p className="text-ui text-muted-foreground/70">
-          Reference files in the Ticket Body with @path
+          {ticket.usesWorktree ? (
+            <>
+              Add an <code className="font-mono">@path</code> reference to the Ticket Body to list a
+              file here.
+            </>
+          ) : (
+            "This ticket has no separate worktree."
+          )}
         </p>
       </div>
     );

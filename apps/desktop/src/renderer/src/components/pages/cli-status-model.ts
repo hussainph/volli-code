@@ -39,7 +39,7 @@ function linkRow(status: CliToolStatus): CliStatusRow {
             label: "Command",
             tone: "muted",
             value: "Removed",
-            detail: "Reinstall from File → Install Volli CLI & Agent Skills.",
+            detail: "Use File → Install Volli CLI & Agent Skills to reinstall it.",
           }
         : { key: "link", label: "Command", tone: "warn", value: "Not linked", detail: link.path };
     case "foreign":
@@ -55,7 +55,7 @@ function linkRow(status: CliToolStatus): CliStatusRow {
         key: "link",
         label: "Command",
         tone: "warn",
-        value: "A file of yours holds the name",
+        value: "A regular file already uses this name",
         detail: link.path,
       };
   }
@@ -91,7 +91,8 @@ function shellRow(status: CliToolStatus): CliStatusRow {
       key: "shell",
       label: "Shell chain",
       tone: "muted",
-      value: `${shell.name} — zsh only for now`,
+      value: "Unsupported shell",
+      detail: `${shell.name} is not supported. Volli supports zsh.`,
     };
   }
   return shell.chainActive
@@ -131,14 +132,15 @@ export function cliStatusRows(status: CliToolStatus): CliStatusRow[] {
       label: "Legacy link",
       tone: "muted",
       value: "Old /usr/local/bin link remains",
-      detail: "Admin-owned; harmless, and safe to delete yourself.",
+      detail:
+        "An administrator owns this link. It does not affect Volli, and you can delete it yourself.",
     });
   } else if (status.legacy.state === "foreign") {
     rows.push({
       key: "legacy",
       label: "Legacy link",
       tone: "warn",
-      value: "Another volli sits in /usr/local/bin",
+      value: "Another Volli link is present",
       detail: status.legacy.path,
     });
   }

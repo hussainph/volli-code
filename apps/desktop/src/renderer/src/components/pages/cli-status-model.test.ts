@@ -70,7 +70,7 @@ describe("cliStatusRows", () => {
     );
     expect(row(file, "link")).toMatchObject({
       tone: "warn",
-      value: "A file of yours holds the name",
+      value: "A regular file already uses this name",
     });
   });
 
@@ -106,7 +106,8 @@ describe("cliStatusRows", () => {
     );
     expect(row(fish, "shell")).toMatchObject({
       tone: "muted",
-      value: "fish — zsh only for now",
+      value: "Unsupported shell",
+      detail: "fish is not supported. Volli supports zsh.",
     });
   });
 

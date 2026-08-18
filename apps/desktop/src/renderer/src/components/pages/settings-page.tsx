@@ -178,7 +178,7 @@ function DoneTtlField() {
     <SettingsRow
       label="Archive Done tickets after"
       htmlFor="done-ttl-days"
-      description="Only tickets with no open PR."
+      description="A ticket must have no open pull request."
     >
       <Input
         id="done-ttl-days"
@@ -321,7 +321,7 @@ function DirtyWorktreesList() {
   return (
     <SettingsSection
       title="Orphaned worktrees"
-      description="Uncommitted work left behind by removed tickets. Never deleted automatically."
+      description="Volli keeps worktrees it cannot verify as safe to remove. It never deletes them automatically."
       action={refreshAction}
     >
       <div className="flex flex-col gap-1">
@@ -395,8 +395,8 @@ function DirtyWorktreesList() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this worktree?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deletes <span className="font-mono text-foreground">{pendingDelete?.path}</span> and
-              the uncommitted work inside it. Can't be undone.
+              This deletes <span className="font-mono text-foreground">{pendingDelete?.path}</span>
+              and everything inside it. You can&apos;t undo this.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

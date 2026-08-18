@@ -55,9 +55,9 @@ export interface DirtyInput {
 function checkStatus(git: RunGit, cwd: string): DirtyResult {
   try {
     const status = git(["status", "--porcelain"], cwd);
-    return status.trim().length > 0 ? dirty("uncommitted or untracked changes") : CLEAN;
+    return status.trim().length > 0 ? dirty("Uncommitted or untracked changes.") : CLEAN;
   } catch {
-    return dirty("could not read git status");
+    return dirty("Git could not read the worktree status.");
   }
 }
 
@@ -66,9 +66,9 @@ function checkSequencer(git: RunGit, cwd: string): DirtyResult {
   // worktree is never assumed clean; `active` is the mid-flight operation.
   switch (detectSequencerState(git, cwd)) {
     case "unknown":
-      return dirty("could not resolve the worktree's git directory");
+      return dirty("Git could not resolve the worktree's Git directory.");
     case "active":
-      return dirty("an in-progress merge, rebase, cherry-pick, revert, or bisect");
+      return dirty("An in-progress merge, rebase, cherry-pick, revert, or bisect.");
     default:
       return CLEAN;
   }
@@ -85,10 +85,10 @@ function checkUnreachableCommits(git: RunGit, input: DirtyInput): DirtyResult {
   try {
     const out = git(args, input.worktreePath);
     return out.trim().length > 0
-      ? dirty("commits not reachable from the base or any remote")
+      ? dirty("Commits are not reachable from the base or any remote.")
       : CLEAN;
   } catch {
-    return dirty("could not compare the branch against its base and remotes");
+    return dirty("Git could not compare the branch with its base and remotes.");
   }
 }
 
@@ -96,7 +96,7 @@ function checkLock(git: RunGit, input: DirtyInput): DirtyResult {
   const target = canonicalize(input.worktreePath);
   const findLocked = (entries: readonly WorktreeListEntry[]): DirtyResult => {
     const entry = entries.find((e) => canonicalize(e.path) === target);
-    return entry?.locked ? dirty("the worktree is locked (git worktree lock)") : CLEAN;
+    return entry?.locked ? dirty("The worktree is locked by Git.") : CLEAN;
   };
   // Reuse the caller's listing when given (sweep hot path); else spawn our own.
   if (input.worktreeEntries) return findLocked(input.worktreeEntries);
@@ -105,7 +105,7 @@ function checkLock(git: RunGit, input: DirtyInput): DirtyResult {
       parseWorktreeList(git(["worktree", "list", "--porcelain"], input.worktreePath)),
     );
   } catch {
-    return dirty("could not read the worktree lock state");
+    return dirty("Git could not read the worktree lock state.");
   }
 }
 
@@ -118,9 +118,9 @@ function checkSubmodules(git: RunGit, cwd: string): DirtyResult {
     // submodule repo starts `-` — counting it would make non-forced remove and
     // the auto-sweep permanently refuse.
     const drifted = out.split("\n").some((line) => /^[+U]/.test(line));
-    return drifted ? dirty("submodule drift") : CLEAN;
+    return drifted ? dirty("The worktree has submodule drift.") : CLEAN;
   } catch {
-    return dirty("could not read submodule status");
+    return dirty("Git could not read submodule status.");
   }
 }
 

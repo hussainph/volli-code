@@ -93,7 +93,7 @@ describe("TicketChangesList", () => {
 
   it("renders a framed empty state when there are no changes", () => {
     const html = render([]);
-    expect(html).toContain("No changes vs base");
+    expect(html).toContain("No changes from base");
     expect(html).toContain("The branch is up to date.");
   });
 

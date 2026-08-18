@@ -115,7 +115,8 @@ export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
         if (registeredPaths.has(leafCanonical) || knownPaths.has(leafCanonical)) continue;
         report.dirty.push({
           path: leafPath,
-          reason: "Not registered with git, so it isn't safe to remove automatically.",
+          reason:
+            "This worktree is not registered with Git, so Volli cannot remove it automatically.",
         });
       }
     }

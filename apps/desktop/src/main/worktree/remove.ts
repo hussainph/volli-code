@@ -98,9 +98,10 @@ export async function remove(
     if (dirty.dirty) {
       // The stable shared prefix is the remove dialog's escalation contract:
       // ONLY this refusal may offer the destructive force step.
+      const reason = (dirty.reason ?? "dirty").replace(/[.!?]+$/, "");
       return err(
-        `${WORKTREE_DIRTY_REFUSAL_PREFIX} (${dirty.reason ?? "dirty"}). ` +
-          `Confirm removal to discard it.`,
+        `${WORKTREE_DIRTY_REFUSAL_PREFIX} (${reason}). ` +
+          `Confirm to remove it and discard its local work.`,
       );
     }
   }
