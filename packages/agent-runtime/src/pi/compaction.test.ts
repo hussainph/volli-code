@@ -24,6 +24,7 @@ import {
   contextMessages,
   contextWindowOf,
   conversationPath,
+  estimatedContextTokens,
   occupiedContextTokens,
   type ConversationReader,
 } from "./compaction";
@@ -168,6 +169,24 @@ describe("occupiedContextTokens", () => {
         ),
       ]),
     ).toBeUndefined();
+  });
+});
+
+describe("estimatedContextTokens", () => {
+  it("counts what a context holds without asking what the model measured", () => {
+    // Pi's heuristic is four characters to the token, per message.
+    expect(estimatedContextTokens([user("a".repeat(400))])).toBe(100);
+    expect(estimatedContextTokens([])).toBe(0);
+  });
+
+  it("ignores the stale usage a retained reply still carries", () => {
+    // The one number an estimate of a *compacted* context must not start from:
+    // the tail keeps the usage of the reply that overflowed, and reading it back
+    // would report the window as full immediately after emptying it. Pi's own
+    // `estimateContextTokens` would answer 200,000 here.
+    const retained = assistant("short", { usage: usage({ input: 200_000, totalTokens: 200_000 }) });
+
+    expect(estimatedContextTokens([retained])).toBeLessThan(100);
   });
 });
 

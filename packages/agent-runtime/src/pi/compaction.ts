@@ -35,6 +35,7 @@
 import {
   buildSessionContext,
   compact,
+  estimateTokens,
   getLastAssistantUsage,
   getOrThrow,
   prepareCompaction,
@@ -153,6 +154,25 @@ export function conversationPath(entries: readonly Entry[], reader: Conversation
     if (entry.type === "message") return reader.replayable(entry) ? [entry] : [];
     return [entry];
   });
+}
+
+/**
+ * What a context is expected to occupy before anything has measured it.
+ *
+ * Pi's per-message character heuristic, summed — deliberately not its
+ * `estimateContextTokens`, which would start from the newest measured usage in
+ * the list. On a *compacted* context that measurement is the one number this
+ * must not use: the retained tail still carries the usage of the reply that
+ * overflowed, and reading it back would report the window as full immediately
+ * after emptying it.
+ *
+ * This is the one estimate in this module and it decides nothing. Compaction
+ * still triggers on measurement alone ({@link occupiedContextTokens}); an
+ * estimate is only what can honestly be said about a context the model has not
+ * answered on yet.
+ */
+export function estimatedContextTokens(messages: readonly AgentMessage[]): number {
+  return messages.reduce((total, message) => total + estimateTokens(message), 0);
 }
 
 /**

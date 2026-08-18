@@ -85,6 +85,15 @@ One model response attempt on a Conversation Branch. Regeneration creates a
 sibling Attempt and retains the earlier result.
 _Avoid_: retry count, overwritten response
 
+**Context Compaction**:
+Replacing the older part of an Agent Thread's context with a summary of it, so
+the Session can continue past the model's window. It is linear and additive: the
+summary is appended, the history before it stays in durable local history, and
+only what the model is sent changes. It happens for one of three reasons — a
+reserve threshold, an overflow the provider refused, or an explicit request —
+and each one is a Session Event.
+_Avoid_: truncation, trimming history, pruning the transcript
+
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
 Session Role, work location, model policy, Authority Snapshot, prompt resources,

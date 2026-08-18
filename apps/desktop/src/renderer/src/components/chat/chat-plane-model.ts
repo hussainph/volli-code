@@ -769,8 +769,9 @@ function providerRecovery(input: {
  *   every attempt it makes on its own; the run itself is still there to try
  *   again, and re-running it is not the same act as re-establishing a
  *   connection that never dropped.
- * - **Nothing** — `context_limit_reached` (compaction does not exist yet, so the
- *   only true answer is a new Session); `quota_exhausted` (a spent allowance is
+ * - **Nothing** — `context_limit_reached` (the runtime has already compacted
+ *   this Session and been refused again, so there is nothing left to summarize
+ *   and no button that could); `quota_exhausted` (a spent allowance is
  *   not retryable and no local setting refills it); `partial_turn_interrupted`
  *   (a stopped turn left the composer usable — resending is typing, not
  *   recovering); `input_required` and `permission_required` (the answer lives on

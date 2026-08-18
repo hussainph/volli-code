@@ -512,6 +512,7 @@ export interface SettledAssistantMessage {
 export type RuntimeObservation =
   | AttachmentObservation
   | TurnObservation
+  | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
   | RuntimeActivityObservation
@@ -553,6 +554,72 @@ export interface TurnObservation {
   occurredAt?: number;
   recoveryCursor?: string;
 }
+
+/**
+ * Why a context was compacted, in the executor's own three words.
+ *
+ * Spelled out rather than imported: this package depends on nothing, and Pi
+ * names these same three reasons in its own `CompactionReason`. The two are
+ * held in step by the one place that can see both — `pi/runtime.ts` checks this
+ * list against Pi's type — rather than by an import this package may not have.
+ *
+ * `manual` has no producer until the `/compact` verb exists, and is declared
+ * now so the vocabulary is settled once instead of widened three times.
+ */
+export const COMPACTION_REASONS = ["threshold", "overflow", "manual"] as const;
+
+export type CompactionReason = (typeof COMPACTION_REASONS)[number];
+
+/**
+ * The Session's context was summarized — or an attempt to summarize it failed.
+ *
+ * Deliberately not a {@link TurnObservation}. Compaction is maintenance rather
+ * than a unit of the conversation: it says nothing the model said, an
+ * interrupted one must raise no partial-turn Attention on recovery, and the
+ * threshold path already runs inside a turn the person is waiting on.
+ *
+ * The two arms carry different facts because they are different facts. A
+ * compaction that happened has a durable entry behind it and a before and after
+ * worth reading; one that failed wrote nothing at all, and an entry id or a
+ * token count on that arm could only be invented. A failed summary is
+ * deliberately **not** an Attention: nothing is blocked by it, the message that
+ * paid for it is delivered anyway, and there is no action a person could take
+ * to clear it. What it does risk — the next turn refused for context length —
+ * has its own Attention, raised only once overflow recovery has been spent.
+ */
+export type CompactionObservation =
+  | {
+      kind: "compaction";
+      state: "compacted";
+      reason: CompactionReason;
+      /** The durable compaction entry in the executor's own history. */
+      entryId: string;
+      /**
+       * What the context held before, as the executor measured it: the model's
+       * own last reported usage, not a guess.
+       */
+      tokensBefore: number;
+      /**
+       * What the compacted context is expected to hold, as the executor
+       * estimates it.
+       *
+       * An estimate on purpose, and the asymmetry with `tokensBefore` is the
+       * honest one: nothing has measured the new context yet, and nothing can
+       * until the model next answers on it.
+       */
+      tokensAfter: number;
+      occurredAt?: number;
+      recoveryCursor?: string;
+    }
+  | {
+      kind: "compaction";
+      state: "failed";
+      reason: CompactionReason;
+      /** Sanitized; the same diagnostic discipline as {@link RuntimeFailure}. */
+      message: string;
+      occurredAt?: number;
+      recoveryCursor?: string;
+    };
 
 /** Transient stream delta. Never advances the durable recovery cursor. */
 export interface TranscriptDeltaObservation {
@@ -608,7 +675,8 @@ export type RuntimeActivityObservation =
  * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
  * then whitelisting this exact set — and it throws rather than skipping what it
  * does not recognise. Adding a whole new observation kind is therefore safe: the
- * sidecar never sees one, so no marker already on disk changes how it validates.
+ * sidecar holds none of them, so no marker already on disk changes how it
+ * validates — {@link CompactionObservation} was added exactly that way.
  * Adding a `reason` is not: every attention marker written by an older build is
  * re-validated against the new list on the next recovery, and a Session whose
  * marker no longer matches fails to attach outright.

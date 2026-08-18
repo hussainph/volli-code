@@ -8,7 +8,9 @@ import {
   DEFAULT_COMPACTION_SETTINGS,
   type AgentMessage,
   type AgentOptions,
+  type CompactionReason as PiCompactionReason,
   type CustomEntry,
+  type Entry,
   type MessageEntry,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -27,9 +29,12 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import {
+  COMPACTION_REASONS,
   isActivityKind,
   type AgentRuntime,
   type AuthoritySnapshot,
+  type CompactionObservation,
+  type CompactionReason,
   type DeliveryOutcome,
   type ModelSelection,
   type RuntimeAttachmentHandle,
@@ -52,6 +57,7 @@ import {
   contextMessages,
   contextWindowOf,
   conversationPath,
+  estimatedContextTokens,
   occupiedContextTokens,
   type ConversationReader,
 } from "./compaction";
@@ -96,6 +102,17 @@ export function autoRetryDelayMs(attempt: number): number {
  * off switch lands on this value rather than on a second condition beside it.
  */
 const compactionSettings = DEFAULT_COMPACTION_SETTINGS;
+
+/**
+ * Volli's compaction vocabulary, checked against the executor's own.
+ *
+ * `@volli/shared` depends on nothing and so spells Pi's `CompactionReason` out
+ * rather than importing it; this is the one file that can see both, and the
+ * `satisfies` is what makes a word Volli uses that Pi does not a compile error
+ * rather than a divergence nobody notices. The list is also what validates a
+ * persisted marker on recovery.
+ */
+const COMPACTION_REASON_VALUES = COMPACTION_REASONS satisfies readonly PiCompactionReason[];
 
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
@@ -269,8 +286,20 @@ function recoverableMessage(entry: MessageEntry): boolean {
 
 const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
 
+/**
+ * The observations a restart can be told about again.
+ *
+ * {@link CompactionObservation} joins them, and the case for it is not that the
+ * runtime would forget: the compaction entry is already durable in the sidecar,
+ * and the elision rule reads it back whether or not a marker exists. It is that
+ * the *Session Event* is derived from observations and from nothing else. A
+ * compaction seen only live is a ledger that goes quiet exactly where its
+ * transcript stops — history that ends mid-conversation with nothing saying
+ * why, which is the hole this marker fills.
+ */
 type RecoverableObservation =
   | TurnObservation
+  | CompactionObservation
   | SettledMessageObservation
   | RuntimeActivityObservation
   | AttentionObservation;
@@ -319,6 +348,16 @@ function isRecoverableObservation(value: Record<string, unknown>): boolean {
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
+    case "compaction":
+      if (!isOneOf(value["reason"], COMPACTION_REASON_VALUES)) return false;
+      // Whole numbers, because the durable ledger reads them as integers and a
+      // marker this accepted but the ledger refused would be a Session that
+      // recovers and then cannot be read.
+      return value["state"] === "compacted"
+        ? typeof value["entryId"] === "string" &&
+            wholeNumber(value["tokensBefore"]) &&
+            wholeNumber(value["tokensAfter"])
+        : value["state"] === "failed" && typeof value["message"] === "string";
     case "activity":
       return (
         typeof value["turnId"] === "string" &&
@@ -471,6 +510,10 @@ function optionalFiniteNumber(value: unknown): boolean {
 
 function nullableFiniteNumber(value: unknown): boolean {
   return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function wholeNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value);
 }
 
 function nullableString(value: unknown): boolean {
@@ -726,6 +769,17 @@ async function attachSession(
     let autoRetryAttempts = 0;
     let autoRetryPending = false;
     let resumingTurn = false;
+    /**
+     * Whether this turn has already spent its one compaction.
+     *
+     * Pi keeps a flag of this name in its own lane state for the same reason: a
+     * turn that overflows, compacts, retries and overflows again has learned
+     * that compacting is not what is wrong with it, and a second attempt would
+     * summarize a summary and refuse again. One per turn, reset where the
+     * transport budget is — a turn that starts for its own reason gets a whole
+     * one, and a turn resumed in place carries on spending the same one.
+     */
+    let overflowRecoveryUsed = false;
     /** Set only while a backoff is being waited out; see {@link interruptTurn}. */
     let cancelBackoff: (() => void) | undefined;
     type PendingMessageDelivery = {
@@ -923,14 +977,18 @@ async function attachSession(
     };
 
     /**
-     * Spend the turn's remaining transport attempts, from the command boundary
-     * the failed run was started at.
+     * Resume a turn its own runtime recovered, from the command boundary the
+     * failed run was started at.
      *
      * Not from the callback that decided to retry: Pi is still finishing that run
      * while its `agent_end` listeners are awaited, and it refuses to begin a
-     * second one until they settle. The rejection arm of the retry cannot be
-     * reached from here — a turn only lands in this loop by failing, which leaves
-     * exactly the failed assistant message it needs to drop as the tail.
+     * second one until they settle.
+     *
+     * The rejection arm of the retry cannot be reached from here. A turn lands
+     * in this loop two ways and both leave a tail the retry accepts: a spent
+     * transport leaves the failed assistant message it drops, and an overflow
+     * recovery leaves the compacted context, which ends where the failed reply
+     * began — the user message, or the tool results it was answering.
      */
     const drainAutoRetries = async (): Promise<void> => {
       while (autoRetryPending) {
@@ -974,6 +1032,71 @@ async function attachSession(
       return utility ?? agent.state.model;
     };
 
+    /** The durable branch, read as a conversation. Costs the whole history. */
+    const conversationBranch = async (): Promise<Entry[]> =>
+      conversationPath(
+        await sidecar.findEntriesOnBranch({ order: "oldestFirst" }),
+        conversationReader,
+      );
+
+    /**
+     * Summarize this Session's history and say so, whichever way it goes.
+     *
+     * One mechanism for every reason a context is compacted, so the threshold
+     * path, the overflow path and the manual verb that will follow cannot drift
+     * into three behaviours or three event shapes. What differs between them is
+     * only when they are called and what they do with the answer.
+     *
+     * The failure is reported rather than swallowed and reported rather than
+     * raised as an Attention. Nothing is blocked by it — the message that paid
+     * for the attempt is delivered on the context that was already there — but
+     * the next turn may well be refused for context length, and a refusal with
+     * no record of the summary that was tried first reads as arbitrary.
+     */
+    const compactContext = async (
+      reason: CompactionReason,
+      path: readonly Entry[],
+      signal: AbortSignal | undefined,
+    ): Promise<boolean> => {
+      const outcome = await compactSession({
+        sidecar,
+        path,
+        models,
+        model: summarizationModel(),
+        settings: compactionSettings,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      // Pi found nothing to compact — an empty history, or one already ending in
+      // a summary. Nothing happened, so nothing is reported: the caller that
+      // needed this to work is the one that has something to say about it.
+      if (outcome.kind === "skipped") return false;
+      if (outcome.kind === "compacted") {
+        // The elided context, from the same rule the replay path applies. Pi
+        // holds no run that is reading this array: the threshold path runs while
+        // it is idle, and the overflow path runs after its loop has ended.
+        agent.state.messages = outcome.messages;
+      }
+      await commitObservation(
+        await persistObservation(
+          outcome.kind === "compacted"
+            ? {
+                kind: "compaction",
+                state: "compacted",
+                reason,
+                entryId: outcome.entry.id,
+                // Floored where a provider's arithmetic becomes a durable
+                // count, for the reason a context window is: the ledger holds
+                // whole tokens, and a fractional one would recover and then
+                // fail to decode.
+                tokensBefore: Math.floor(outcome.entry.tokensBefore),
+                tokensAfter: estimatedContextTokens(outcome.messages),
+              }
+            : { kind: "compaction", state: "failed", reason, message: outcome.message },
+        ),
+      );
+      return outcome.kind === "compacted";
+    };
+
     /**
      * Make room for the turn that is about to start, if the last reply says the
      * window is nearly spent.
@@ -990,14 +1113,14 @@ async function attachSession(
      *
      * Only the idle prompt path reaches this. A queued or steering message joins
      * a run Pi is already streaming, where the context is fixed and rewriting it
-     * underneath would corrupt the turn in flight.
+     * underneath would corrupt the turn in flight — which is also why this
+     * cannot be the only compaction there is, and why a run that spends the
+     * window on its own tool traffic is {@link recoverFromFailure}'s to catch.
      *
      * A failed summarization changes nothing and stops nothing. The user's
      * message still goes to the model on the context that was already there:
      * this is maintenance, and refusing to deliver a message because maintenance
-     * failed would turn a recoverable Session into a stuck one. What the failure
-     * risks is a context-length refusal on the turn that follows, which is the
-     * dead end overflow recovery exists to retire.
+     * failed would turn a recoverable Session into a stuck one.
      */
     const compactBeforeTurn = async (): Promise<void> => {
       // Asked first because it is free. A model whose catalog reports no usable
@@ -1005,31 +1128,55 @@ async function attachSession(
       // whole history — there is no reason to pay it for an answer already known.
       const contextWindow = contextWindowOf(agent.state.model);
       if (contextWindow === undefined) return;
-      const path = conversationPath(
-        await sidecar.findEntriesOnBranch({ order: "oldestFirst" }),
-        conversationReader,
-      );
+      const path = await conversationBranch();
       if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings)) return;
-      const outcome = await compactSession({
-        sidecar,
-        path,
-        models,
-        model: summarizationModel(),
-        settings: compactionSettings,
-        // The attachment's own lifetime bounds it, like every other provider
-        // call here. Nothing else can: no turn has started, so there is no turn
-        // to interrupt, and a person pressing stop before their message has been
-        // delivered is stopping something that has not begun.
-        signal: spec.signal,
-      });
-      if (outcome.kind !== "compacted") return;
-      // The elided context, from the same rule the replay path applies. Pi is
-      // idle here by construction, so this is the one moment the live array can
-      // be replaced without racing a run that is reading it.
-      agent.state.messages = outcome.messages;
+      // The attachment's own lifetime bounds it, like every other provider call
+      // here. Nothing else can: no turn has started, so there is no turn to
+      // interrupt, and a person pressing stop before their message has been
+      // delivered is stopping something that has not begun.
+      await compactContext("threshold", path, spec.signal);
     };
 
-    unsubscribe = agent.subscribe(async (event) => {
+    /**
+     * What this runtime can still do about a failed turn without asking anybody.
+     *
+     * Two recoveries, one shape: both spend something the turn is allowed to
+     * spend once, both keep the turn open while they do it, and both hand back
+     * the same answer — that the run may be resumed in place. Everything else is
+     * the user's to decide, and says so by returning false.
+     *
+     * **Overflow is where a long run's context is answered.** Compaction at the
+     * head of a message cannot help a turn that fills the window with its own
+     * tool results, because by then the turn is streaming and rewriting its
+     * context would corrupt it. So the provider's refusal is the trigger: it is
+     * the only honest signal that arrives at a moment when rewriting the context
+     * is safe again, which is exactly now — the loop has ended, and nothing will
+     * read the message array until the retry does.
+     *
+     * The retry continues from what the compacted context ends with, and that is
+     * not a coincidence to leave unstated: the reply that failed is dropped from
+     * the durable path as unreplayable, and Pi never cuts a context in front of
+     * a tool result, so what remains is the user message or the tool results the
+     * failed reply was answering — which is what `continue` requires.
+     */
+    const recoverFromFailure = async (
+      failed: RuntimeFailure,
+      signal: AbortSignal,
+    ): Promise<boolean> => {
+      if (isTransientTransportFailure(failed) && autoRetryAttempts < AUTO_RETRY_LIMIT) {
+        autoRetryAttempts += 1;
+        await waitBeforeRetry(host.retryBackoffMs(autoRetryAttempts - 1));
+        return true;
+      }
+      if (failed.reason !== "context" || overflowRecoveryUsed) return false;
+      overflowRecoveryUsed = true;
+      // The run's own signal, not the attachment's: a person pressing stop
+      // during the summary is stopping this turn, and the summary is now the
+      // only part of it still running.
+      return compactContext("overflow", await conversationBranch(), signal);
+    };
+
+    unsubscribe = agent.subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
         // A resumed attempt is the same turn continuing, so it neither starts one
         // nor refreshes the budget it is spending.
@@ -1041,6 +1188,7 @@ async function attachSession(
         if (!resumed) {
           turnId = randomUUID();
           autoRetryAttempts = 0;
+          overflowRecoveryUsed = false;
           await commitObservation(
             await persistObservation({ kind: "turn", state: "started", turnId }),
           );
@@ -1158,19 +1306,24 @@ async function attachSession(
       // was asked to. Neither is an unrecoverable failure, and neither deserves
       // a banner offering no way out of a state the user chose.
       if (failure.reason !== "aborted" && !interrupting) {
-        // A socket that died mid-stream is not a decision anyone has to make, so
-        // the turn stays live over the wait and the attempt that follows: no
-        // completion, no interruption, and a follow-up typed meanwhile queues
-        // against the same run exactly as it would mid-stream. What survives the
-        // budget is reported as it always was.
-        if (isTransientTransportFailure(failure) && autoRetryAttempts < AUTO_RETRY_LIMIT) {
-          autoRetryAttempts += 1;
-          await waitBeforeRetry(host.retryBackoffMs(autoRetryAttempts - 1));
-          if (!interrupting) {
+        // Neither a dropped socket nor a spent window is a decision anyone has to
+        // make, so the turn stays live over the recovery and the attempt that
+        // follows: no completion, no interruption, and a follow-up typed
+        // meanwhile queues against the same run exactly as it would mid-stream.
+        // What survives the turn's own budget is reported as it always was.
+        const recovered = await recoverFromFailure(failure, runSignal);
+        // Re-read after the await, because both recoveries take real time: a
+        // person who pressed stop during the backoff or the summary has ended
+        // this turn themselves, and neither resuming it nor raising an Attention
+        // over it is an honest answer to that.
+        if (!interrupting) {
+          if (recovered) {
             autoRetryPending = true;
             return;
           }
-        } else {
+          // Including a context refusal that compaction could not answer — an
+          // overflow with nothing left to summarize is still a dead end, and
+          // still has to say so.
           const reason = attentionReasonFor(failure);
           const raised = await persistObservation({
             kind: "attention",

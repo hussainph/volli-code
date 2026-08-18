@@ -28,6 +28,8 @@
 
 import type {
   AttentionObservation,
+  CompactionObservation,
+  CompactionReason,
   RuntimeActivityObservation,
   RuntimeObservation,
   SessionInteraction,
@@ -127,6 +129,27 @@ export type TranslatedObservation =
   | (TranslatedObservationBase & { kind: "turn.started"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.completed"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.interrupted"; turnId: string })
+  /**
+   * The executor summarized its context, or tried to and could not.
+   *
+   * Two facts rather than one with an outcome, because they carry different
+   * evidence: a compaction that happened is addressed by the durable summary it
+   * wrote, and one that failed has nothing to address. Both are the executor's
+   * own act, reported rather than minted here — which is why the success arm
+   * carries the executor's entry id and mints its durable identity from it.
+   */
+  | (TranslatedObservationBase & {
+      kind: "context.compacted";
+      reason: CompactionReason;
+      entryId: string;
+      tokensBefore: number;
+      tokensAfter: number;
+    })
+  | (TranslatedObservationBase & {
+      kind: "context.compaction_failed";
+      reason: CompactionReason;
+      detail: string;
+    })
   /**
    * The Session's authority refused a call. The executor reports it rather than
    * minting it: only the runtime sees the call, and only the Session Engine owns
@@ -300,6 +323,11 @@ export class RuntimeObservationTranslator {
         return this.#translateAttachment(observation, emit);
       case "turn":
         return this.#translateTurn(observation, emit);
+      // Emitted, and nothing else. Compaction touches none of the streaming
+      // state a turn boundary retires: no message is in flight that it ends, and
+      // the overlay a live turn is filling belongs to the turn it is still in.
+      case "compaction":
+        return emit(this.#compactionObservation(observation));
       case "delta":
         return this.#translateDelta(observation, emit);
       case "message-settled":
@@ -340,6 +368,8 @@ export class RuntimeObservationTranslator {
     switch (observation.kind) {
       case "turn":
         return [this.#turnObservation(observation)];
+      case "compaction":
+        return [this.#compactionObservation(observation)];
       case "message-settled": {
         const settled = this.#settledObservation(observation);
         return settled === null ? [] : [settled];
@@ -542,6 +572,41 @@ export class RuntimeObservationTranslator {
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
       turnId: observation.turnId,
+    };
+  }
+
+  /**
+   * One compaction, named by what the executor durably wrote.
+   *
+   * The success arm's id is the executor's own entry id, so the fact seen live
+   * and the same fact replayed after a restart land under one durable id without
+   * agreeing about anything else. The failure arm wrote no entry, so it falls
+   * back to the executor's recovery cursor — and to the counter only when there
+   * is none, exactly as an attention does and for the same reason.
+   */
+  #compactionObservation(
+    observation: CompactionObservation,
+  ): Extract<TranslatedObservation, { kind: "context.compacted" | "context.compaction_failed" }> {
+    if (observation.state === "failed") {
+      const eventIdentity = observation.recoveryCursor ?? `live:${++this.#sequence}`;
+      return {
+        id: `${this.#namespace}:compaction:${this.#attachmentId}:failed:${eventIdentity}`,
+        kind: "context.compaction_failed",
+        occurredAt: observation.occurredAt ?? this.#now(),
+        ...recoveryCursor(observation.recoveryCursor),
+        reason: observation.reason,
+        detail: observation.message,
+      };
+    }
+    return {
+      id: `${this.#namespace}:compaction:${observation.entryId}`,
+      kind: "context.compacted",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
+      reason: observation.reason,
+      entryId: observation.entryId,
+      tokensBefore: observation.tokensBefore,
+      tokensAfter: observation.tokensAfter,
     };
   }
 

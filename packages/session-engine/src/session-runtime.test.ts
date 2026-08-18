@@ -768,6 +768,56 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.authorityDenials).toBe(1);
   });
 
+  it("records both halves of a compaction as durable Session Events", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    await adapter.emit({
+      kind: "compaction",
+      state: "compacted",
+      reason: "overflow",
+      entryId: "pi-entry-9",
+      tokensBefore: 190_000,
+      tokensAfter: 12_000,
+      occurredAt: 160,
+    });
+    await adapter.emit({
+      kind: "compaction",
+      state: "failed",
+      reason: "threshold",
+      message: "Summarization failed.",
+      occurredAt: 161,
+    });
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(
+      snapshot.frames
+        .map(({ event }) => event.payload)
+        .filter((payload) => payload.kind.startsWith("context.")),
+    ).toEqual([
+      {
+        kind: "context.compacted",
+        attachmentId,
+        reason: "overflow",
+        entryId: "pi-entry-9",
+        tokensBefore: 190_000,
+        tokensAfter: 12_000,
+      },
+      {
+        kind: "context.compaction_failed",
+        attachmentId,
+        reason: "threshold",
+        detail: "Summarization failed.",
+      },
+    ]);
+    // The Session is neither working nor blocked for having compacted: what
+    // changed is what the executor will send next, and no projected field is
+    // derived from that.
+    expect(snapshot.projection.turnActive).toBe(false);
+    expect(snapshot.projection.attention.active).toEqual([]);
+  });
+
   it("attaches and releases through the narrow binding", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

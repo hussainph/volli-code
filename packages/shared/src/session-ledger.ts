@@ -3,7 +3,7 @@
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
-import type { ModelSelection, PromptResource } from "./agent-runtime";
+import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
 
 export interface Session {
   id: string;
@@ -423,6 +423,40 @@ export type SessionEventPayload =
   | { kind: "turn.started"; attachmentId: string; turnId: string }
   | { kind: "turn.completed"; attachmentId: string; turnId: string }
   | { kind: "turn.interrupted"; attachmentId: string; turnId: string }
+  /**
+   * The Session's context was summarized, and the history before the summary
+   * left the model's view without leaving the Session's.
+   *
+   * A fact of its own rather than a turn boundary: no turn need be running for
+   * it, nothing was said, and what changed is what the executor will send next
+   * time. `entryId` addresses the summary in the executor's own durable
+   * history, which is what lets a reader show the elided conversation instead of
+   * merely reporting that it is gone.
+   */
+  | {
+      kind: "context.compacted";
+      attachmentId: string;
+      reason: CompactionReason;
+      entryId: string;
+      /** Measured before, estimated after — see `CompactionObservation`. */
+      tokensBefore: number;
+      tokensAfter: number;
+    }
+  /**
+   * Compaction was attempted and produced nothing.
+   *
+   * Recorded because the silence is what hurts: the turn that paid for the
+   * attempt was delivered on the context that was already there, and the refusal
+   * that may follow reads as arbitrary unless history says the summary was tried
+   * first. It is not an Attention — nothing is blocked and nobody can clear it.
+   */
+  | {
+      kind: "context.compaction_failed";
+      attachmentId: string;
+      reason: CompactionReason;
+      /** Sanitized executor diagnostic; never raw provider text. */
+      detail: string;
+    }
   | {
       kind: "transcript.referenced";
       attachmentId: string | null;
@@ -527,6 +561,8 @@ type ObservedSessionEventKind =
   | "turn.started"
   | "turn.completed"
   | "turn.interrupted"
+  | "context.compacted"
+  | "context.compaction_failed"
   | "transcript.referenced"
   | "attention.raised"
   | "attention.cleared"
@@ -595,6 +631,22 @@ export function observationPayload(observation: SessionObservation): SessionEven
         kind: observation.kind,
         attachmentId: observation.attachmentId,
         turnId: observation.turnId,
+      };
+    case "context.compacted":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        reason: observation.reason,
+        entryId: observation.entryId,
+        tokensBefore: observation.tokensBefore,
+        tokensAfter: observation.tokensAfter,
+      };
+    case "context.compaction_failed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        reason: observation.reason,
+        detail: observation.detail,
       };
     case "transcript.referenced":
       return {
@@ -1047,6 +1099,11 @@ export function projectSession(
       case "authority.denied":
         authorityDenials += 1;
         break;
+      // Compaction changes what the *executor* will send next, not anything
+      // this projection holds: the Session's history is untouched by it, and a
+      // Session is no more or less active for having compacted.
+      case "context.compacted":
+      case "context.compaction_failed":
       case "run.started":
       case "run.completed":
       case "transcript.referenced":
