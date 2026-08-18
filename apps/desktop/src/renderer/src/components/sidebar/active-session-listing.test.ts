@@ -13,6 +13,8 @@ import {
 import type { HarnessEventNotice } from "../../../../ipc/contract";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
+
 import {
   subscribeHarnessEvents,
   ticketScope,
@@ -800,32 +802,38 @@ describe("buildActiveSessionListing — the project container", () => {
       target: { kind: "terminal", tabId: "proj-2", paneId: "proj-2" },
     } satisfies ActiveSessionRow;
 
-    expect(isProjectSessionRowSelected(row, true, projectState, null)).toBe(true);
-    expect(isProjectSessionRowSelected(row, false, projectState, null)).toBe(false);
+    expect(isProjectSessionRowSelected(row, true, projectState, "proj-2")).toBe(true);
+    expect(isProjectSessionRowSelected(row, false, projectState, "proj-2")).toBe(false);
+    // The permanent Board tab in front means NO Session row is in front. The
+    // container's own ledger still names proj-2 — it has no way to represent
+    // the board — so reading it instead of `homeActiveTab` lit a terminal row
+    // while the user was looking at the board.
+    expect(isProjectSessionRowSelected(row, true, projectState, HOME_BOARD_TAB_ID)).toBe(false);
     expect(
       isProjectSessionRowSelected(
         { ...row, target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" } },
         true,
         projectState,
-        null,
+        "proj-2",
       ),
     ).toBe(false);
+    // Right tab, wrong PANE — the one fact only the container holds.
     expect(
       isProjectSessionRowSelected(
-        { ...row, target: { kind: "chat", tabId: "chat:proj-2", sessionId: "proj-2" } },
+        { ...row, target: { kind: "terminal", tabId: "proj-2", paneId: "split-leaf" } },
         true,
         projectState,
-        null,
+        "proj-2",
       ),
     ).toBe(false);
     // A row with no target at all — a Session whose tab is gone — is never
     // the tab in front of you, whatever else is true.
-    expect(isProjectSessionRowSelected({ ...row, target: null }, true, projectState, null)).toBe(
-      false,
-    );
+    expect(
+      isProjectSessionRowSelected({ ...row, target: null }, true, projectState, "proj-2"),
+    ).toBe(false);
   });
 
-  it("selects a ticketless chat row only when its tab is the one in front on Sessions", () => {
+  it("selects a ticketless chat row only when its tab is the one in front on Home", () => {
     const chatRow = {
       id: "chat:chat-1",
       ticket: null,
@@ -838,20 +846,21 @@ describe("buildActiveSessionListing — the project container", () => {
       target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
     } satisfies ActiveSessionRow;
 
-    // Its own tab is the one activated from Sessions.
+    // Its own tab is the one in front on Home. No container at all: a chat has
+    // no pane, so nothing about it is the terminal store's to know.
     expect(isProjectSessionRowSelected(chatRow, true, undefined, "chat:chat-1")).toBe(true);
-    // Sessions isn't the surface in front.
+    // Home is not the page in front.
     expect(isProjectSessionRowSelected(chatRow, false, undefined, "chat:chat-1")).toBe(false);
-    // A different tab was last activated from Sessions.
+    // A different tab is in front.
     expect(isProjectSessionRowSelected(chatRow, true, undefined, "chat:chat-2")).toBe(false);
-    // Nothing has been activated from Sessions yet.
-    expect(isProjectSessionRowSelected(chatRow, true, undefined, null)).toBe(false);
+    // Nothing but the permanent Board tab has ever been in front.
+    expect(isProjectSessionRowSelected(chatRow, true, undefined, HOME_BOARD_TAB_ID)).toBe(false);
   });
 
   it("darkens the terminal row a chat tab is covering", () => {
     // Selecting a chat tab leaves the terminal container's activeSessionId
-    // where it was, so both ledgers still name proj-1 — only the chat is
-    // actually on screen.
+    // where it was, so IT still names proj-1 — only the chat is actually on
+    // screen, and only `homeActiveTab` knows that.
     const projectState = projectSessionsOf([projectSessionTab("proj-1", "First")]);
     projectState.activeSessionId = "proj-1";
     const terminalRow = {
@@ -869,8 +878,6 @@ describe("buildActiveSessionListing — the project container", () => {
     expect(isProjectSessionRowSelected(terminalRow, true, projectState, "chat:chat-1")).toBe(false);
     // The terminal tab back in front lights it again.
     expect(isProjectSessionRowSelected(terminalRow, true, projectState, "proj-1")).toBe(true);
-    // A malformed `chat:` id names no Session, so it covers nothing.
-    expect(isProjectSessionRowSelected(terminalRow, true, projectState, "chat:")).toBe(true);
   });
 
   it("lists a live project terminal in Active, with no ticket", () => {

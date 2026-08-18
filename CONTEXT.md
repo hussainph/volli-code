@@ -23,6 +23,13 @@ _Avoid_: missing Attachment, broken Artifact
 The expanded working surface for one ticket, where its Ticket Body, sessions, files, artifacts, and Change Set coexist.
 _Avoid_: ticket worktree, artifact view
 
+**Home**:
+The project-level tabbed workspace, and the app's landing page. Its permanent
+first tab is the Board; the project's own Project Sessions open as tabs beside
+it. Opening a ticket takes Home over: the Ticket workspace fills the surface and
+Home's tab strip steps aside, so only one tab strip is ever on screen.
+_Avoid_: Board (for the page), Sessions page, dashboard
+
 **Project Files**:
 The project-level repository workspace for browsing and editing the Main checkout.
 _Avoid_: global files, project file tab

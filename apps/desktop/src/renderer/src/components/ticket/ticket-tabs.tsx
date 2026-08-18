@@ -326,7 +326,7 @@ function TicketTab({
           </>
         ) : null}
         {/* Closing from the menu, not only from a × you have to hover to see —
-            the Sessions strip has offered this since it shipped, and a Session
+            Home's strip has offered this since it shipped, and a Session
             is the one tab kind whose close the keyboard can otherwise not reach. */}
         {renamable ? (
           <>

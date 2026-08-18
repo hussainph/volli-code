@@ -1,9 +1,9 @@
 /**
  * What terminal focus would take — asked two ways, answered once.
  *
- * Two callers need the same six chrome facts and cannot read them the same way:
- * the control drawn ON the pane (`sessions/session-split-layout.tsx`) has to be
- * SUBSCRIBED so it appears and disappears as the chrome moves, while the
+ * Two callers need the same seven chrome facts and cannot read them the same
+ * way: the control drawn ON the pane (`sessions/session-split-layout.tsx`) has
+ * to be SUBSCRIBED so it appears and disappears as the chrome moves, while the
  * ⌥⌘Return chord (`hooks/use-terminal-focus-shortcut.ts`) has to read them at
  * PRESS TIME, from a listener that was registered once. That is a difference in
  * mechanism, not in meaning — so every fact below is derived exactly once, as a
@@ -51,10 +51,10 @@ function selectTicketTabId(
   return state.byProject[projectId]?.ticketTabs[ticketId]?.active ?? TICKET_BODY_TAB_ID;
 }
 
-/** The Sessions page's active tab — null for a project that has never had one. */
-function selectProjectTabId(state: WorkspaceState, projectId: string | null): string | null {
-  if (projectId === null) return null;
-  return state.byProject[projectId]?.sessionsActiveTab ?? null;
+/** Which Home tab is in front — the permanent Board tab by default. */
+function selectHomeTabId(state: WorkspaceState, projectId: string | null): string {
+  if (projectId === null) return DEFAULT_WORKSPACE_UI.homeActiveTab;
+  return state.byProject[projectId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab;
 }
 
 /**
@@ -62,7 +62,7 @@ function selectProjectTabId(state: WorkspaceState, projectId: string | null): st
  *
  * One function for both surfaces: `byOwner` is keyed by ticketId for a ticket
  * Session and by projectId for a ticketless one, so "which owner" is the only
- * thing that differs between the ticket strip's answer and the Sessions page's.
+ * thing that differs between the ticket strip's answer and Home's own.
  */
 function selectTerminalSessionId(
   state: SessionsState,
@@ -86,6 +86,7 @@ export function readTerminalFocusChrome(): TerminalFocusChrome {
     nav: selectNav(workspace, selectedProjectId),
     settingsOpen: useUiStore.getState().settingsOpen,
     openTicketId,
+    homeActiveTab: selectHomeTabId(workspace, selectedProjectId),
     ticketSessionId: selectTerminalSessionId(
       sessions,
       openTicketId,
@@ -94,7 +95,7 @@ export function readTerminalFocusChrome(): TerminalFocusChrome {
     projectSessionId: selectTerminalSessionId(
       sessions,
       selectedProjectId,
-      selectProjectTabId(workspace, selectedProjectId),
+      selectHomeTabId(workspace, selectedProjectId),
     ),
   };
 }
@@ -108,12 +109,11 @@ export function readTerminalFocusChrome(): TerminalFocusChrome {
  * neither lint nor typecheck can see that. The composed target IS a fresh object
  * each render, which is fine — it is a return value, not a selector result.
  *
- * `sessionsActiveTab` is the Sessions page's receipt rather than its own
- * derivation: `sessions-layer.tsx` re-derives which tab is in front on every
- * render and writes the answer straight back, so reading the record here is
- * reading what that surface just decided. A one-frame-stale id simply fails to
- * name a live terminal tab, and the control does not draw — a fail-safe, not a
- * fail-wrong.
+ * `homeActiveTab` is Home's receipt rather than its own derivation:
+ * `home-surface.tsx` re-derives which tab is in front on every render and
+ * writes the answer straight back, so reading the record here is reading what
+ * that surface just decided. A one-frame-stale id simply fails to name a live
+ * terminal tab, and the control does not draw — a fail-safe, not a fail-wrong.
  */
 export function useTerminalFocusTarget(): TerminalFocusTarget | null {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
@@ -123,17 +123,18 @@ export function useTerminalFocusTarget(): TerminalFocusTarget | null {
   const ticketTabId = useWorkspaceStore((state) =>
     selectTicketTabId(state, selectedProjectId, openTicketId),
   );
-  const projectTabId = useWorkspaceStore((state) => selectProjectTabId(state, selectedProjectId));
+  const homeActiveTab = useWorkspaceStore((state) => selectHomeTabId(state, selectedProjectId));
   const ticketSessionId = useSessionsStore((state) =>
     selectTerminalSessionId(state, openTicketId, ticketTabId),
   );
   const projectSessionId = useSessionsStore((state) =>
-    selectTerminalSessionId(state, selectedProjectId, projectTabId),
+    selectTerminalSessionId(state, selectedProjectId, homeActiveTab),
   );
 
   return terminalFocusTargetForChrome({
     selectedProjectId,
     nav,
+    homeActiveTab,
     settingsOpen,
     openTicketId,
     ticketSessionId,

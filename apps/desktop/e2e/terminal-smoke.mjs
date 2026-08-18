@@ -166,12 +166,11 @@ async function waitForLiveCanvas(page, timeoutMs = 20000) {
 
 /**
  * Boot a terminal tab through the session-start control's caret and wait for
- * its canvas. The Sessions surface's default Session is a structured chat
- * (sessions-layer.tsx's first-visit auto-open — which, with no default model
- * recorded in this profile, refuses into the empty state), so a PTY smoke
- * mints every terminal itself. `.first()` because an EMPTY surface mounts the
- * control twice (tab strip + empty state) and either would do; `expectedTabs`
- * pins the wait to this create rather than a canvas an earlier tab painted.
+ * its canvas. Home's session-start control starts a structured CHAT on a press
+ * (a terminal is the companion kind, one caret away), so a PTY smoke mints
+ * every terminal itself through that caret. `.first()` because the ticket
+ * surfaces mount the same control too; `expectedTabs` pins the wait to this
+ * create rather than a canvas an earlier tab painted.
  */
 async function startTerminalTab(page, expectedTabs) {
   await page.getByLabel("Other session kinds").first().click();
@@ -312,8 +311,8 @@ async function main() {
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
-    // === 1. Workspace A: open Sessions, start a terminal, probe cwd =========
-    await page.getByText("Sessions", { exact: true }).click();
+    // === 1. Workspace A: open Home, start a terminal, probe cwd ============
+    await page.getByText("Home", { exact: true }).click();
     await startTerminalTab(page, 1); // a terminal is an explicit pick now
     const aTabs1 = await tabCount(page);
     await page.screenshot({ path: shot("01-workspace-a-terminal.png") });
@@ -329,10 +328,11 @@ async function main() {
     );
 
     // === 2. Workspace B: switch via rail, get its own terminal, probe cwd ===
-    // Nav is remembered per-workspace and defaults to Board, so a fresh
-    // workspace opens on Board — click Sessions to reveal its terminal surface.
+    // Nav and the active Home tab are both remembered per-workspace and both
+    // default to Home's Board tab, so a fresh workspace opens on the board —
+    // click Home to be sure of the page, then mint its own terminal.
     await page.getByText("BC", { exact: true }).click(); // Beta Cove monogram
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Home", { exact: true }).click();
     await startTerminalTab(page, 1); // beta's first terminal, explicitly
     const bTabs = await tabCount(page);
     await page.screenshot({ path: shot("02-workspace-b-terminal.png") });
@@ -350,7 +350,7 @@ async function main() {
     // === 3. Isolation/concurrency: back in A, SAME session, no dup tab ======
     // Alpha remembers it was on Sessions, but re-assert to be robust.
     await page.getByText("AR", { exact: true }).click(); // Alpha Ridge monogram
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Home", { exact: true }).click();
     await waitForLiveCanvas(page);
     const aTabs2 = await tabCount(page);
     await focusTerminal(page);
@@ -366,10 +366,19 @@ async function main() {
       `tabs=${aTabs2}`,
     );
 
-    // === 4. Keep-alive across nav: A → Board → Sessions, history intact =====
-    await page.getByText("Board", { exact: true }).click();
+    // === 4. Keep-alive across a Home TAB switch, history intact ============
+    // This used to be a nav round trip, Board ↔ Sessions. Those are one page
+    // now (VC-54), so the same journey — the terminal surface goes away and
+    // comes back — is a switch to Home's permanent Board tab and back. The nav
+    // half of the old check lives on in `home-taxonomy-smoke.mjs` (Home ↔
+    // Files), because both directions still have to keep the PTY mounted.
+    const homeTabs = page.getByRole("tablist", { name: "Home tabs", exact: true });
+    await homeTabs.getByRole("tab", { name: "Board" }).click();
     await sleep(500);
-    await page.getByText("Sessions", { exact: true }).click();
+    await homeTabs
+      .getByRole("tab", { name: /^Terminal/ })
+      .first()
+      .click();
     await waitForLiveCanvas(page);
     const aTabs3 = await tabCount(page);
     await focusTerminal(page);
@@ -379,7 +388,7 @@ async function main() {
     await page.screenshot({ path: shot("04-after-nav-return.png") });
     check(
       4,
-      "Keep-alive across nav (Board↔Sessions): same shell, cwd intact",
+      "Keep-alive across a Home tab switch (Board↔Session): same shell, cwd intact",
       aThird !== null && aThird.includes(`third-${alphaDir}`) && aTabs3 === 1,
       `tabs=${aTabs3}`,
     );
@@ -536,9 +545,12 @@ async function main() {
       (await waitForFileContains(childGridBeforePath, "", 5000))?.trim() ?? null;
     const chromeBefore = await page.evaluate(() => ({
       dpr: window.devicePixelRatio,
-      sessionsFontSize: getComputedStyle(
+      // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
+      // focused pane alone. "Sessions" was that label until VC-54 retired the
+      // nav item; "Configure" is its surviving neighbour on the same row.
+      navFontSize: getComputedStyle(
         Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Sessions" && element.children.length === 0,
+          (element) => element.textContent === "Configure" && element.children.length === 0,
         ),
       ).fontSize,
     }));
@@ -553,9 +565,12 @@ async function main() {
     const rootGridAfter = (await waitForFileContains(rootGridAfterPath, "", 5000))?.trim() ?? null;
     const chromeAfter = await page.evaluate(() => ({
       dpr: window.devicePixelRatio,
-      sessionsFontSize: getComputedStyle(
+      // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
+      // focused pane alone. "Sessions" was that label until VC-54 retired the
+      // nav item; "Configure" is its surviving neighbour on the same row.
+      navFontSize: getComputedStyle(
         Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Sessions" && element.children.length === 0,
+          (element) => element.textContent === "Configure" && element.children.length === 0,
         ),
       ).fontSize,
     }));

@@ -4,8 +4,8 @@
  * are still unproven now that every structured Session (Ticket or Project)
  * attaches Pi (`project-sessions.ts`, commit 49a62640): the ticket-orphan
  * sidebar reopen, and the "Cleaned up" filter. The retired smoke's third
- * part — the Sessions page hosting a chat tab beside a terminal tab, and one
- * prompt streaming to settle — is `pi-scratch-chat-smoke.mjs`'s job now, so
+ * part — Home hosting a chat tab beside a terminal tab, and one prompt
+ * streaming to settle — is `pi-project-chat-smoke.mjs`'s job now, so
  * it is not repeated here.
  *
  *   (a) **Ticket-orphan reopen.** A chat born inside a ticket workspace
@@ -79,7 +79,7 @@ import {
 } from "./lib/smoke-kit.mjs";
 
 const PROJECT = { id: "pi-sessions-host-project", name: "Pi Sessions Host", prefix: "SH" };
-// Kept at or under 48 characters — see pi-scratch-chat-smoke.mjs for why:
+// Kept at or under 48 characters — see pi-project-chat-smoke.mjs for why:
 // `autoTitleFromMessage` keeps a first line that short verbatim as the
 // Session's title, so this prompt IS the title the sidebar row is found by.
 const ORPHAN_PROMPT = "Say hi before this ticket is deleted.";

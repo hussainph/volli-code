@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import {
   activeTerminalSessionId,
   isTerminalFocusKeyEvent,
@@ -23,15 +24,17 @@ function keyEvent(overrides: Partial<TerminalFocusKeyEvent> = {}): TerminalFocus
 }
 
 /**
- * A ticket open on Board with a terminal Session tab in front — and, at the same
- * time, a terminal in front on the project's own Sessions page. Both are stocked
- * deliberately: the two surfaces are told apart by `nav` alone, so a fixture that
- * only ever held one of them could not catch the resolver reading the wrong one.
+ * A ticket open on Home's Board tab with a terminal Session tab in front — and,
+ * at the same time, a terminal in front on the project's own Home Session tab.
+ * Both are stocked deliberately: the two surfaces are told apart by which HOME
+ * TAB is in front, so a fixture that only ever held one of them could not catch
+ * the resolver reading the wrong one.
  */
 function chrome(overrides: Partial<TerminalFocusChrome> = {}): TerminalFocusChrome {
   return {
     selectedProjectId: "p1",
-    nav: "board",
+    nav: "home",
+    homeActiveTab: HOME_BOARD_TAB_ID,
     settingsOpen: false,
     openTicketId: "t1",
     ticketSessionId: "s1",
@@ -91,11 +94,11 @@ describe("terminalFocusTargetForChrome", () => {
     });
   });
 
-  it("names the project's OWN terminal on the Sessions page", () => {
+  it("names the project's OWN terminal on a Home Session tab", () => {
     // The parity fix: zen mode was ticket-only for no reason other than that the
     // target type demanded a ticketId. A ticketless Session fills a canvas just
     // as well, and `ticketId: null` is the durable fact rather than a gap.
-    expect(terminalFocusTargetForChrome(chrome({ nav: "sessions" }))).toEqual({
+    expect(terminalFocusTargetForChrome(chrome({ homeActiveTab: "proj-term-1" }))).toEqual({
       projectId: "p1",
       ticketId: null,
       sessionId: "proj-term-1",
@@ -103,25 +106,31 @@ describe("terminalFocusTargetForChrome", () => {
   });
 
   it("reads the surface in front, not whichever terminal exists", () => {
-    // Both surfaces hold a terminal in the fixture; only the one on the current
-    // page may answer. A resolver that fell back to the other would focus a
-    // terminal nobody can see.
+    // Both surfaces hold a terminal in the fixture; only the one the active Home
+    // tab names may answer. A resolver that fell back to the other would focus a
+    // terminal nobody can see — and with a ticket remembered behind a Session
+    // tab, both are live at once.
     expect(terminalFocusTargetForChrome(chrome({ ticketSessionId: null }))).toBeNull();
     expect(
-      terminalFocusTargetForChrome(chrome({ nav: "sessions", projectSessionId: null })),
+      terminalFocusTargetForChrome(
+        chrome({ homeActiveTab: "proj-term-1", projectSessionId: null }),
+      ),
     ).toBeNull();
   });
 
   it("refuses when no project is selected", () => {
     expect(terminalFocusTargetForChrome(chrome({ selectedProjectId: null }))).toBeNull();
     expect(
-      terminalFocusTargetForChrome(chrome({ selectedProjectId: null, nav: "sessions" })),
+      terminalFocusTargetForChrome(
+        chrome({ selectedProjectId: null, homeActiveTab: "proj-term-1" }),
+      ),
     ).toBeNull();
   });
 
   it("refuses on pages that host no terminal at all", () => {
-    // `setNav` deliberately keeps `openTicketId`, so Files and Configure would
-    // otherwise offer to focus the ticket terminal behind them.
+    // `setNav` keeps `openTicketId` whenever a Session tab is in front, so Files
+    // and Configure would otherwise offer to focus the ticket terminal behind
+    // them.
     expect(terminalFocusTargetForChrome(chrome({ nav: "files" }))).toBeNull();
     expect(terminalFocusTargetForChrome(chrome({ nav: "configure" }))).toBeNull();
   });
@@ -129,7 +138,7 @@ describe("terminalFocusTargetForChrome", () => {
   it("refuses behind app-wide Settings on EITHER surface", () => {
     expect(terminalFocusTargetForChrome(chrome({ settingsOpen: true }))).toBeNull();
     expect(
-      terminalFocusTargetForChrome(chrome({ nav: "sessions", settingsOpen: true })),
+      terminalFocusTargetForChrome(chrome({ homeActiveTab: "proj-term-1", settingsOpen: true })),
     ).toBeNull();
   });
 
@@ -162,8 +171,8 @@ describe("activeTerminalSessionId", () => {
   });
 
   it("treats a surface with nothing in front as having no terminal", () => {
-    // The Sessions page records `null` for a project whose strip has never had a
-    // tab in front, where a ticket always has at least its Body.
+    // A caller may have no tab to name at all 2014 the ticket strip's own answer
+    // when nothing there is a Session.
     expect(activeTerminalSessionId(null, tabs)).toBeNull();
     expect(activeTerminalSessionId(null, undefined)).toBeNull();
   });

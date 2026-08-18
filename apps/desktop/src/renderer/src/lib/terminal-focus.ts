@@ -6,11 +6,11 @@
  * green button: `hooks/use-fullscreen.ts` is read-only and exists so the
  * traffic-light spacer can collapse.
  *
- * BOTH surfaces that host a terminal may enter it: a ticket's tab strip and the
- * project's own Sessions page. It used to be ticket-only, and nothing about the
+ * BOTH surfaces that host a terminal may enter it: a ticket's tab strip and
+ * Home's own Session tabs. It used to be ticket-only, and nothing about the
  * feature justified that — the gate simply demanded an `openTicketId` because
- * the target type demanded a `ticketId`. A project-level Session is a Session;
- * the PTY it holds fills a canvas exactly as well.
+ * the target type demanded a `ticketId`. A Project Session is a Session; the
+ * PTY it holds fills a canvas exactly as well.
  *
  * Two callers answer the same question — the control drawn ON the pane
  * (`session-split-layout.tsx`, which must decide whether to render at all) and
@@ -21,6 +21,7 @@
  * `nav-history`, `project-shortcut`), so it unit-tests in the node environment
  * with no DOM and both callers are left holding nothing but their store reads.
  */
+import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import type { TerminalFocusTarget } from "@renderer/stores/ui";
 import type { NavKey } from "@renderer/stores/workspace";
 
@@ -58,8 +59,14 @@ export function isTerminalFocusKeyEvent(event: TerminalFocusKeyEvent): boolean {
 /** The chrome facts terminal focus resolves against, read at render or press time. */
 export interface TerminalFocusChrome {
   selectedProjectId: string | null;
-  /** The selected project's nav page. Ticket detail is a child of `board`. */
+  /** The selected project's nav page. Ticket detail is a state of `home`. */
   nav: NavKey;
+  /**
+   * Which Home tab is in front (`home-tabs.ts`) — the Board tab, or one of the
+   * project's own Sessions. This is what tells the two terminal-hosting
+   * surfaces apart; see {@link terminalFocusTargetForChrome}.
+   */
+  homeActiveTab: string;
   /** App-wide Settings is chrome layered OVER the workspace, not a nav page. */
   settingsOpen: boolean;
   /** The selected project's open ticket, or null on the plain board. */
@@ -69,27 +76,29 @@ export interface TerminalFocusChrome {
    * see {@link activeTerminalSessionId}.
    */
   ticketSessionId: string | null;
-  /** The live terminal Session the SESSIONS page's active tab names, else null. */
+  /** The live terminal Session the active HOME tab names, else null. */
   projectSessionId: string | null;
 }
 
 /**
  * The Session that would take the canvas, or `null` when nothing may.
  *
- * One question, asked per page, because the two surfaces that host a terminal
- * are two different pages and only one of them can be in front:
+ * One question, asked per surface, because the two that host a terminal are two
+ * different HOME TABS and only one of them can be in front:
  *
- *  • `board` + an open ticket → that ticket's active tab, if it is a terminal.
- *  • `sessions` → the project's own strip, if its active tab is a terminal.
+ *  • Home's Board tab + an open ticket → that ticket's active tab, if it is a
+ *    terminal.
+ *  • a Home Session tab → that Session, if it is a terminal.
  *
- * The nav and Settings gates are not belt-and-braces. `setNav` deliberately does
- * NOT clear `openTicketId` (stores/workspace.ts) — a ticket you opened stays open
- * behind the Files, Sessions and Configure pages so returning to Board lands you
- * back on it — so `openTicketId != null` is true on every page in the workspace,
- * not just the one where the ticket is on screen. Without the nav line, standing
- * on Sessions would offer to focus a ticket terminal that is nowhere in front of
- * the user; without the Settings line, both would offer it from underneath a
- * sheet covering them.
+ * The tab, nav and Settings gates are not belt-and-braces. `openTicketId`
+ * survives leaving the ticket (stores/workspace.ts) — across Files and
+ * Configure so returning to Home lands you back on it, and across Home's own
+ * Session tabs, which keep the ticket remembered behind them (VC-54 decision
+ * 1). So `openTicketId != null` is true in three places where the ticket is
+ * nowhere on screen. Without the tab line, standing on a Home chat would offer
+ * to focus a ticket terminal nobody can see; without the nav line, Files would;
+ * without the Settings line, all of them would offer it from underneath a sheet
+ * covering them.
  *
  * Returning the target rather than committing it keeps this pure, and lets the
  * pane render off the same value it will later write.
@@ -98,18 +107,15 @@ export function terminalFocusTargetForChrome(
   chrome: TerminalFocusChrome,
 ): TerminalFocusTarget | null {
   const projectId = chrome.selectedProjectId;
-  if (projectId === null || chrome.settingsOpen) return null;
-  if (chrome.nav === "board") {
+  if (projectId === null || chrome.settingsOpen || chrome.nav !== "home") return null;
+  if (isHomeBoardTab(chrome.homeActiveTab)) {
     if (chrome.openTicketId === null || chrome.ticketSessionId === null) return null;
     return { projectId, ticketId: chrome.openTicketId, sessionId: chrome.ticketSessionId };
   }
-  if (chrome.nav === "sessions") {
-    if (chrome.projectSessionId === null) return null;
-    // ticketId null is not "unknown": it is the durable fact that this Session
-    // belongs to no ticket, the same reading `projectScope` already carries.
-    return { projectId, ticketId: null, sessionId: chrome.projectSessionId };
-  }
-  return null;
+  if (chrome.projectSessionId === null) return null;
+  // ticketId null is not "unknown": it is the durable fact that this Session
+  // belongs to no ticket, the same reading `projectScope` already carries.
+  return { projectId, ticketId: null, sessionId: chrome.projectSessionId };
 }
 
 /**
@@ -123,11 +129,10 @@ export function terminalFocusTargetForChrome(
  * makes the answer honest after a Session closes, where the recorded active id
  * outlives the tab.
  *
- * `activeTabId` is nullable because the Sessions page records `null` for a
- * project that has never had a tab in front, where a ticket always has at least
- * its Body. Structurally typed and total on `undefined` so a caller can hand it
- * a lookup straight out of a Zustand selector without minting an empty array to
- * stand in for an owner that has never had a Session.
+ * `activeTabId` is nullable because a caller may have no tab to name at all.
+ * Structurally typed and total on `undefined` so a caller can hand it a lookup
+ * straight out of a Zustand selector without minting an empty array to stand in
+ * for an owner that has never had a Session.
  */
 export function activeTerminalSessionId(
   activeTabId: string | null,
