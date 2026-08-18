@@ -19,6 +19,8 @@
  * inline-or-chip call. None of it touches disk.
  */
 
+import { isExpressibleRefPath } from "./file-ref";
+
 /** Bytes the app has taken custody of, addressed by content. */
 export interface Blob {
   /** Lowercase hex sha256 of the bytes — the Blob's whole identity. */
@@ -126,6 +128,82 @@ export function isImageMime(mime: string): boolean {
  * at import, before anything is written — rather than discovering it at send.
  */
 export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The most inlined image data one Session may accumulate across all its turns.
+ *
+ * {@link MAX_INLINE_IMAGE_BYTES} bounds a single image; this bounds the
+ * conversation. The two are not the same guard, and only having the first is
+ * precisely the gap behind the Claude Code reports: no one image was absurd,
+ * but nothing stopped a session collecting enough of them that replaying the
+ * history became the problem. Inlined bytes reach Pi's JSONL recovery sidecar,
+ * which is re-read on every attach, so an unbounded session degrades a little
+ * further with each screenshot until it stops working at all.
+ *
+ * Enforced at attach against the Session's already-linked image Blobs, so the
+ * refusal names a number a person can act on while they still have the file in
+ * hand.
+ */
+export const MAX_SESSION_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Whether one more image of `candidateBytes` fits a Session that has already
+ * inlined `usedBytes`. Pure so both the attach affordance and the command that
+ * performs the attach can ask the same question and never disagree.
+ */
+export function fitsSessionImageBudget(usedBytes: number, candidateBytes: number): boolean {
+  return usedBytes + candidateBytes <= MAX_SESSION_INLINE_IMAGE_BYTES;
+}
+
+/**
+ * What a Blob link looks like to the renderer: the link, plus the few Blob
+ * columns a chip or a preview needs. Everything else the UI wants is derived
+ * from these by pure helpers both sides already share — {@link isImageMime}
+ * decides inline-or-chip, {@link blobUrl} addresses the bytes — so the wire
+ * shape carries no field that could disagree with them.
+ */
+export interface BlobLinkView {
+  /**
+   * The `blob_links` row, or `null` for a Blob that is imported but not yet
+   * attached to anything — a file added to a Ticket that has not been created.
+   * Such a Blob is real, addressable and previewable; only its owner is
+   * pending. Collection reclaims it if the draft is abandoned.
+   */
+  linkId: string | null;
+  blobHash: string;
+  label: string;
+  originalName: string;
+  mime: string;
+  sizeBytes: number;
+}
+
+/**
+ * What attaching a file should actually do, given where it came from.
+ *
+ * Attach and the `@path` picker overlap on repository files, and they are not
+ * the same promise: `@` names the live file, while a snapshot is frozen bytes
+ * materialized under `.volli/attachments/`, which is gitignored and rebuilt
+ * from the Blob store on every ensure. An agent that edits the snapshot loses
+ * the edit silently, so a file that CAN be named live is named live.
+ *
+ * Images are the exception, and only additively: Pi cannot see a path, so a
+ * repository image is named live AND snapshotted, giving the agent the real
+ * file to edit and the model the pixels to look at.
+ *
+ * `repoRelPath` is `null` whenever the file has no nameable home in the
+ * project — outside every project root, or pasted from the clipboard and never
+ * on disk at all. Such a file can only be a snapshot.
+ */
+export type AttachResolution = "ref" | "snapshot" | "ref-and-snapshot";
+
+export function resolveAttachment(repoRelPath: string | null, mime: string): AttachResolution {
+  // Not in the project, or in it under a name the ref grammar cannot express
+  // (`isExpressibleRefPath` rejects spaces, so `docs/design notes.pdf` has no
+  // `@` form). Inserting a ref we cannot parse back would degrade to plain
+  // text, which is worse than a snapshot.
+  if (repoRelPath === null || !isExpressibleRefPath(repoRelPath)) return "snapshot";
+  return isImageMime(mime) ? "ref-and-snapshot" : "ref";
+}
 
 /** Inserts `-${n}` before the extension (`spec.png` → `spec-2.png`); an extensionless name gets it appended (`notes` → `notes-2`). */
 function withCounterSuffix(fileName: string, n: number): string {

@@ -138,6 +138,64 @@ in the composer.
 - The `@path` picker is not superseded. It is the right answer for repo files
   and stays exactly as it is.
 
+## Decisions settled in review
+
+Four questions the plan above left open, answered. Recorded because each one
+has a plausible alternative that would otherwise get re-argued.
+
+### The Pi sidecar is a third durable store, and it gets a budget
+
+The guardrail above says bytes never enter `session_events` or the transcript
+artifact. That is not the whole durable surface. `submitUserMessage` reaches
+Pi, and `pi/runtime.ts` writes every user message to its JSONL recovery sidecar
+(`sidecar.appendMessage(durableMessage(...))`), which is replayed on attach
+(`findEntries({ order: "oldestFirst" })`). Inlined base64 lands there — the same
+artifact shape, and the same replay-every-turn mechanic, as the Claude Code
+transcript corruption this plan is written against.
+
+We accept it, because the alternative breaks the feature: a follow-up turn
+("now make it blue") needs the image still in context, so reference-only
+history would have to rehydrate on every replay. What the cited bugs actually
+lacked was a *bound*, not reference semantics. So the 5 MB per-image ceiling is
+joined by a **cumulative per-session budget** on inlined image bytes, enforced
+at attach, refused with a message naming the session total.
+
+### An attach before the Ticket exists imports eagerly
+
+The new-Ticket composer has no `ticketId` to link against, so `owner` becomes
+optional on import: bytes land as an unlinked Blob at attach time, and the link
+is written once `ticket.create` returns an id. This puts the size refusal and
+the dedup at the moment of attaching, which is when a person can act on them,
+rather than after they have written the whole Ticket. The cost is that an
+abandoned draft leaves unlinked Blobs, which makes collection load-bearing
+rather than housekeeping.
+
+### A repo file attaches as an `@` ref, not a snapshot
+
+Attach and `@` overlap on repo files, and they differ in liveness: `@` points
+at the live file, a snapshot is frozen under `.volli/attachments/`, which is
+gitignored and rebuildable. An agent that edits the snapshot loses the edit
+silently. So the attach gesture resolves by source:
+
+| source | non-image | image |
+| --- | --- | --- |
+| in repo, `isExpressibleRefPath` | `@relative/path`, no Blob | `@relative/path` **and** a snapshot, so vision works |
+| outside the repo, unexpressible path, or pasted | snapshot, chip | snapshot, inlined |
+
+A repo image gets both halves deliberately: the ref so edits reach the real
+file, the snapshot so the model can see the pixels. Two mechanics that the
+grammar and the platform force into the fallback column:
+`isExpressibleRefPath` rejects paths containing spaces (`docs/design notes.pdf`
+is unreferenceable), and Electron 43 removed `File.path`, so a drop only knows
+its origin if `webUtils.getPathForFile` is exposed through preload — a *pasted*
+screenshot has no path at all and therefore always snapshots.
+
+### Image-only messages send
+
+`#submit` rejects an empty prompt with `PI_EMPTY_MESSAGE`. Dragging in a
+screenshot and pressing return without typing is an ordinary gesture, so that
+guard relaxes when the message carries image parts.
+
 ## Work order
 
 1. **Shared model** — `Blob`, hash/path derivation, the materialization naming
@@ -149,7 +207,15 @@ in the composer.
    the `volli-blob:` protocol and CSP entry.
 4. **Preload + ticket surfaces** — semantic commands, composer attach, ticket
    detail list/add/remove, inline rendering in the body. Closes #94.
-5. **Chat** — wire the vendored `PromptInputAttachments`, carry `FileUIPart`
-   through `message.submit`, inline images at send, render inline/chips.
+5. **Chat** — carry `FileUIPart` through `message.submit`, inline images at
+   send, render inline/chips. Note that `ai-elements/prompt-input.tsx` vendors
+   only the attachment *state* layer (`AttachmentsContext`, add/remove/clear,
+   drag/drop/paste, `accept`/`maxFiles`/`maxFileSize`); there are no chip or
+   preview components, so those get written here. Its `FileUIPart.url` is a
+   renderer-local `URL.createObjectURL` blob URL, meaningless in main — the
+   part carried across the RPC edge holds `volli-blob:<hash>` instead, obtained
+   by importing through main first. `submitUserMessage` is typed `text: string`
+   in `shared/agent-runtime.ts` and has to widen to content blocks, including
+   the first-turn `composeFirstUserMessage` path.
 6. **Materialization + brief** — re-point `attachment-materialize.ts` at
    `blob_links` and include session-linked blobs, not just ticket ones.

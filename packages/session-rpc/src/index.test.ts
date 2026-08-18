@@ -683,6 +683,7 @@ describe("Session tRPC router", () => {
               label: "GPT-5.6 Sol",
               state: "available" as const,
               reasoningLevels: ["off", "low", "medium", "high"] as const,
+              acceptsImageInput: true,
               headers: { authorization: "model-secret" },
             },
           ],
@@ -710,6 +711,7 @@ describe("Session tRPC router", () => {
       "state",
     ]);
     expect(Object.keys(access.models[0]!).toSorted()).toEqual([
+      "acceptsImageInput",
       "label",
       "modelId",
       "providerId",
@@ -757,6 +759,7 @@ describe("Session tRPC router", () => {
             label: "  GPT-5.6 Sol  ",
             state: "available" as const,
             reasoningLevels: ["off", "low", "medium", "high"] as const,
+            acceptsImageInput: true,
           },
         ],
       }),
@@ -809,6 +812,7 @@ describe("Session tRPC router", () => {
             label: "   ",
             state: "available" as const,
             reasoningLevels: ["off", "high"] as const,
+            acceptsImageInput: true,
           },
           {
             providerId: "anthropic",
@@ -816,6 +820,7 @@ describe("Session tRPC router", () => {
             label: "y".repeat(513),
             state: "available" as const,
             reasoningLevels: ["off"] as const,
+            acceptsImageInput: false,
           },
           {
             providerId: "anthropic",
@@ -823,6 +828,7 @@ describe("Session tRPC router", () => {
             label: "Claude Sonnet 5",
             state: "available" as const,
             reasoningLevels: ["off"] as const,
+            acceptsImageInput: true,
           },
         ],
       }),

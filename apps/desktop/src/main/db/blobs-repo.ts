@@ -18,7 +18,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { Blob, BlobLink, NamedBlobLink, TicketEventActor } from "@volli/shared";
+import type { Blob, BlobLink, BlobLinkView, NamedBlobLink, TicketEventActor } from "@volli/shared";
 import { recordTicketEvent } from "./events-repo";
 import { prepared } from "./prepared";
 
@@ -157,6 +157,53 @@ export function listMaterializableLinks(
   }));
 }
 
+/**
+ * A Ticket's or a Session's attachments as the renderer wants them: the link
+ * joined to the few Blob columns a chip or a preview needs.
+ *
+ * Exactly one of `ticketId`/`sessionId` is meaningful, mirroring the CHECK on
+ * the table itself. A single query serves both rather than two near-identical
+ * ones, because the SELECT list and the ordering are the part that must not
+ * drift between the two surfaces.
+ */
+export function listLinkViews(
+  db: Database.Database,
+  owner: { ticketId: string; sessionId?: undefined } | { sessionId: string; ticketId?: undefined },
+): BlobLinkView[] {
+  const rows = prepared<
+    [string | null, string | null],
+    BlobLinkRow & { mime: string; size_bytes: number; original_name: string }
+  >(
+    db,
+    `SELECT blob_links.*, blobs.mime, blobs.size_bytes, blobs.original_name
+     FROM blob_links JOIN blobs ON blobs.hash = blob_links.blob_hash
+     WHERE blob_links.ticket_id IS ? AND blob_links.session_id IS ?
+     ORDER BY blob_links.created_at ASC, blob_links.rowid ASC`,
+  ).all(owner.ticketId ?? null, owner.sessionId ?? null);
+  return rows.map((row) => ({
+    linkId: row.id,
+    blobHash: row.blob_hash,
+    label: row.label,
+    originalName: row.original_name,
+    mime: row.mime,
+    sizeBytes: row.size_bytes,
+  }));
+}
+
+/**
+ * The link already joining this Blob to this owner, if there is one — the
+ * dedup probe behind {@link createBlobLink}'s idempotence.
+ */
+function findLink(db: Database.Database, input: CreateBlobLinkInput): BlobLink | undefined {
+  const row = prepared<[string, string | null, string | null], BlobLinkRow>(
+    db,
+    `SELECT * FROM blob_links
+     WHERE blob_hash = ? AND ticket_id IS ? AND session_id IS ?
+     ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+  ).get(input.blobHash, input.ticketId ?? null, input.sessionId ?? null);
+  return row ? mapLink(row) : undefined;
+}
+
 export function getLink(db: Database.Database, linkId: string): BlobLink | undefined {
   const row = prepared<[string], BlobLinkRow>(db, "SELECT * FROM blob_links WHERE id = ?").get(
     linkId,
@@ -188,6 +235,14 @@ export function createBlobLink(
   const run = db.transaction((): BlobLink => {
     const blob = getBlob(db, input.blobHash);
     if (!blob) throw new Error(`Unknown blob: ${input.blobHash}`);
+    // Attaching the same file to the same place twice is idempotent. Content
+    // addressing makes the second attach the SAME Blob, so a second link would
+    // materialize the identical bytes twice under `spec.png` and `spec-2.png` —
+    // two files the agent has no way to tell apart, from a gesture the user
+    // almost always meant as a no-op (a re-drop, a double click). Deduping here
+    // rather than in the UI keeps it true for every surface at once.
+    const existing = findLink(db, input);
+    if (existing) return existing;
     // `||`, not `??`: an empty-string label falls back too, upholding the
     // schema's CHECK (label <> '') — a label is never empty at rest.
     const label = input.label || blob.originalName;
@@ -262,6 +317,16 @@ export function deleteBlobLink(
  * `blob-store.ts`'s remove to reclaim the bytes — deliberately, on its own
  * schedule, rather than as a cascade off the last link.
  */
+/**
+ * Drops a Blob row. The caller removes the bytes; see `blob-collect.ts` for
+ * why in that order. Does not check for links — the FK's ON DELETE CASCADE
+ * would silently take them with it, so only ever call this for a hash
+ * {@link listUnlinkedBlobHashes} just returned.
+ */
+export function deleteBlob(db: Database.Database, hash: string): void {
+  prepared(db, "DELETE FROM blobs WHERE hash = ?").run(hash);
+}
+
 export function listUnlinkedBlobHashes(db: Database.Database): string[] {
   return prepared<[], { hash: string }>(
     db,

@@ -14,6 +14,7 @@
 import type {
   Appearance,
   ArchivedTicket,
+  BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
   CreateTerminalSessionRequest,
@@ -162,6 +163,45 @@ export interface CommentUpdateInput {
 
 export interface CommentIdInput {
   commentId: string;
+}
+
+/**
+ * One attach gesture (VC-50). `bytes` and `sourcePath` are alternatives, not a
+ * pair: a paste has only bytes, a native-picker choice has only a path, and a
+ * drop can have both. `sourcePath` is what makes a repo file eligible to be
+ * named live with `@` instead of snapshotted, so a drop that supplies it gets
+ * the better behaviour.
+ */
+export interface BlobAttachInput {
+  fileName: string;
+  bytes?: Uint8Array;
+  sourcePath?: string;
+  mime?: string;
+  label?: string;
+  /** Absolute workspace root an `@` ref would resolve against. */
+  refRoot?: string;
+  /** Exactly one owner, or `unowned` for a Ticket still being composed. */
+  owner: { ticketId: string } | { sessionId: string } | { unowned: true };
+}
+
+/** Lists what is attached to one Ticket or one Session. */
+export interface BlobListInput {
+  ticketId?: string;
+  sessionId?: string;
+}
+
+export interface BlobLinkIdInput {
+  linkId: string;
+}
+
+/**
+ * Attaches Blobs imported before their Ticket existed. The new-Ticket composer
+ * imports eagerly (so size is refused and previews drawn while the file is
+ * still in hand) and calls this once `ticket.create` has returned an id.
+ */
+export interface BlobLinkDraftsInput {
+  ticketId: string;
+  blobs: { blobHash: string; label?: string }[];
 }
 
 /** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
@@ -335,6 +375,19 @@ export interface VolliDataIpcContract {
   "volli:comment-update": { args: [input: CommentUpdateInput]; result: TicketCommentResult };
   /** Hard-deletes a comment; no event. */
   "volli:comment-remove": { args: [input: CommentIdInput]; result: Result };
+
+  /**
+   * Attaches one file (VC-50). Decides in main whether the file is named live
+   * as an `@` ref or snapshotted into the Blob store, because only main knows
+   * the workspace and only main may read the bytes.
+   */
+  "volli:blob-attach": { args: [input: BlobAttachInput]; result: BlobAttachResult };
+  /** A Ticket's or a Session's attachments, chronological. */
+  "volli:blob-list": { args: [input: BlobListInput]; result: BlobLinksResult };
+  /** Detaches one attachment. Leaves the bytes for collection. */
+  "volli:blob-remove": { args: [input: BlobLinkIdInput]; result: Result };
+  /** Attaches Blobs that were imported before their Ticket existed. */
+  "volli:blob-link-drafts": { args: [input: BlobLinkDraftsInput]; result: BlobLinksResult };
 
   /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
   "volli:session-list": { args: [input: ProjectIdInput]; result: SessionsResult };
@@ -1287,6 +1340,18 @@ export interface SessionStartedNotice {
  * `Result` (no payload) is a plain ok/error ack.
  */
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+
+/**
+ * What one attach produced (VC-50). `relPath` is present when the file was
+ * named live as an `@` ref; `blob` when bytes were stored. A repository image
+ * carries both.
+ */
+export type BlobAttachResult = Result<{
+  relPath: string | null;
+  blob: BlobLinkView | null;
+}>;
+
+export type BlobLinksResult = Result<{ blobs: BlobLinkView[] }>;
 
 export type PickFolderResult =
   | { canceled: true }

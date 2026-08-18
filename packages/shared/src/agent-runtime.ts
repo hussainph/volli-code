@@ -118,6 +118,17 @@ export interface ModelAccessModel {
    * not report a usable size, so a reader never mistakes "unknown" for zero.
    */
   contextWindow?: number;
+  /**
+   * Whether this model takes image input (Pi's `Model.input` including
+   * `"image"`), so the attach affordance can say a model cannot see pictures
+   * instead of discovering it a turn later (VC-50).
+   *
+   * Not knowing reads as `true`. The asymmetry is deliberate: an attachment
+   * always materializes into the workspace and is named in the brief, so a
+   * wrong `true` degrades to a path reference the agent can still open, while a
+   * wrong `false` removes an affordance the model actually supports.
+   */
+  acceptsImageInput: boolean;
 }
 
 /** The complete sanitized Model Access view at one observation time. */

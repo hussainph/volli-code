@@ -395,6 +395,7 @@ describe("model access", () => {
           state: "available",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
           contextWindow: 128000,
+          acceptsImageInput: true,
         },
         {
           providerId: "anthropic",
@@ -403,6 +404,7 @@ describe("model access", () => {
           state: "authentication-required",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
           contextWindow: 128000,
+          acceptsImageInput: true,
         },
       ],
     });
@@ -518,6 +520,7 @@ describe("model access", () => {
           state: "unavailable",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
           contextWindow: 128000,
+          acceptsImageInput: true,
         },
       ],
     });

@@ -12,6 +12,8 @@ import {
   USER_ACTOR,
   validateUniquePrefix,
 } from "@volli/shared";
+import { attachBlob } from "./blob-attach";
+import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type {
   Label,
@@ -24,6 +26,12 @@ import type {
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
+  BlobAttachInput,
+  BlobAttachResult,
+  BlobLinkDraftsInput,
+  BlobLinkIdInput,
+  BlobLinksResult,
+  BlobListInput,
   BootstrapPayload,
   BootstrapResult,
   CommentCreateInput,
@@ -293,6 +301,12 @@ export function registerDataIpcHandlers(
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
+    /**
+     * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
+     * the attach handler is the only thing that reads it, and it fails honestly
+     * rather than writing somewhere arbitrary.
+     */
+    blobsRoot?: string;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -302,6 +316,7 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
@@ -564,6 +579,68 @@ export function registerDataIpcHandlers(
       if (!getComment(db, input.commentId)) return { ok: false, error: "Unknown comment" };
       deleteComment(db, input.commentId);
       return { ok: true };
+    },
+
+    "volli:blob-attach": async (input: BlobAttachInput): Promise<BlobAttachResult> => {
+      try {
+        const outcome = await attachBlob(db, blobsRootPath, input, Date.now());
+        // Flattened to two nullable fields rather than passed through as the
+        // tagged union: every refusal on this channel already travels as
+        // `{ ok: false }`, and a second discriminant beside it would give the
+        // renderer two different shapes to branch on for one answer.
+        return {
+          ok: true,
+          relPath: outcome.kind === "blob" ? null : outcome.relPath,
+          blob: outcome.kind === "ref" ? null : outcome.blob,
+        };
+      } catch (error) {
+        // Attach failures are sentences written for a person — a file over the
+        // size ceiling, a chat at its image budget — so the message is the
+        // point and is surfaced verbatim.
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+
+    "volli:blob-list": (input: BlobListInput): BlobLinksResult => {
+      if (input.ticketId !== undefined) {
+        return { ok: true, blobs: listLinkViews(db, { ticketId: input.ticketId }) };
+      }
+      if (input.sessionId !== undefined) {
+        return { ok: true, blobs: listLinkViews(db, { sessionId: input.sessionId }) };
+      }
+      return { ok: false, error: "Attachments belong to a ticket or a session" };
+    },
+
+    "volli:blob-remove": (input: BlobLinkIdInput): Result => {
+      const removed = deleteBlobLink(db, input.linkId, Date.now(), { kind: "user" });
+      if (!removed) return { ok: false, error: "Unknown attachment" };
+      return { ok: true };
+    },
+
+    "volli:blob-link-drafts": (input: BlobLinkDraftsInput): BlobLinksResult => {
+      try {
+        const now = Date.now();
+        // One transaction: a composer's attachments arrive together, and a
+        // Ticket that kept three of five would be worse than one that kept none
+        // and said so.
+        db.transaction(() => {
+          for (const draft of input.blobs) {
+            createBlobLink(
+              db,
+              {
+                blobHash: draft.blobHash,
+                ...(draft.label === undefined ? {} : { label: draft.label }),
+                ticketId: input.ticketId,
+                eventActor: { kind: "user" },
+              },
+              now,
+            );
+          }
+        })();
+        return { ok: true, blobs: listLinkViews(db, { ticketId: input.ticketId }) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
     },
 
     "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => {

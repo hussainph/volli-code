@@ -294,6 +294,7 @@ describe("Sessions", () => {
           label: "Claude Opus",
           state: "available",
           reasoningLevels: ["low", "medium", "high"],
+          acceptsImageInput: true,
         },
         {
           providerId: "openai-codex",
@@ -301,6 +302,7 @@ describe("Sessions", () => {
           label: "GPT",
           state: "available",
           reasoningLevels: ["high", "xhigh"],
+          acceptsImageInput: true,
         },
         {
           providerId: "anthropic",
@@ -308,6 +310,7 @@ describe("Sessions", () => {
           label: "Signed out",
           state: "authentication-required",
           reasoningLevels: ["medium"],
+          acceptsImageInput: true,
         },
       ],
     };

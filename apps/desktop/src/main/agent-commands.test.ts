@@ -3777,6 +3777,7 @@ describe("model.list", () => {
           label: "Claude Opus 5",
           state: "available",
           reasoningLevels: ["low", "medium", "high"],
+          acceptsImageInput: true,
         },
         {
           providerId: "anthropic",
@@ -3784,6 +3785,7 @@ describe("model.list", () => {
           label: "Claude Legacy",
           state: "unavailable",
           reasoningLevels: ["off"],
+          acceptsImageInput: true,
         },
         {
           providerId: "openai-codex",
@@ -3791,6 +3793,7 @@ describe("model.list", () => {
           label: "Terra",
           state: "authentication-required",
           reasoningLevels: ["medium", "high", "xhigh"],
+          acceptsImageInput: true,
         },
       ],
     };

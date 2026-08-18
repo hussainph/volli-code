@@ -714,6 +714,149 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:blob-attach", () => {
+    const { guard, invalidError } = DATA_IPC["volli:blob-attach"];
+    const bytes = new Uint8Array([1, 2, 3]);
+
+    it("accepts bytes with each kind of owner", () => {
+      expect(guard([{ fileName: "a.png", bytes, owner: { ticketId: "t1" } }])).toBe(true);
+      expect(guard([{ fileName: "a.png", bytes, owner: { sessionId: "s1" } }])).toBe(true);
+      expect(guard([{ fileName: "a.png", bytes, owner: { unowned: true } }])).toBe(true);
+    });
+
+    it("accepts a source path instead of bytes, which is the native picker", () => {
+      expect(guard([{ fileName: "a.png", sourcePath: "/x/a.png", owner: { unowned: true } }])).toBe(
+        true,
+      );
+    });
+
+    it("accepts the optional descriptive fields", () => {
+      expect(
+        guard([
+          {
+            fileName: "a.png",
+            bytes,
+            mime: "image/png",
+            label: "Mock",
+            refRoot: "/repo",
+            owner: { unowned: true },
+          },
+        ]),
+      ).toBe(true);
+    });
+
+    it("rejects a payload with neither bytes nor a path", () => {
+      expect(guard([{ fileName: "a.png", owner: { unowned: true } }])).toBe(false);
+    });
+
+    it("rejects bytes that are not actually bytes", () => {
+      expect(guard([{ fileName: "a.png", bytes: [1, 2, 3], owner: { unowned: true } }])).toBe(
+        false,
+      );
+    });
+
+    it("rejects a missing or blank file name", () => {
+      expect(guard([{ bytes, owner: { unowned: true } }])).toBe(false);
+      expect(guard([{ fileName: "   ", bytes, owner: { unowned: true } }])).toBe(false);
+    });
+
+    it("rejects an owner that names nothing", () => {
+      expect(guard([{ fileName: "a.png", bytes, owner: {} }])).toBe(false);
+      expect(guard([{ fileName: "a.png", bytes, owner: null }])).toBe(false);
+      expect(guard([{ fileName: "a.png", bytes, owner: { unowned: false } }])).toBe(false);
+      expect(guard([{ fileName: "a.png", bytes }])).toBe(false);
+    });
+
+    it("rejects a non-string optional field", () => {
+      expect(guard([{ fileName: "a.png", bytes, mime: 7, owner: { unowned: true } }])).toBe(false);
+      expect(guard([{ fileName: "a.png", bytes, label: 7, owner: { unowned: true } }])).toBe(false);
+      expect(guard([{ fileName: "a.png", bytes, refRoot: 7, owner: { unowned: true } }])).toBe(
+        false,
+      );
+    });
+
+    it("rejects a non-object payload and a wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid attachment");
+    });
+  });
+
+  describe("volli:blob-list", () => {
+    const { guard, invalidError } = DATA_IPC["volli:blob-list"];
+
+    it("accepts either owner", () => {
+      expect(guard([{ ticketId: "t1" }])).toBe(true);
+      expect(guard([{ sessionId: "s1" }])).toBe(true);
+    });
+
+    it("rejects a non-string owner id", () => {
+      expect(guard([{ ticketId: 1 }])).toBe(false);
+      expect(guard([{ sessionId: 1 }])).toBe(false);
+    });
+
+    it("rejects a non-object payload and a wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid attachment owner");
+    });
+  });
+
+  describe("volli:blob-remove", () => {
+    const { guard, invalidError } = DATA_IPC["volli:blob-remove"];
+
+    it("accepts a valid { linkId } payload", () => {
+      expect(guard([{ linkId: "l1" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload, a non-string id and a wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([{ linkId: 1 }])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid attachment");
+    });
+  });
+
+  describe("volli:blob-link-drafts", () => {
+    const { guard, invalidError } = DATA_IPC["volli:blob-link-drafts"];
+
+    it("accepts drafts with and without labels", () => {
+      expect(
+        guard([{ ticketId: "t1", blobs: [{ blobHash: "a" }, { blobHash: "b", label: "Mock" }] }]),
+      ).toBe(true);
+    });
+
+    it("accepts an empty draft list, which is a ticket created with nothing attached", () => {
+      expect(guard([{ ticketId: "t1", blobs: [] }])).toBe(true);
+    });
+
+    it("rejects a malformed draft entry", () => {
+      expect(guard([{ ticketId: "t1", blobs: [{ blobHash: 1 }] }])).toBe(false);
+      expect(guard([{ ticketId: "t1", blobs: [{ blobHash: "a", label: 1 }] }])).toBe(false);
+      expect(guard([{ ticketId: "t1", blobs: [null] }])).toBe(false);
+    });
+
+    it("rejects a missing ticket, a non-array list and a wrong arity", () => {
+      expect(guard([{ blobs: [] }])).toBe(false);
+      expect(guard([{ ticketId: "t1", blobs: "nope" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid attachment drafts");
+    });
+  });
+
   describe("volli:session-list", () => {
     const { guard, invalidError } = DATA_IPC["volli:session-list"];
 
@@ -1237,9 +1380,13 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 46 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(46);
+    it("covers all 50 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(50);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      expect(DATA_CHANNELS).toContain("volli:blob-attach");
+      expect(DATA_CHANNELS).toContain("volli:blob-list");
+      expect(DATA_CHANNELS).toContain("volli:blob-remove");
+      expect(DATA_CHANNELS).toContain("volli:blob-link-drafts");
       expect(DATA_CHANNELS).toContain("volli:ticket-move");
       expect(DATA_CHANNELS).toContain("volli:app-state-set");
       expect(DATA_CHANNELS).toContain("volli:retention-poll");

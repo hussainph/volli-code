@@ -2,14 +2,17 @@ import { describe, it, expect } from "vite-plus/test";
 import {
   BLOB_URL_SCHEME,
   MAX_INLINE_IMAGE_BYTES,
+  MAX_SESSION_INLINE_IMAGE_BYTES,
   type NamedBlobLink,
   blobRelPath,
   blobsSectionInput,
   blobUrl,
+  fitsSessionImageBudget,
   isBlobHash,
   isImageMime,
   materializedBlobNames,
   parseBlobUrl,
+  resolveAttachment,
 } from "./blob";
 
 const HASH = "a".repeat(64);
@@ -176,5 +179,52 @@ describe("materializedBlobNames", () => {
 
   it("maps nothing for no links", () => {
     expect(materializedBlobNames([]).size).toBe(0);
+  });
+});
+
+describe("fitsSessionImageBudget", () => {
+  it("admits an image that exactly fills the remaining budget", () => {
+    expect(fitsSessionImageBudget(MAX_SESSION_INLINE_IMAGE_BYTES - 10, 10)).toBe(true);
+  });
+
+  it("refuses the byte that would cross it", () => {
+    expect(fitsSessionImageBudget(MAX_SESSION_INLINE_IMAGE_BYTES - 10, 11)).toBe(false);
+  });
+
+  it("admits the first image into an empty session", () => {
+    expect(fitsSessionImageBudget(0, MAX_INLINE_IMAGE_BYTES)).toBe(true);
+  });
+
+  it("leaves room for more than one maximum-size image", () => {
+    // The per-image ceiling and the session budget are separate guards: a
+    // session that admitted only one 5 MB image would make the second
+    // meaningless.
+    expect(fitsSessionImageBudget(MAX_INLINE_IMAGE_BYTES, MAX_INLINE_IMAGE_BYTES)).toBe(true);
+  });
+});
+
+describe("resolveAttachment", () => {
+  it("snapshots a file with no home in the project", () => {
+    expect(resolveAttachment(null, "application/pdf")).toBe("snapshot");
+    expect(resolveAttachment(null, "image/png")).toBe("snapshot");
+  });
+
+  it("names a repo document live rather than freezing a copy of it", () => {
+    expect(resolveAttachment("docs/spec.pdf", "application/pdf")).toBe("ref");
+  });
+
+  it("names a repo image live AND snapshots it, so the model can see it", () => {
+    expect(resolveAttachment("src/logo.png", "image/png")).toBe("ref-and-snapshot");
+  });
+
+  it("snapshots a repo path the ref grammar cannot express", () => {
+    // A space truncates the ref run, so `@docs/design notes.pdf` would parse
+    // back as `@docs/design` — a snapshot is the honest fallback.
+    expect(resolveAttachment("docs/design notes.pdf", "application/pdf")).toBe("snapshot");
+    expect(resolveAttachment("docs/design notes.png", "image/png")).toBe("snapshot");
+  });
+
+  it("snapshots an extensionless repo-root file, which has no ref form", () => {
+    expect(resolveAttachment("Makefile", "text/plain")).toBe("snapshot");
   });
 });

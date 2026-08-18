@@ -23,7 +23,7 @@ import type {
   WorktreeOrphansResult,
   WorktreeRemoveResult,
 } from "../ipc/contract";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -93,6 +93,8 @@ import type { TestDb } from "./db/test-helpers";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
 import { worktreesHome } from "./worktree-runtime";
 import { listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
+import { MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
+import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
 const fakeEvent = { sender: {} };
@@ -1600,5 +1602,139 @@ describe("descriptor guard rejections reach the caller through the envelope, one
         includeUnstaged: "yes",
       }),
     ).toEqual({ ok: false, error: "Invalid commit request" });
+  });
+});
+
+describe("attachments (VC-50)", () => {
+  let blobsDir: string;
+  let workspace: string;
+  let projectId: string;
+  let ticket: Ticket;
+
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+  beforeEach(() => {
+    blobsDir = mkdtempSync(join(tmpdir(), "volli-blobs-"));
+    workspace = mkdtempSync(join(tmpdir(), "volli-ws-"));
+    // Re-register so the attach handler has somewhere to put bytes; the shared
+    // beforeEach registers without a blob root.
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { blobsRoot: blobsDir });
+    projectId = createProject();
+    ticket = createTicket(projectId);
+  });
+
+  afterEach(() => {
+    rmSync(blobsDir, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("snapshots a pasted image and lists it back", async () => {
+    const attached = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "pasted.png",
+      bytes: PNG,
+      owner: { ticketId: ticket.id },
+    });
+    if (!attached.ok) throw new Error(attached.error);
+    expect(attached.relPath).toBeNull();
+    expect(attached.blob?.mime).toBe("image/png");
+
+    const listed = invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id });
+    if (!listed.ok) throw new Error(listed.error);
+    expect(listed.blobs).toHaveLength(1);
+    expect(listed.blobs[0]?.originalName).toBe("pasted.png");
+  });
+
+  it("names a repo document live instead of copying it", async () => {
+    const sourcePath = join(workspace, "spec.pdf");
+    writeFileSync(sourcePath, PNG);
+    const attached = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "spec.pdf",
+      sourcePath,
+      refRoot: workspace,
+      owner: { ticketId: ticket.id },
+    });
+    if (!attached.ok) throw new Error(attached.error);
+    expect(attached.relPath).toBe("spec.pdf");
+    expect(attached.blob).toBeNull();
+    expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
+      blobs: [],
+    });
+  });
+
+  it("surfaces an oversized image as a sentence the user can act on", async () => {
+    const huge = new Uint8Array(MAX_INLINE_IMAGE_BYTES + 1);
+    const attached = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "huge.png",
+      bytes: huge,
+      owner: { ticketId: ticket.id },
+    });
+    expect(attached).toMatchObject({ ok: false });
+    if (attached.ok) throw new Error("expected refusal");
+    expect(attached.error).toMatch(/under 5 MB/);
+  });
+
+  it("detaches an attachment, and refuses one it does not know", async () => {
+    const attached = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "a.png",
+      bytes: PNG,
+      owner: { ticketId: ticket.id },
+    });
+    if (!attached.ok || !attached.blob?.linkId) throw new Error("expected a link");
+    expect(invoke<Result>("volli:blob-remove", { linkId: attached.blob.linkId })).toEqual({
+      ok: true,
+    });
+    expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
+      blobs: [],
+    });
+    expect(invoke<Result>("volli:blob-remove", { linkId: "nope" })).toEqual({
+      ok: false,
+      error: "Unknown attachment",
+    });
+  });
+
+  it("links composer drafts once the ticket they belong to exists", async () => {
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "mock.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    // Imported, previewable, and owned by nothing yet.
+    expect(draft.blob.linkId).toBeNull();
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      ticketId: ticket.id,
+      blobs: [{ blobHash: draft.blob.blobHash, label: "Mock" }],
+    });
+    if (!linked.ok) throw new Error(linked.error);
+    expect(linked.blobs).toHaveLength(1);
+    expect(linked.blobs[0]?.label).toBe("Mock");
+  });
+
+  it("links no drafts at all when one of them names an unknown blob", async () => {
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "mock.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      ticketId: ticket.id,
+      blobs: [{ blobHash: draft.blob.blobHash }, { blobHash: "a".repeat(64) }],
+    });
+    expect(linked.ok).toBe(false);
+    // The good one did not survive on its own — a half-attached ticket would be
+    // worse than an honest refusal.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
+      blobs: [],
+    });
+  });
+
+  it("refuses a list that names no owner", async () => {
+    expect(invoke<BlobLinksResult>("volli:blob-list", {})).toEqual({
+      ok: false,
+      error: "Attachments belong to a ticket or a session",
+    });
   });
 });

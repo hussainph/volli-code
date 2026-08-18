@@ -141,6 +141,7 @@ describe("the Session's own model, against the catalog", () => {
       label: "GPT-5.6 Luna",
       state: "available",
       reasoningLevels: ["medium"],
+      acceptsImageInput: true,
     },
     {
       // The same model name, from a provider this profile never signed into.
@@ -149,6 +150,7 @@ describe("the Session's own model, against the catalog", () => {
       label: "GPT-5.6 Luna",
       state: "authentication-required",
       reasoningLevels: ["medium"],
+      acceptsImageInput: true,
     },
   ];
   const providers: readonly ModelAccessProvider[] = [

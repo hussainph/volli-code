@@ -135,6 +135,11 @@ export async function inspectPiModelAccess(
                 ? "authentication-required"
                 : "unavailable",
         reasoningLevels: getSupportedThinkingLevels(model),
+        // Same defensive stance as contextWindow above — Pi types `input` as
+        // required, a gateway entry need not honour that. An unreadable field
+        // reads as "takes images", because an attachment a model cannot see
+        // still materializes and is still named in the brief by path.
+        acceptsImageInput: !Array.isArray(model.input) || model.input.includes("image"),
       });
     }
   }

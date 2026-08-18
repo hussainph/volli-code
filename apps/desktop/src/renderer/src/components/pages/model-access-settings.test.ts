@@ -15,6 +15,7 @@ const MODEL: ModelAccessModel = {
   label: "GPT-5.6 Sol",
   state: "available",
   reasoningLevels: ["low", "medium", "high"],
+  acceptsImageInput: true,
 };
 
 describe("default model reasoning", () => {

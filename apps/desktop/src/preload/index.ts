@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 // Type-only imports ONLY, from BOTH sources below: the pack config keeps main
 // and preload dependency-disjoint (see CAUTION in vite.config.ts) — a runtime
 // import from @volli/shared here could split a shared chunk out of preload.cjs.
@@ -56,6 +56,12 @@ import type {
   CliDoctorResult,
   CliStatusResult,
   CommentCreateInput,
+  BlobAttachInput,
+  BlobAttachResult,
+  BlobLinkDraftsInput,
+  BlobLinkIdInput,
+  BlobLinksResult,
+  BlobListInput,
   CommentIdInput,
   CommentUpdateInput,
   DataChangedEvent,
@@ -360,6 +366,33 @@ const api = {
       invoke("volli:comment-update", input),
     /** Hard-deletes a comment; no event. */
     remove: (input: CommentIdInput): Promise<Result> => invoke("volli:comment-remove", input),
+  },
+  attachments: {
+    /**
+     * Attaches one file (VC-50). Main decides whether it becomes an `@` ref to
+     * a live repo file or a snapshot in the Blob store — the renderer knows
+     * neither the project roots nor the bytes on disk, and should not.
+     */
+    attach: (input: BlobAttachInput): Promise<BlobAttachResult> =>
+      invoke("volli:blob-attach", input),
+    /** A ticket's or a session's attachments, chronological. */
+    list: (input: BlobListInput): Promise<BlobLinksResult> => invoke("volli:blob-list", input),
+    /** Detaches one attachment; the bytes stay until collection. */
+    remove: (input: BlobLinkIdInput): Promise<Result> => invoke("volli:blob-remove", input),
+    /** Attaches Blobs imported before their ticket existed, once it has an id. */
+    linkDrafts: (input: BlobLinkDraftsInput): Promise<BlobLinksResult> =>
+      invoke("volli:blob-link-drafts", input),
+    /**
+     * The absolute path behind a dropped `File`, or `""` when the drag did not
+     * come from the filesystem.
+     *
+     * Electron 32 removed `File.path`, and `webUtils` is a renderer-side API
+     * that context isolation puts out of the page's reach — so this crossing
+     * exists purely to answer "where did this file come from?", which is what
+     * decides between an `@` ref and a snapshot. It reads a path; it never
+     * opens one.
+     */
+    pathForFile: (file: File): string => webUtils.getPathForFile(file),
   },
   sessions: {
     /** Every Session in a project (ticket-scoped and project-scoped scratch), newest first — a terminal or chat row per Session, never dropped. */
