@@ -30,6 +30,8 @@ import {
   type WebTargetRuleId,
 } from "@volli/shared";
 
+import { extractReadableMarkdown } from "./extract";
+
 /** Every rule this module can cite, beyond the ones admission already owns. */
 export const WEB_FETCH_RULE_IDS = [
   /** A hostname resolved to at least one address that is not the public Internet. */
@@ -106,8 +108,15 @@ export type WebFetchLimits = { -readonly [K in keyof typeof WEB_FETCH_LIMITS]: n
 /** The identity Volli presents, so an operator can see who called and why. */
 export const WEB_FETCH_USER_AGENT = "Volli/1.0 (+https://volli.app)";
 
-/** The media types this slice will read, and the name each is reported under. */
-const READABLE_TYPES: ReadonlyMap<string, SafeWebFetchResult["contentType"]> = new Map([
+/**
+ * The media types this slice will read, and the name each is read under.
+ *
+ * `html` is a served kind, not a returned one: HTML is the one type whose
+ * bytes are not text a model can use, so it alone goes through extraction
+ * before it reaches a caller. The other two are returned as they arrived.
+ */
+type ServedKind = "html" | "text" | "markdown";
+const READABLE_TYPES: ReadonlyMap<string, ServedKind> = new Map([
   ["text/html", "html"],
   ["text/plain", "text"],
   ["text/markdown", "markdown"],
@@ -281,7 +290,12 @@ function requestOptions(
     method: "GET",
     headers: {
       "user-agent": WEB_FETCH_USER_AGENT,
-      accept: "text/html, text/plain, text/markdown",
+      // Preference-ordered rather than equal: a host that can serve Markdown or
+      // plain text hands back bytes that need no extraction, and one that
+      // cannot serves the HTML it would have served anyway. Asking for HTML
+      // first would make every negotiation return the one type that costs the
+      // most to read.
+      accept: "text/markdown, text/plain;q=0.9, text/html;q=0.8",
       // Identity only. A compressed body is a decompression bound this slice
       // has not written, and asking for one Volli cannot police is careless.
       "accept-encoding": "identity",
@@ -314,7 +328,17 @@ function contentType(response: IncomingMessage): { media: string; charset: strin
   return { media: media.trim().toLowerCase(), charset: charset ?? "utf-8" };
 }
 
-/** Decode the collected bytes, then bound what the caller is handed. */
+/**
+ * Turn validated bytes into the bounded document a caller reads.
+ *
+ * For the two media types that are already text, the body is the document and
+ * the only question is the bound. For HTML it is not: the body is markup whose
+ * article is usually a minority of its bytes, so it goes through extraction
+ * first and the bound is applied to what comes out. That order is the whole
+ * defence against chrome-heavy pages — bounding the markup would spend the
+ * budget on the `<head>` before the article began, which on a documentation
+ * site is a table of contents and nothing else.
+ */
 function document(
   target: AdmittedWebTarget,
   url: URL,
@@ -338,13 +362,29 @@ function document(
     );
   }
   const decoded = new TextDecoder(encoding).decode(body);
-  const truncated = decoded.length > limits.textChars;
+
+  let text: string;
+  let truncated: boolean;
+  // `html` is narrowed away here, so what reaches the contract is exactly the
+  // two kinds the contract allows: text that arrived as text, and text that
+  // had to be taken out of markup to exist.
+  let returned: Exclude<ServedKind, "html">;
+  if (kind === "html") {
+    const extracted = extractReadableMarkdown(decoded, target.url);
+    text = extracted.text;
+    truncated = extracted.truncated || extracted.text.length > limits.textChars;
+    returned = "markdown";
+  } else {
+    text = decoded;
+    truncated = decoded.length > limits.textChars;
+    returned = kind;
+  }
   return {
     requestedUrl: target.url,
     finalUrl: target.url,
     origin: url.origin,
-    contentType: kind,
-    text: truncated ? decoded.slice(0, limits.textChars) : decoded,
+    contentType: returned,
+    text: truncated ? text.slice(0, limits.textChars) : text,
     truncated,
   };
 }

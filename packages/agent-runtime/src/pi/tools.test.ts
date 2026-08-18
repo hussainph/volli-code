@@ -317,7 +317,7 @@ function document(overrides: Partial<RuntimeWebDocument> = {}): RuntimeWebDocume
     requestedUrl: "https://example.com/guide",
     finalUrl: "https://example.com/guide",
     origin: "https://example.com",
-    contentType: "html",
+    contentType: "markdown",
     text: "The guide says to run the migration first.",
     truncated: false,
     ...overrides,

@@ -30,6 +30,12 @@ export {
   type PiSessionEnvIdentity,
 } from "./pi/execution-env";
 export {
+  extractReadableMarkdown,
+  WEB_EXTRACT_LIMITS,
+  type ExtractedDocument,
+  type WebExtractLimits,
+} from "./web/extract";
+export {
   createSafeWebFetch,
   WEB_FETCH_LIMITS,
   WEB_FETCH_RULE_IDS,

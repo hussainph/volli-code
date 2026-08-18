@@ -183,7 +183,9 @@ describe("safe web fetch", () => {
     });
     expect(sent[0]?.headers).toEqual({
       "user-agent": WEB_FETCH_USER_AGENT,
-      accept: "text/html, text/plain, text/markdown",
+      // Preference-ordered: Markdown and plain text arrive usable, HTML arrives
+      // as the one type this boundary has to work to read.
+      accept: "text/markdown, text/plain;q=0.9, text/html;q=0.8",
       "accept-encoding": "identity",
     });
     // No jar, so a cookie the first response set cannot ride the second request.
@@ -335,10 +337,9 @@ describe("safe web fetch", () => {
   });
 
   it.each([
-    ["text/html; charset=utf-8", "html"],
     ["text/markdown", "markdown"],
     ["text/plain", "text"],
-  ])("reads %s as %s", async (served, reported) => {
+  ])("returns %s as %s, verbatim", async (served, reported) => {
     const { fetcher } = await fetcherFor((_request, response) => {
       response.writeHead(200, { "content-type": served });
       response.end("# notes");
@@ -347,6 +348,32 @@ describe("safe web fetch", () => {
     await expect(
       fetcher.fetch({ url: "http://docs.example.com/doc", signal: new AbortController().signal }),
     ).resolves.toMatchObject({ contentType: reported, text: "# notes" });
+  });
+
+  it("extracts HTML to its article, so the bound is spent on prose not chrome", async () => {
+    // A page whose chrome dwarfs its article the way real documentation does:
+    // a nav of links well past the character bound, then the article at the
+    // end. Returned raw, the bound would be spent entirely inside the nav and
+    // the model would never see a word of the article.
+    const nav = Array.from(
+      { length: 2500 },
+      (_, index) => `<a href="/section/${index}">section ${index}</a>`,
+    ).join(" ");
+    const { fetcher } = await fetcherFor((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<!doctype html><html><head><title>Notes</title></head><body><nav>${nav}</nav>` +
+          `<main><article><h1>Notes</h1><p>Run the migration before the deploy, and run it exactly once.</p></article></main></body></html>`,
+      );
+    });
+
+    await expect(
+      fetcher.fetch({ url: "http://docs.example.com/doc", signal: new AbortController().signal }),
+    ).resolves.toMatchObject({
+      contentType: "markdown",
+      text: expect.stringContaining("Run the migration before the deploy"),
+      truncated: false,
+    });
   });
 
   it.each([

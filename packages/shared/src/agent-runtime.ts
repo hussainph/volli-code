@@ -382,7 +382,13 @@ export interface RuntimeWebDocument {
   finalUrl: string;
   /** Scheme, host and port of the final URL. */
   origin: string;
-  contentType: "html" | "text" | "markdown";
+  /**
+   * The kind of text in {@link text}: `markdown` when the page was served as
+   * Markdown or its article was extracted from HTML and converted, `text` for
+   * the other media types Volli reads. Raw markup is never handed back — it is
+   * spent inside the boundary, and only what a reader can use leaves it.
+   */
+  contentType: "text" | "markdown";
   /** The document's text, already inside the boundary's own character bound. */
   text: string;
   /** Whether the boundary cut the text short of the document's end. */
