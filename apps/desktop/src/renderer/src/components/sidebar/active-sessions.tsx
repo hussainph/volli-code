@@ -292,15 +292,32 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   // for the facts the Session channel genuinely cannot announce: the two Previous
   // cleanup rules read a ticket's column history, which moves on the board rather
   // than in the ledger. The ref starts true so the mount fetch is not doubled.
+  const syncListingClocks = React.useCallback(() => {
+    const now = Date.now();
+    setListingNow(now);
+    setAgeNow(now);
+  }, []);
   const wasVisible = React.useRef(true);
   React.useEffect(() => {
     if (!visible) {
       wasVisible.current = false;
       return;
     }
-    if (!wasVisible.current) setRefreshTick((tick) => tick + 1);
+    if (!wasVisible.current) {
+      // A hidden Electron window may throttle or suspend timers. Refreshing the
+      // durable rows on return without also refreshing the listing clock can
+      // leave an idle chat in Active until some unrelated state change lands.
+      syncListingClocks();
+      setRefreshTick((tick) => tick + 1);
+    }
     wasVisible.current = true;
-  }, [visible]);
+  }, [syncListingClocks, visible]);
+  // Window activation is a second return path: the nav can remain on the same
+  // page while macOS suspends the renderer behind another window or a sleep.
+  React.useEffect(() => {
+    window.addEventListener("focus", syncListingClocks);
+    return () => window.removeEventListener("focus", syncListingClocks);
+  }, [syncListingClocks]);
 
   // The sidebar's durable read catches chats started outside this renderer.
   // A resident title overlays it immediately, so the first exchange does not
