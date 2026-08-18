@@ -851,12 +851,17 @@
  * pixels away on the same edge) — the exact collision that map was written to
  * end, one component over.
  *
- * Both clear 4.5:1 against `--card` in both appearances (measured: ~9:1 dark,
- * ~5.5:1 light). They read differently by construction rather than by
- * accident — the generated set makes these ink colours on a light canvas and
- * light colours on a dark one, so the same ring is a neon filament in dark and
- * a drawn line in light. Correct both times: a glow on paper IS a line, and a
- * lighter one would have less contrast, not more.
+ * In DARK the tokens are painted exactly as generated — Lc ~65 against
+ * `--card`, a light filament on near-black — and nothing about them needs to
+ * move.
+ *
+ * In LIGHT the generated set makes those same tokens INK, because it solves
+ * them to that same Lc 65 on a light canvas: `--positive` is #005f40 and
+ * `--attention` is #764900. Painted straight at ring width they read as a line
+ * someone drew rather than one that is lit, so light re-solves the colour
+ * brighter and pays contrast for it. The numbers behind that trade, and why it
+ * is affordable for this one mark and nowhere else, are in LIGHT IS SOLVED,
+ * NOT THICKENED below.
  *
  * Reduced motion parks the travelling ring rather than dropping it, because
  * here the mark IS the information: a card with an agent on it must still be
@@ -882,15 +887,17 @@
   inset: -1px;
   border-radius: inherit;
   --session-ring-width: 1.5px;
+  /* The status token this ring is about — swapped per state below. `-color` is
+   * what actually gets painted, and in light it is solved from this rather
+   * than being it; see LIGHT IS SOLVED, NOT THICKENED. */
+  --session-ring-seed: var(--positive);
+  --session-ring-color: var(--session-ring-seed);
   /* The visible thickness of the ring, and the only thing the mask leaves. */
   padding: var(--session-ring-width);
   overflow: hidden;
   pointer-events: none;
   display: none;
   opacity: 0;
-  /* The travelling colour. Overridden per state by the two rules below so the
-   * gradient itself is written once. */
-  --session-ring-color: var(--positive);
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -915,26 +922,68 @@
   }
 }
 
-/* Light appearance carries the ring THICKER, and it is the one axis that may
- * move here. The hues are generated, never authored, and in light they are ink
- * colours — dark green and dark brown — so "make it glow more" would mean
- * lightening them, which lowers contrast rather than raising it (see COLOUR
- * above; both already clear 4.5:1). What a dark line on a light canvas actually
- * lacks is WEIGHT: at 1.5px it reads as a hairline against a warm busy card and
- * washes out at arm's length, where the same 1.5px in dark is a filament
- * against near-black and is already loud.
+/* ── LIGHT IS SOLVED, NOT THICKENED ────────────────────────────────────────
+ * On a light canvas the status tokens are DARK — `--attention` is #764900, a
+ * brown — and at ring width that reads as mud rather than as a lit edge. The
+ * obvious fixes are both wrong, and measurably so:
  *
- * So the same mark is drawn at the weight each canvas needs to carry it, which
- * is what the two-block generated token set does for every other colour in the
- * app — this is the non-colour half of the same idea. The outer radius is
- * unchanged, so the ring stays seated on the border either way; only the inner
- * edge moves in, and 12 − 2.5 leaves the corners comfortably concentric. */
+ *   • MORE CHROMA does nothing. `solveStatusTokens` fixes chroma at
+ *     STATUS_CHROMA (0.16) and solves LIGHTNESS down until the fill clears
+ *     STATUS_LC (65) against the card. On a light card that lands amber at
+ *     L=0.447, where sRGB holds at most C=0.097 — so the token is ALREADY
+ *     gamut-clipped, and asking for 0.14, 0.18 or 0.25 all hand back the exact
+ *     same #764900. There is no vibrancy left to turn up.
+ *   • MORE WIDTH was the previous answer here and it made the mud thicker.
+ *
+ * Chroma headroom only opens as lightness rises, so brightness is not a second
+ * lever — it is the only one. This solves the ring at L=0.65, where the same
+ * hues carry C~0.147 instead of the 0.097 and 0.093 they were clipped to:
+ * amber lands on #cb7900 and green on #00ac71. That half-again of chroma is
+ * the sparkle this rule exists for.
+ *
+ * Those two hexes are what the BROWSER paints, and they are not what this
+ * repo's `oklchToHex` returns for the same coordinates (#c57d00, #00a975).
+ * `oklch()` here is out of sRGB, and Chromium clips it where `gamutMap`
+ * reduces chroma at fixed L and h — so a reader checking these numbers with
+ * the shared colour module will get a near miss and think the rule drifted.
+ * Measured off a canvas `getImageData`, which is the only thing that answers
+ * what actually reaches the screen.
+ *
+ * WHAT IT COSTS, measured rather than asserted: Lc 39 for amber and Lc 34 for
+ * green against `--card`, where the rest of the status family sits at 65 — so
+ * the ring gives up 26–31 Lc. In WCAG's terms that is 2.4:1 and 2.1:1, which
+ * does NOT clear 1.4.11's 3:1. Recorded here because it is exactly the number
+ * a reader would otherwise assume: buying 3:1 back costs the vividness this
+ * rule exists for (both hues only cross it around L=0.55, which lands most of
+ * the way back to the mud), and 1.4.11 governs graphics REQUIRED to understand
+ * the content. This ring is not one — it is a redundant reinforcement of a
+ * state the sidebar's Active band already names in words and the list row
+ * already wears its own mark for, so a reader who cannot pick it out has lost
+ * a glance rather than the information. It stays above Lc 30, which is the
+ * floor for a mark that only has to be SPOTTED rather than read.
+ *
+ * That budget is scoped to this one 2px edge and does not travel. STATUS_LC is
+ * the floor for status TEXT, matched across the family so that no status label
+ * shouts over another, and nothing here licenses spending it anywhere else.
+ *
+ * Derived rather than authored: only L and C are pinned, `h` comes from the
+ * token, so a scope that repaints its canvas still moves this ring with it.
+ * Dark is untouched — there the tokens are already light on near-black and
+ * asking for anything else would be inventing a problem. */
 :root.light .session-ring {
-  --session-ring-width: 2.5px;
+  --session-ring-color: oklch(from var(--session-ring-seed) 0.65 0.16 h);
+  /* A little extra weight, and it is the SAME budget being balanced rather than
+   * a second helping of it: the solve above buys vividness by giving up 26–31
+   * Lc, so spending the width down to dark's 1.5px in the same breath would pay
+   * for the trade twice and leave a thin line at reduced contrast. 2px, not the
+   * 2.5px this rule used to carry — the colour is doing most of the work now,
+   * and past 2px a light ring stops reading as lit and starts reading as
+   * outlined. */
+  --session-ring-width: 2px;
 }
 
 .session-ring[data-activity="waiting"] {
-  --session-ring-color: var(--attention);
+  --session-ring-seed: var(--attention);
 }
 
 /* Waiting stands still — see MOTION IS THE STATE above. The whole perimeter is

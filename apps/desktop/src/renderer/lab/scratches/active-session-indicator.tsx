@@ -36,17 +36,27 @@
  *     while `border-radius: inherit` still described the border box. A 1px
  *     offset invisible along an edge, obvious at a corner.)
  *
- * Both hues clear 4.5:1 against `--card` in both appearances — about 9:1 dark,
- * 5.5:1 light. They still read differently, and that is the generated token
- * set doing its job rather than a bug: ink on a light canvas, light on a dark
- * one.
+ * ── LIGHT IS A DIFFERENT COLOUR, NOT THE SAME ONE DIMMED ────────────────────
+ * Toggle Light/Dark and the ring changes hue AND width — both deliberate, and
+ * both will look like mistakes if you do not know why.
  *
- * Which is why LIGHT DRAWS THE RING THICKER (2.5px against dark's 1.5px), and
- * it will look like a mistake if you toggle between them not knowing. A dark
- * line on paper does not want to be lightened — that costs contrast rather than
- * buying presence — it wants weight, while the same 1.5px in dark is already a
- * filament against near-black. Judge the two appearances separately, not as a
- * before-and-after: 3px was tried and reads as a chunky bordered box.
+ * The status tokens are solved to clear Lc 65 against the card, which on a
+ * light canvas forces them DARK: `--attention` is #764900, a brown, and at ring
+ * width it reads as mud. Turning up the vibrancy does nothing at all — that
+ * lightness is already past sRGB's chroma ceiling for the hue, so the token is
+ * gamut-clipped and asking for more hands back the identical brown. Lightness
+ * is the only lever that opens any chroma headroom, so light re-solves the ring
+ * at L=0.65 (a real amber, #cb7900) and pays 26–31 Lc for it — which also puts
+ * it under WCAG 1.4.11's 3:1, deliberately and with the reasoning written out
+ * in `globals.css`. That is affordable *here* and nowhere else: this is a 2px
+ * edge rather than status text, and it is never the only place its state is
+ * said.
+ *
+ * Which is also why light keeps 2px against dark's 1.5px — not a second helping
+ * of the same budget, but the other half of one trade. Judge the two
+ * appearances separately rather than as a before-and-after. Tried and rejected:
+ * 2.5px on the old brown (thicker mud), 3px on anything (reads outlined, not
+ * lit).
  *
  * Static, and deliberately so: there is no store behind these, because what is
  * under review is the drawing rather than the derivation. The derivation has
