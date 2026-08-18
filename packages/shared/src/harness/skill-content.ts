@@ -44,6 +44,7 @@ Inspect state before mutating it: read the board and the target ticket first, so
 ## Comment vs move vs signal
 
 - Comment (\`volli ticket comment\`) to record findings or hand off context; use exact body edits so a stale read fails instead of clobbering.
+- Write comments for the human scanning the ticket later. Give a little context first, then short plain sentences in the project's own domain words (Simplified Technical English). Never paste walls of raw output — say what the output means, and leave the full text in the session transcript.
 - Move (\`volli ticket move\`) only for a deliberate, real status change. Signals never move the board: when the ticket is ready, the move is its own explicit step.
 - Signal \`volli session blocked\` when you are stuck and need a person — the \`--reason\` is exactly what they see.
 - Signal \`volli session done\` to record that your session finished; it lands in the session ledger only, so pair it with the comment and move that actually hand the work over.
@@ -60,6 +61,7 @@ export const VOLLI_ORCHESTRATION = `# Volli orchestration
 5. Do not chain-spawn work merely because a ticket entered Doing.
 6. Use exact body edits for existing prose so stale reads fail instead of clobbering changes.
 7. Peek a session (terminal or chat) to learn whether it is alive, what it is doing, and when it last moved; keep peeks narrow, because their output consumes the caller's context.
+8. Write ticket comments a human can scan: a little context, then short plain sentences in the project's domain words — never a wall of raw output.
 `;
 
 /**
@@ -220,7 +222,7 @@ export const VOLLI_COMMAND_DOC = `Applies only inside a Volli session: if neithe
  */
 export const VOLLI_FENCED_INSTRUCTIONS = `These instructions apply ONLY when the \`VOLLI_SESSION\` or \`VOLLI_SOCKET\` environment variable is set — that is what marks a session started by Volli. If neither is set, you are not working under Volli: skip this block entirely, do not run \`volli\` commands, and do not launch the Volli app.
 
-Inside a Volli session, use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
+Inside a Volli session, use the bundled \`volli\` CLI as your planning interface for tickets, board moves, comments, and session signals. Run \`volli identify\` first, then read the relevant board or ticket before writing. When you leave a comment, write for the human scanning the ticket: a little context, then short plain sentences — never a wall of raw output. The CLI is self-documenting: \`volli help\` for the full reference, \`volli help <command>\` for details. If the app is unreachable, run \`volli app launch\` explicitly before retrying; surface every CLI error.`;
 
 /**
  * The body of the managed block Volli appends to the user's zsh login profile

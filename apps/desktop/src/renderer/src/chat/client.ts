@@ -30,6 +30,7 @@ import type {
 import type { UIMessage } from "ai";
 
 import { isUntitledChatSession, renameChatSession } from "@renderer/chat/rename";
+import { toastError } from "@renderer/lib/toast";
 import { nextRelease, type QueuedMessage } from "@renderer/chat/session-model";
 import {
   movesProjection,
@@ -343,6 +344,12 @@ export interface ChatSessionTransport {
     title: string | null;
     /** Skill slugs to inject at attach time. Absent means none. */
     skills?: readonly string[];
+    /**
+     * This Session's model policy, when the surface opening it picked one.
+     * Absent means the configured default for the Role, which is what every
+     * surface but the New-ticket composer's Create & start sends (VC-56).
+     */
+    model?: ModelSelection;
   }): Promise<{ sessionId: string }>;
   attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
@@ -370,6 +377,19 @@ export function browserChatTransport(): ChatSessionTransport {
         ticketId: input.ticketId,
         title: input.title,
         ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
+        // A picked model reaches the wire as the OVERRIDE it is: the server
+        // merges it onto the app default for the Role and refuses one Model
+        // Access cannot honor, exactly as it does for `volli session start
+        // --model`. Splitting the selection here rather than in the store keeps
+        // the shape difference at the one boundary that has it.
+        ...(input.model === undefined
+          ? {}
+          : {
+              modelOverride: {
+                model: { providerId: input.model.providerId, modelId: input.model.modelId },
+                reasoningLevel: input.model.reasoningLevel,
+              },
+            }),
       }),
     attachSession: (input) =>
       rpc.sessions.attach.mutate({
@@ -391,6 +411,12 @@ export class ChatSessionClient {
 
   #subscription: { unsubscribe(): void } | null = null;
   #cancelFlush: (() => void) | null = null;
+  // Whether a stream subscription is currently delivering. Every source the
+  // error band can name is repairable EXCEPT a dead one: `reconcile` repairs
+  // the durable binding and `retryAttach` repairs a missing executor, but
+  // neither resubscribes THIS client — so `recover` and `dismissError` read
+  // this flag to decide whether the renderer's own stream needs reopening.
+  #streamAlive = false;
   // Frames key on sequence and overlays do not: every overlay in one batch
   // carries the same `throughSequence`, so a sequence-keyed map would keep one
   // and silently drop the missing middle of a sentence.
@@ -434,8 +460,8 @@ export class ChatSessionClient {
    * on a Session with history has no other way to get it. Everything after it
    * arrives as deltas.
    */
-  connect(): Promise<void> {
-    return this.#open(null);
+  async connect(): Promise<void> {
+    await this.#open(null);
   }
 
   /**
@@ -519,20 +545,55 @@ export class ChatSessionClient {
    * with no executor is re-attached. Starting over is not here at all — minting
    * a Session is the store's job, and reaching for it from a client that already
    * has one would duplicate it.
+   *
+   * A stream this client terminally lost is reopened FIRST, whichever arm
+   * follows. `#lost` leaves no subscription behind, and neither reconcile nor
+   * a live executor ever reopens one — a Retry that reconciled without
+   * resubscribing would clear the band while the transcript stayed frozen,
+   * which is the failure this Session can least afford to hide (VC-97). The
+   * re-attach arm needs no help: `retryAttach` reopens the stream itself.
    */
   recover(): Promise<boolean> {
     const slice = this.#slice();
     if (slice === undefined) return Promise.resolve(false);
-    return (slice.projection?.liveExecutor ?? null) === null
-      ? this.retryAttach()
-      : this.reconcile();
+    if ((slice.projection?.liveExecutor ?? null) === null) return this.retryAttach();
+    return this.#streamAlive ? this.reconcile() : this.#reopenThenReconcile();
+  }
+
+  /**
+   * The reopen, and only then the reconcile that depends on it.
+   *
+   * Ordered rather than raced, because the two settle the same latch and the
+   * reconcile is the louder writer: a reopen that failed fast would latch the
+   * honest `#lost` band and a reconcile succeeding after it would clear that
+   * band, restoring the exact frozen-transcript-behind-a-healthy-face this
+   * Retry exists to prevent. A reopen that fails ends the recovery instead,
+   * leaving the band it just wrote to say so.
+   */
+  async #reopenThenReconcile(): Promise<boolean> {
+    if (!(await this.#open(null))) return false;
+    return this.reconcile();
+  }
+
+  /**
+   * Clears the error band without demanding anything of the transport.
+   *
+   * The latch is renderer-local state, and dismissing it is the reader's call:
+   * nothing durable changes, and the Session is handed back to whatever its
+   * stream says. One exception is not the reader's to accept — a stream this
+   * client terminally lost is quietly reopened, because a dismissal that left
+   * the transcript frozen would trade an honest band for an invisible one.
+   */
+  dismissError(): void {
+    this.#writes().settle(this.sessionId, null);
+    if (!this.#streamAlive) void this.connect();
   }
 
   /** Retry Pi's last failed run without submitting the user's message twice. */
   retryRuntime(): Promise<boolean> {
     const attachmentId = this.#liveAttachmentId();
     if (attachmentId === null) return Promise.resolve(false);
-    return this.#run("Retry", () =>
+    return this.#eventRun("Retry", () =>
       this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
@@ -618,7 +679,7 @@ export class ChatSessionClient {
   selectModel(selection: ModelSelection): Promise<boolean> {
     const slice = this.#slice();
     if (slice === undefined || slice.projection?.turnActive === true) return Promise.resolve(false);
-    return this.#run("Model not changed", () =>
+    return this.#eventRun("Model not changed", () =>
       this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
@@ -629,7 +690,7 @@ export class ChatSessionClient {
 
   interrupt(): Promise<boolean> {
     const attachmentId = this.#liveAttachmentId();
-    return this.#run("Interrupt", () =>
+    return this.#eventRun("Interrupt", () =>
       this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
@@ -647,7 +708,7 @@ export class ChatSessionClient {
     interactionId: string,
     resolution: SessionInteractionResolution,
   ): Promise<boolean> {
-    return this.#run("Decision not delivered", () =>
+    return this.#eventRun("Decision not delivered", () =>
       this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
@@ -658,7 +719,7 @@ export class ChatSessionClient {
 
   /** Withdraws a decision nobody is going to make, so the card stops blocking. */
   cancelInteraction(interactionId: string): Promise<boolean> {
-    return this.#run("Decision not cancelled", () =>
+    return this.#eventRun("Decision not cancelled", () =>
       this.#rpc.session.cancelInteraction.mutate({ sessionId: this.sessionId, interactionId }),
     );
   }
@@ -676,6 +737,7 @@ export class ChatSessionClient {
   /** Retires this client. Releases nothing on the harness — the Session outlives it. */
   dispose(): void {
     this.#generation += 1;
+    this.#streamAlive = false;
     this.#cancelFlush?.();
     this.#cancelFlush = null;
     this.#frames.clear();
@@ -687,7 +749,13 @@ export class ChatSessionClient {
 
   /* ------------------------------------------------------------- the stream */
 
-  async #open(cursor: string | null): Promise<void> {
+  /**
+   * Opens the stream, reporting whether THIS call established it — the signal
+   * `#reopenThenReconcile` needs to know a recovery is worth continuing. A
+   * superseded generation reports false too: it established nothing for the
+   * caller that asked, whatever the open that overtook it goes on to do.
+   */
+  async #open(cursor: string | null): Promise<boolean> {
     const generation = (this.#generation += 1);
     this.#subscription?.unsubscribe();
     this.#subscription = null;
@@ -696,7 +764,7 @@ export class ChatSessionClient {
       let afterSequence = this.#slice()?.transcript.throughSequence ?? 0;
       if (cursor === null) {
         const snapshot = await this.#rpc.session.snapshot.query({ sessionId: this.sessionId });
-        if (this.#stale(generation)) return;
+        if (this.#stale(generation)) return false;
         this.#writes().applyStream(this.sessionId, readFrames(snapshot.frames), []);
         this.#writes().setProjection(this.sessionId, snapshot.projection);
         afterSequence = snapshot.throughSequence;
@@ -711,6 +779,7 @@ export class ChatSessionClient {
         {
           onStarted: () => {
             this.#reconnectable = true;
+            this.#streamAlive = true;
           },
           onData: (event) => {
             this.#lastEventId = event.id;
@@ -724,9 +793,12 @@ export class ChatSessionClient {
           },
         },
       );
+      return true;
     } catch (failure) {
-      if (this.#stale(generation)) return;
+      if (this.#stale(generation)) return false;
+      this.#streamAlive = false;
       this.#lost(failure);
+      return false;
     }
   }
 
@@ -742,6 +814,7 @@ export class ChatSessionClient {
   #dropped(failure: unknown): void {
     this.#subscription?.unsubscribe();
     this.#subscription = null;
+    this.#streamAlive = false;
     if (!this.#reconnectable) {
       this.#lost(failure);
       return;
@@ -870,7 +943,9 @@ export class ChatSessionClient {
   /* ------------------------------------------------------------- the shared */
 
   /**
-   * One command, and whether it landed.
+   * One recovery command, and whether it landed — the arm `recover` reaches
+   * for, where a failure IS the Session's plumbing and must latch the band
+   * until recovered or dismissed.
    *
    * A resolved round trip is not the same as a delivered command: a harness that
    * will not serve one answers with a rejected receipt rather than by throwing.
@@ -886,6 +961,33 @@ export class ChatSessionClient {
       return true;
     } catch (failure) {
       this.#writes().settle(this.sessionId, `${label}: ${errorMessage(failure)}`);
+      return false;
+    }
+  }
+
+  /**
+   * One event-shaped command, and whether it landed — where the failure is a
+   * moment, not a state, and its consequence is already visible where it
+   * happened: the card the decision never reached stays answerable, the model
+   * pill keeps the selection it had, a stopped turn keeps running. A toast
+   * names the failure once; latching the band would instead park a Retry that
+   * addresses none of them (VC-97).
+   *
+   * Neither outcome touches the latch. A failure of `interrupt` is not a
+   * failure of the Session's plumbing, and a success of it does not repair
+   * one either — clearing a latched transport error on an unrelated command's
+   * round trip is how a frozen transcript ended up looking healthy.
+   */
+  async #eventRun(label: string, call: () => Promise<unknown>): Promise<boolean> {
+    try {
+      const refusal = rejectedReceipt(await call());
+      if (refusal !== null) {
+        toastError(`${label}: ${refusal}`);
+        return false;
+      }
+      return true;
+    } catch (failure) {
+      toastError(`${label}: ${errorMessage(failure)}`);
       return false;
     }
   }

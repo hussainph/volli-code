@@ -97,6 +97,7 @@ export default defineConfig(({ mode }) => ({
         "src/chat/wire.ts",
         "src/components/attachments/attachment-model.ts",
         "src/components/board/board-dnd.ts",
+        "src/components/board/board-session-activity.ts",
         "src/components/chat/chat-plane-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
@@ -111,8 +112,13 @@ export default defineConfig(({ mode }) => ({
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
+        // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
+        // as tab-focus.ts: the squiggle's geometry is arithmetic the view
+        // renders but never owns.
+        "src/components/theme/slider-squiggle.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
+        "src/components/ticket/clamp-policy.ts",
         "src/components/ticket/label-picker-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
@@ -188,6 +194,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/theme-repo.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
+        "**/src/main/session-control/activity-watch.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

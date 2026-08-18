@@ -1,6 +1,6 @@
 /**
  * Diffs navigator — the Calm Stack's changes page
- * (lab/scratches/ticket-right-sidebar.tsx `ChangesPanel`).
+ * (the retired ticket-right-sidebar lab scratch's `ChangesPanel`).
  *
  * A titled header over a flat list (decision #53 — never a tree). The header
  * carries the page's name, the file count, refresh, a filter toggle and the

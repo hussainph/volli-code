@@ -108,7 +108,7 @@ describe("TicketSessionsPanel rows", () => {
 
   it("draws History as a sibling section, never the old rail's drawer", () => {
     // The Calm Stack has no drawer, no collapsible and no full-bleed seam
-    // anywhere in the rail (lab/scratches/ticket-right-sidebar.tsx). History is
+    // anywhere in the rail (per the retired ticket-right-sidebar lab scratch). History is
     // the same block as Sessions, one heading lower.
     const html = panel();
 

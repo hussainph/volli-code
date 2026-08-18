@@ -60,7 +60,11 @@ import {
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import {
   expandCommandInvocation,
+  visibleModels,
+  type HiddenModelRef,
   type IndexedFile,
+  type ModelAccessModel,
+  type ModelAccessProvider,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
@@ -1022,6 +1026,38 @@ export interface ComposerModelSelection {
   reasoningLevel: string;
 }
 
+/**
+ * The models a picker may offer, out of everything Model Access knows.
+ *
+ * Two filters and one mapping, in one place because two surfaces now ask the
+ * question: this composer, and the New-ticket composer's Create & start row
+ * (VC-56). Signed-in models only — Pi's catalog is every provider it knows,
+ * around a thousand models against the handful this profile has credentials
+ * for, and a picker listing the rest is a picker whose first "GPT-5.6 Luna" is
+ * whichever provider sorted first. Then the user's own curation comes off
+ * (`visibleModels`): what you toggled out of Model Access is not an option
+ * either. Catalog order is preserved throughout — it is the harness's answer to
+ * which provider matters, and re-sorting it here would be our opinion.
+ */
+export function offerableModels(
+  models: readonly ModelAccessModel[],
+  providers: readonly ModelAccessProvider[],
+  hidden: readonly HiddenModelRef[],
+): readonly ComposerModel[] {
+  return visibleModels(
+    models.filter((model) => model.state === "available"),
+    hidden,
+  ).map((model) => ({
+    id: `${model.providerId}/${model.modelId}`,
+    providerId: model.providerId,
+    providerLabel:
+      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
+    modelId: model.modelId,
+    label: model.label,
+    reasoningLevels: model.reasoningLevels,
+  }));
+}
+
 /** The selected model's own stop set, or nothing when the list does not hold it. */
 function effortLevels(
   models: readonly ComposerModel[],
@@ -1074,7 +1110,13 @@ export function modelPillLabel(
     : name;
 }
 
-function ModelPill({
+/**
+ * Exported for the New-ticket composer, which picks the model a Ticket Session
+ * will be BORN with (VC-56). The two surfaces answer the same question one
+ * moment apart — what will this Session run as — so a second pill shaped
+ * slightly differently would be the same control drawn twice.
+ */
+export function ModelPill({
   models,
   selection,
   selectionProviderLabel,

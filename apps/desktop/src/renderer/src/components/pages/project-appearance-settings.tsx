@@ -1,6 +1,5 @@
 import * as React from "react";
 import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
-import { CircleHalfIcon } from "@phosphor-icons/react/dist/csr/CircleHalf";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -120,7 +119,6 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   return (
     <>
       <ProjectAppThemeSection key={project.id} project={project} />
-      <ProjectAppearanceModeSection key={project.id} project={project} />
       <ProjectEditorThemeSection key={project.id} projectId={project.id} />
       <ProjectTerminalThemeSection key={project.id} projectId={project.id} />
     </>
@@ -142,13 +140,26 @@ function projectScope(project: Project) {
 }
 
 /**
- * This project's own gradient.
+ * This project's mode and its own gradient — the Configure twin of the global
+ * page's "App theme".
+ *
+ * ONE SECTION, TWO SCOPES, and that is the whole subtlety. The two settings stay
+ * genuinely independent: a project may pin dark while inheriting the gradient,
+ * or take its own gradient and still follow the app-wide mode, and collapsing
+ * them onto one Inherit/Custom control would make three of those four states
+ * unreachable. So each row owns its own scope switch instead of the section
+ * owning one for both — the rule this page follows everywhere is that the scope
+ * control sits at the level of the thing it scopes, which for Editor and
+ * Terminal is the section (one surface each) and here is the row.
  *
  * Same tri-state as every other surface on this page, and the same rule behind
- * it: **Custom** opens on the canvas the project is ALREADY wearing — the
- * app-wide one — so the switch changes what the choice means without changing
- * what is on screen. **Inherit** clears the column rather than storing a marker,
- * so a project that has been reset reads exactly like one never touched.
+ * it: **Custom** opens on what the project is ALREADY wearing — the app-wide
+ * value — so the switch changes what the choice means without changing what is
+ * on screen. **Inherit** clears the column rather than storing a marker, so a
+ * project that has been reset reads exactly like one never touched. For mode,
+ * Custom pins whatever is currently inherited, `auto` included: "follows the
+ * system, in this project only" is a real choice and not the same as inheriting
+ * an `auto` that could later be changed app-wide.
  *
  * The editor's own preview mechanism is scope-aware, so a drag here paints this
  * window and commits to this project's `projects` row — the global canvas is
@@ -162,6 +173,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
 
   const choice = projectCanvasChoice(own);
+  const modeChoice = projectAppearanceChoice(appearance);
   // The scope descriptor is memoised for the same reason the global page's is a
   // module constant: the editor holds it in `useCallback` dependencies.
   const scope = React.useMemo<ThemeScope>(
@@ -170,12 +182,44 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   );
   // Resolved for THIS project — its own appearance override when it has one.
   const resolved = resolveAppearance(appearance ?? globalAppearance, systemPrefersDark);
+  const inherited = describeAppearance(
+    globalAppearance,
+    resolveAppearance(globalAppearance, systemPrefersDark),
+  );
+
+  const writeMode = (next: typeof globalAppearance | null): void => {
+    void useThemeStore.getState().setProjectAppearance(project.id, next);
+  };
 
   return (
-    <SettingsSection
-      title="App theme"
-      icon={PaletteIcon}
-      action={
+    <SettingsSection title="App theme" icon={PaletteIcon}>
+      <SettingsRow label="Mode" align="center">
+        <Segmented
+          ariaLabel="Appearance scope"
+          testId="project-appearance-mode-scope"
+          value={modeChoice.kind === "inherit" ? "inherit" : "custom"}
+          options={SURFACE_MODES}
+          onChange={(mode: SurfaceMode) => writeMode(mode === "inherit" ? null : globalAppearance)}
+        />
+        {modeChoice.kind === "inherit" ? (
+          <span data-testid="project-appearance-mode-inherit">
+            <InheritNote>
+              Following app-wide — <span className="text-foreground">{inherited}</span>.
+            </InheritNote>
+          </span>
+        ) : (
+          <>
+            <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
+            <AppearanceModeChoice
+              value={modeChoice.appearance}
+              testId="project-appearance-mode"
+              onChange={writeMode}
+            />
+          </>
+        )}
+      </SettingsRow>
+
+      <SettingsRow label="Canvas" align="center">
         <Segmented
           ariaLabel="Canvas scope"
           testId="project-appearance-canvas-mode"
@@ -187,80 +231,19 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
               .setProjectCanvas(project.id, mode === "inherit" ? null : globalCanvas);
           }}
         />
-      }
-    >
-      {choice.kind === "inherit" ? (
-        <div data-testid="project-appearance-canvas-inherit">
-          <InheritNote>Following app-wide canvas.</InheritNote>
-        </div>
-      ) : (
-        <>
-          <div className="pb-2">
-            <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
-          </div>
-          <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />
-        </>
-      )}
-    </SettingsSection>
-  );
-}
-
-/**
- * This project's light/dark choice — a second column, and a second tri-state.
- *
- * Separate from the canvas above because the two are genuinely independent: a
- * project may pin dark while inheriting the gradient, or take its own gradient
- * and still follow the app-wide mode. Folding them into one control would make
- * three of those four states unreachable.
- *
- * Custom pins whatever is currently inherited, `auto` included — "follows the
- * system, in this project only" is a real choice and not the same as inheriting
- * an `auto` that could later be changed app-wide.
- */
-function ProjectAppearanceModeSection({ project }: { project: Project }) {
-  const own = useThemeStore((state) => state.projectOverride?.appearance ?? null);
-  const globalAppearance = useThemeStore((state) => state.globalAppearance);
-  const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
-
-  const choice = projectAppearanceChoice(own);
-  const inherited = describeAppearance(
-    globalAppearance,
-    resolveAppearance(globalAppearance, systemPrefersDark),
-  );
-
-  const write = (appearance: typeof globalAppearance | null): void => {
-    void useThemeStore.getState().setProjectAppearance(project.id, appearance);
-  };
-
-  return (
-    <SettingsSection
-      title="Light & dark"
-      icon={CircleHalfIcon}
-      action={
-        <Segmented
-          ariaLabel="Appearance scope"
-          testId="project-appearance-mode-scope"
-          value={choice.kind === "inherit" ? "inherit" : "custom"}
-          options={SURFACE_MODES}
-          onChange={(mode: SurfaceMode) => write(mode === "inherit" ? null : globalAppearance)}
-        />
-      }
-    >
-      {choice.kind === "inherit" ? (
-        <div data-testid="project-appearance-mode-inherit">
-          <InheritNote>
-            Following app-wide — <span className="text-foreground">{inherited}</span>.
-          </InheritNote>
-        </div>
-      ) : (
-        <SettingsRow label="Mode">
+        {choice.kind === "inherit" ? (
+          <span data-testid="project-appearance-canvas-inherit">
+            <InheritNote>Following app-wide canvas.</InheritNote>
+          </span>
+        ) : (
           <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
-          <AppearanceModeChoice
-            value={choice.appearance}
-            testId="project-appearance-mode"
-            onChange={write}
-          />
-        </SettingsRow>
+        )}
+      </SettingsRow>
+
+      {choice.kind === "inherit" ? null : (
+        <div className="pt-2">
+          <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />
+        </div>
       )}
     </SettingsSection>
   );

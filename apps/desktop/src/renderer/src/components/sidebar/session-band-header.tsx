@@ -118,7 +118,7 @@ export function SessionBandFilterMenu({
           )}
         >
           {/* `bold` OVERRIDES the audit, which records `regular` for this site
-              (lab/scratches/icon-weight-audit.tsx) — and it does so because the
+              (the retired icon-weight-audit lab scratch) — and it does so because the
               audit drew it at 14px and it ships at 12. CLAUDE.md's fifth clause
               is what wins here: bold is the small-size tier, because at ≤12px
               regular draws lighter than the label beside it, and coverage is

@@ -48,7 +48,7 @@ import {
   commentAuthorLabel,
   describeEvent,
 } from "@renderer/components/ticket/activity";
-import { Markdown } from "@renderer/components/ticket/markdown";
+import { ClampedMarkdown } from "@renderer/components/ticket/clamped-markdown";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
@@ -287,8 +287,10 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
           </div>
         </div>
       ) : (
+        // Read view clamps (VC-99): a verbose agent comment collapses to the
+        // policy cap with a fade + Show more, instead of stretching the feed.
         <div className="mt-1">
-          <Markdown source={comment.body} />
+          <ClampedMarkdown source={comment.body} />
         </div>
       )}
     </li>

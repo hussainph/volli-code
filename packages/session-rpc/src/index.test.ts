@@ -1014,6 +1014,62 @@ describe("Session tRPC router", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("carries a model override on create, and refuses a level no model can run", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // The composer's Create & start states both halves; the merge onto the
+    // app default and the availability check are the server's, not this edge's.
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Work on VC-1",
+      modelOverride: {
+        model: { providerId: "anthropic", modelId: "sonnet-4.5" },
+        reasoningLevel: "high",
+      },
+    });
+    // A level alone is a legal override: it keeps the default model.
+    await caller.sessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+      modelOverride: { reasoningLevel: "low" },
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        modelOverride: {
+          model: { providerId: "anthropic", modelId: "sonnet-4.5" },
+          reasoningLevel: "high",
+        },
+      }),
+      expect.objectContaining({ modelOverride: { reasoningLevel: "low" } }),
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-3",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+        // @ts-expect-error — the wire grammar is the shipped level set, and a
+        // renderer that invented a level must be refused at the edge.
+        modelOverride: { reasoningLevel: "ludicrous" },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

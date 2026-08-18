@@ -15,14 +15,7 @@ import {
 import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import type {
-  Label,
-  Project,
-  SessionListingRow,
-  SessionProjection,
-  Ticket,
-  TicketStatus,
-} from "@volli/shared";
+import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -106,13 +99,10 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import {
-  chatSessionRecord,
-  createDesktopSessionEngine,
-  terminalSessionRecord,
-} from "./session-control";
+import { createDesktopSessionEngine, sessionListingRows } from "./session-control";
 import { prepared } from "./db/prepared";
 import {
+  getTicket,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
@@ -138,6 +128,7 @@ import {
   type AgentSiteReleaseReport,
   archiveAndClean,
   commitTicketRemaining,
+  ensure,
   getRetentionTtlDays,
   listBranches,
   publishTicketBranch,
@@ -233,24 +224,83 @@ function busyRefusal(site: BusyWorktreeSite): string {
     : "A terminal is still running in this worktree. Close it first.";
 }
 
-/**
- * The renderer's Session listing: a discriminated row per Session, so a
- * structured-only Session is visible instead of silently dropping out.
- *
- * PRECEDENCE: a Session that has ever opened a terminal attachment renders as
- * its terminal row, byte-for-byte what `terminalSessionRecord` always
- * returned; only an attachment-less or structured-only Session renders as a
- * chat row. The CLI socket (`agent-commands.ts`) applies the same precedence
- * to its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify,
- * peek, the hooks) stays terminal-only on purpose and never reaches here.
+/*
+ * The renderer's Session listing rows are built by `session-control/listing-row.ts`,
+ * which is also what the `volli:session-activity` push uses — the fetch and the
+ * push must produce the identical row or a Session changes appearance the moment
+ * it moves. The CLI socket (`agent-commands.ts`) applies the same precedence to
+ * its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify, peek,
+ * the hooks) stays terminal-only on purpose and never reaches here.
  */
-function sessionListingRows(sessions: readonly SessionProjection[]): SessionListingRow[] {
-  return sessions.map((session): SessionListingRow => {
-    const terminal = terminalSessionRecord(session);
-    return terminal !== null
-      ? { kind: "terminal", record: terminal }
-      : { kind: "chat", record: chatSessionRecord(session) };
+
+/**
+ * Tickets whose worktree is being materialized RIGHT NOW (VC-98).
+ *
+ * `ensure` is git work measured in seconds, and the rail control that starts it
+ * is the same one that can switch scope straight back off. That switch-off used
+ * to be permitted mid-flight: `updateTicketFieldsCommand` freezes scope only
+ * once `worktree_path` is stamped, and the stamp lands at the END of `ensure`.
+ * So the off-write committed against a still-null path, `ensure` then stamped a
+ * worktree onto a ticket that had just been scoped to the main checkout, and
+ * the freeze made the contradiction PERMANENT — `uses_worktree` 0 beside a real
+ * worktree on disk, with the destination control gone and no way back through
+ * the UI. Holding the ticket here for the duration closes that window.
+ */
+const materializingWorktrees = new Set<string>();
+
+/**
+ * Materializes the worktree of a ticket that was just switched INTO worktree
+ * scope (VC-98).
+ *
+ * `ensure` had exactly two callers, both Session boots, so switching scope on
+ * for a ticket whose Session already existed recorded `usesWorktree: true` and
+ * then had nothing create the checkout. Everything downstream believed the
+ * flag: the board showed the ticket as isolated, `volli worktree status`
+ * reported no worktree, and the agent already running went on writing to the
+ * main checkout. Scope is now a promise this keeps.
+ *
+ * Deliberately NOT inside `updateTicketFieldsCommand`'s transaction: `ensure`
+ * is git work, and no DB write may straddle it (ensure.ts). The flag is the
+ * user's recorded intent and stands committed whatever git does next — which
+ * is safe, because a ticket left worktree-scoped with no worktree refuses to
+ * bind a Session anywhere else (`prepare`, #38) rather than quietly falling
+ * back to the main checkout.
+ *
+ * Live Session bindings are left exactly where they are. A binding is fixed at
+ * attach and re-pointing one under a running agent would move its working
+ * directory mid-turn; the next attach picks up the materialized worktree on
+ * its own, and `volli identify` warns any agent still standing outside it.
+ */
+async function materializeSwitchedOnWorktree(
+  db: Database.Database,
+  ticketId: string,
+  committed: Ticket,
+): Promise<TicketResult> {
+  // Held across the whole await so a concurrent scope-off is refused rather
+  // than racing the identity stamp; released in `finally` so a throw cannot
+  // strand the ticket un-switchable forever.
+  materializingWorktrees.add(ticketId);
+  const outcome = await ensure(worktreeDeps(db), ticketId).finally(() => {
+    materializingWorktrees.delete(ticketId);
   });
+  // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
+  // new identity stamp to show. Failure has a scope flag that really did change
+  // under a renderer that is about to revert it optimistically off the back of
+  // the error below — and the re-hydrate is what puts the true value back. It
+  // lands last by construction rather than by luck: this event is sent before
+  // the reply, so the renderer starts its bootstrap round-trip before it sees
+  // the error, and a round-trip cannot outrun a message already queued.
+  broadcastDataChanged({ ticketId, projectId: committed.projectId, kind: "worktree" });
+  if (!outcome.ok) {
+    // Surfaced as a failed mutation so it reaches a toast rather than living
+    // only in the phase stream (CLAUDE.md: never swallow a failed mutation).
+    // The ticket stays worktree-scoped with no worktree, which is a state the
+    // app already knows how to be in — it is what every ticket looks like
+    // before its first Session — and the next session start retries `ensure`.
+    return { ok: false, error: `worktree scope is on, but ${outcome.error}` };
+  }
+  // Re-read: `ensure` stamped path/branch/base after `committed` was captured.
+  return { ok: true, ticket: getTicket(db, ticketId) ?? committed };
 }
 
 // ---- registration --------------------------------------------------------
@@ -490,12 +540,32 @@ export function registerDataIpcHandlers(
       };
     },
 
-    "volli:ticket-update": (input: TicketUpdateInput): TicketResult => {
+    "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
       const now = Date.now();
-      return {
-        ok: true,
-        ticket: updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
-      };
+      // The one write that can race the `ensure` a previous call is still
+      // running: switching scope back OFF before the identity stamp lands.
+      // Refused rather than queued — the user is asking to undo something that
+      // is already half-done on disk, and the honest answer is to say so while
+      // it finishes. Re-asserting `true` is a no-op and passes through.
+      if (input.usesWorktree === false && materializingWorktrees.has(input.ticketId)) {
+        return {
+          ok: false,
+          error:
+            "The ticket's worktree is still being created, so its worktree scoping can't change yet. Try again once it's ready.",
+        };
+      }
+      // Read BEFORE the write: the returned ticket shows scope as it now stands,
+      // which cannot tell "just switched on" from "was already on" — and only
+      // the transition materializes.
+      const before = getTicketRow(db, input.ticketId);
+      const ticket = updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } });
+      // Only the one transition goes async. Every other update — a title, a
+      // body, a branch stamp — stays the synchronous write it has always been,
+      // the same split `volli:ticket-move` makes for its interrupt side effect.
+      const switchedOn =
+        before !== undefined && before.uses_worktree === 0 && ticket.usesWorktree === true;
+      if (!switchedOn) return { ok: true, ticket };
+      return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
     },
 
     "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => {

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import type { Ticket } from "@volli/shared";
 
 import {
@@ -8,9 +9,11 @@ import {
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
+import { BODY_CLAMP_PX, planClamp } from "@renderer/components/ticket/clamp-policy";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 /**
@@ -44,6 +47,23 @@ export function TicketBodyEditor({
   fileRefs?: DocumentFileRefs;
 }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
+
+  // The body's collapse (VC-99): agent-written bodies can run long, and an
+  // uncapped editor pushes the Activity feed far below the fold. The editor
+  // reports its unclamped content height on every change; over BODY_CLAMP_PX
+  // the host clamps (Monaco scrolls inside the CSS-clamped box — the composer
+  // bounds its body the same way) and an Expand/Collapse row appears under it.
+  // Short bodies render exactly as before: no cap, no toggle. `null` until the
+  // first report — `planClamp` reads that as "fits", and the reset below parks
+  // it there again on ticket switch so a tall body never clamps a short one.
+  const [contentHeight, setContentHeight] = React.useState<number | null>(null);
+  const [expanded, setExpanded] = React.useState(false);
+  const { overflowing, clamped } = planClamp(contentHeight, BODY_CLAMP_PX, expanded);
+
+  React.useEffect(() => {
+    setContentHeight(null);
+    setExpanded(false);
+  }, [ticket.id]);
 
   // The value that seeds / resets the editor doc; changing it re-syncs the
   // editor's buffer when it isn't focused (or, if focused-but-untouched, on blur
@@ -161,11 +181,29 @@ export function TicketBodyEditor({
           value={docValue}
           onChange={handleChange}
           onBlur={() => debouncer.flush()}
+          onContentHeightChange={setContentHeight}
           placeholder="Add description…"
           ariaLabel="Ticket description"
           fileRefs={fileRefs}
           className="min-h-32"
+          style={clamped ? { maxHeight: BODY_CLAMP_PX } : undefined}
         />
+        {overflowing ? (
+          // The same disclosure language as the feed's bunch rows: a muted
+          // text button with a rotating caret. Sits in the gutter-bleed wrapper
+          // so it aligns with the body text it expands.
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            aria-expanded={expanded}
+            className="mt-1 flex items-center gap-1 rounded-sm px-1 text-ui text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {expanded ? "Collapse" : "Expand"}
+            <CaretDownIcon
+              className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
+            />
+          </button>
+        ) : null}
       </div>
     </div>
   );

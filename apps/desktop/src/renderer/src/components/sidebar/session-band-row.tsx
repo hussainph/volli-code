@@ -104,7 +104,7 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
     return (
       <span className={ID_LANE}>
         {/* `bold` OVERRIDES the audit's `regular` verdict for this site
-            (lab/scratches/icon-weight-audit.tsx), under CLAUDE.md's fifth
+            (the retired icon-weight-audit lab scratch), under CLAUDE.md's fifth
             clause: this glyph stands in the ID lane at 12px, where regular draws
             lighter than the `text-label` ids it alternates with — so the one
             row without a ticket would read as the faintest row in the band. */}
@@ -125,7 +125,7 @@ function KindGlyph({ kind }: { kind: SessionRowKind }) {
   return (
     <span className="flex shrink-0 items-center">
       {/* `bold` OVERRIDES the audit's `regular` verdict for both glyphs
-          (lab/scratches/icon-weight-audit.tsx), under CLAUDE.md's fifth clause:
+          (the retired icon-weight-audit lab scratch), under CLAUDE.md's fifth clause:
           at 12px regular draws lighter than the row's own title, and a kind that
           leads the identity cannot be the faintest mark in the row it opens.
           Emphatically not `fill` — at this size ChatCircle's is a solid disc

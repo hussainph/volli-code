@@ -24,6 +24,7 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   HiddenModelRef,
   ModelAccessModel,
@@ -31,12 +32,7 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import {
-  errorMessage,
-  readSkillResources,
-  visibleModels,
-  type PromptResource,
-} from "@volli/shared";
+import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -101,8 +97,8 @@ import {
   type SignInProviderOption,
 } from "@renderer/components/chat/chat-plane-model";
 import {
+  offerableModels,
   SessionComposer,
-  type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
 import {
@@ -151,6 +147,44 @@ const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
 const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
+/**
+ * The transcript's dissolve into the composer — 64px of ramp above an opaque bar.
+ *
+ * Something has to sit here: the scroller runs the full height of the plane and
+ * the composer is opaque, so without a ramp a line scrolling under it is cut by
+ * a straight horizontal edge, mid-glyph, with nothing to say it was scrolling
+ * rather than broken. That is the same cut `sidebar-scroll.tsx` softens at the
+ * nav and the footer.
+ *
+ * WHAT THE SHAPE IS FOR, and why it is not a plain linear ramp. Alpha has to
+ * reach 1 BEFORE the seam: a linear fade is still ~2% short one pixel above the
+ * composer, so the last of the ink survives to the seam and is then hard-cut by
+ * an opaque edge — the ghost this gradient has always been trying to avoid. The
+ * first fix for that was a flat 2rem of solid background at the bottom, which
+ * bought a clean seam by DELETING a whole line: text did not fade out, it hit
+ * an invisible wall 32px above the composer and vanished, leaving a stripe of
+ * half-glyphs at the wall and dead paper below it.
+ *
+ * So the ramp is EASED instead of flattened. Stops are sampled from smootherstep
+ * — S(x) = 6x⁵ − 15x⁴ + 10x³, alpha = 1 − S, over the band above the seam — so
+ * the curve is flat at both ends and steep in the middle: opaque with margin at
+ * the seam, imperceptible at the top edge where the fade begins, and dissolving
+ * fastest in between. Full background is reached 5px above the composer rather
+ * than 32, which is the whole gain: three lines dissolve where one used to be
+ * erased. The percentages are samples of that curve, not picks off the alpha
+ * ladder in docs/DESIGN.md — changing one in isolation puts a kink in a curve.
+ */
+const COMPOSER_SCRIM = [
+  "linear-gradient(to top",
+  "var(--background) 0 8%",
+  "color-mix(in oklab, var(--background) 95%, transparent) 25%",
+  "color-mix(in oklab, var(--background) 77%, transparent) 40%",
+  "color-mix(in oklab, var(--background) 48%, transparent) 55%",
+  "color-mix(in oklab, var(--background) 20%, transparent) 70%",
+  "color-mix(in oklab, var(--background) 3%, transparent) 85%",
+  "transparent 100%)",
+].join(",");
+
 export interface ChatPlaneProps {
   sessionId: string;
   /** Project scope for Model Access and file navigation. */
@@ -175,6 +209,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     resolveInteraction,
     selectModel,
     submit,
+    dismissError,
   } = controller;
   const session = controller.session;
 
@@ -218,18 +253,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable = modelSelection !== null && catalogState !== "loading";
-  // Signed-in models only, minus the user's visibility curation. Pi's catalog
-  // is every provider it knows — around a thousand models against the handful
-  // this profile has credentials for — and a picker that lists the rest is a
-  // picker whose first "GPT-5.6 Luna" is whichever provider sorted first. What
-  // you cannot send to is not an option, and what you toggled off in Model
-  // Access is not one either (VC-53).
+  // What this picker may offer (VC-53), decided in one place because the
+  // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
-    () =>
-      visibleModels(
-        models.filter((model) => model.state === "available"),
-        hidden,
-      ).map((model) => composerModel(model, providers)),
+    () => offerableModels(models, providers, hidden),
     [hidden, models, providers],
   );
   const sessionModel = React.useMemo(
@@ -694,8 +721,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      // The transport latch is the surface's own state; retiring it is the
+      // reader's call, not a recovery (VC-97).
+      dismiss: () => dismissError(),
     }),
-    [liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -752,12 +782,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               </ContentColumn>
             )}
           </ConversationContent>
-          {/* A short fade keyed to the measured composer. It lives inside the
-              Conversation, ahead of the button, so paint order is structural:
-              content, then fade, then button. Its bottom 2rem is solid, not
-              ramping — a plain linear fade only reaches full background on its
-              last pixel, which left a legible ghost hard-cut by the card. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-[linear-gradient(to_top,var(--background)_0,var(--background)_2rem,transparent_100%)]" />
+          {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+              for the curve. It lives inside the Conversation, ahead of the
+              button, so paint order is structural: content, then fade, then
+              button. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+            style={{ backgroundImage: COMPOSER_SCRIM }}
+          />
 
           {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
@@ -808,9 +840,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // One thing parks above the composer at a time; a pending
               // question outranks a list you can reopen by typing.
               interactionOpen={pending !== null}
-              // The card above draws no box of its own while this holds; this
-              // one is it. Both read the same rule off the same interaction —
-              // see `ComposerInteractionStack`.
+              // What this box's words will do, not where the answer belongs.
+              // The card above keeps its own field and is the affordance; this
+              // is the fallback that stops a question standing over the
+              // composer from making it a dead end (VC-68). It changes the
+              // placeholder and the control's name, never the behaviour.
               answering={answering}
               models={composerModels}
               selection={selection}
@@ -899,21 +933,6 @@ function useModelAccess(active: boolean): {
         catalogState: "pinned",
         catalogError: null,
       };
-}
-
-function composerModel(
-  model: ModelAccessModel,
-  providers: readonly ModelAccessProvider[],
-): ComposerModel {
-  return {
-    id: `${model.providerId}/${model.modelId}`,
-    providerId: model.providerId,
-    providerLabel:
-      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
-    modelId: model.modelId,
-    label: model.label,
-    reasoningLevels: model.reasoningLevels,
-  };
 }
 
 /* ---------------------------------------------------------------- running */
@@ -1043,6 +1062,21 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           onClick={blocker.secondaryAction.act}
         >
           {blocker.secondaryAction.label}
+        </Button>
+      ) : null}
+      {/* The one row that reports this surface's own latch — Retry stays for
+          the recovery, and this retires the row when the reader has read it.
+          An icon, not a labeled button: it competes with nothing, and the row's
+          words are the retry's business, not its. */}
+      {blocker.dismiss ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0"
+          aria-label={blocker.dismiss.label}
+          onClick={blocker.dismiss.act}
+        >
+          <XIcon aria-hidden className="size-3" />
         </Button>
       ) : null}
     </div>

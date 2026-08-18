@@ -57,7 +57,7 @@ import { getProjectById, listProjects } from "./db/projects-repo";
 import { getTicket } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
@@ -97,6 +97,7 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
+  broadcastSessionActivity,
   broadcastSessionHarness,
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
@@ -583,7 +584,19 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: describeDbOpenFailure(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
-  const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
+  // The one Session Engine in the process, wrapped once so every durable write
+  // anywhere downstream — the runtime's turns, the agent socket's commands, the
+  // IPC handlers' retitles — re-publishes the affected Session's listing row to
+  // every window. Wrapping HERE is what makes that claim true: this is the only
+  // construction site, so there is no unwatched engine for a caller to hold.
+  // See `session-control/activity-watch.ts`.
+  const sessionActivityWatch =
+    dbHandle.ok === true
+      ? watchSessionActivity(createDesktopSessionEngine(dbHandle.db), {
+          publish: broadcastSessionActivity,
+        })
+      : null;
+  const sessionEngine = sessionActivityWatch?.engine ?? null;
   // Attachment bytes reach the renderer here (VC-50). Registered after the db
   // opens because the media type is a `blobs` column, and read through the
   // handle at request time rather than captured: a degraded db still serves

@@ -33,6 +33,7 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
+import { useProjectSessionsStore } from "./project-sessions";
 import { useTicketSessionRecordsStore } from "./ticket-session-records";
 
 export type TerminalSplitDirection = "vertical" | "horizontal";
@@ -838,14 +839,25 @@ export function subscribeHarnessEvents(): () => void {
  * record only names WHICH harness, so it is repointed only when that moved. An
  * unconditional repoint would hand the rail a new record object per launch,
  * carrying the value it already had.
+ *
+ * Two durable caches are repointed, not one, because a terminal's record is
+ * cached per ticket (the rail) AND per project (the sidebar's bands, the
+ * board's indicator). An announce is the one Session fact that moves NEITHER
+ * cache on its own: it never touches the ledger, so `volli:session-activity`
+ * cannot see it, and a surface that missed this patch would go on naming the
+ * harness the terminal was launched with for the rest of the run.
  */
 export function subscribeSessionHarness(): () => void {
   return window.api.sessions.onHarnessChange((notice) => {
     useSessionsStore.getState().announceHarness(notice.sessionId, notice.harnessId, notice.at);
-    if (notice.changed && notice.ticketId !== null) {
+    if (!notice.changed) return;
+    if (notice.ticketId !== null) {
       useTicketSessionRecordsStore
         .getState()
         .setActiveHarness(notice.ticketId, notice.sessionId, notice.harnessId);
     }
+    useProjectSessionsStore
+      .getState()
+      .setActiveHarness(notice.projectId, notice.sessionId, notice.harnessId);
   });
 }

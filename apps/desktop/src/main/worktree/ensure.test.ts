@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +11,9 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { getTicketRow, insertTicket } from "../db/tickets-repo";
 import { ensure } from "./ensure";
+import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetPhasesForTest } from "./phase";
+import { readWorktreeStatus } from "./read";
 import { scriptedGit } from "./scripted-git";
 import type { WorktreePhase } from "./types";
 
@@ -343,5 +346,76 @@ describe("ensure — attachments stage", () => {
     );
 
     expect(result.ok).toBe(true);
+  });
+});
+
+/** Real git against a real repo — identity pinned so a bare CI checkout can commit. */
+function runRepoGit(cwd: string, args: readonly string[]): void {
+  execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Volli Test",
+      GIT_AUTHOR_EMAIL: "test@volli.local",
+      GIT_COMMITTER_NAME: "Volli Test",
+      GIT_COMMITTER_EMAIL: "test@volli.local",
+    },
+  });
+}
+
+describe("ensure → worktree status, against a real repository (VC-98)", () => {
+  it("turns a worktree-less ticket into one `volli worktree status` can report", async () => {
+    const projectPath = tempDir("real-repo");
+    runRepoGit(projectPath, ["init", "-b", "main"]);
+    writeFileSync(join(projectPath, "README.md"), "# repo\n");
+    runRepoGit(projectPath, ["add", "README.md"]);
+    runRepoGit(projectPath, ["commit", "-m", "initial"]);
+
+    const home = tempDir("real-home");
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", path: projectPath, ticketPrefix: "VC", baseBranch: "main" }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t1",
+        ticketNumber: 12,
+        title: "MCP server",
+        usesWorktree: true,
+      }),
+    );
+    const deps = {
+      db: ctx.db,
+      git: runGitCapturing,
+      gitAsync: runGitCapturingAsync,
+      home,
+      blobsRoot: blobsRoot(tempDir("real-userdata")),
+    };
+
+    // The state VC-81 was left in: scoped to a worktree, with no worktree, and
+    // the read verb refusing every question an agent asks about its work.
+    expect(readWorktreeStatus(deps, "t1")).toMatchObject({
+      kind: "no-worktree",
+      usesWorktree: true,
+    });
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome).toMatchObject({ ok: true });
+    // Real git, real directory: the persisted identity is a fact on disk, not
+    // a stamp the read verb has to take on trust.
+    const row = getTicketRow(ctx.db, "t1");
+    expect(row?.worktree_path).not.toBeNull();
+    expect(row?.branch).toBe("volli/VC-12-mcp-server");
+    expect(row?.base_branch).toBe("main");
+    expect(existsSync(row!.worktree_path!)).toBe(true);
+    expect(readWorktreeStatus(deps, "t1")).toMatchObject({
+      kind: "ok",
+      displayId: "VC-12",
+      branch: "volli/VC-12-mcp-server",
+      baseBranch: "main",
+    });
   });
 });

@@ -1,7 +1,8 @@
 /**
- * Ticket detail right rail — the Calm Stack (decision #46;
- * lab/scratches/ticket-right-sidebar.tsx is the design of record, and this file
- * reproduces its `SidebarPanel` + `ActiveLabelTabs` + `NowPanel`).
+ * Ticket detail right rail — the Calm Stack (decision #46; designed in the
+ * ticket-right-sidebar lab scratch, since retired — this file reproduces its
+ * `SidebarPanel` + `ActiveLabelTabs` + `NowPanel` and is now the design of
+ * record).
  *
  * The panel owns its own header: one centred pill of three pages — Now, Diffs,
  * Files — floating above whichever page is showing. The vertical icon strip
