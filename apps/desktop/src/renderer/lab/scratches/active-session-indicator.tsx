@@ -37,8 +37,8 @@
  *     offset invisible along an edge, obvious at a corner.)
  *
  * ── LIGHT IS A DIFFERENT COLOUR, NOT THE SAME ONE DIMMED ────────────────────
- * Toggle Light/Dark and the ring changes hue AND width — both deliberate, and
- * both will look like mistakes if you do not know why.
+ * Toggle Light/Dark and the ring changes hue and NOTHING ELSE. Same 1.5px in
+ * both, so what you are comparing is two colours rather than two drawings.
  *
  * The status tokens are solved to clear Lc 65 against the card, which on a
  * light canvas forces them DARK: `--attention` is #764900, a brown, and at ring
@@ -48,15 +48,16 @@
  * is the only lever that opens any chroma headroom, so light re-solves the ring
  * at L=0.65 (a real amber, #cb7900) and pays 26–31 Lc for it — which also puts
  * it under WCAG 1.4.11's 3:1, deliberately and with the reasoning written out
- * in `globals.css`. That is affordable *here* and nowhere else: this is a 2px
- * edge rather than status text, and it is never the only place its state is
- * said.
+ * in `globals.css`. That is affordable *here* and nowhere else: this is a
+ * 1.5px edge rather than status text, and it is never the only place its state
+ * is said.
  *
- * Which is also why light keeps 2px against dark's 1.5px — not a second helping
- * of the same budget, but the other half of one trade. Judge the two
- * appearances separately rather than as a before-and-after. Tried and rejected:
- * 2.5px on the old brown (thicker mud), 3px on anything (reads outlined, not
- * lit).
+ * The width was the road not taken, and it is worth knowing it was tried: 2.5px
+ * and then 2px, back when weight was doing the work the colour does now. Both
+ * paid twice for one trade — brighter AND heavier stops being one mark rendered
+ * for two canvases — and a light ring reads as outlined rather than lit well
+ * before it looks bold. Judge the two appearances separately rather than as a
+ * before-and-after.
  *
  * Static, and deliberately so: there is no store behind these, because what is
  * under review is the drawing rather than the derivation. The derivation has

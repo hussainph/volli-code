@@ -886,14 +886,14 @@
   /* Cancels the card's 1px border — see WHY `inset` IS NEGATIVE above. */
   inset: -1px;
   border-radius: inherit;
-  --session-ring-width: 1.5px;
   /* The status token this ring is about — swapped per state below. `-color` is
    * what actually gets painted, and in light it is solved from this rather
    * than being it; see LIGHT IS SOLVED, NOT THICKENED. */
   --session-ring-seed: var(--positive);
   --session-ring-color: var(--session-ring-seed);
-  /* The visible thickness of the ring, and the only thing the mask leaves. */
-  padding: var(--session-ring-width);
+  /* The visible thickness of the ring, and the only thing the mask leaves.
+   * One value for both appearances: only the colour is per-canvas. */
+  padding: 1.5px;
   overflow: hidden;
   pointer-events: none;
   display: none;
@@ -962,9 +962,20 @@
  * a glance rather than the information. It stays above Lc 30, which is the
  * floor for a mark that only has to be SPOTTED rather than read.
  *
- * That budget is scoped to this one 2px edge and does not travel. STATUS_LC is
- * the floor for status TEXT, matched across the family so that no status label
- * shouts over another, and nothing here licenses spending it anywhere else.
+ * That budget is scoped to this one 1.5px edge and does not travel. STATUS_LC
+ * is the floor for status TEXT, matched across the family so that no status
+ * label shouts over another, and nothing here licenses spending it anywhere
+ * else.
+ *
+ * AND THE WIDTH DOES NOT MOVE. This rule went through 2.5px and then 2px while
+ * weight was still doing the work the colour now does, and both were paying
+ * twice for one trade: a ring that is brighter AND heavier than its dark twin
+ * stops being the same mark rendered for two canvases and starts being two
+ * marks. Once the hue carries it, the extra weight is just a thicker line, and
+ * a light ring reads as OUTLINED rather than lit well before it looks bold.
+ * So light and dark are both 1.5px and the colour is the only thing that
+ * differs between appearances — which is what the generated token set does for
+ * everything else in the app.
  *
  * Derived rather than authored: only L and C are pinned, `h` comes from the
  * token, so a scope that repaints its canvas still moves this ring with it.
@@ -972,14 +983,6 @@
  * asking for anything else would be inventing a problem. */
 :root.light .session-ring {
   --session-ring-color: oklch(from var(--session-ring-seed) 0.65 0.16 h);
-  /* A little extra weight, and it is the SAME budget being balanced rather than
-   * a second helping of it: the solve above buys vividness by giving up 26–31
-   * Lc, so spending the width down to dark's 1.5px in the same breath would pay
-   * for the trade twice and leave a thin line at reduced contrast. 2px, not the
-   * 2.5px this rule used to carry — the colour is doing most of the work now,
-   * and past 2px a light ring stops reading as lit and starts reading as
-   * outlined. */
-  --session-ring-width: 2px;
 }
 
 .session-ring[data-activity="waiting"] {
