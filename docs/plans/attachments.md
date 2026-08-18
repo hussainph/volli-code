@@ -1,6 +1,22 @@
 # Attachments (VC-50)
 
-Status: design settled, implementation in progress.
+Status: implemented.
+
+What shipped, against the work order at the foot of this document: the shared
+Blob model and storage (1, 2), ingest and the `volli-blob:` protocol (3),
+preload commands and both Ticket surfaces (4), chat (5), and materialization
+from `blob_links` (6). Plus two things the original order did not name — a
+cumulative per-Session image budget, and boot-time collection of unreferenced
+Blobs.
+
+One piece of the plan below is deliberately NOT built: the send-time skip for a
+model that takes no images. `ModelAccessModel.acceptsImageInput` gates the
+attach affordance, which is where the plan said the capability should be
+visible, but nothing re-checks it at send. Switching to a text-only model after
+attaching an image therefore reaches the provider rather than degrading to the
+path reference. The attachment is still materialized and still named in the
+prompt by path, so the agent can open it either way; what is missing is the
+quiet drop of the inline block.
 
 One system for every file a user hands the app — a screenshot pasted into a
 chat, a PDF spec dropped on the ticket composer, a design mock referenced from

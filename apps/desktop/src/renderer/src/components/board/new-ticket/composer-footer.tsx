@@ -1,3 +1,4 @@
+import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { ComposerFileAttach } from "@renderer/components/board/new-ticket/composer-file-attach";
 import { Button } from "@renderer/components/ui/button";
 import { Switch } from "@renderer/components/ui/switch";
@@ -24,6 +25,7 @@ import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
 export function ComposerFooter({
   fileIndex,
   onInsertRef,
+  onAttachFiles,
   createMore,
   onCreateMoreChange,
   harnessLabel,
@@ -33,6 +35,8 @@ export function ComposerFooter({
 }: {
   fileIndex: FileIndexHandle;
   onInsertRef: (relPath: string) => void;
+  /** Attach a file from anywhere (VC-50) — the repository-file picker beside it stays. */
+  onAttachFiles?: (files: readonly File[]) => void;
   createMore: boolean;
   onCreateMoreChange: (createMore: boolean) => void;
   /** The active terminal harness's label, for the kickoff button's accessible name. */
@@ -43,7 +47,12 @@ export function ComposerFooter({
 }) {
   return (
     <div className="flex items-center gap-2">
+      {/* Two paperclips, two questions. This one searches the repository index
+          and writes `@path`; the one beside it takes a file from anywhere. A
+          repository file chosen through either ends as the same `@` reference,
+          because main resolves that, not the button. */}
       <ComposerFileAttach fileIndex={fileIndex} onInsert={onInsertRef} />
+      {onAttachFiles === undefined ? null : <ComposerAttachButton onFiles={onAttachFiles} />}
 
       <label className="flex items-center gap-2 text-ui text-muted-foreground">
         <Switch

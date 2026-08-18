@@ -95,6 +95,7 @@ export default defineConfig(({ mode }) => ({
         "src/chat/session-model.ts",
         "src/chat/transcript.ts",
         "src/chat/wire.ts",
+        "src/components/attachments/attachment-model.ts",
         "src/components/board/board-dnd.ts",
         "src/components/chat/chat-plane-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",

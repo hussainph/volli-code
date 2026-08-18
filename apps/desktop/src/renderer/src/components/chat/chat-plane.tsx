@@ -15,6 +15,8 @@
  * which cards have a decision in flight.
  */
 import * as React from "react";
+import { toast } from "sonner";
+import type { BlobLinkView } from "@volli/shared";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
@@ -130,6 +132,7 @@ import {
   useChatDraftsStore,
   type HeldMessage,
 } from "@renderer/stores/chat-drafts";
+import { useAttachments } from "@renderer/hooks/use-attachments";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -239,6 +242,22 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     [selectModel],
   );
 
+  /**
+   * Whether the Session's model can read images (VC-50) — the same catalog the
+   * picker uses. Unknown reads as supported: the affordance's job is to warn,
+   * not to lock, and a wrong warning on a model that can see is worse than
+   * none.
+   */
+  const imagesUnsupported = React.useMemo(() => {
+    if (modelSelection === null) return false;
+    const model = models.find(
+      (candidate) =>
+        candidate.providerId === modelSelection.providerId &&
+        candidate.modelId === modelSelection.modelId,
+    );
+    return model !== undefined && !model.acceptsImageInput;
+  }, [modelSelection, models]);
+
   // The window belongs to the Session's model, read from the same catalog the
   // picker uses; null while the catalog has not answered or does not know.
   const contextWindow = React.useMemo(() => {
@@ -309,19 +328,53 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * differently. A refused answer lands where a refused message lands: back in
    * the strip under the composer, as words nothing took.
    */
+  /**
+   * Files attached to the message being written (VC-50).
+   *
+   * Owned here rather than in the composer because they belong to the message,
+   * not to the box: they have to survive the composer's memo, ride the queued
+   * copy, and be readable by {@link send} at the moment ⏎ is pressed.
+   *
+   * A repository file resolves to an `@` reference instead of a copy, and that
+   * reference is appended to the draft — the same text the `@` picker would
+   * have inserted, so both routes to a repository file end in one thing.
+   */
+  const {
+    attachments,
+    attachFiles,
+    remove: removeAttachment,
+    clear: clearAttachments,
+  } = useAttachments({
+    owner: { sessionId },
+    onRefInsert: (relPath) => {
+      // `useAttachments` re-reads its callbacks every render, so `input` here
+      // is the draft as it stands, not as it stood when the drop began.
+      setDraft(sessionId, input.length === 0 ? `@${relPath} ` : `${input} @${relPath} `);
+    },
+    onError: (message) => toast.error(message),
+  });
+  // Read at submit rather than closed over, so `send` keeps its identity while
+  // the strip changes underneath it.
+  const attachmentsRef = React.useRef(attachments);
+  attachmentsRef.current = attachments;
+
   const dispatch = React.useCallback(
     (
       text: string,
       road: (message: QueuedMessage) => Promise<HeldDispatchOutcome>,
       resources?: readonly PromptResource[],
+      attached?: readonly BlobLinkView[],
     ) => {
       // Resources ride the message object itself — through hold, queue and
       // steer — so a copy released later delivers exactly what `/skill`
       // resolved to when ⏎ was pressed, not whatever the file says by then.
-      const message: QueuedMessage =
-        resources !== undefined && resources.length > 0
-          ? { id: nextId(), text, resources }
-          : { id: nextId(), text };
+      // Attachments ride it for the same reason (VC-50).
+      const message: QueuedMessage = {
+        id: nextId(),
+        text,
+        ...(resources !== undefined && resources.length > 0 ? { resources } : {}),
+        ...(attached !== undefined && attached.length > 0 ? { attachments: attached } : {}),
+      };
       holdMessage(sessionId, message);
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
@@ -343,9 +396,13 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
-      dispatch(text, (message) => deliver(message, intent), resources);
+      dispatch(text, (message) => deliver(message, intent), resources, attachmentsRef.current);
+      // The strip belongs to the message that just left, not to the box. It is
+      // cleared rather than detached: the links stay, because the message the
+      // agent received refers to them.
+      clearAttachments();
     },
-    [deliver, dispatch],
+    [clearAttachments, deliver, dispatch],
   );
 
   // What the Session is holding for you, from the two records that say it — see
@@ -751,6 +808,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               onSteerQueued={onSteerQueued}
               onSubmit={submitComposer}
               onStop={stopTurn}
+              attachments={attachments}
+              onAttachFiles={(picked) => void attachFiles(picked)}
+              onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
+              imagesUnsupported={imagesUnsupported}
             />
           </ComposerInteractionStack>
         </ContentColumn>

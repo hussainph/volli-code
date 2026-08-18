@@ -2,6 +2,8 @@ import * as React from "react";
 import { errorMessage, type Project, type TicketPriority, type TicketStatus } from "@volli/shared";
 import { toast } from "sonner";
 
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { useAttachments } from "@renderer/hooks/use-attachments";
 import { resolveBaseBranch } from "@renderer/components/board/new-ticket/branch-picker";
 import { useBranchListing } from "@renderer/components/board/new-ticket/composer-branch";
 import { ComposerBreadcrumb } from "@renderer/components/board/new-ticket/composer-breadcrumb";
@@ -173,6 +175,33 @@ export function ComposerForm({
     [target, status, priority, title, body, labels, usesWorktree, baseBranch],
   );
 
+  /**
+   * Files attached before the Ticket exists (VC-50).
+   *
+   * They are imported the moment they are chosen — so an oversized image is
+   * refused while the person still has it in hand, rather than after they have
+   * written the whole Ticket — and linked to the Ticket once it has an id. A
+   * draft abandoned instead leaves unreferenced Blobs, which boot-time
+   * collection reclaims.
+   *
+   * `refRoot` is the target project's checkout: a file already in the
+   * repository becomes an `@` reference in the body, exactly as the footer's
+   * file picker would have written it.
+   */
+  const {
+    attachments,
+    attachFiles,
+    remove: removeAttachment,
+    clear: clearAttachments,
+  } = useAttachments({
+    owner: { unowned: true },
+    refRoot: target.path,
+    onRefInsert: (relPath) => editorRef.current?.insertAtCursor(`@${relPath}`),
+    onError: (message) => toast.error(message),
+  });
+  const attachmentsRef = React.useRef(attachments);
+  attachmentsRef.current = attachments;
+
   const deps = React.useMemo<SubmitDeps>(
     () => ({
       addTicket: (projectId, ticketStatus, ticketTitle, options) =>
@@ -188,6 +217,15 @@ export function ComposerForm({
         useWorkspaceStore.getState().openTicketSession(projectId, ticketId, sessionId),
       persistHarness: (harnessId) => useUiStore.getState().setLastHarnessId(harnessId),
       toastSuccess: (message) => toast.success(message),
+      linkAttachments: async (ticketId) => {
+        const pending = attachmentsRef.current;
+        if (pending.length === 0) return;
+        const result = await window.api.attachments.linkDrafts({
+          ticketId,
+          blobs: pending.map((entry) => ({ blobHash: entry.blobHash, label: entry.label })),
+        });
+        if (!result.ok) toast.error(result.error);
+      },
     }),
     [],
   );
@@ -196,9 +234,12 @@ export function ComposerForm({
     setTitle("");
     setBody("");
     setLabels([]);
+    // The links now belong to the Ticket that was just created; the strip is
+    // forgotten rather than detached.
+    clearAttachments();
     // Return focus to the title for the next rapid entry (Create-more).
     requestAnimationFrame(() => titleRef.current?.focus());
-  }, []);
+  }, [clearAttachments]);
 
   const handleCreate = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
@@ -318,8 +359,15 @@ export function ComposerForm({
         />
       </div>
 
+      <AttachmentStrip
+        attachments={attachments}
+        onRemove={(attachment) => void removeAttachment(attachment)}
+        className="border-t border-border px-4 pt-2"
+      />
+
       <div className="border-t border-border px-4 py-2">
         <ComposerFooter
+          onAttachFiles={(picked) => void attachFiles(picked)}
           fileIndex={fileIndex}
           onInsertRef={(relPath) => editorRef.current?.insertAtCursor(`@${relPath}`)}
           createMore={createMore}

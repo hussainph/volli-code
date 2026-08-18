@@ -19,7 +19,7 @@
  * requirements for.
  */
 import type { SessionStreamOverlay } from "@volli/session-engine";
-import { autoTitleFromMessage, errorMessage, skillResourcePart } from "@volli/shared";
+import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   ModelSelection,
   SessionInteractionResolution,
@@ -552,7 +552,12 @@ export class ChatSessionClient {
   async submit(message: QueuedMessage, delivery: ChatMessageDelivery): Promise<MessageDelivery> {
     const slice = this.#slice();
     const body = message.text.trim();
-    if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
+    const attachments = message.attachments ?? [];
+    // An attachment makes an otherwise-empty message a real one (VC-50): a
+    // dropped screenshot with no words is a question, and refusing it here
+    // would drop the file the person just chose.
+    if (slice === undefined || !isDeliverable(slice)) return "refused";
+    if (body.length === 0 && attachments.length === 0) return "refused";
     try {
       // The message-scoped resource channel (VC-49): each skill body the text's
       // `/slug` references resolved to travels as its own typed part BESIDE the
@@ -566,6 +571,17 @@ export class ChatSessionClient {
         parts: [
           { type: "text" as const, text: body },
           ...(message.resources ?? []).map(skillResourcePart),
+          // Attachments travel as AI SDK file parts addressed by
+          // `volli-blob:<hash>` — never as bytes. The hash is what makes the
+          // durable transcript small enough to replay forever, and what lets
+          // main find the file again after the worktree it was materialized
+          // into has been pruned.
+          ...attachments.map((attachment) => ({
+            type: "file" as const,
+            url: blobUrl(attachment.blobHash),
+            mediaType: attachment.mime,
+            filename: attachment.originalName,
+          })),
         ],
       };
       const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };

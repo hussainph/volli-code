@@ -98,6 +98,7 @@ import {
   countProjects,
   deleteProject,
   findProjectByPath,
+  getProjectById,
   insertProject,
   listProjects,
   nextSortOrder,
@@ -110,6 +111,7 @@ import {
   createDesktopSessionEngine,
   terminalSessionRecord,
 } from "./session-control";
+import { prepared } from "./db/prepared";
 import {
   getTicketRow,
   listAllTickets,
@@ -583,7 +585,17 @@ export function registerDataIpcHandlers(
 
     "volli:blob-attach": async (input: BlobAttachInput): Promise<BlobAttachResult> => {
       try {
-        const outcome = await attachBlob(db, blobsRootPath, input, Date.now());
+        // The workspace an `@` ref resolves against is derived here rather than
+        // sent by the renderer: it is a fact about the Ticket's worktree and
+        // the project's checkout, and a renderer that guessed it wrong would
+        // silently turn repository files into frozen copies.
+        const refRoot = input.refRoot ?? resolveRefRoot(db, input.owner);
+        const outcome = await attachBlob(
+          db,
+          blobsRootPath,
+          { ...input, ...(refRoot === undefined ? {} : { refRoot }) },
+          Date.now(),
+        );
         // Flattened to two nullable fields rather than passed through as the
         // tagged union: every refusal on this channel already travels as
         // `{ ok: false }`, and a second discriminant beside it would give the
@@ -1011,4 +1023,39 @@ export function registerDataIpcHandlers(
   };
 
   registerGuardedIpcHandlers(DATA_IPC, handlers);
+}
+
+/**
+ * The workspace root an `@` reference from this owner would resolve against
+ * (VC-50), or `undefined` when there is no such tree — which makes every file
+ * a snapshot, the safe answer.
+ *
+ * A Ticket with a worktree is briefed inside it; a Ticket without one runs in
+ * the project's own checkout, which is also where a ticketless Session runs. A
+ * Session is resolved through the Ticket it belongs to for exactly that reason:
+ * the tree is a fact about the work, not about the conversation.
+ */
+function resolveRefRoot(
+  db: Database.Database,
+  owner: BlobAttachInput["owner"],
+): string | undefined {
+  if ("unowned" in owner) return undefined;
+  const ticketId =
+    "ticketId" in owner
+      ? owner.ticketId
+      : (prepared<[string], { ticket_id: string | null }>(
+          db,
+          "SELECT ticket_id FROM sessions WHERE id = ?",
+        ).get(owner.sessionId)?.ticket_id ?? null);
+  if (ticketId === null) {
+    if ("ticketId" in owner) return undefined;
+    const projectId = prepared<[string], { project_id: string }>(
+      db,
+      "SELECT project_id FROM sessions WHERE id = ?",
+    ).get(owner.sessionId)?.project_id;
+    return projectId === undefined ? undefined : getProjectById(db, projectId)?.path;
+  }
+  const ticket = getTicketRow(db, ticketId);
+  if (ticket === undefined) return undefined;
+  return ticket.worktree_path ?? getProjectById(db, ticket.project_id)?.path;
 }

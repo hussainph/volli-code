@@ -88,6 +88,15 @@ export interface SubmitDeps {
   focusSession(projectId: string, ticketId: string, sessionId: string): void;
   persistHarness(harnessId: HarnessId): void;
   toastSuccess(message: string): void;
+  /**
+   * Attaches files the composer imported before the Ticket existed (VC-50).
+   *
+   * Runs immediately after creation and BEFORE the kickoff prompt, so the
+   * agent's first turn is briefed with the attachments already in place — a
+   * Ticket booted without them would read a brief naming files that are not
+   * there yet. Omitted by callers that cannot attach.
+   */
+  linkAttachments?(ticketId: string): Promise<void>;
 }
 
 /** The shared outcome: whether a ticket was actually created (drives the form's reset/close). */
@@ -118,6 +127,7 @@ export async function runPlainCreate(
     baseBranch: baseBranchFor(fields),
   });
   if (ticket === null) return { created: false };
+  await deps.linkAttachments?.(ticket.id);
   deps.toastSuccess(`${displayTicketId(fields.ticketPrefix, ticket.ticketNumber)} created`);
   return { created: true };
 }
@@ -148,6 +158,9 @@ export async function runKickoff(
     baseBranch: baseBranchFor(fields),
   });
   if (ticket === null) return { created: false };
+  // Before the prompt is composed and the session booted: the brief names the
+  // attachments, and materialization reads them from the links made here.
+  await deps.linkAttachments?.(ticket.id);
 
   const displayId = displayTicketId(fields.ticketPrefix, ticket.ticketNumber);
   const prompt = composeTicketPrompt({ displayId, title: fields.title, body: fields.body });
