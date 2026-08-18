@@ -246,6 +246,21 @@ function sessionListingRows(sessions: readonly SessionProjection[]): SessionList
 }
 
 /**
+ * Tickets whose worktree is being materialized RIGHT NOW (VC-98).
+ *
+ * `ensure` is git work measured in seconds, and the rail control that starts it
+ * is the same one that can switch scope straight back off. That switch-off used
+ * to be permitted mid-flight: `updateTicketFieldsCommand` freezes scope only
+ * once `worktree_path` is stamped, and the stamp lands at the END of `ensure`.
+ * So the off-write committed against a still-null path, `ensure` then stamped a
+ * worktree onto a ticket that had just been scoped to the main checkout, and
+ * the freeze made the contradiction PERMANENT — `uses_worktree` 0 beside a real
+ * worktree on disk, with the destination control gone and no way back through
+ * the UI. Holding the ticket here for the duration closes that window.
+ */
+const materializingWorktrees = new Set<string>();
+
+/**
  * Materializes the worktree of a ticket that was just switched INTO worktree
  * scope (VC-98).
  *
@@ -273,7 +288,13 @@ async function materializeSwitchedOnWorktree(
   ticketId: string,
   committed: Ticket,
 ): Promise<TicketResult> {
-  const outcome = await ensure(worktreeDeps(db), ticketId);
+  // Held across the whole await so a concurrent scope-off is refused rather
+  // than racing the identity stamp; released in `finally` so a throw cannot
+  // strand the ticket un-switchable forever.
+  materializingWorktrees.add(ticketId);
+  const outcome = await ensure(worktreeDeps(db), ticketId).finally(() => {
+    materializingWorktrees.delete(ticketId);
+  });
   // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
   // new identity stamp to show. Failure has a scope flag that really did change
   // under a renderer that is about to revert it optimistically off the back of
@@ -526,6 +547,18 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
       const now = Date.now();
+      // The one write that can race the `ensure` a previous call is still
+      // running: switching scope back OFF before the identity stamp lands.
+      // Refused rather than queued — the user is asking to undo something that
+      // is already half-done on disk, and the honest answer is to say so while
+      // it finishes. Re-asserting `true` is a no-op and passes through.
+      if (input.usesWorktree === false && materializingWorktrees.has(input.ticketId)) {
+        return {
+          ok: false,
+          error:
+            "The ticket's worktree is still being created, so its worktree scoping can't change yet. Try again once it's ready.",
+        };
+      }
       // Read BEFORE the write: the returned ticket shows scope as it now stands,
       // which cannot tell "just switched on" from "was already on" — and only
       // the transition materializes.
