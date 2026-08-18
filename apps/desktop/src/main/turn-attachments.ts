@@ -7,8 +7,12 @@
  *  - **Every file materializes** into `.volli/attachments/` and is named by
  *    path in the prompt, so the agent can open it with a tool whatever its
  *    type. This is the only channel a PDF has.
- *  - **Images additionally inline** as base64 image content, because Pi has no
- *    document block and a path is not something a model can look at.
+ *  - **Inlinable images additionally inline** as base64 image content, because
+ *    Pi has no document block and a path is not something a model can look at.
+ *    Inlinable is `isInlinableImageMime`, not `isImageMime`: Pi hands the
+ *    media type verbatim to the provider, and a type the provider refuses
+ *    (SVG, HEIC) would not merely fail this turn — it persists into Pi's
+ *    recovery sidecar and replays, failing every turn after it too.
  *
  * Kept out of `pi-adapter.ts` deliberately. The adapter is delicate, and this
  * is the part with real branching in it — so it lives where it can be tested
@@ -21,7 +25,7 @@
  */
 import type Database from "better-sqlite3";
 import {
-  isImageMime,
+  isInlinableImageMime,
   materializedBlobNames,
   parseBlobUrl,
   SESSION_ATTACHMENTS_REL_DIR,
@@ -112,7 +116,7 @@ export async function prepareTurnAttachments(
     // nothing about it rather than inventing a path.
     if (blob === undefined || relPath === undefined) continue;
     lines.push(`- \`${relPath}\``);
-    if (!isImageMime(blob.mime)) continue;
+    if (!isInlinableImageMime(blob.mime)) continue;
     images.push({
       data: Buffer.from(readBlob(blobsRootPath, hash)).toString("base64"),
       mimeType: blob.mime,

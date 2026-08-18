@@ -119,6 +119,24 @@ describe("prepareTurnAttachments", () => {
     expect(prepared.images).toEqual([]);
   });
 
+  it("names an SVG by path but never inlines it — the provider would refuse it, and the refusal would replay every turn", async () => {
+    const blob = await attach("logo.svg", new TextEncoder().encode("<svg/>"));
+
+    const prepared = await prepareTurnAttachments(
+      ctx.db,
+      root,
+      message(blobUrl(blob.blobHash)),
+      owner(),
+    );
+
+    // Materialized and named like any file — the agent can open it — but its
+    // bytes must never become ImageContent: Pi hands `mimeType` verbatim to
+    // the API, image/svg+xml is a guaranteed 400, and an inlined image
+    // persists into the sidecar where the failure replays on every later turn.
+    expect(prepared.note).toContain(".volli/attachments/logo.svg");
+    expect(prepared.images).toEqual([]);
+  });
+
   it("mentions each attachment once even when the message repeats it", async () => {
     const blob = await attach("shot.png", PNG);
     const url = blobUrl(blob.blobHash);

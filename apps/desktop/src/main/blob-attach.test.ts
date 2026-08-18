@@ -219,6 +219,17 @@ describe("attachBlob: the guards that keep a session usable", () => {
     expect(outcome.kind).toBe("blob");
   });
 
+  it("does not cap an SVG either — an image no provider takes is a path ref, so its size is a disk question", async () => {
+    const huge = new Uint8Array(MAX_INLINE_IMAGE_BYTES + 1);
+    const outcome = await attachBlob(
+      ctx.db,
+      root,
+      { fileName: "huge.svg", bytes: huge, owner: { sessionId } },
+      1,
+    );
+    expect(outcome.kind).toBe("blob");
+  });
+
   it("refuses the image that would push a session past its cumulative budget", async () => {
     // Four 5 MB images fit in 20 MB; the fifth cannot, even though it is
     // individually legal. This is the guard the per-image ceiling cannot make.
@@ -251,6 +262,16 @@ describe("attachBlob: the guards that keep a session usable", () => {
       ctx.db,
       root,
       { fileName: "big.pdf", bytes: new Uint8Array(4096), owner: { sessionId } },
+      1,
+    );
+    expect(sessionInlineImageBytes(ctx.db, sessionId)).toBe(0);
+  });
+
+  it("does not budget an SVG, which never inlines and so never replays", async () => {
+    await attachBlob(
+      ctx.db,
+      root,
+      { fileName: "diagram.svg", bytes: new Uint8Array(4096), owner: { sessionId } },
       1,
     );
     expect(sessionInlineImageBytes(ctx.db, sessionId)).toBe(0);

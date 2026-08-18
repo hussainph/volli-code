@@ -15,8 +15,9 @@
  *
  * Pure and shared: the renderer needs {@link blobUrl} to display one, main
  * needs {@link blobRelPath} to find its bytes and {@link parseBlobUrl} to
- * serve them, and both need {@link isImageMime} to make the same
- * inline-or-chip call. None of it touches disk.
+ * serve them. {@link isImageMime} makes the picture-or-card presentation
+ * call; {@link isInlinableImageMime} — deliberately narrower — makes the
+ * may-the-model-see-it call. None of it touches disk.
  */
 
 import { isExpressibleRefPath } from "./file-ref";
@@ -110,14 +111,45 @@ export function parseBlobUrl(url: string): string | null {
 }
 
 /**
- * Whether a Blob's bytes can be handed to a model as image content. This is
- * the one predicate that splits the two halves of the pipeline: an image is
- * materialized into the workspace AND inlined at send time, everything else is
- * materialized and referenced by path only. It also decides presentation —
- * images render inline, every other type is a chip.
+ * Whether a Blob is an image for PRESENTATION: thumbnails render the picture
+ * itself, everything else renders as a card. Presentation only — whether the
+ * bytes may be handed to a model is {@link isInlinableImageMime}, and the two
+ * deliberately disagree about an SVG: it previews fine in an `<img>`, and no
+ * provider accepts it as image input.
  */
 export function isImageMime(mime: string): boolean {
   return mime.startsWith("image/");
+}
+
+/**
+ * The image media types a provider will actually take as base64 image input.
+ * Anthropic's documented set, which is also the floor across providers —
+ * Pi passes `mimeType` verbatim as the wire `media_type`, so anything outside
+ * this list is a guaranteed 400 at the API.
+ */
+const INLINABLE_IMAGE_MIMES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+/**
+ * Whether a Blob's bytes can be handed to a model as image content. This is
+ * the one predicate that splits the two halves of the pipeline: an inlinable
+ * image is materialized into the workspace AND inlined at send time,
+ * everything else is materialized and referenced by path only.
+ *
+ * STRICTER than {@link isImageMime}, and the gap is load-bearing: an
+ * `image/svg+xml` or `image/heic` that inlined would be refused by the
+ * provider — and because an inlined image persists into Pi's recovery sidecar
+ * and replays on every later turn, ONE such attachment would fail every turn
+ * after it, which is exactly the wedge (anthropics/claude-code #8202 and kin)
+ * this design exists to prevent. An unknown image type degrades to the
+ * materialized path ref instead, which the agent can still open with a tool.
+ */
+export function isInlinableImageMime(mime: string): boolean {
+  return INLINABLE_IMAGE_MIMES.has(mime);
 }
 
 /**
@@ -126,6 +158,8 @@ export function isImageMime(mime: string): boolean {
  * already entered durable history replays on every subsequent turn, so the
  * session stops accepting even plain text. We therefore cap on the way IN —
  * at import, before anything is written — rather than discovering it at send.
+ * Applies to {@link isInlinableImageMime} types only: nothing else can inline,
+ * so nothing else can enter history, and its size is a disk question.
  */
 export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -228,7 +262,11 @@ export function resolveAttachment(repoRelPath: string | null, mime: string): Att
   // `@` form). Inserting a ref we cannot parse back would degrade to plain
   // text, which is worse than a snapshot.
   if (repoRelPath === null || !isExpressibleRefPath(repoRelPath)) return "snapshot";
-  return isImageMime(mime) ? "ref-and-snapshot" : "ref";
+  // Inlinable only: the second half of ref-and-snapshot exists so the model
+  // can see the pixels, and a repo SVG's pixels are exactly what a provider
+  // refuses — snapshotting it would buy a frozen copy nobody can use over the
+  // live file the ref already names.
+  return isInlinableImageMime(mime) ? "ref-and-snapshot" : "ref";
 }
 
 /** Inserts `-${n}` before the extension (`spec.png` → `spec-2.png`); an extensionless name gets it appended (`notes` → `notes-2`). */

@@ -15,7 +15,7 @@ import { readFile } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import {
   type BlobLinkView,
-  isImageMime,
+  isInlinableImageMime,
   resolveAttachment,
   fitsSessionImageBudget,
   MAX_SESSION_INLINE_IMAGE_BYTES,
@@ -74,12 +74,16 @@ export type AttachOutcome =
   | { kind: "blob"; blob: BlobLinkView }
   | { kind: "ref-and-blob"; relPath: string; blob: BlobLinkView };
 
-/** Bytes already inlined by a Session's image links — what the budget is measured against. */
+/**
+ * Bytes already inlined by a Session's image links — what the budget is
+ * measured against. Inlinable types only: an SVG never reaches the model as
+ * content, so it costs the conversation nothing and must not spend its budget.
+ */
 export function sessionInlineImageBytes(db: Database.Database, sessionId: string): number {
   let total = 0;
   for (const link of listSessionLinks(db, sessionId)) {
     const blob = getBlob(db, link.blobHash);
-    if (blob && isImageMime(blob.mime)) total += blob.sizeBytes;
+    if (blob && isInlinableImageMime(blob.mime)) total += blob.sizeBytes;
   }
   return total;
 }
@@ -106,7 +110,7 @@ function assertFitsSessionBudget(
 ): void {
   const owner = request.owner;
   if (!("sessionId" in owner)) return;
-  if (!isImageMime(mime)) return;
+  if (!isInlinableImageMime(mime)) return;
   const used = sessionInlineImageBytes(db, owner.sessionId);
   if (fitsSessionImageBudget(used, bytes.byteLength)) return;
   throw new Error(

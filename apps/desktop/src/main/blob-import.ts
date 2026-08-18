@@ -10,14 +10,15 @@
  * of Claude Code bug reports. Refusing at import means the bad bytes never
  * reach history at all, which is the only place the check is cheap.
  *
- * Non-image types are not capped here: they are never inlined as model input,
+ * Non-inlinable types are not capped here — documents, and image types no
+ * provider takes as input (SVG, HEIC): they are never inlined as model input,
  * only materialized and referenced by path, so their size is a disk question
  * rather than a protocol one.
  */
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type Database from "better-sqlite3";
-import { MAX_INLINE_IMAGE_BYTES, isImageMime, type BlobLink } from "@volli/shared";
+import { MAX_INLINE_IMAGE_BYTES, isInlinableImageMime, type BlobLink } from "@volli/shared";
 import { blobExists, hashBytes, writeBlob } from "./blob-store";
 import { createBlobLink, upsertBlob, type CreateBlobLinkInput } from "./db/blobs-repo";
 
@@ -109,7 +110,7 @@ export function importOwnerless(
   now: number,
 ): string {
   const fileName = basename(rawFileName);
-  if (isImageMime(mime) && bytes.byteLength > MAX_INLINE_IMAGE_BYTES) {
+  if (isInlinableImageMime(mime) && bytes.byteLength > MAX_INLINE_IMAGE_BYTES) {
     const mb = (bytes.byteLength / (1024 * 1024)).toFixed(1);
     throw new Error(`"${fileName}" is ${mb} MB — images must be under 5 MB to send to a model.`);
   }

@@ -10,6 +10,7 @@ import {
   fitsSessionImageBudget,
   isBlobHash,
   isImageMime,
+  isInlinableImageMime,
   materializedBlobNames,
   parseBlobUrl,
   resolveAttachment,
@@ -93,6 +94,26 @@ describe("isImageMime", () => {
     expect(isImageMime("application/pdf")).toBe(false);
     expect(isImageMime("text/plain")).toBe(false);
     expect(isImageMime("")).toBe(false);
+  });
+});
+
+describe("isInlinableImageMime", () => {
+  it("accepts exactly the types a provider takes as image input", () => {
+    expect(isInlinableImageMime("image/png")).toBe(true);
+    expect(isInlinableImageMime("image/jpeg")).toBe(true);
+    expect(isInlinableImageMime("image/gif")).toBe(true);
+    expect(isInlinableImageMime("image/webp")).toBe(true);
+  });
+
+  it("rejects image types the provider would refuse — an inlined SVG replays its 400 every turn", () => {
+    expect(isInlinableImageMime("image/svg+xml")).toBe(false);
+    expect(isInlinableImageMime("image/heic")).toBe(false);
+    expect(isInlinableImageMime("image/tiff")).toBe(false);
+  });
+
+  it("rejects non-images, like isImageMime does", () => {
+    expect(isInlinableImageMime("application/pdf")).toBe(false);
+    expect(isInlinableImageMime("")).toBe(false);
   });
 });
 
@@ -215,6 +236,10 @@ describe("resolveAttachment", () => {
 
   it("names a repo image live AND snapshots it, so the model can see it", () => {
     expect(resolveAttachment("src/logo.png", "image/png")).toBe("ref-and-snapshot");
+  });
+
+  it("names a repo SVG live only — no provider takes its pixels, so a snapshot buys nothing", () => {
+    expect(resolveAttachment("src/logo.svg", "image/svg+xml")).toBe("ref");
   });
 
   it("snapshots a repo path the ref grammar cannot express", () => {
