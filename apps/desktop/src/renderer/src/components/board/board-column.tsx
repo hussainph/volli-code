@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
+import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Badge } from "@renderer/components/ui/badge";
@@ -20,6 +21,12 @@ interface BoardColumnProps {
   /** The board's owning project's label rows — constant for the whole board tree. */
   projectLabels: readonly Label[];
   selectedId: string | null;
+  /**
+   * ticketId → what is running on it; absent means nothing is (VC-100). Passed
+   * down whole rather than per card so the board holds one derivation and one
+   * store subscription — the same reasoning as `projectLabels` above.
+   */
+  sessionActivity: Readonly<Record<string, TicketSessionActivity>>;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -37,6 +44,7 @@ export function BoardColumn({
   ticketPrefix,
   projectLabels,
   selectedId,
+  sessionActivity,
   onSelect,
   onOpen,
   composerInitiallyOpen,
@@ -96,6 +104,7 @@ export function BoardColumn({
               ticketPrefix={ticketPrefix}
               projectLabels={projectLabels}
               selected={ticket.id === selectedId}
+              sessionActivity={sessionActivity[ticket.id] ?? null}
               onSelect={onSelect}
               onOpen={onOpen}
             />

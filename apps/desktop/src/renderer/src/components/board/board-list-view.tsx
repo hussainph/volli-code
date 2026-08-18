@@ -19,8 +19,39 @@ import { SortableTicketShell } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { StatusDot } from "@renderer/components/ui/status-dot";
+import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
+import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
+
+/**
+ * What a list row wears while an agent is running on its ticket (VC-100).
+ *
+ * The board's cards get a travelling ring; a row deliberately does not. A 36px
+ * full-width strip has ~1500px of perimeter for a highlight to crawl around,
+ * and a dozen of them would be a page of moving outlines — the ring works on a
+ * card because a card is a small closed shape, which is exactly what a row is
+ * not.
+ *
+ * TWO MARKS, because the two states are two different claims and each already
+ * has its drawing in this app. `working` is the transcript's own running mark
+ * (`ui/thinking-orbs.tsx`): three orbs on a wave, the idiom for "still going",
+ * carrying no urgency for something that may be on screen for ten minutes.
+ * `waiting` is the one state asking for a person, and that is `StatusDot`'s
+ * amber — orbs there would say the agent is thinking when it is in fact
+ * stopped, waiting on you.
+ *
+ * The orbs take `--positive` rather than the transcript's ember: on this
+ * surface the accent already means "selected" (`bg-primary/10` on the row it
+ * sits in), and the card's ring beside it reads the same green for the same
+ * state. One colour for `working` across the whole board.
+ */
+function RunningMark({ activity }: { activity: TicketSessionActivity | null }) {
+  if (activity === null) return null;
+  if (activity === "waiting") return <StatusDot state="waiting" />;
+  return <ThinkingOrbs className="text-positive" />;
+}
 
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
@@ -33,11 +64,14 @@ export function TicketRowContent({
   ticketPrefix,
   projectLabels,
   selected = false,
+  sessionActivity = null,
 }: {
   ticket: Ticket;
   ticketPrefix: string;
   projectLabels: readonly Label[];
   selected?: boolean;
+  /** What is running on this ticket, or `null` for nothing (VC-100). */
+  sessionActivity?: TicketSessionActivity | null;
 }) {
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
@@ -50,7 +84,13 @@ export function TicketRowContent({
     >
       <PriorityIndicator priority={ticket.priority} />
       <span className="w-14 shrink-0 font-mono text-label text-muted-foreground">{displayId}</span>
-      <span className="truncate text-sm text-foreground">{ticket.title}</span>
+      {/* The title and its running mark travel together, inside the row's own
+          `gap-4` rather than beside it: the mark is about the ticket the title
+          names, and 16px of air would read as a third column. */}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-sm text-foreground">{ticket.title}</span>
+        <RunningMark activity={sessionActivity} />
+      </span>
       {ticket.labels.length > 0 ? (
         <div className="ml-auto hidden shrink-0 items-center gap-1 sm:flex">
           {ticket.labels.map((label) => (
@@ -73,6 +113,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticketPrefix,
   projectLabels,
   selected,
+  sessionActivity,
   onSelect,
   onOpen,
 }: {
@@ -81,6 +122,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticketPrefix: string;
   projectLabels: readonly Label[];
   selected: boolean;
+  sessionActivity: TicketSessionActivity | null;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -102,6 +144,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
         ticketPrefix={ticketPrefix}
         projectLabels={projectLabels}
         selected={selected}
+        sessionActivity={sessionActivity}
       />
     </SortableTicketShell>
   );
@@ -121,6 +164,7 @@ function ListSection({
   ticketPrefix,
   projectLabels,
   selectedId,
+  sessionActivity,
   onSelect,
   onOpen,
   dragActive,
@@ -131,6 +175,8 @@ function ListSection({
   ticketPrefix: string;
   projectLabels: readonly Label[];
   selectedId: string | null;
+  /** ticketId → what is running on it; absent means nothing is (VC-100). */
+  sessionActivity: Readonly<Record<string, TicketSessionActivity>>;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -158,6 +204,7 @@ function ListSection({
               ticketPrefix={ticketPrefix}
               projectLabels={projectLabels}
               selected={ticket.id === selectedId}
+              sessionActivity={sessionActivity[ticket.id] ?? null}
               onSelect={onSelect}
               onOpen={onOpen}
             />
@@ -249,6 +296,12 @@ interface BoardListViewProps {
   boardEmpty: boolean;
   dragActive: boolean;
   selectedId: string | null;
+  /**
+   * ticketId → what is running on it; absent means nothing is (VC-100). One map
+   * for the whole view, derived once by the board — see
+   * `hooks/use-board-session-activity.ts`.
+   */
+  sessionActivity: Readonly<Record<string, TicketSessionActivity>>;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -271,6 +324,7 @@ export function BoardListView({
   boardEmpty,
   dragActive,
   selectedId,
+  sessionActivity,
   onSelect,
   onOpen,
 }: BoardListViewProps) {
@@ -300,6 +354,7 @@ export function BoardListView({
               ticketPrefix={ticketPrefix}
               projectLabels={projectLabels}
               selectedId={selectedId}
+              sessionActivity={sessionActivity}
               onSelect={onSelect}
               onOpen={onOpen}
               dragActive={dragActive}

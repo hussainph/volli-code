@@ -96,6 +96,7 @@ export default defineConfig(({ mode }) => ({
         "src/chat/transcript.ts",
         "src/chat/wire.ts",
         "src/components/board/board-dnd.ts",
+        "src/components/board/board-session-activity.ts",
         "src/components/chat/chat-plane-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
@@ -187,6 +188,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/theme-repo.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
+        "**/src/main/session-control/activity-watch.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

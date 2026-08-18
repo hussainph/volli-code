@@ -41,6 +41,7 @@ import {
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
@@ -175,6 +176,14 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // terminal. Separate from the event stream above because it answers a
   // different question — not what the agent is doing, but which agent it is.
   React.useEffect(() => subscribeSessionHarness(), []);
+
+  // Structured Session state, pushed. Mounted here for the reason the three
+  // above are — but it is worth naming what it replaced: every Session listing
+  // used to re-read the whole project on a ten-second timer, because a chat
+  // turn opening in main had no way to reach a window. This is that channel
+  // (`stores/project-sessions.ts`), and the sidebar's Active band and the
+  // board's active-session ring both read what it feeds.
+  React.useEffect(() => subscribeProjectSessionActivity(), []);
 
   // And the catalog those events are read against: which harnesses beyond the
   // four this renderer ships main will actually launch. Pulled once here so a

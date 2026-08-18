@@ -99,6 +99,7 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RevealResult,
+  SessionActivityNotice,
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
@@ -418,6 +419,19 @@ const api = {
       ipcRenderer.on("volli:session-harness" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:session-harness" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to Session listing rows re-derived after a Session's durable
+     * history moved — the push that replaced the ten-second `list` poll. Every
+     * project's Sessions arrive on this one channel; a listener scoped to one
+     * project filters on `projectId` before it looks at the row.
+     */
+    onActivity: (callback: (event: SessionActivityNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionActivityNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-activity" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-activity" satisfies VolliIpcEvent, listener);
     },
   },
   /**

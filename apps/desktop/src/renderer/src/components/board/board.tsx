@@ -35,6 +35,7 @@ import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { TicketDialogHost } from "@renderer/components/board/ticket-dialog-host";
 import { useBoardCanvasPan } from "@renderer/hooks/use-board-canvas-pan";
+import { useBoardSessionActivity } from "@renderer/hooks/use-board-session-activity";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { cn } from "@renderer/lib/utils";
@@ -126,6 +127,16 @@ export const Board = React.memo(function Board({
   const selectTicket = useBoardStore((state) => state.selectTicket);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
+
+  // Which tickets have an agent running on them (VC-100). ONE subscription and
+  // one derivation for the whole board: a card asking this for itself would put
+  // a sessions-store subscription behind every one of them, and a busy
+  // terminal bumps its output stamp about once a second.
+  const boardTicketIds = React.useMemo(
+    () => new Set(storeTickets.map((ticket) => ticket.id)),
+    [storeTickets],
+  );
+  const sessionActivity = useBoardSessionActivity(projectId, boardTicketIds);
 
   // Columns and pills only play their enter transition when they appear on an
   // ALREADY-mounted board (a drop expanded a column, a filter emptied one).
@@ -356,6 +367,7 @@ export const Board = React.memo(function Board({
               boardEmpty={boardEmpty}
               dragActive={drag !== null}
               selectedId={selectedId}
+              sessionActivity={sessionActivity}
               onSelect={handleSelect}
               onOpen={handleOpen}
             />
@@ -388,6 +400,7 @@ export const Board = React.memo(function Board({
                   ticketPrefix={ticketPrefix}
                   projectLabels={projectLabels}
                   selectedId={selectedId}
+                  sessionActivity={sessionActivity}
                   onSelect={handleSelect}
                   onOpen={handleOpen}
                   composerInitiallyOpen={expandedEmptyStatus === status}
@@ -424,14 +437,18 @@ export const Board = React.memo(function Board({
                     ticket={drag.ticket}
                     ticketPrefix={ticketPrefix}
                     projectLabels={projectLabels}
+                    sessionActivity={sessionActivity[drag.ticket.id] ?? null}
                   />
                 </div>
               ) : (
+                // The overlay carries the ring too: picking a card up must not
+                // make its agent look like it stopped.
                 <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-card">
                   <TicketCardContent
                     ticket={drag.ticket}
                     ticketPrefix={ticketPrefix}
                     projectLabels={projectLabels}
+                    sessionActivity={sessionActivity[drag.ticket.id] ?? null}
                   />
                 </div>
               )

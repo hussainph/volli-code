@@ -766,6 +766,279 @@
   }
 }
 
+/* THE SAME FACT AT BOARD DISTANCE — the ring a ticket card wears while an agent
+ * is running on it (`board/ticket-card.tsx`, VC-100).
+ *
+ * The dot above answers "what is this Session doing" for a reader who has
+ * already found the row. This answers "which of these fifty cards should I be
+ * looking at" for someone who has not — the whole point being to save the trip
+ * to the sidebar. At that distance a 6px dot on a card is not findable, and the
+ * only channel a glance across a grid actually reads is motion on a large
+ * shape. So the card's own outline is the mark: a highlight travelling the
+ * perimeter, which no static card can be mistaken for.
+ *
+ * ── WHY IT IS A ROTATING LAYER AND NOT A ROTATING GRADIENT ────────────────
+ * The obvious build is a `conic-gradient(from var(--angle))` with `--angle`
+ * registered through `@property` and animated 0→360deg. That is what the
+ * automations lab prototyped, and on one card it is fine. It is the wrong shape
+ * here for the reason the transcript's shimmer already gives twenty lines up:
+ * animating the gradient repaints the element every frame, and this mark is on
+ * screen exactly when the main thread is busiest — an agent streaming is what
+ * lit it. N active cards would be N repaints per frame, competing with the
+ * answer the user is waiting for.
+ *
+ * So the LAYER moves and the gradient does not. `.session-ring` is a masked
+ * window sitting on the card's own border line; `::before` is an oversized
+ * square carrying a fixed conic gradient, rotated with `transform`. A rotated
+ * layer is rastered once for the whole loop and advanced by the compositor,
+ * which is the same trade `.chat-shimmer-band` makes and for the same reason.
+ *
+ * The square has to stay at least as wide as the card's DIAGONAL or a corner
+ * goes uncovered at 45° — which is `k ≥ √(1 + (h/w)²)` for a side of `k × w`.
+ * 160% holds for any card up to 1.25× its own width in height, which no board
+ * card comes near, and it is a percentage rather than a fixed px so the
+ * guarantee survives the column getting wider. Bigger is not free: the layer is
+ * rastered at its full size, so 220% would have cost twice the texture for
+ * margin nothing uses.
+ *
+ * ── WHY IT SITS ON THE BORDER LINE, AND WHY `inset` IS NEGATIVE ────────────
+ * Not the lab's `-2px`. Selection on this card colours the border rather than
+ * drawing a ring for a reason recorded in `ticket-card.tsx`: the column
+ * scroller clips anything drawn outside the first card's top edge. An outset
+ * glow would be cut in half on exactly the card at the top of Doing, which is
+ * the one most likely to be running something. So the ring lands ON the card's
+ * own border rather than around it.
+ *
+ * `-1px` is what puts it there, and it is arithmetic rather than nudging. An
+ * absolutely positioned box is offset from its containing block's PADDING box,
+ * which sits inside the card's 1px border — so `inset: 0` drew the ring one
+ * pixel in, while `border-radius: inherit` still gave it the 12px radius of the
+ * border box it was no longer on. Along a straight edge that is a 1px offset
+ * nobody sees; at a corner the two curves have different radii and the ring
+ * visibly peels away from the border. Cancelling the border width puts the ring
+ * exactly on the border box, where its inherited radius is the right one.
+ *
+ * It is therefore coupled to the card's border being 1px. That is the one fact
+ * this rule needs from its caller, and it is worth the coupling: the
+ * alternative is re-deriving the corner every time the radius ladder moves.
+ *
+ * ── APPEARING AND LEAVING ─────────────────────────────────────────────────
+ * `display` transitions with `allow-discrete`, so the ring fades in AND out
+ * with pure CSS while costing nothing when it is off — a `display: none`
+ * subtree generates no boxes, so an inactive card's `::before` is never created
+ * and its animation never runs. That matters at 150 cards, and it is why the
+ * span is always rendered rather than mounted on demand: React cannot animate
+ * an unmount without help, and the fade out is worth more here than the node.
+ *
+ * ── MOTION IS THE STATE, NOT JUST THE COLOUR ────────────────────────────
+ * Only `working` travels. `waiting` is the same ring standing still.
+ *
+ * That is the honest mapping rather than a decoration: something is MOVING on
+ * that card exactly when something is moving in the Session, and a blocked
+ * agent has stopped. Told apart by hue alone the two states were one signal
+ * wearing two colours, which asks the reader to know the colour code before
+ * the card means anything; told apart by motion they are legible in
+ * peripheral vision, before the eye has resolved either.
+ *
+ * It also lets the loud one stay rare. A board with four blocked agents on it
+ * has four still outlines instead of four things crawling, and the one that is
+ * genuinely producing is the only thing in the grid that moves.
+ *
+ * ── COLOUR ────────────────────────────────────────────────────────────────
+ * From `ui/status-dot.tsx`'s map, not from the accent the lab used: `working`
+ * is `--positive` and `waiting` is `--attention`. Ember would have put an
+ * active card in the same colour as a SELECTED one (`border-primary/70`, two
+ * pixels away on the same edge) — the exact collision that map was written to
+ * end, one component over.
+ *
+ * In DARK the tokens are painted exactly as generated — Lc ~65 against
+ * `--card`, a light filament on near-black — and nothing about them needs to
+ * move.
+ *
+ * In LIGHT the generated set makes those same tokens INK, because it solves
+ * them to that same Lc 65 on a light canvas: `--positive` is #005f40 and
+ * `--attention` is #764900. Painted straight at ring width they read as a line
+ * someone drew rather than one that is lit, so light re-solves the colour
+ * brighter and pays contrast for it. The numbers behind that trade, and why it
+ * is affordable for this one mark and nowhere else, are in LIGHT IS SOLVED,
+ * NOT THICKENED below.
+ *
+ * Reduced motion parks the travelling ring rather than dropping it, because
+ * here the mark IS the information: a card with an agent on it must still be
+ * findable when the travelling is gone. That does collapse `working` and
+ * `waiting` onto one drawing separated only by hue — the same thing
+ * `status-dot-live` already accepts when its breath stops, and the right trade,
+ * since the alternative is a card that stops saying anything at all. The two
+ * sweeps above drop themselves instead, and correctly — a frozen highlight
+ * halfway along a word reads as a bug, while a still outline reads as an
+ * outline. */
+@keyframes session-ring-sweep {
+  from {
+    transform: translate(-50%, -50%) rotate(0turn);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(1turn);
+  }
+}
+
+.session-ring {
+  position: absolute;
+  /* Cancels the card's 1px border — see WHY `inset` IS NEGATIVE above. */
+  inset: -1px;
+  border-radius: inherit;
+  /* The status token this ring is about — swapped per state below. `-color` is
+   * what actually gets painted, and in light it is solved from this rather
+   * than being it; see LIGHT IS SOLVED, NOT THICKENED. */
+  --session-ring-seed: var(--positive);
+  --session-ring-color: var(--session-ring-seed);
+  /* The visible thickness of the ring, and the only thing the mask leaves.
+   * One value for both appearances: only the colour is per-canvas. */
+  padding: 1.5px;
+  overflow: hidden;
+  pointer-events: none;
+  display: none;
+  opacity: 0;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  transition:
+    opacity 200ms var(--ease-out),
+    display 200ms allow-discrete;
+}
+
+.session-ring[data-activity] {
+  display: block;
+  opacity: 1;
+}
+
+@starting-style {
+  .session-ring[data-activity] {
+    opacity: 0;
+  }
+}
+
+/* ── LIGHT IS SOLVED, NOT THICKENED ────────────────────────────────────────
+ * On a light canvas the status tokens are DARK — `--attention` is #764900, a
+ * brown — and at ring width that reads as mud rather than as a lit edge. The
+ * obvious fixes are both wrong, and measurably so:
+ *
+ *   • MORE CHROMA does nothing. `solveStatusTokens` fixes chroma at
+ *     STATUS_CHROMA (0.16) and solves LIGHTNESS down until the fill clears
+ *     STATUS_LC (65) against the card. On a light card that lands amber at
+ *     L=0.447, where sRGB holds at most C=0.097 — so the token is ALREADY
+ *     gamut-clipped, and asking for 0.14, 0.18 or 0.25 all hand back the exact
+ *     same #764900. There is no vibrancy left to turn up.
+ *   • MORE WIDTH was the previous answer here and it made the mud thicker.
+ *
+ * Chroma headroom only opens as lightness rises, so brightness is not a second
+ * lever — it is the only one. This solves the ring at L=0.65, where the same
+ * hues carry C~0.147 instead of the 0.097 and 0.093 they were clipped to:
+ * amber lands on #cb7900 and green on #00ac71. That half-again of chroma is
+ * the sparkle this rule exists for.
+ *
+ * Those two hexes are what the BROWSER paints, and they are not what this
+ * repo's `oklchToHex` returns for the same coordinates (#c57d00, #00a975).
+ * `oklch()` here is out of sRGB, and Chromium clips it where `gamutMap`
+ * reduces chroma at fixed L and h — so a reader checking these numbers with
+ * the shared colour module will get a near miss and think the rule drifted.
+ * Measured off a canvas `getImageData`, which is the only thing that answers
+ * what actually reaches the screen.
+ *
+ * WHAT IT COSTS, measured rather than asserted: Lc 39 for amber and Lc 34 for
+ * green against `--card`, where the rest of the status family sits at 65 — so
+ * the ring gives up 26–31 Lc. In WCAG's terms that is 2.4:1 and 2.1:1, which
+ * does NOT clear 1.4.11's 3:1. Recorded here because it is exactly the number
+ * a reader would otherwise assume: buying 3:1 back costs the vividness this
+ * rule exists for (both hues only cross it around L=0.55, which lands most of
+ * the way back to the mud), and 1.4.11 governs graphics REQUIRED to understand
+ * the content. This ring is not one — it is a redundant reinforcement of a
+ * state the sidebar's Active band already names in words and the list row
+ * already wears its own mark for, so a reader who cannot pick it out has lost
+ * a glance rather than the information. It stays above Lc 30, which is the
+ * floor for a mark that only has to be SPOTTED rather than read.
+ *
+ * That budget is scoped to this one 1.5px edge and does not travel. STATUS_LC
+ * is the floor for status TEXT, matched across the family so that no status
+ * label shouts over another, and nothing here licenses spending it anywhere
+ * else.
+ *
+ * AND THE WIDTH DOES NOT MOVE. This rule went through 2.5px and then 2px while
+ * weight was still doing the work the colour now does, and both were paying
+ * twice for one trade: a ring that is brighter AND heavier than its dark twin
+ * stops being the same mark rendered for two canvases and starts being two
+ * marks. Once the hue carries it, the extra weight is just a thicker line, and
+ * a light ring reads as OUTLINED rather than lit well before it looks bold.
+ * So light and dark are both 1.5px and the colour is the only thing that
+ * differs between appearances — which is what the generated token set does for
+ * everything else in the app.
+ *
+ * Derived rather than authored: only L and C are pinned, `h` comes from the
+ * token, so a scope that repaints its canvas still moves this ring with it.
+ * Dark is untouched — there the tokens are already light on near-black and
+ * asking for anything else would be inventing a problem. */
+:root.light .session-ring {
+  --session-ring-color: oklch(from var(--session-ring-seed) 0.65 0.16 h);
+}
+
+.session-ring[data-activity="waiting"] {
+  --session-ring-seed: var(--attention);
+}
+
+/* Waiting stands still — see MOTION IS THE STATE above. The whole perimeter is
+ * lit rather than one arc parked somewhere on it: a stopped comet reads as an
+ * animation that died, while a closed ring reads as a ring. */
+.session-ring[data-activity="waiting"]::before {
+  animation: none;
+  background: var(--session-ring-color);
+}
+
+.session-ring::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 160%;
+  aspect-ratio: 1;
+  /* The centring half of the transform, declared OUTSIDE the keyframes as well
+   * as inside them. A keyframe replaces the whole `transform`, so the two have
+   * to agree — and this is the value that survives when the animation does not
+   * run at all. Without it, `animation: none` under reduced motion left the
+   * square hanging off the centre by half its own size and the "steady ring"
+   * was a corner. */
+  transform: translate(-50%, -50%);
+  /* A single bright arc with soft falloff on both sides, and the rest of the
+   * circle empty — so the card's own border shows through everywhere the
+   * highlight is not, and the mark reads as a light travelling along an edge
+   * rather than as a second border that happens to shimmer. */
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    color-mix(in oklab, var(--session-ring-color) 45%, transparent) 24deg,
+    var(--session-ring-color) 60deg,
+    color-mix(in oklab, var(--session-ring-color) 45%, transparent) 96deg,
+    transparent 130deg,
+    transparent 360deg
+  );
+  /* 2.6s, the period the automations lab settled on. Slower than the status
+   * dot's 2.4s breath by design: this travels a whole perimeter rather than
+   * fading in place, and the same period would read as hurrying. `linear`
+   * because constant motion has no start or end to ease. */
+  animation: session-ring-sweep 2.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-ring::before {
+    animation: none;
+    background: var(--session-ring-color);
+    opacity: 0.55;
+  }
+}
+
 /* ELEVATION — the lift overlays and the shadow set.
  *
  * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
