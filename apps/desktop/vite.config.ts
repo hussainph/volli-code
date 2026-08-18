@@ -117,6 +117,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/theme/slider-squiggle.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
+        "src/components/ticket/clamp-policy.ts",
         "src/components/ticket/label-picker-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
