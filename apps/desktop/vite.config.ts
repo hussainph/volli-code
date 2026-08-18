@@ -97,6 +97,10 @@ export default defineConfig(({ mode }) => ({
         "src/chat/transcript.ts",
         "src/chat/wire.ts",
         "src/components/attachments/attachment-model.ts",
+        // The drop/paste decision (VC-106) is a pure `.ts` beside the views
+        // that spread it, for the same reason as tab-focus.ts: four surfaces
+        // share it and its capture-phase subtleties are worth the gate.
+        "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
         "src/components/board/board-session-activity.ts",
         "src/components/chat/chat-plane-model.ts",

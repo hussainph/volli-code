@@ -77,6 +77,7 @@ import type { BlobLinkView } from "@volli/shared";
 import type { SessionContextUsage } from "@renderer/chat/context-usage";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
+import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
@@ -311,36 +312,9 @@ export const SessionComposer = React.memo(function SessionComposer({
           className,
         )}
         onSubmit={() => send(composerIntent({ working, steer: false }))}
-        // CAPTURE, and that is the whole point. `PromptInput` binds its own
-        // native drop listener on the form and routes what it catches into the
-        // vendored attachment state, which this composer does not use — so a
-        // dropped file would land there and be seen by nobody. React registers
-        // these at the root, so they run while the event is still descending,
-        // and stopping the NATIVE event is what keeps it from reaching the
-        // form's own listener at all.
-        onDropCapture={(event) => {
-          const dropped = [...(event.dataTransfer?.files ?? [])];
-          if (onAttachFiles === undefined || dropped.length === 0) return;
-          event.preventDefault();
-          event.nativeEvent.stopPropagation();
-          onAttachFiles(dropped);
-        }}
-        onDragOverCapture={(event) => {
-          // Without this the drop is never delivered: the default action for a
-          // dragover is "reject", and only preventing it makes this a target.
-          if (onAttachFiles !== undefined && event.dataTransfer?.types.includes("Files")) {
-            event.preventDefault();
-          }
-        }}
-        onPasteCapture={(event) => {
-          const pasted = [...(event.clipboardData?.files ?? [])];
-          if (onAttachFiles === undefined || pasted.length === 0) return;
-          // Only when the clipboard actually carries files. A paste of text
-          // that happens to come from a file manager still pastes as text.
-          event.preventDefault();
-          event.nativeEvent.stopPropagation();
-          onAttachFiles(pasted);
-        }}
+        // Capture-phase, and that is load-bearing — see `file-drop.ts` for why
+        // this composer must take the drop before `PromptInput`'s own listener.
+        {...fileAttachHandlers(onAttachFiles)}
       >
         {queued.length > 0 ? (
           // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
