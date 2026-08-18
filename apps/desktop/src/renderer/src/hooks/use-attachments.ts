@@ -37,11 +37,27 @@ export interface AttachmentsHandle {
   clear: () => void;
   /** Replaces the strip, for a surface that loads its attachments from the database. */
   reset: (attachments: readonly BlobLinkView[]) => void;
+  /**
+   * Detaches everything still in the strip — for a surface going away (VC-50).
+   *
+   * A chat's strip state is the ONLY pointer to a link no message has carried
+   * yet: nothing persists it, so navigating away without this would leave a
+   * durable link the person can never see or remove again — spending the
+   * Session's image budget and materializing on every boot, forever. Reads a
+   * ref the mutators keep in step synchronously, so a message sent in the same
+   * tick (which `clear`s the strip) can never have its links torn out from
+   * under it by an unmount racing the re-render.
+   */
+  discardPending: () => Promise<void>;
 }
 
 export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandle {
   const { owner, refRoot, onRefInsert, onError } = options;
   const [attachments, setAttachments] = React.useState<readonly BlobLinkView[]>([]);
+  // The strip as of the LAST MUTATION, not the last render — every mutator
+  // below writes it before (or instead of) setState, which is what lets
+  // `discardPending` run from an unmount cleanup and still see the truth.
+  const live = React.useRef<readonly BlobLinkView[]>([]);
 
   // Read through a ref so `attachFiles` keeps a stable identity across renders
   // — it is handed to drag/paste handlers that would otherwise re-bind on every
@@ -74,11 +90,10 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
       // the real file, AND snapshotted so the model can see it.
       if (result.blob !== null) {
         const blob = result.blob;
-        setAttachments((previous) =>
-          previous.some((entry) => entry.blobHash === blob.blobHash)
-            ? previous
-            : [...previous, blob],
-        );
+        if (!live.current.some((entry) => entry.blobHash === blob.blobHash)) {
+          live.current = [...live.current, blob];
+        }
+        setAttachments(live.current);
       }
     }
   }, []);
@@ -87,14 +102,34 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
     // Dropped from the strip first, whatever the database says. The link may
     // not exist yet (an unowned composer draft), and either way the person has
     // already decided this file is not part of the message.
-    setAttachments((previous) => previous.filter((entry) => entry !== attachment));
+    live.current = live.current.filter((entry) => entry !== attachment);
+    setAttachments(live.current);
     if (attachment.linkId === null) return;
     const result = await window.api.attachments.remove({ linkId: attachment.linkId });
     if (!result.ok) latest.current.onError?.(result.error);
   }, []);
 
-  const clear = React.useCallback(() => setAttachments([]), []);
-  const reset = React.useCallback((next: readonly BlobLinkView[]) => setAttachments(next), []);
+  const clear = React.useCallback(() => {
+    live.current = [];
+    setAttachments([]);
+  }, []);
+  const reset = React.useCallback((next: readonly BlobLinkView[]) => {
+    live.current = next;
+    setAttachments(next);
+  }, []);
 
-  return { attachments, attachFiles, remove, clear, reset };
+  const discardPending = React.useCallback(async (): Promise<void> => {
+    const pending = live.current;
+    live.current = [];
+    setAttachments([]);
+    for (const entry of pending) {
+      if (entry.linkId === null) continue;
+      const result = await window.api.attachments.remove({ linkId: entry.linkId });
+      // Surfaced even though the surface is going away — the toast outlives
+      // the pane, and a failed detach is a mutation someone should hear about.
+      if (!result.ok) latest.current.onError?.(result.error);
+    }
+  }, []);
+
+  return { attachments, attachFiles, remove, clear, reset, discardPending };
 }

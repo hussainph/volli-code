@@ -346,6 +346,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     attachFiles,
     remove: removeAttachment,
     clear: clearAttachments,
+    discardPending: discardPendingAttachments,
   } = useAttachments({
     owner: { sessionId },
     onRefInsert: (relPath) => {
@@ -359,6 +360,20 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // the strip changes underneath it.
   const attachmentsRef = React.useRef(attachments);
   attachmentsRef.current = attachments;
+  // The strip dies with the pane (VC-50). Its links were made at attach time,
+  // and nothing else — no draft store, no message — points at them until ⏎
+  // carries them into one; a pane that unmounted (or switched Sessions) with
+  // files still in the strip would strand those links: invisible, unremovable,
+  // spending the Session's image budget and materializing on every boot.
+  // `discardPending` reads the hook's own synchronously-kept ref, so a message
+  // sent in this same tick (send() clears the strip before returning) keeps
+  // every link it references.
+  React.useEffect(
+    () => () => {
+      void discardPendingAttachments();
+    },
+    [discardPendingAttachments, sessionId],
+  );
 
   const dispatch = React.useCallback(
     (
