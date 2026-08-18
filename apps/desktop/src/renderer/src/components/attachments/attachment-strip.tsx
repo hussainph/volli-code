@@ -75,7 +75,7 @@ export function AttachmentThumb({
           onClick={() => onRemove(attachment)}
           // Always reachable by keyboard, only visible on hover or focus: a
           // permanent × on every tile turns a quiet strip into a busy one.
-          className="absolute -right-1.5 -top-1.5 size-5 rounded-full border border-border bg-background p-0 opacity-0 shadow-sm transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute -right-1.5 -top-1.5 size-5 rounded-full border border-border bg-background p-0 opacity-0 shadow-raised transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
         >
           <XIcon className="size-3" />
         </Button>
