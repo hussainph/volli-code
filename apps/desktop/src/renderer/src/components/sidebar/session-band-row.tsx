@@ -21,6 +21,7 @@
  * and the row hands its own row back to it.
  */
 import * as React from "react";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -282,6 +283,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   now,
   selected,
   onSelect,
+  showIdentity = true,
 }: {
   row: PreviousSessionRow;
   ticketPrefix: string;
@@ -294,6 +296,18 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   now: number;
   selected: boolean;
   onSelect(row: PreviousSessionRow): void;
+  /**
+   * Whether the row draws its own ticket id. `false` under a
+   * {@link TicketGroupRow}, where the id is the thing the reader just expanded
+   * and repeating it on every child is noise the row pays for twice — once in
+   * ink, and once in the ~45px of width it takes out of a title that truncates.
+   *
+   * A prop rather than a second component: everything else about a nested child
+   * — the kind glyph, the muted tier, the `3ch` age column holding one right
+   * edge — is unchanged, and a copy of this row that drifted from it would be a
+   * worse outcome than one conditional.
+   */
+  showIdentity?: boolean;
 }) {
   return (
     <SidebarMenuItem>
@@ -311,7 +325,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
             row's meta line for the smokes' contrast checks. */}
         {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
         <KindGlyph kind={row.kind} />
-        <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
+        {showIdentity ? <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
         <span className="min-w-0 flex-1 truncate">{row.title}</span>
         {/* 0 is the model's "nothing durable can date this" sentinel — an age
             drawn from it would read as the epoch, so the row says nothing. */}
@@ -322,5 +336,124 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
         ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
+  );
+});
+
+/**
+ * The id tying a {@link TicketGroupRow} to the list it discloses, so the
+ * disclosure is announced as a control OVER something rather than as a lone
+ * "expanded". Derived from the ticket id rather than taken from `useId` because
+ * the two ends are rendered by different components — the row here, the list by
+ * the band — and a derived id needs no channel between them.
+ *
+ * The list is unmounted while the group is collapsed, so this names nothing in
+ * that state. That is the same trade Radix's `Collapsible` makes in
+ * `file-tree.tsx` one section up, and it is the right side of it: keeping every
+ * hidden row mounted to satisfy the reference would cost the band exactly the
+ * density this grouping exists to buy.
+ */
+export function sessionGroupPanelId(ticketId: string): string {
+  return `session-group-${ticketId}`;
+}
+
+/**
+ * A ticket, standing for the Previous sessions filed under it (VC-69).
+ *
+ * The Previous band is unbounded by design and sorted by global recency, so a
+ * ticket's sessions were never adjacent to each other: eight runs of one ticket
+ * arrived scattered the width of the whole list, each row repeating the same id
+ * and most of them titled "Chat". This row is what collapses that — one entry
+ * per ticket, holding its id, its title, how many sessions are behind it and
+ * when the newest of them last did anything.
+ *
+ * **The caller supplies the `SidebarMenuItem`**, unlike the two rows above,
+ * which wrap themselves in one. The list this row discloses has to sit inside
+ * the same `<li>` to be that row's child, and only the caller holds both. A row
+ * dropped straight into a `SidebarMenu` would put a `<button>` in a `<ul>`.
+ *
+ * **It carries no status dot, and that is structural rather than an omission.**
+ * A Session needing a human is pinned to the Active band for as long as it is
+ * asking, so nothing behind a collapsed ticket here can ever be waiting on
+ * anyone — see {@link PreviousListingEntry}. A dot would be a mark that is
+ * always the same colour, which is how a reader learns to stop reading dots.
+ *
+ * **The count is drawn even at 1.** Every ticket gets one of these rows, so the
+ * count is the only thing that says which of them is hiding a stack; a row that
+ * showed it only when it exceeded one would make the common case unreadable to
+ * anybody who had not noticed the rule.
+ *
+ * **Nothing animates except the caret.** A disclosure in a navigator is opened
+ * tens of times a day, which is the frequency where motion should be reduced
+ * rather than added, and animating the list's height would be layout and paint
+ * inside a scroll container this band can fill. The caret's `transform` is the
+ * whole treatment — the same one `file-tree.tsx` settled on one section up.
+ */
+export const TicketGroupRow = React.memo(function TicketGroupRow({
+  ticket,
+  ticketPrefix,
+  count,
+  newestAt,
+  now,
+  open,
+  selected,
+  onToggle,
+}: {
+  ticket: Ticket;
+  ticketPrefix: string;
+  count: number;
+  newestAt: number;
+  /** The same clock the child rows' ages are read against. */
+  now: number;
+  open: boolean;
+  /**
+   * Whether the Session in front of you is one of this ticket's.
+   *
+   * The band reveals that group as well as marking it, so the two normally
+   * show together — the child carries the precise highlight, this one says
+   * which stack it came out of. They come apart in the one state that needs
+   * this most: collapse the group by hand and the mark is all that is left
+   * pointing at where you are.
+   */
+  selected: boolean;
+  onToggle(ticketId: string): void;
+}) {
+  return (
+    <SidebarMenuButton
+      size="sm"
+      isActive={selected}
+      aria-expanded={open}
+      aria-controls={sessionGroupPanelId(ticket.id)}
+      onClick={() => onToggle(ticket.id)}
+      title={`${displayTicketId(ticketPrefix, ticket.ticketNumber)} · ${ticket.title}`}
+      className="h-6 gap-1.5 text-ui"
+    >
+      {/* `bold` for the same reason every other glyph in this band takes it:
+          at 12px regular draws lighter than the label beside it. */}
+      <CaretRightIcon
+        weight="bold"
+        aria-hidden
+        className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")}
+      />
+      <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
+      <span className="shrink-0 text-label tabular-nums text-muted-foreground/70">
+        {count}
+        {/* The count and the age are two unlabelled numbers standing next to
+            each other, which a screen reader runs into one token — 3 sessions
+            at 43m read as "343m". The unit is what breaks them apart, and it is
+            spelled only where there is room for it, which is out of band. */}
+        <span className="sr-only">{count === 1 ? " session" : " sessions"}</span>
+      </span>
+      {/* The same `3ch` reservation the child rows make, for the same reason:
+          one trailing mark, one right edge, and a ticking age that cannot drag
+          the title's truncation point back and forth as "59m" becomes "1h".
+          And the same 0 sentinel they honour: "nothing durable can date this"
+          drawn as an age would read as the epoch, so the row says nothing. */}
+      {newestAt > 0 ? (
+        <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums text-muted-foreground">
+          {compactAge(newestAt, now)}
+        </span>
+      ) : null}
+    </SidebarMenuButton>
   );
 });

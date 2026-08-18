@@ -312,6 +312,12 @@ async function columnCardIds(page, label) {
  * would be matching a typographic treatment; and a ticketless row prints a
  * globe instead of an id, so a row is not guaranteed to contribute an entry
  * here at all — which is exactly why the attribute exists.
+ *
+ * The two bands count differently, and have since VC-69: ACTIVE draws one row
+ * per Session, so a ticket with three of them contributes its id three times.
+ * PREVIOUS groups its Sessions under one row per ticket, so a ticket appears
+ * exactly once however many Sessions are behind it — the nested child rows
+ * deliberately drop the id their group row already prints.
  */
 async function sidebarSessionIds(page, band = "active") {
   return page.evaluate((name) => {

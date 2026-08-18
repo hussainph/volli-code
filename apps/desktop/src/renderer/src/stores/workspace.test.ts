@@ -140,6 +140,64 @@ describe("setDirExpanded", () => {
   });
 });
 
+/**
+ * Which Previous-band ticket groups are open in the sidebar (VC-69).
+ *
+ * Per project for the reason the sidebar component cannot be: `ActiveSessions`
+ * is render-hidden across nav switches rather than unmounted and is not keyed
+ * by project, so component state would carry one project's open groups into the
+ * next one's band.
+ */
+describe("setSessionGroupExpanded", () => {
+  it("tracks open groups independently per project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
+    store.getState().setSessionGroupExpanded("project-a", "ticket-2", true);
+    store.getState().setSessionGroupExpanded("project-b", "ticket-9", true);
+
+    expect(store.getState().byProject["project-a"]?.expandedSessionGroups).toEqual([
+      "ticket-1",
+      "ticket-2",
+    ]);
+    expect(store.getState().byProject["project-b"]?.expandedSessionGroups).toEqual(["ticket-9"]);
+  });
+
+  it("collapsing removes only that ticket", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
+    store.getState().setSessionGroupExpanded("project-a", "ticket-2", true);
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", false);
+
+    expect(store.getState().byProject["project-a"]?.expandedSessionGroups).toEqual(["ticket-2"]);
+  });
+
+  it("is a no-op when the state already matches", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
+
+    // The band re-renders on every chat-activity refresh, so a `set` that
+    // changes nothing would still notify every subscriber.
+    const before = store.getState().byProject;
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
+    store.getState().setSessionGroupExpanded("project-a", "never-opened", false);
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("starts collapsed after a relaunch — open groups are this sitting's state only", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
+    store.getState().setBoardView("project-a", "list");
+
+    const relaunched = createWorkspaceStore(storage);
+
+    expect(relaunched.getState().byProject["project-a"]?.expandedSessionGroups).toEqual([]);
+    // The persisted neighbour still survives, so this is the partialize rule
+    // and not a storage that failed to write.
+    expect(relaunched.getState().byProject["project-a"]?.boardView).toBe("list");
+  });
+});
+
 describe("setBoardView", () => {
   it("tracks the board/list view independently per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -1736,6 +1794,7 @@ describe("forget", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setNav("project-a", "files");
     store.getState().setDirExpanded("project-a", "/a/src", true);
+    store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().previewProjectFile("project-a", "src/app.ts");
@@ -1746,6 +1805,7 @@ describe("forget", () => {
     expect(store.getState().byProject["project-a"] ?? DEFAULT_WORKSPACE_UI).toEqual({
       nav: "home",
       expandedDirs: [],
+      expandedSessionGroups: [],
       boardView: "board",
       boardSort: DEFAULT_TICKET_SORT,
       openTicketId: null,

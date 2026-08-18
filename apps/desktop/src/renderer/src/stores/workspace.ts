@@ -17,7 +17,7 @@
  * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
  * Diff tabs landing where you left them after lazy content reload, issue #109,
  * or the Project Files workspace that must resume where you left it, decisions
- * #55/#56), while `nav` and `expandedDirs` stay session-only — nav resetting to
+ * #55/#56), while `nav`, `expandedDirs` and `expandedSessionGroups` stay session-only — nav resetting to
  * Home on relaunch is a settled decision (see ui.ts's history) and now applies
  * per workspace. The partialize below prunes each record down to that persisted
  * set; merge rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale
@@ -126,6 +126,21 @@ export interface WorkspaceUiState {
   nav: NavKey;
   /** Absolute paths of expanded file-tree directories (collapsed = absent). */
   expandedDirs: readonly string[];
+  /**
+   * Ticket ids whose Previous-band group is open in the sidebar (collapsed =
+   * absent, so the band's steady state is collapsed and a fresh project starts
+   * that way without a migration).
+   *
+   * Here rather than in the component because `ActiveSessions` is not keyed by
+   * project — it is render-hidden across nav switches, not unmounted — so
+   * component state would follow the reader from one project to the next and
+   * open groups belonging to tickets they are no longer looking at.
+   *
+   * Session-only, like `expandedDirs`: which stacks you opened while hunting
+   * for something is a fact about this sitting, not a preference worth
+   * restoring, and "collapsed" is the answer this band is designed around.
+   */
+  expandedSessionGroups: readonly string[];
   /** Board vs. list rendering of the ticket set. Persisted. */
   boardView: BoardView;
   /** Column ordering shared by both views; "manual" is the drag-reorder mode. Persisted. */
@@ -184,6 +199,7 @@ export interface WorkspaceUiState {
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   nav: "home",
   expandedDirs: [],
+  expandedSessionGroups: [],
   boardView: "board",
   boardSort: DEFAULT_TICKET_SORT,
   openTicketId: null,
@@ -291,6 +307,8 @@ interface WorkspaceState {
    */
   setNav(projectId: string, nav: NavKey): void;
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
+  /** Opens or closes one ticket's Previous-band group in the sidebar. */
+  setSessionGroupExpanded(projectId: string, ticketId: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
   /**
@@ -771,6 +789,21 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
+        setSessionGroupExpanded(projectId, ticketId, expanded) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            // Same no-op guard `setDirExpanded` keeps, for the same reason: this
+            // fires from a row in a band that re-renders on every activity
+            // refresh, and a `set` that changes nothing still notifies.
+            if (current.expandedSessionGroups.includes(ticketId) === expanded) return state;
+            return patchWorkspace(state, projectId, {
+              expandedSessionGroups: expanded
+                ? [...current.expandedSessionGroups, ticketId]
+                : current.expandedSessionGroups.filter((id) => id !== ticketId),
+            });
+          });
+        },
+
         setBoardView(projectId, view) {
           set((state) => patchWorkspace(state, projectId, { boardView: view }));
         },
@@ -1140,7 +1173,8 @@ export function createWorkspaceStore(storage?: StateStorage) {
           ),
         }),
         // Rebuild full records from the pruned persisted pair: everything not
-        // persisted (nav, expandedDirs) rehydrates to the defaults.
+        // persisted (nav, expandedDirs, expandedSessionGroups) rehydrates to
+        // the defaults.
         merge: (persisted, current) => {
           // Null-prototype for the same reason the sanitizers use one: project
           // ids are persisted JSON keys, and `__proto__` among them must not

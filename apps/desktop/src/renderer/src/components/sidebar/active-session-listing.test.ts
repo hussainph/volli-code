@@ -27,12 +27,14 @@ import {
   ACTIVE_QUIET_WINDOW_MS,
   buildActiveSessionListing,
   isProjectSessionRowSelected,
+  groupPreviousByTicket,
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
   listingOutputStamps,
   PREVIOUS_MAX_AGE_MS,
   type ActiveSessionRow,
+  type PreviousSessionRow,
 } from "./active-session-listing";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
@@ -2107,5 +2109,120 @@ describe("buildActiveSessionListing — fed by the live harness channel", () => 
       { title: "Implement UI", activity: "waiting", attention: { signal: "waiting" } },
     ]);
     expect(result.previous).toEqual([]);
+  });
+});
+
+/**
+ * The Previous band's arrangement into ticket entries (VC-69).
+ *
+ * Every case here is about the two things this function is allowed to do and
+ * the one thing it must not: it may bracket a ticket's rows and it may place
+ * that bracket, but it may never change which rows are present or the order
+ * they are in — those were settled by `buildActiveSessionListing`, and the
+ * whole reason this is a separate function is that it cannot see the inputs
+ * they were decided from.
+ */
+/** A built Previous-band row, for the grouping tests below. */
+function previousRow(
+  overrides: Partial<PreviousSessionRow> & Pick<PreviousSessionRow, "id">,
+): PreviousSessionRow {
+  return {
+    ticket: null,
+    title: "Chat",
+    kind: "chat",
+    endedOrQuietAt: 1_000,
+    target: null,
+    cleaned: false,
+    ...overrides,
+  };
+}
+
+describe("groupPreviousByTicket", () => {
+  const t1 = ticket({ id: "t1", status: "doing", ticketNumber: 1 });
+  const t2 = ticket({ id: "t2", status: "todo", ticketNumber: 2 });
+
+  it("is empty for an empty band", () => {
+    expect(groupPreviousByTicket([])).toEqual([]);
+  });
+
+  it("gives a ticket with ONE session an entry of its own, not a bare row", () => {
+    const row = previousRow({ id: "a", ticket: t1, endedOrQuietAt: 5_000 });
+
+    expect(groupPreviousByTicket([row])).toEqual([
+      { kind: "ticket", id: "t1", ticket: t1, rows: [row], newestAt: 5_000 },
+    ]);
+  });
+
+  it("collects a ticket's sessions into one entry, newest first", () => {
+    const newest = previousRow({ id: "a", ticket: t1, endedOrQuietAt: 9_000, title: "Review" });
+    const older = previousRow({ id: "b", ticket: t1, endedOrQuietAt: 3_000, title: "Implement" });
+
+    const entries = groupPreviousByTicket([newest, older]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: "ticket", id: "t1", newestAt: 9_000 });
+    expect(titles((entries[0] as { rows: PreviousSessionRow[] }).rows)).toEqual([
+      "Review",
+      "Implement",
+    ]);
+  });
+
+  it("keeps a ticketless session top-level rather than bucketing it with other orphans", () => {
+    const first = previousRow({ id: "a", title: "Launch tickets" });
+    const second = previousRow({ id: "b", title: "Backlog scan" });
+
+    expect(groupPreviousByTicket([first, second])).toEqual([
+      { kind: "session", id: "a", row: first },
+      { kind: "session", id: "b", row: second },
+    ]);
+  });
+
+  it("ranks a ticket by its FIRST appearance, so band recency survives grouping", () => {
+    // A recency-sorted band: t2's newest beats t1's newest, but t1 also owns
+    // the oldest row. Grouping must not let that trailing row drag t1 down.
+    const rows = [
+      previousRow({ id: "t2-new", ticket: t2, endedOrQuietAt: 9_000 }),
+      previousRow({ id: "t1-new", ticket: t1, endedOrQuietAt: 8_000 }),
+      previousRow({ id: "t1-old", ticket: t1, endedOrQuietAt: 1_000 }),
+    ];
+
+    expect(groupPreviousByTicket(rows).map((entry) => entry.id)).toEqual(["t2", "t1"]);
+  });
+
+  it("interleaves ticketless sessions at their own recency, not in a trailing block", () => {
+    const rows = [
+      previousRow({ id: "t1-new", ticket: t1, endedOrQuietAt: 9_000 }),
+      previousRow({ id: "orphan", endedOrQuietAt: 5_000 }),
+      previousRow({ id: "t1-old", ticket: t1, endedOrQuietAt: 1_000 }),
+    ];
+
+    expect(groupPreviousByTicket(rows).map((entry) => entry.id)).toEqual(["t1", "orphan"]);
+  });
+
+  it("preserves every row exactly once, whatever the arrangement", () => {
+    const rows = [
+      previousRow({ id: "a", ticket: t1, endedOrQuietAt: 9_000 }),
+      previousRow({ id: "b", endedOrQuietAt: 8_000 }),
+      previousRow({ id: "c", ticket: t2, endedOrQuietAt: 7_000 }),
+      previousRow({ id: "d", ticket: t1, endedOrQuietAt: 6_000 }),
+      previousRow({ id: "e", ticket: t2, endedOrQuietAt: 5_000 }),
+    ];
+
+    const flattened = groupPreviousByTicket(rows).flatMap((entry) =>
+      entry.kind === "session" ? [entry.row] : entry.rows,
+    );
+
+    // Same rows, and the same relative order they arrived in — grouping moves
+    // rows next to their siblings and does nothing else.
+    expect(flattened.map((row) => row.id)).toEqual(["a", "d", "b", "c", "e"]);
+    expect(flattened).toHaveLength(rows.length);
+  });
+
+  it("carries a cleaned row into its ticket's entry unchanged", () => {
+    const row = previousRow({ id: "a", ticket: t1, cleaned: true, endedOrQuietAt: 2_000 });
+
+    expect(groupPreviousByTicket([row])).toEqual([
+      { kind: "ticket", id: "t1", ticket: t1, rows: [row], newestAt: 2_000 },
+    ]);
   });
 });

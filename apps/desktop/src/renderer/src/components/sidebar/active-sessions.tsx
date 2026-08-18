@@ -3,11 +3,18 @@ import { useShallow } from "zustand/react/shallow";
 import { errorMessage, type LatestSessionSignal, type Project, type Ticket } from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
+import {
+  SidebarGroup,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuSub,
+} from "@renderer/components/ui/sidebar";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import {
   buildActiveSessionListing,
+  groupPreviousByTicket,
   isProjectSessionRowSelected,
+>>>>>>> 07d6ef68 (VC-69: group Previous-band sessions under their ticket)
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -19,7 +26,12 @@ import {
   SessionBandHeader,
   type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-header";
-import { ActiveBandRow, PreviousBandRow } from "@renderer/components/sidebar/session-band-row";
+import {
+  ActiveBandRow,
+  PreviousBandRow,
+  sessionGroupPanelId,
+  TicketGroupRow,
+} from "@renderer/components/sidebar/session-band-row";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { delayUntil } from "@renderer/lib/boundary-timer";
@@ -37,6 +49,17 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/worksp
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
+const EMPTY_EXPANDED: readonly string[] = [];
+
+/**
+ * The nesting rule under a ticket entry, tightened from `SidebarMenuSub`'s
+ * stock `mx-4 px-2` — the same call `file-tree.tsx` makes one section up, and
+ * for the same reason: stock spends ~48px a level, which a session row cannot
+ * pay out of a title that already truncates. The hairline itself is the
+ * primitive's own `border-sidebar-border-veil`, so a nested session is bracketed
+ * by the mark the file tree already taught this sidebar to mean "inside".
+ */
+const SESSION_GROUP_NEST = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
 
 /** Re-indexes the batched durable Session projection for the pure listing model. */
 function indexSignalsByTicket(
@@ -100,6 +123,11 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const openHome = useWorkspaceStore((state) => state.openHome);
   const homeActiveTab = useWorkspaceStore(
     (state) => state.byProject[project.id]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+  );
+  const expandedGroups = useWorkspaceStore(
+    (state) => state.byProject[project.id]?.expandedSessionGroups ?? EMPTY_EXPANDED,
+  );
+  const setSessionGroupExpanded = useWorkspaceStore((state) => state.setSessionGroupExpanded);
   );
   // The project's Session rows, shared with the board's active-session
   // indicator and fed by `volli:session-activity` rather than by a timer —
@@ -369,6 +397,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   );
 
   /**
+   * The Previous band as it is DRAWN: one entry per ticket, plus the ticketless
+   * sessions that have no ticket to sit under. Purely a rearrangement of
+   * `listing.previous` — which rows survive and what order they are in was
+   * settled by the builder above and cannot be changed here (VC-69).
+   */
+  const previousEntries = React.useMemo(
+    () => groupPreviousByTicket(listing.previous),
+    [listing.previous],
+  );
+
+  /**
    * The model's own answer to "when does this list change with no new input" —
    * a row ageing out of Active, a cleanup rule newly firing, a working row
    * going quiet, a hooked launch running out of grace. It is the ONLY thing
@@ -447,6 +486,41 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       activeTabId === row.target.tabId);
 
   /**
+   * The ticket entry holding the Session in front of you, when the Previous
+   * band is where that Session ended up.
+   *
+   * Asks {@link isSelected} rather than restating what makes a row current: a
+   * second copy of that predicate is how the group's mark and the row's own
+   * highlight would come to disagree about the same tab.
+   */
+  let selectedGroupId: string | null = null;
+  for (const entry of previousEntries) {
+    if (entry.kind !== "ticket" || !entry.rows.some(isSelected)) continue;
+    selectedGroupId = entry.id;
+    break;
+  }
+
+  /**
+   * Open that group. Rows arrive in this band ON THEIR OWN — a Session ages out
+   * of Active once its quiet window runs out, with nobody touching it — and
+   * `openTicketId`/`ticketTabs` are persisted while `expandedSessionGroups`
+   * deliberately is not. So without this, the tab you are looking at slides
+   * behind a closed disclosure half an hour after you last typed in it, and is
+   * behind one again on the first frame after every relaunch, with nothing in
+   * the sidebar marking where you are. Collapsed by default is the band's
+   * steady state; it was never meant to hide the thing in front of you.
+   *
+   * Keyed on the group id alone, so it fires when the selection MOVES rather
+   * than on every rebuild of the band — which is what lets a reader close the
+   * revealed group by hand and have it stay closed until they go somewhere else
+   * and come back.
+   */
+  React.useEffect(() => {
+    if (selectedGroupId === null) return;
+    setSessionGroupExpanded(project.id, selectedGroupId, true);
+  }, [selectedGroupId, project.id, setSessionGroupExpanded]);
+
+  /**
    * Where a row goes. A ticketed row reopens its exact session, or failing that
    * its ticket workspace.
    *
@@ -465,6 +539,22 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * per render is exactly the prop that would make that memo do nothing. Its
    * dependencies are store actions and one id, none of which move.
    */
+  /**
+   * Opens or closes one ticket's group. Stable, and handed to every entry AS IS
+   * for the same reason `activate` is: `TicketGroupRow` is memoised, and a
+   * fresh `() => toggle(id)` per entry per render is exactly the prop that
+   * would make that memo do nothing — so the row hands its own ticket id back.
+   */
+  const toggleGroup = React.useCallback(
+    (ticketId: string) => {
+      const open = useWorkspaceStore
+        .getState()
+        .byProject[project.id]?.expandedSessionGroups.includes(ticketId);
+      setSessionGroupExpanded(project.id, ticketId, open !== true);
+    },
+    [project.id, setSessionGroupExpanded],
+  );
+
   const activate = React.useCallback(
     (row: ActiveSessionRow | PreviousSessionRow) => {
       const ticket = row.ticket;
@@ -530,23 +620,61 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       </SidebarGroup>
 
       <SidebarGroup data-session-band="previous" className="gap-1 pt-0">
+        {/* The count stays the number of SESSIONS, not of entries. It is the
+            band's answer to "how much is back there", and collapsing the rows
+            under their tickets must not make that number shrink. */}
         <SessionBandHeader label="Previous" count={listing.previous.length}>
           <SessionBandFilterMenu filter={filter} onChange={setFilter} />
         </SessionBandHeader>
-        {listing.previous.length === 0 ? (
+        {previousEntries.length === 0 ? (
           <p className={EMPTY_INLINE}>Nothing yet</p>
         ) : (
           <SidebarMenu>
-            {listing.previous.map((row) => (
-              <PreviousBandRow
-                key={row.id}
-                row={row}
-                ticketPrefix={project.ticketPrefix}
-                now={ageNow}
-                selected={isSelected(row)}
-                onSelect={activate}
-              />
-            ))}
+            {previousEntries.map((entry) =>
+              entry.kind === "session" ? (
+                <PreviousBandRow
+                  key={entry.id}
+                  row={entry.row}
+                  ticketPrefix={project.ticketPrefix}
+                  now={ageNow}
+                  selected={isSelected(entry.row)}
+                  onSelect={activate}
+                />
+              ) : (
+                <SidebarMenuItem key={entry.id}>
+                  <TicketGroupRow
+                    ticket={entry.ticket}
+                    ticketPrefix={project.ticketPrefix}
+                    count={entry.rows.length}
+                    newestAt={entry.newestAt}
+                    now={ageNow}
+                    open={expandedGroups.includes(entry.id)}
+                    selected={entry.id === selectedGroupId}
+                    onToggle={toggleGroup}
+                  />
+                  {expandedGroups.includes(entry.id) ? (
+                    <SidebarMenuSub
+                      id={sessionGroupPanelId(entry.id)}
+                      className={SESSION_GROUP_NEST}
+                    >
+                      {entry.rows.map((row) => (
+                        <PreviousBandRow
+                          key={row.id}
+                          row={row}
+                          ticketPrefix={project.ticketPrefix}
+                          now={ageNow}
+                          selected={isSelected(row)}
+                          onSelect={activate}
+                          // The id is what the reader just expanded; repeating
+                          // it on every child costs ink and ~45px of title.
+                          showIdentity={false}
+                        />
+                      ))}
+                    </SidebarMenuSub>
+                  ) : null}
+                </SidebarMenuItem>
+              ),
+            )}
           </SidebarMenu>
         )}
       </SidebarGroup>
