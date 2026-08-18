@@ -205,9 +205,10 @@ export function TicketFilesPanel({
   onPinFile(relPath: string): void;
 }) {
   // A repository file attached here resolves to an `@` reference, and the body
-  // is where such a reference belongs — but this panel does not own the body.
-  // So the ref is reported rather than written, which is honest: the file is
-  // already in the repository and the Files rail already lists it.
+  // is where such a reference belongs — the HOST now writes it there (VC-106):
+  // the detail view passes `refRoot` and an `onRefInsert` that splices into the
+  // Body editor (or appends through the store when the Body tab is closed),
+  // exactly as the New-ticket composer's paperclip does.
   //
   // Hooks cannot be conditional, so the panel always has a strip of its own and
   // simply defers to the host's when there is one. The unused instance holds no
