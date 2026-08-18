@@ -51,17 +51,16 @@ describe("Settings → Appearance", () => {
     expect(html.indexOf("Light &amp; dark")).toBeGreaterThan(html.indexOf("App theme"));
   });
 
-  it("shows what every contrast floor measured, whether or not one is short", () => {
-    // The engine clamps an unreachable floor and says nothing, so this readout
-    // is the only place in the app the number can be seen at all.
+  it("carries no contrast instrumentation on the shipped canvas", () => {
+    // The per-floor Lc readout was tuning instrumentation and came out. The
+    // shipped canvas strands nothing, so the page shows controls and no
+    // contrast surface at all — the alert is reserved for a canvas the user
+    // authors into genuinely unreachable copy.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
-    expect(html).toContain('data-testid="canvas-contrast-readout"');
-    expect(html).toContain("Body copy");
-    expect(html).toContain("Secondary copy");
-    expect(html).toContain("Sidebar nav");
-    // Nothing is stranded on the shipped canvas, so no alarm is raised over it.
+    expect(html).not.toContain('data-testid="canvas-contrast-readout"');
     expect(html).not.toContain('data-testid="canvas-contrast-stranded"');
+    expect(html).not.toContain("Body copy");
   });
 
   it("hosts an Editor section beside the Terminal theme picker", () => {

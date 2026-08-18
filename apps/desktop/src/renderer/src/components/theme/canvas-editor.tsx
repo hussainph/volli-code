@@ -94,7 +94,6 @@ import {
   droppedStopIndex,
   easedVibrancy,
   grainForAngle,
-  lcLabel,
   normalizeStopHex,
   padAnchor,
   percentLabel,
@@ -104,7 +103,6 @@ import {
   UNIT_STEP,
   UNIT_STEP_COARSE,
   type CanvasContrastReport,
-  type CanvasFloorReading,
 } from "@renderer/components/theme/canvas-editor-model";
 import {
   SLIDER_SQUIGGLE_AMPLITUDE,
@@ -117,7 +115,6 @@ import {
 } from "@renderer/components/theme/slider-squiggle";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 
@@ -751,12 +748,6 @@ function UnitSlider({
     <div className="flex items-center gap-4">
       {chip}
       <span className="relative inline-flex h-4 w-44 items-center">
-        {/* The trough, so the groove reads as a channel the wave lies in rather
-            than as a line floating on the card. */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 rounded-full bg-muted"
-        />
         <Wave stand={stand} ink="stroke-border-strong" />
         <Wave
           stand={stand}
@@ -936,29 +927,8 @@ function GrainDial({
   );
 }
 
-/** One measured floor: what it scored, and whether it had anywhere left to go. */
-function FloorReading({ reading }: { reading: CanvasFloorReading }) {
-  return (
-    <li className="flex items-baseline justify-between gap-4 text-ui leading-5">
-      <span className="text-muted-foreground">{reading.what}</span>
-      <span className="shrink-0 tabular-nums text-muted-foreground">
-        Lc{" "}
-        <span className={reading.capped ? "text-foreground" : undefined}>
-          {lcLabel(reading.achieved)}
-        </span>{" "}
-        <span className="text-muted-foreground/70">
-          {reading.capped
-            ? `— at this canvas's ceiling, ${lcLabel(reading.shortfall)} under a floor of ${lcLabel(reading.floor)}`
-            : `of ${lcLabel(reading.floor)}`}
-        </span>
-      </span>
-    </li>
-  );
-}
-
 /**
- * What this canvas's copy actually measures — and the one state the engine
- * cannot report for itself.
+ * The one state the engine cannot report for itself.
  *
  * `deriveCanvasTokens` never throws: a floor its surface cannot physically carry
  * is clamped to the best that surface allows, because the gradient is the user's
@@ -966,21 +936,21 @@ function FloorReading({ reading }: { reading: CanvasFloorReading }) {
  * the right call and it has a cost — the ask silently goes unmet — and this is
  * where the cost is paid back.
  *
- * Two registers, for the two sizes the miss comes in.
+ * NOTHING RENDERS UNTIL SOMETHING IS WRONG. This used to sit under an
+ * always-visible readout of every floor and its measured Lc. That readout was
+ * instrumentation: true, occasionally useful while the solver was being tuned,
+ * and a table of colour-science numbers on a settings page the rest of the time
+ * — the "contrast lecture" this file's own header was told to stop giving. It
+ * came out at the owner's call.
  *
- * The **readout is always there**, every floor and what it scored, with a
- * ceiling annotated inline. That is where the shipped canvas's own hairline
- * shortfall lives: `--sidebar` sits a couple of hundredths of an Lc under 75 at
- * several vibrancies, which is true, worth being able to look up, and not worth
- * an alarm. Three numbers that are usually fine are also what make the fourth
- * state legible when it arrives.
- *
- * The **alert** is for a floor stranded by more than the emitted hex can even
- * express, which only the user's own choice of colour and vibrancy can cause. It
- * says what is unreachable, by how much, what it costs, and — when one exists —
- * offers the slider position that recovers it.
+ * What stays is the ALERT, which is not instrumentation: a floor stranded by
+ * more than the emitted hex can even express, caused only by the user's own
+ * choice of colour and vibrancy, and invisible everywhere else in the app. It
+ * says what is unreachable and — when one exists — offers the slider position
+ * that recovers it. A canvas can still be authored into unreadable copy; this
+ * is the only thing that says so.
  */
-function ContrastReport({
+function ContrastAlert({
   report,
   eased,
   onEase,
@@ -989,49 +959,40 @@ function ContrastReport({
   eased: number | null;
   onEase(vibrancy: number): void;
 }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <SectionHeading as="p">Contrast</SectionHeading>
-        <ul data-testid="canvas-contrast-readout" className="mt-1 flex flex-col">
-          {report.readings.map((reading) => (
-            <FloorReading key={reading.token} reading={reading} />
-          ))}
-        </ul>
-      </div>
+  if (report.stranded.length === 0) return null;
 
-      {report.stranded.length === 0 ? null : (
-        <div
-          role="status"
-          data-testid="canvas-contrast-stranded"
-          className="flex gap-2 rounded-md border border-border bg-muted/50 p-4"
-        >
-          {/* Filled: this is the one thing on the page that went wrong, and the
-              only glyph in the editor that is not a control's own noun. */}
-          <WarningIcon weight="fill" className="mt-1 size-4 shrink-0 text-primary-text" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">
-              {report.stranded.length === 1
-                ? `${report.stranded[0].what} can't reach its contrast floor on this canvas.`
-                : `${report.stranded
-                    .map((reading) => reading.what.toLowerCase())
-                    .join(" and ")} can't reach their contrast floors on this canvas.`}
-            </p>
-            {eased === null ? null : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2"
-                onClick={() => onEase(eased)}
-                data-testid="canvas-contrast-ease"
-              >
-                <SlidersHorizontalIcon />
-                Ease vibrancy to {percentLabel(eased)}
-              </Button>
-            )}
-          </div>
+  return (
+    <div className="border-t border-border/50 pt-4">
+      <div
+        role="status"
+        data-testid="canvas-contrast-stranded"
+        className="flex gap-2 rounded-md border border-border bg-muted/50 p-4"
+      >
+        {/* Filled: this is the one thing on the page that went wrong, and the
+            only glyph in the editor that is not a control's own noun. */}
+        <WarningIcon weight="fill" className="mt-1 size-4 shrink-0 text-primary-text" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">
+            {report.stranded.length === 1
+              ? `${report.stranded[0].what} can't reach its contrast floor on this canvas.`
+              : `${report.stranded
+                  .map((reading) => reading.what.toLowerCase())
+                  .join(" and ")} can't reach their contrast floors on this canvas.`}
+          </p>
+          {eased === null ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={() => onEase(eased)}
+              data-testid="canvas-contrast-ease"
+            >
+              <SlidersHorizontalIcon />
+              Ease vibrancy to {percentLabel(eased)}
+            </Button>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1199,13 +1160,11 @@ export function CanvasEditor({
         </span>
       </SettingsRow>
 
-      <div className="border-t border-border/50 pt-2">
-        <ContrastReport
-          report={report}
-          eased={eased}
-          onEase={(vibrancy) => commit((current) => ({ ...current, vibrancy }))}
-        />
-      </div>
+      <ContrastAlert
+        report={report}
+        eased={eased}
+        onEase={(vibrancy) => commit((current) => ({ ...current, vibrancy }))}
+      />
     </>
   );
 }
