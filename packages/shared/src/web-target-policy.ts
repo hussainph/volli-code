@@ -41,12 +41,12 @@ export const WEB_TARGET_RULE_IDS = [
   "target.scheme",
   /** Credentials embedded in the authority, which also disguise the real host. */
   "target.credentials",
-  /** A port outside the narrow set this slice is willing to call a web read. */
-  "target.port",
   /** A hostname that names the local machine or a cloud metadata service. */
   "target.host",
   /** A literal IP address in the URL that is not on the public Internet. */
   "target.address",
+  /** A port outside the narrow set this slice is willing to call a web read. */
+  "target.port",
 ] as const;
 
 export type WebTargetRuleId = (typeof WEB_TARGET_RULE_IDS)[number];
@@ -101,13 +101,6 @@ function canonicalHost(hostname: string): string {
 }
 
 /**
- * Whether a name is, or sits beneath, a blocked name.
- *
- * Matched on label boundaries rather than as text: `app.localhost` resolves to
- * loopback and is refused, while `localhost.example.com` is an ordinary public
- * name that a substring test would wrongly catch.
- */
-/**
  * The address a URL names outright, with URL syntax removed.
  *
  * IPv6 literals are bracketed in a URL and those brackets are not part of the
@@ -126,6 +119,13 @@ function literalAddress(hostname: string): string | undefined {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) ? hostname : undefined;
 }
 
+/**
+ * Whether a name is, or sits beneath, a blocked name.
+ *
+ * Matched on label boundaries rather than as text: `app.localhost` resolves to
+ * loopback and is refused, while `localhost.example.com` is an ordinary public
+ * name that a substring test would wrongly catch.
+ */
 function isBlockedHost(hostname: string): boolean {
   const host = canonicalHost(hostname);
   for (const blocked of BLOCKED_HOST_LABELS) {
