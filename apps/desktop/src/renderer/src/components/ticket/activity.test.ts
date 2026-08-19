@@ -127,6 +127,17 @@ describe("describeEvent", () => {
     );
   });
 
+  it("accounts for a reclaimed worktree folder, with and without a branch", () => {
+    // VC-113: the reclaim line says what was taken AND what survived it — a
+    // branchless checkout has nothing kept to name, so both readings exist.
+    expect(describeEvent({ kind: "worktree_reclaimed", branch: null, daysInDone: 14 })).toBe(
+      "removed the worktree folder after 14 days in Done",
+    );
+    expect(
+      describeEvent({ kind: "worktree_reclaimed", branch: "volli/VC-113-x", daysInDone: 14 }),
+    ).toBe("removed the worktree folder after 14 days in Done (branch volli/VC-113-x kept)");
+  });
+
   it("names both directions of a worktree scoping flip", () => {
     // VC-16: the flip is only settable before a worktree materializes, so the
     // feed is the only lasting record of which destination was chosen — both
