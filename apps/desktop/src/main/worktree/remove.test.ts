@@ -259,6 +259,19 @@ describe("remove", () => {
   });
 });
 
+/** Git that registers only the main checkout — a stranded path is unknown to it. */
+function forgottenGit(unregistered: string) {
+  return scriptedGit((args) => {
+    if (args[0] === "worktree" && args[1] === "list") {
+      return `worktree /repo\nHEAD abc\nbranch refs/heads/main\n`;
+    }
+    if (args[0] === "worktree" && args[1] === "remove") {
+      throw new Error(`fatal: '${unregistered}' is not a working tree`);
+    }
+    return "";
+  });
+}
+
 // VC-113: the state a half-finished removal leaves behind — the checkout is
 // still on disk, but git has forgotten it. `git worktree remove` refuses such a
 // path in BOTH modes, so before this fallback the ticket could not be cleared
@@ -273,19 +286,6 @@ describe("remove — a directory git has forgotten", () => {
     writeFileSync(join(wt, "note.txt"), "work");
     seed(wt);
     return wt;
-  }
-
-  /** Git that registers only the main checkout — the stranded path is unknown to it. */
-  function forgottenGit(unregistered: string) {
-    return scriptedGit((args) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        return `worktree /repo\nHEAD abc\nbranch refs/heads/main\n`;
-      }
-      if (args[0] === "worktree" && args[1] === "remove") {
-        throw new Error(`fatal: '${unregistered}' is not a working tree`);
-      }
-      return "";
-    });
   }
 
   it("deletes the folder itself once the user confirms, and clears the stamp", async () => {
