@@ -10,22 +10,43 @@
  *
  * The call is deliberately not part of the chat: it runs through
  * `completeUtility`, which creates no Session, no attachment, no transcript
- * and no ledger entry. The model ladder is the policy stated by the owner
- * (VC-81): the explicit utility default, then the Session's own recorded
- * model, then the Role's default — never a model nobody configured. A rung
- * that resolves but cannot run reasoning "off" is refused rather than
+ * and no ledger entry.
+ *
+ * The model ladder itself is domain policy and lives in `@volli/shared`
+ * ({@link resolveAutoTitleModel}); this file only reads the three rungs and
+ * runs the winner. The order is the owner's, given in review on VC-81 and
+ * recorded there: utility, then the model the chat already runs under, then
+ * the Role's default — because a Role default is the expensive orchestration
+ * tier, and reaching for it to write six words is the thing the utility slot
+ * exists to avoid. Note that VC-81's scope bullets predate that clarification
+ * and read as if the heuristic were the only fallback; the ticket comment is
+ * the current word.
+ *
+ * A rung that resolves but cannot run reasoning "off" is refused rather than
  * clamped or substituted, and a Session nobody named a title for is never
  * answered with anything but the heuristic. Failures log and keep the
  * heuristic; this is not a mutation a person requested, so nothing toasts.
  */
 import {
   AUTO_TITLE_SYSTEM_PROMPT,
+  autoTitleSubject,
   errorMessage,
+  resolveAutoTitleModel,
+  resolveDefaultModel,
   sanitizeAutoTitle,
+  type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelSelection,
   type UtilityCompletion,
 } from "@volli/shared";
+
+/**
+ * The whole refinement's budget — the provider probe and the completion share
+ * it. Nothing waits on this call: the heuristic title is already on screen, so
+ * a provider that never answers should cost one abandoned request, not a
+ * promise that is still pending when the app quits.
+ */
+export const AUTO_TITLE_TIMEOUT_MS = 20_000;
 
 /** The Session facts one refine needs, read once from a projection. */
 export interface AutoTitleSession {
@@ -35,26 +56,25 @@ export interface AutoTitleSession {
   model: ModelSelection | null;
 }
 
-export type AutoTitleRole = "ticket" | "project";
-
 export interface AutoTitlerOptions {
   readSession(sessionId: string): Promise<AutoTitleSession | null>;
   /**
-   * Rung one: the explicit cost-efficient default. Explicit only — this rung
-   * must not inherit the global default, or it would shadow the Session's own
-   * model on every profile that never set a utility model.
+   * The configured defaults, read once per refinement rather than once per
+   * rung, so a Settings change mid-refinement cannot be half-applied — and so
+   * one title costs one read.
    */
-  readUtilityDefault(): ModelSelection | null;
-  /**
-   * Rung three: the Role's already-resolved default (`ticket ?? global` for a
-   * Ticket Session, `global` for a project chat).
-   */
-  readRoleDefault(role: AutoTitleRole): ModelSelection | null;
-  inspectModelAccess(): Promise<ModelAccessSnapshot>;
+  readModelDefaults(): ModelAccessDefaults;
+  inspectModelAccess(input: { signal: AbortSignal }): Promise<ModelAccessSnapshot>;
   completeUtility(input: UtilityCompletion): Promise<string>;
   retitle(sessionId: string, title: string): Promise<void>;
 }
 
+/**
+ * One refinement request — the shape both doors send and every seam between
+ * them passes along. Declared once here and imported by the CLI door, the IPC
+ * contract and the renderer handler, so the triple never travels as three
+ * structurally-identical inline types.
+ */
 export interface AutoTitleRequest {
   sessionId: string;
   /** The first user message the title is derived from. */
@@ -104,16 +124,20 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
         return;
       }
     }
-    const chosen =
-      options.readUtilityDefault() ??
-      session.model ??
-      options.readRoleDefault(session.ticketId === null ? "project" : "ticket");
+    const defaults = options.readModelDefaults();
+    const chosen = resolveAutoTitleModel({
+      utility: defaults.utility,
+      session: session.model,
+      roleDefault: resolveDefaultModel(defaults, session.ticketId === null ? "global" : "ticket"),
+    });
     if (chosen === null) {
       return;
     }
+    // One deadline for the probe and the call together.
+    const signal = AbortSignal.timeout(AUTO_TITLE_TIMEOUT_MS);
     let access: ModelAccessSnapshot;
     try {
-      access = await options.inspectModelAccess();
+      access = await options.inspectModelAccess({ signal });
     } catch (failure) {
       logSkip(request.sessionId, `Model Access could not be read (${errorMessage(failure)})`);
       return;
@@ -143,7 +167,10 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       raw = await options.completeUtility({
         model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel: "off" },
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
-        user: request.firstMessage,
+        // Capped: a title is six words, and the opening decides them. A pasted
+        // file behind the question is billed input that buys nothing.
+        user: autoTitleSubject(request.firstMessage),
+        signal,
       });
     } catch (failure) {
       logSkip(request.sessionId, `the model call failed (${errorMessage(failure)})`);

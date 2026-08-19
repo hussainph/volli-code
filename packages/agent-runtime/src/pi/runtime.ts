@@ -270,11 +270,14 @@ async function runUtilityCompletion(
   const message = await host.models.completeSimple(
     model,
     { systemPrompt: input.systemPrompt, messages: [queuedUserMessage(input.user)] },
-    // The same translation Pi's own agent makes for a Session at "off"
-    // (agent.js: thinkingLevel === "off" → reasoning omitted): SimpleStreamOptions
-    // has no "off" value, and omitting the option IS the off-path, not a
-    // default-level request. Every other level passes through verbatim.
-    input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel },
+    {
+      // The same translation Pi's own agent makes for a Session at "off"
+      // (agent.js: thinkingLevel === "off" → reasoning omitted): SimpleStreamOptions
+      // has no "off" value, and omitting the option IS the off-path, not a
+      // default-level request. Every other level passes through verbatim.
+      ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
   );
   if (hasFailedStopReason(message)) {
     throw new Error(sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."));

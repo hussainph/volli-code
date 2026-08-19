@@ -38,12 +38,29 @@ describe("ModelAccessSettings", () => {
     // The helper is a tooltip trigger whose accessible name IS the purpose
     // copy (VC-81: users can understand what the utility slot is for), sitting
     // on the utility row only.
-    expect(html).toContain("auto-titling new chats");
+    expect(html).toContain("naming new chats");
     expect(html).toContain('data-testid="default-model-utility"');
     const utilityStart = html.indexOf('data-testid="default-model-utility"');
     const utilityRow = html.slice(utilityStart);
-    expect(utilityRow).toContain("auto-titling new chats");
+    expect(utilityRow).toContain("naming new chats");
     expect(utilityRow).toContain('data-slot="tooltip-trigger"');
+  });
+
+  it("says out loud what an empty utility slot falls back to", () => {
+    // CONTEXT.md's Model Access rule is that Volli never falls back to another
+    // model SILENTLY. Leaving this slot empty does not switch background work
+    // off — it runs on the chat's own model — so the row has to say so.
+    expect(renderPane()).toContain("Left unset");
+  });
+
+  it("gives the helper a real focusable control to hang its name on", () => {
+    const html = renderPane();
+    const trigger = html.indexOf('data-slot="tooltip-trigger"');
+    // A <span tabIndex={0} aria-label> takes the tab stop but has no role to
+    // be named by; a button is reachable AND announced.
+    expect(html.slice(0, trigger).lastIndexOf("<button")).toBeGreaterThan(
+      html.slice(0, trigger).lastIndexOf("<span"),
+    );
   });
 
   it("leaves the other purpose rows without a helper", () => {
@@ -54,7 +71,7 @@ describe("ModelAccessSettings", () => {
       globalStart,
       html.indexOf('data-testid="default-model-ticket"', globalStart),
     );
-    expect(globalRow).not.toContain("auto-titling");
+    expect(globalRow).not.toContain("naming new chats");
     expect(globalRow).not.toContain('data-slot="tooltip-trigger"');
   });
 });

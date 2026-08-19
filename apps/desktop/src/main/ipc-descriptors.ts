@@ -460,29 +460,17 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:session-rename"> => {
       if (args.length !== 1) return false;
       const [input] = args;
+      if (!isRecord(input)) return false;
+      if (typeof input["sessionId"] !== "string") return false;
+      if (typeof input["title"] !== "string" || input["title"].trim().length === 0) return false;
+      // The optional auto-title rider (VC-81): absent on a person's rename, a
+      // non-blank first message on the heuristic one.
+      const refineFrom = input["refineFrom"];
       return (
-        isRecord(input) &&
-        typeof input["sessionId"] === "string" &&
-        typeof input["title"] === "string" &&
-        input["title"].trim().length > 0
+        refineFrom === undefined || (typeof refineFrom === "string" && refineFrom.trim().length > 0)
       );
     },
     invalidError: "Invalid session title",
-  },
-  "volli:session-refine-title": {
-    guard: (args): args is IpcArgs<"volli:session-refine-title"> => {
-      if (args.length !== 1) return false;
-      const [input] = args;
-      return (
-        isRecord(input) &&
-        typeof input["sessionId"] === "string" &&
-        typeof input["firstMessage"] === "string" &&
-        input["firstMessage"].trim().length > 0 &&
-        typeof input["heuristicTitle"] === "string" &&
-        input["heuristicTitle"].trim().length > 0
-      );
-    },
-    invalidError: "Invalid session title refinement request",
   },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {

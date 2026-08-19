@@ -988,11 +988,11 @@ app.whenReady().then(async () => {
   /**
    * Model-call titling (VC-81): the one main-side hook both doors feed.
    *
-   * The model ladder is the owner's recorded chain — the explicit utility
-   * default, then the Session's own recorded model, then the Role's default
-   * — resolved here where the policy lives, never in the runtime. Absent
-   * with any of its three dependencies (the same rule as `sessions` above),
-   * which reads as pure heuristic titling: the shipped fallback.
+   * The ladder itself is stated once in `@volli/shared`
+   * (`resolveAutoTitleModel`); this only supplies the three rungs it reads
+   * and the doors that run it. Absent with any of its three dependencies
+   * (the same rule as `sessions` above), which reads as pure heuristic
+   * titling: the shipped fallback.
    */
   const autoTitler =
     sessionEngine !== null && sessionDb !== null && piRuntimeHost !== null
@@ -1006,16 +1006,11 @@ app.whenReady().then(async () => {
               model: projection.modelSelection,
             };
           },
-          // Rung one is the explicit utility choice only — inheritance is
-          // what rung three states, and reading it here would shadow the
-          // Session's own model on every profile that never set one.
-          readUtilityDefault: () => readModelAccessDefaults(sessionDb).utility,
-          readRoleDefault: (role) =>
-            resolveDefaultModel(
-              readModelAccessDefaults(sessionDb),
-              role === "ticket" ? "ticket" : "global",
-            ),
-          inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          // Read per refinement, not captured: a Session outlives the Settings
+          // change that retunes it, and the next title should run under the
+          // policy configured now. One read serves all three rungs.
+          readModelDefaults: () => readModelAccessDefaults(sessionDb),
+          inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
           completeUtility: (input) => piRuntimeHost.completeUtility(input),
           retitle: async (sessionId, title) => {
             const submitted = await sessionEngine.submit({

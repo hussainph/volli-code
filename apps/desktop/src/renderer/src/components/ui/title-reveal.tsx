@@ -15,17 +15,50 @@
  * which is the repo's own sweep rule: a frozen half-revealed word reads as a
  * rendering bug, a static label reads as a label.
  *
- * `previous` lives in a ref rather than state on purpose: the change is
- * detected during the render that replaces the text, and the ref is then
- * advanced in an effect. Reading it from state would re-render with the
- * animation classes gone the instant the effect settled — the reveal would
- * commit and then be stripped before a frame drew.
+ * The reveal is latched to the TEXT, not to the render that first saw it. This
+ * is the whole reason {@link nextRevealState} exists rather than a ref
+ * advanced in an effect: a tab strip re-renders constantly while the chat
+ * underneath it streams, and a flag derived from "did this render see a
+ * change" is false again by the very next one. React would then reuse the same
+ * word nodes (their keys are data-derived and unchanged) minus the animation
+ * class, cancelling the reveal mid-flight and snapping the words in. Latching
+ * on the text means every later render with the same text agrees the reveal is
+ * still on, and the CSS one-shot runs to its end.
  */
 import * as React from "react";
 
-/** One label, as words — the unit the stagger animates. */
-export function titleWords(text: string): readonly string[] {
-  return text.split(" ");
+/** The stagger between two words, in milliseconds. */
+export const TITLE_REVEAL_STAGGER_MS = 25;
+
+/**
+ * What this component remembers between renders: the text it has accounted
+ * for, and the text it is currently revealing (`null` for none).
+ */
+export interface TitleRevealState {
+  seen: string | null;
+  revealing: string | null;
+}
+
+/** A component that has never rendered has seen nothing and reveals nothing. */
+export const INITIAL_REVEAL_STATE: TitleRevealState = { seen: null, revealing: null };
+
+/**
+ * The state this component should hold for `text`, given what it holds now.
+ *
+ * Three cases, and the whole behaviour of the reveal is in them:
+ * - the text is unchanged → the state stands, so an unrelated re-render can
+ *   never cancel a reveal already under way;
+ * - the first text a component ever sees → recorded, never revealed;
+ * - a genuine replacement → latched as the text being revealed.
+ */
+export function nextRevealState(state: TitleRevealState, text: string): TitleRevealState {
+  if (state.seen === text) return state;
+  return { seen: text, revealing: state.seen === null ? null : text };
+}
+
+/** Whether `text` is the text currently being revealed. */
+export function isRevealing(state: TitleRevealState, text: string): boolean {
+  return state.revealing === text;
 }
 
 /**
@@ -43,30 +76,21 @@ export function titleWordKeys(words: readonly string[]): readonly string[] {
   });
 }
 
-/**
- * Whether a label change is a reveal: any real change on an already-painted
- * label. `null` is a component's first paint, which stays still.
- */
-export function shouldRevealTitle(previous: string | null, next: string): boolean {
-  return previous !== null && previous !== next;
-}
-
-/** The stagger between two words, in milliseconds. */
-export const TITLE_REVEAL_STAGGER_MS = 25;
-
 export interface TitleRevealProps {
   text: string;
   className?: string;
 }
 
 export function TitleReveal({ text, className }: TitleRevealProps) {
-  const previous = React.useRef<string | null>(null);
-  const reveal = shouldRevealTitle(previous.current, text);
-  React.useEffect(() => {
-    previous.current = text;
-  }, [text]);
+  const [state, setState] = React.useState<TitleRevealState>(INITIAL_REVEAL_STATE);
+  // Adjusting state during render, the documented React pattern for deriving
+  // from changed props: React re-runs this component immediately, before any
+  // DOM is touched, so no frame ever paints the stale answer.
+  const settled = nextRevealState(state, text);
+  if (settled !== state) setState(settled);
 
-  const words = titleWords(text);
+  const reveal = isRevealing(settled, text);
+  const words = text.split(" ");
   const keys = titleWordKeys(words);
 
   return (

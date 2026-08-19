@@ -5304,7 +5304,7 @@ function utilityModels(
   onCall?: (call: {
     model: Model<string>;
     context: Context;
-    options: { reasoning?: string } | undefined;
+    options: { reasoning?: string; signal?: AbortSignal } | undefined;
   }) => void,
 ): Models {
   const faux = fauxProvider({
@@ -5377,6 +5377,24 @@ describe("completeUtility", () => {
       user: "The login button is broken",
     });
     expect(calls[0]!.options).toEqual({ reasoning: "low" });
+  });
+
+  it("hands the caller's deadline to the provider", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }, (call) => calls.push(call)),
+    });
+    // Background work has nobody waiting on it, so an unanswered request must
+    // be abandonable rather than pending for the life of the process.
+    const signal = AbortSignal.timeout(30_000);
+    await runtime.completeUtility({
+      model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+      systemPrompt: "Title this conversation.",
+      user: "The login button is broken",
+      signal,
+    });
+    expect(calls[0]!.options).toEqual({ signal });
   });
 
   it("throws when the model is not in the runtime's catalog", async () => {

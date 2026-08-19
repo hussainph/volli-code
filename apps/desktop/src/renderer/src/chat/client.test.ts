@@ -1561,23 +1561,20 @@ describe("auto-title on delivery", () => {
   it("names an untitled Session once its first message delivers", async () => {
     const { client, sessionId } = await readyWithTitle(null);
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    const refineMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", {
-      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
-    });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
     await expect(
       client.submit({ id: "m1", text: "Fix the parser\nmore detail" }, "steer"),
     ).resolves.toBe("delivered");
     await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
-    // The model refinement rides behind the heuristic write, over the full
-    // first user message, guarded by the heuristic title it replaces.
-    expect(refineMock).toHaveBeenCalledWith({
+    // One call, not two: the heuristic title and the message a model may
+    // sharpen it from travel together, so no window exists between them in
+    // which the title could change out from under the refinement's baseline.
+    expect(renameMock).toHaveBeenCalledWith({
       sessionId,
-      firstMessage: "Fix the parser\nmore detail",
-      heuristicTitle: "Fix the parser",
+      title: "Fix the parser",
+      refineFrom: "Fix the parser\nmore detail",
     });
     vi.unstubAllGlobals();
   });
@@ -1585,10 +1582,7 @@ describe("auto-title on delivery", () => {
   it("refines an attachment-only message from the file label", async () => {
     const { client, sessionId } = await readyWithTitle(null);
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    const refineMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", {
-      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
-    });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
     await expect(
       client.submit(
@@ -1611,60 +1605,17 @@ describe("auto-title on delivery", () => {
     ).resolves.toBe("delivered");
     await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "shot.png" });
-    expect(refineMock).toHaveBeenCalledWith({
-      sessionId,
-      firstMessage: "shot.png",
-      heuristicTitle: "shot.png",
-    });
-    vi.unstubAllGlobals();
-  });
-
-  it("does not request a refinement when the heuristic rename did not stick", async () => {
-    const { client } = await readyWithTitle(null);
-    const renameMock = vi.fn().mockResolvedValue({ ok: false });
-    const refineMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", {
-      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
-    });
-
-    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
-      "delivered",
-    );
-    await settle();
-
-    expect(renameMock).toHaveBeenCalled();
-    expect(refineMock).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
-  it("swallows a refinement refusal — the heuristic title already stands", async () => {
-    const { client } = await readyWithTitle(null);
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    const refineMock = vi.fn().mockRejectedValue(new Error("no handler"));
-    vi.stubGlobal("window", {
-      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
-    });
-
-    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
-      "delivered",
-    );
-    await settle();
-
     expect(renameMock).toHaveBeenCalledWith({
-      sessionId: client.sessionId,
-      title: "Fix the parser",
+      sessionId,
+      title: "shot.png",
+      refineFrom: "shot.png",
     });
-    expect(refineMock).toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
   it("fires through a queue release too — the one choke point both paths share", async () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    const refineMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", {
-      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
-    });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
     // No live executor yet, so the message queues; setProjection below is what
     // the queue's release rule reacts to, exactly as it would off a stream
     // frame that just brought one up.
@@ -1680,7 +1631,11 @@ describe("auto-title on delivery", () => {
     store.getState().setProjection(sessionId, projectionWithTitle(null));
     await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
+    expect(renameMock).toHaveBeenCalledWith({
+      sessionId,
+      title: "Fix the parser",
+      refineFrom: "Fix the parser",
+    });
     vi.unstubAllGlobals();
   });
 

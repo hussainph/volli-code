@@ -37,7 +37,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; restty never leaves renderer terminal components.
 - Name ticket worktree branches `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`.
 - Use a branch, commit, and PR workflow. Never commit directly to `main`.
-- Surface every failed mutation to the user with an alert or toast. Never silently swallow errors.
+- Surface every failed mutation to the user with an alert or toast. Never silently swallow errors. The one exception is work no one asked for: a background refinement a person did not request (auto-titling's model call) has no failure a toast could ask them to act on, and its fallback is already on screen, so it logs and keeps the fallback. The test is whether a person is waiting on the result, not whether the code is async.
 - Keep canonical design tokens in `apps/desktop/src/renderer/src/globals.css` as shadcn-style CSS variables. The color ones are **generated, never hand-authored**: a scope stores a canvas, the token set is derived from it at render time, and the two blocks between the BEGIN/END markers (`:root, :root.dark` and `:root.light`) are regenerated together with `node apps/desktop/scripts/generate-theme-css.mjs`. The app is not dark-only and `class="dark"` is not pinned — appearance resolves to light, dark or the system's choice, and preload stamps the resolved mode before the first frame.
 - Keep TypeScript-consumable domain colors, including the project-tile palette, in `@volli/shared`.
 - Use ember orange `#E8652A` as the accent and preserve the frosted/dark two-tier sidebar direction.

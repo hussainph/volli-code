@@ -95,6 +95,7 @@ import { insertSession } from "./session-control/test-support";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
+import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
@@ -1321,42 +1322,82 @@ describe("volli:session-rename", () => {
   });
 });
 
-describe("volli:session-refine-title", () => {
-  it("acks and hands a valid request to the titling seam", () => {
-    const requests: Array<{ sessionId: string; firstMessage: string; heuristicTitle: string }> = [];
+describe("volli:session-rename auto-title rider", () => {
+  /** A renameable session plus a recorder for whatever titling it asks for. */
+  function renameHarness(): AutoTitleRequest[] {
+    const projectId = createProject();
+    insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
+    const requests: AutoTitleRequest[] = [];
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       { autoTitle: (input) => requests.push(input) },
     );
+    return requests;
+  }
 
-    const result = invoke<SessionRenameResult>("volli:session-refine-title", {
+  it("hands the refinement to the titling seam once the rename has stuck", async () => {
+    const requests = renameHarness();
+
+    const result = await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
       sessionId: "s1",
-      firstMessage: "Fix the parser",
-      heuristicTitle: "Fix the parser",
+      title: "  Fix the parser  ",
+      refineFrom: "Fix the parser, it crashes on empty input",
     });
     expect(result).toEqual({ ok: true });
+    // The baseline the async-gap guard compares against is the TRIMMED title
+    // actually persisted, not the raw string the renderer sent.
     expect(requests).toEqual([
-      { sessionId: "s1", firstMessage: "Fix the parser", heuristicTitle: "Fix the parser" },
+      {
+        sessionId: "s1",
+        firstMessage: "Fix the parser, it crashes on empty input",
+        heuristicTitle: "Fix the parser",
+      },
     ]);
   });
 
-  it("acks without a titling seam — a degraded boot refines nothing", () => {
-    const result = invoke<SessionRenameResult>("volli:session-refine-title", {
+  it("refines nothing for a rename with no rider — a person naming their own chat", async () => {
+    const requests = renameHarness();
+
+    await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
       sessionId: "s1",
-      firstMessage: "Fix the parser",
-      heuristicTitle: "Fix the parser",
+      title: "My own name",
+    });
+    expect(requests).toEqual([]);
+  });
+
+  it("refines nothing when the rename itself was refused", async () => {
+    const requests = renameHarness();
+
+    expect(
+      await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
+        sessionId: "ghost",
+        title: "Fix the parser",
+        refineFrom: "Fix the parser",
+      }),
+    ).toEqual({ ok: false, error: "Unknown session" });
+    expect(requests).toEqual([]);
+  });
+
+  it("renames without a titling seam — a degraded boot refines nothing", async () => {
+    const projectId = createProject();
+    insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
+
+    const result = await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
+      sessionId: "s1",
+      title: "Fix the parser",
+      refineFrom: "Fix the parser",
     });
     expect(result).toEqual({ ok: true });
   });
 
-  it("refuses a request missing its heuristic baseline", () => {
+  it("refuses a blank rider before any rename happens", () => {
     expect(
-      invoke<SessionRenameResult>("volli:session-refine-title", {
+      invoke<SessionRenameResult>("volli:session-rename", {
         sessionId: "s1",
-        firstMessage: "Fix the parser",
-        heuristicTitle: "   ",
+        title: "Fix the parser",
+        refineFrom: "   ",
       }),
-    ).toEqual({ ok: false, error: "Invalid session title refinement request" });
+    ).toEqual({ ok: false, error: "Invalid session title" });
   });
 });
 

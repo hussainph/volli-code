@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  AUTO_TITLE_MAX_SUBJECT_CHARS,
   AUTO_TITLE_SYSTEM_PROMPT,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelSelection,
 } from "@volli/shared";
@@ -90,8 +93,8 @@ function harness(
   const titler = createAutoTitler({
     ...overrides,
     readSession: overrides.readSession ?? readSession,
-    readUtilityDefault: overrides.readUtilityDefault ?? (() => UTILITY),
-    readRoleDefault: overrides.readRoleDefault ?? (() => TICKET_DEFAULT),
+    readModelDefaults:
+      overrides.readModelDefaults ?? (() => ({ ...EMPTY_MODEL_ACCESS_DEFAULTS, utility: UTILITY })),
     inspectModelAccess: overrides.inspectModelAccess ?? inspectModelAccess,
     completeUtility,
     retitle: overrides.retitle ?? retitle,
@@ -111,31 +114,53 @@ function harness(
   };
 }
 
+/** Defaults with no explicit utility choice, so the ladder falls past rung one. */
+const NO_UTILITY: ModelAccessDefaults = {
+  global: GLOBAL_DEFAULT,
+  ticket: TICKET_DEFAULT,
+  utility: null,
+};
+
 describe("createAutoTitler().refine", () => {
   it("retitles with the sanitized model answer once it lands", async () => {
     const h = harness({ completeUtility: async () => '"Fix the login flow."' });
     await h.refine({});
-    expect(h.completeUtility).toHaveBeenCalledWith({
-      model: { providerId: UTILITY.providerId, modelId: UTILITY.modelId, reasoningLevel: "off" },
-      systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
-      user: "The login button is broken",
-    });
+    expect(h.completeUtility).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { providerId: UTILITY.providerId, modelId: UTILITY.modelId, reasoningLevel: "off" },
+        systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
+        user: "The login button is broken",
+      }),
+    );
     expect(h.retitle.mock.calls).toEqual([[SESSION_ID, "Fix the login flow"]]);
   });
 
+  it("gives the whole refinement one deadline, shared by the probe and the call", async () => {
+    const h = harness({});
+    await h.refine({});
+    const probeSignal = h.inspectModelAccess.mock.calls[0]?.[0].signal;
+    expect(probeSignal).toBeInstanceOf(AbortSignal);
+    expect(h.completeUtility.mock.calls[0]?.[0].signal).toBe(probeSignal);
+  });
+
+  it("caps the message it sends, so a pasted wall of text is not billed in full", async () => {
+    const h = harness({});
+    await h.refine({ firstMessage: "x".repeat(AUTO_TITLE_MAX_SUBJECT_CHARS + 4000) });
+    expect(h.completeUtility.mock.calls[0]?.[0].user).toHaveLength(AUTO_TITLE_MAX_SUBJECT_CHARS);
+  });
+
   it("walks the ladder: utility, then the session's own model, then the role default", async () => {
-    const sessionOnly = harness({ readUtilityDefault: () => null });
-    await sessionOnly.refine({});
-    expect(sessionOnly.completeUtility).toHaveBeenCalledWith(
+    const sessionOwn = harness({ readModelDefaults: () => NO_UTILITY });
+    await sessionOwn.refine({});
+    expect(sessionOwn.completeUtility).toHaveBeenCalledWith(
       expect.objectContaining({
         model: { providerId: "anthropic", modelId: "opus", reasoningLevel: "off" },
       }),
     );
 
     const roleDefault = harness({
-      readUtilityDefault: () => null,
+      readModelDefaults: () => NO_UTILITY,
       readSession: async () => session({ model: null }),
-      readRoleDefault: (role) => (role === "ticket" ? TICKET_DEFAULT : GLOBAL_DEFAULT),
     });
     await roleDefault.refine({});
     expect(roleDefault.completeUtility).toHaveBeenCalledWith(
@@ -145,9 +170,8 @@ describe("createAutoTitler().refine", () => {
     );
 
     const projectSession = harness({
-      readUtilityDefault: () => null,
+      readModelDefaults: () => NO_UTILITY,
       readSession: async () => session({ model: null, ticketId: null }),
-      readRoleDefault: (role) => (role === "ticket" ? TICKET_DEFAULT : GLOBAL_DEFAULT),
     });
     await projectSession.refine({});
     expect(projectSession.completeUtility).toHaveBeenCalledWith(
@@ -157,11 +181,17 @@ describe("createAutoTitler().refine", () => {
     );
   });
 
+  it("reads the configured defaults once per refinement, not once per rung", async () => {
+    const readModelDefaults = vi.fn(() => NO_UTILITY);
+    const h = harness({ readModelDefaults });
+    await h.refine({});
+    expect(readModelDefaults).toHaveBeenCalledTimes(1);
+  });
+
   it("makes no call when nothing on the ladder resolves, leaving the heuristic", async () => {
     const h = harness({
-      readUtilityDefault: () => null,
+      readModelDefaults: () => EMPTY_MODEL_ACCESS_DEFAULTS,
       readSession: async () => session({ model: null }),
-      readRoleDefault: () => null,
     });
     await h.refine({});
     expect(h.completeUtility).not.toHaveBeenCalled();

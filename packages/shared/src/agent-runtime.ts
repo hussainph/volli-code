@@ -945,6 +945,12 @@ export interface UtilityCompletion {
   systemPrompt: string;
   /** The single user message. */
   user: string;
+  /**
+   * The caller's deadline. Background work has no one waiting on it, so a
+   * provider that never answers must not leave a promise pending for the life
+   * of the process.
+   */
+  signal?: AbortSignal;
 }
 
 /** The singular runtime port. Not a registry; there is exactly one executor. */

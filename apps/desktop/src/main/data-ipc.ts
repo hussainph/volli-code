@@ -16,6 +16,7 @@ import {
 import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -53,7 +54,6 @@ import type {
   RetentionTtlSetInput,
   SessionRenameInput,
   SessionRenameResult,
-  SessionRefineTitleInput,
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
@@ -364,13 +364,9 @@ export function registerDataIpcHandlers(
     /**
      * The renderer door of model-call titling (VC-81): kicks one refinement
      * off behind a just-written heuristic title. Absent (tests, degraded
-     * boot) means the request is acknowledged and nothing is refined.
+     * boot) means the rename succeeds and nothing is refined.
      */
-    autoTitle?: (input: {
-      sessionId: string;
-      firstMessage: string;
-      heuristicTitle: string;
-    }) => void;
+    autoTitle?: (input: AutoTitleRequest) => void;
     /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
@@ -796,24 +792,18 @@ export function registerDataIpcHandlers(
       if (submitted.receipt?.status !== "completed") {
         return { ok: false, error: "Session rename was not completed" };
       }
-      return { ok: true };
-    },
-
-    "volli:session-refine-title": (input: SessionRefineTitleInput): SessionRenameResult => {
-      // Accepted, not awaited: the ack says main took the request; the
-      // refinement runs detached and keeps the heuristic on every failure.
-      if (
-        typeof input.sessionId === "string" &&
-        input.sessionId.trim().length > 0 &&
-        typeof input.firstMessage === "string" &&
-        input.firstMessage.trim().length > 0 &&
-        typeof input.heuristicTitle === "string" &&
-        input.heuristicTitle.trim().length > 0
-      ) {
-        options.autoTitle?.(input);
-        return { ok: true };
+      // The auto-title rider (VC-81), fired only once the heuristic title it
+      // names as its baseline has actually stuck. Detached and never awaited:
+      // the ack answers the rename, and every refinement failure keeps the
+      // title just written. The descriptor guard has already refused a blank.
+      if (input.refineFrom !== undefined) {
+        options.autoTitle?.({
+          sessionId: input.sessionId,
+          firstMessage: input.refineFrom,
+          heuristicTitle: input.title.trim(),
+        });
       }
-      return { ok: false, error: "Invalid session title refinement request." };
+      return { ok: true };
     },
 
     "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {

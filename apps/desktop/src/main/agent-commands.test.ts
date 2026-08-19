@@ -4167,6 +4167,18 @@ describe("session.start", () => {
     expect(harness.refinements).toEqual([]);
   });
 
+  it("makes zero refinement requests when the kickoff never went out", async () => {
+    const harness = startHarness({ state: "needs-recovery" });
+
+    await harness.execute({ id: "VC-1", message: "Validate VC-52 before release" });
+
+    // A Session held for recovery has not sent this message and may never
+    // send it — titling from text nobody submitted would spend a model call
+    // on a conversation that did not happen. Same gate as the kickoff itself.
+    expect(harness.kickoffs).toEqual([]);
+    expect(harness.refinements).toEqual([]);
+  });
+
   it("announces the start to every surface without moving the board", async () => {
     const harness = startHarness();
 

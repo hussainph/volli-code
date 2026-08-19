@@ -23,7 +23,6 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import * as React from "react";
 import {
   compactionReserveChoices,
@@ -55,7 +54,6 @@ import {
 } from "@renderer/components/ui/select";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { Switch } from "@renderer/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
@@ -65,8 +63,14 @@ import { useUiStore } from "@renderer/stores/ui";
  *
  * `help` is the hover helper a row carries when its purpose is not obvious
  * from its two-word label (VC-81 asked for one on the utility row): what the
- * slot is FOR, so a person picking a model for it knows what the bill is
- * for. The tooltip is a helper, not a tutorial — one thought, one hover.
+ * slot is FOR, so a person picking a model for it knows what the bill is for.
+ * The tooltip is a helper, not a tutorial — one thought, one hover.
+ *
+ * The Utility helper also names what happens when the slot is empty. Leaving
+ * it unset does not switch background work off; those calls fall to the model
+ * each chat is already running under. That is a fallback a person can be
+ * billed for, and CONTEXT.md's Model Access rule is that Volli never falls
+ * back to another model SILENTLY — so this is where it is said out loud.
  */
 const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string; help?: string }[] = [
   { purpose: "global", label: "Project chats" },
@@ -74,7 +78,7 @@ const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string; help?: stri
   {
     purpose: "utility",
     label: "Utility",
-    help: "Background jobs that keep a Session healthy: auto-titling new chats and summarizing long conversations. An inexpensive model here keeps those calls cheap.",
+    help: "Background jobs: naming new chats, summarizing long conversations. Left unset, these run on the model the chat itself is using — an inexpensive model here keeps them cheap.",
   },
 ];
 
@@ -307,9 +311,10 @@ export function ModelAccessSettings({
  * nothing when the purpose inherits would read as unconfigured — which is the
  * one thing it is not.
  *
- * A row with a `help` string carries it as a hover helper beside the label:
- * an info glyph that reads the purpose aloud on hover, so the slot explains
- * itself without a paragraph under the control (CLAUDE.md's copy rule).
+ * A row with a `help` string carries it as a hover helper beside the label —
+ * rendered by {@link SettingsRow}, so every helper in Settings is the same
+ * glyph in the same place, and the slot explains itself without a paragraph
+ * under the control (CLAUDE.md's copy rule).
  */
 function DefaultModelRow({
   purpose,
@@ -347,29 +352,8 @@ function DefaultModelRow({
 
   return (
     <SettingsRow
-      label={
-        help === undefined ? (
-          label
-        ) : (
-          <span className="inline-flex items-center gap-1.5">
-            {label}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  tabIndex={0}
-                  aria-label={help}
-                  className="inline-flex cursor-help text-muted-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring/45"
-                >
-                  <InfoIcon aria-hidden className="size-3.5" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-64">
-                {help}
-              </TooltipContent>
-            </Tooltip>
-          </span>
-        )
-      }
+      label={label}
+      {...(help === undefined ? {} : { help })}
       testId={`default-model-${purpose}`}
     >
       <Select

@@ -109,7 +109,6 @@ import type {
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
-  SessionRefineTitleInput,
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
@@ -408,18 +407,17 @@ const api = {
     /** A ticket's Session listing rows, newest first — backs the right-rail linked-sessions list. */
     listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
       invoke("volli:session-list-for-ticket", input),
-    /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
+    /**
+     * Renames a session (project- or ticket-scoped); the title is trimmed and
+     * must be non-empty in main.
+     *
+     * `refineFrom` rides along on the automatic heuristic rename only (VC-81):
+     * main may then derive a sharper title with one model call. The result
+     * still answers the rename — the refinement is best effort behind it, and
+     * its failures keep the title this call just wrote.
+     */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
-    /**
-     * Asks main to refine a just-written heuristic title with one model call
-     * (VC-81). Fire-and-forget: the promise is an acceptance ack, not the
-     * model's answer, and a rejection here never toasts (CLAUDE.md's toast
-     * rule is for failed mutations a person requested; this one is best
-     * effort and keeps the heuristic on failure).
-     */
-    refineTitle: (input: SessionRefineTitleInput): Promise<SessionRenameResult> =>
-      invoke("volli:session-refine-title", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count
