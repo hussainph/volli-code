@@ -153,6 +153,40 @@ describe("sweepOrphans", () => {
     expect(report.dirty).toEqual([]); // not ours to report on, either
   });
 
+  it("never sweeps a worktree registered AT the container itself — that one act would take every checkout", async () => {
+    const projectPath = tempDir("proj");
+    const home = tempDir("home");
+    const root = join(home, ".volli", "worktrees");
+    const container = join(root, projectContainerName(projectPath, "proj-1"));
+    mkdirSync(container, { recursive: true });
+    ageDir(container, 400); // ancient AND clean — the strict-leaf gate must still refuse
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+    const removed: string[] = [];
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "prune") return "";
+      if (args[0] === "worktree" && args[1] === "list") {
+        return (
+          `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+          `worktree ${container}\nHEAD b\nbranch refs/heads/container-as-worktree\n`
+        );
+      }
+      if (args[0] === "worktree" && args[1] === "remove") {
+        removed.push(args[2]!);
+        return "";
+      }
+      return ""; // every dirty probe reads clean
+    });
+
+    const report = await sweepOrphans({ db: ctx.db, git, home, now, blobsRoot: "unused" });
+
+    expect(removed).toEqual([]);
+    expect(report.removedClean).toEqual([]);
+    expect(report.keptRecent).toEqual([]);
+    expect(report.dirty).toEqual([]); // invisible to the walk: it is a container, not a leaf
+  });
+
   // VC-113: "clean" arrives the moment a branch is pushed, which is exactly when
   // a PR opens — so cleanliness alone cannot mean disposable. Time has to pass.
   it("spares a clean orphan that was touched inside the retention window", async () => {

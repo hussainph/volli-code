@@ -71,16 +71,23 @@ export function ownedContainers(db: Database.Database, home: string): OwnedConta
 }
 
 /**
+ * Whether `target` is a leaf INSIDE `container` — strictly. A path equal to the
+ * container itself is not a worktree and answers `false`: deleting a container
+ * would take every ticket's checkout with it, which no route may do in one act.
+ * Every destructive path (sweep, remove, orphan-delete) gates on THIS question,
+ * so the two containment rules cannot drift apart.
+ */
+export function isOwnedWorktreeLeaf(container: OwnedContainer, target: string): boolean {
+  return isInside(container.path, target) && !isInside(target, container.path);
+}
+
+/**
  * Whether `target` is a leaf INSIDE one of `containers` — a worktree directory
- * this database owns. A path equal to a container itself is not a worktree and
- * answers `false`: deleting a container would take every ticket's checkout with
- * it, which no route may do in one act.
+ * this database owns.
  */
 export function isOwnedWorktreePath(
   containers: readonly OwnedContainer[],
   target: string,
 ): boolean {
-  return containers.some(
-    (container) => isInside(container.path, target) && !isInside(target, container.path),
-  );
+  return containers.some((container) => isOwnedWorktreeLeaf(container, target));
 }

@@ -37,11 +37,11 @@ import { join } from "node:path";
 
 import { listProjects } from "../db/projects-repo";
 import { listWorktreePaths } from "../db/tickets-repo";
-import { ownedContainers } from "./containers";
+import { isOwnedWorktreeLeaf, ownedContainers } from "./containers";
 import { isWorktreeDirty } from "./dirty";
 import { parseWorktreeList, type WorktreeListEntry } from "./git";
 import { homeDir } from "./home";
-import { canonicalize, isInside } from "./paths";
+import { canonicalize } from "./paths";
 import { retentionTtlMs } from "./retention";
 import { type SweepReport, type WorktreeDeps } from "./types";
 
@@ -115,10 +115,13 @@ export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
       if (knownPaths.has(entryCanonical)) continue;
 
       // Containment gate (§7 + VC-113): only a leaf inside THIS project's own
-      // container is ours to clean. Everything else — a personal worktree
-      // elsewhere on disk, another project's container, another INSTALL's
-      // container under the same root — is never removed and never reported.
-      if (container === undefined || !isInside(container.path, entry.path)) continue;
+      // container is ours to clean — the same strict-leaf question remove.ts
+      // and the orphan-delete channel ask (containers.ts), so a worktree
+      // registered AT the container path itself can never be swept. Everything
+      // else — a personal worktree elsewhere on disk, another project's
+      // container, another INSTALL's container under the same root — is never
+      // removed and never reported.
+      if (container === undefined || !isOwnedWorktreeLeaf(container, entry.path)) continue;
 
       // An orphan: an app-owned registered worktree with no DB row.
       const dirty = isWorktreeDirty(deps.git, {
