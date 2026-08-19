@@ -291,17 +291,22 @@ async function main() {
       throw new Error("detail view never opened after double-click");
     }
 
-    async function expandDetailsDrawer() {
-      const aside = page.locator("aside");
-      const details = aside.getByRole("button", { name: "Details", exact: true });
-      await waitUntil("Details drawer button", async () => (await details.count()) >= 1);
-      if ((await details.getAttribute("aria-expanded")) !== "true") {
-        await details.click();
-      }
-      await waitUntil(
-        "Details drawer expanded (Status visible)",
-        async () => (await aside.getByText("Status", { exact: false }).count()) >= 1,
-      );
+    // VC-55 folded the old Details drawer into the repository card on the
+    // rail's resting Now page, so there is no drawer to open anymore — the
+    // retention prompt (and its "Archive & clean" primary) is in the rail
+    // (`aside`) as soon as the detail view opens.
+    async function waitForArchivePrimary() {
+      return waitUntil(
+        '"Archive & clean" primary button',
+        async () =>
+          (await page
+            .locator("aside")
+            .getByRole("button", { name: "Archive & clean", exact: true })
+            .count()) >= 1,
+        { timeout: 10000 },
+      )
+        .then(() => true)
+        .catch(() => false);
     }
 
     // === 1. Discovery + merge ==============================================
@@ -339,18 +344,7 @@ async function main() {
 
         // The rail shows "Archive & clean" as the adaptive primary (DOM check).
         await openDetail(t.displayId);
-        await expandDetailsDrawer();
-        const archiveButtonShown = await waitUntil(
-          '"Archive & clean" primary button',
-          async () =>
-            (await page
-              .locator("aside")
-              .getByRole("button", { name: "Archive & clean", exact: true })
-              .count()) >= 1,
-          { timeout: 10000 },
-        )
-          .then(() => true)
-          .catch(() => false);
+        const archiveButtonShown = await waitForArchivePrimary();
 
         const ok =
           prUrlStamped &&
