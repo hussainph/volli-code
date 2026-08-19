@@ -19,7 +19,7 @@
  * time someone forgot to list the epoch.
  */
 import * as React from "react";
-import { hueFan, rampFromBackground } from "@volli/shared";
+import { hueFan, isHexColor, rampFromBackground } from "@volli/shared";
 
 /** The stops the four intensity steps sit on, background → primary. */
 const STREAK_STOPS = [0.12, 0.42, 0.72, 1];
@@ -33,11 +33,33 @@ const STREAK_STOPS = [0.12, 0.42, 0.72, 1];
  */
 const SERIES_SPREAD = 70;
 
-/** A token's current value on the document root, or `fallback` outside a DOM. */
+/**
+ * The colour a token reading yields, or `fallback` when it is not one this can
+ * do OKLCH arithmetic on.
+ *
+ * The hex check is the load-bearing half, and it is why this is a function
+ * rather than a `??`. `hexToRgb` THROWS on anything it cannot parse, so an
+ * absent token was never the only way to lose a colour — a token carrying
+ * `oklch(...)`, `color-mix(...)` or a bare keyword would take the whole chat
+ * surface down with it, and a chart is not worth a blank screen. The generator
+ * emits `#rrggbb` today; this keeps that an implementation detail of the
+ * generator rather than a load-bearing assumption out here.
+ *
+ * Split from the DOM read so the decision is testable: the renderer's test
+ * project runs under vitest's `node` environment with no document, the same
+ * reason `theme/apply.test.ts` exercises its contract through a stand-in.
+ */
+export function usableToken(value: string | null | undefined, fallback: string): string {
+  return value !== null && value !== undefined && isHexColor(value) ? value.trim() : fallback;
+}
+
+/** A token's current value on the document root, resolved through {@link usableToken}. */
 function readToken(name: string, fallback: string): string {
   if (typeof document === "undefined") return fallback;
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value.length > 0 ? value : fallback;
+  return usableToken(
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+    fallback,
+  );
 }
 
 /**

@@ -95,6 +95,7 @@ function hasRailOnScreen(): boolean {
       homeActiveTab: workspace?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
       settingsOpen: useUiStore.getState().settingsOpen,
       openTicketId: workspace?.openTicketId ?? DEFAULT_WORKSPACE_UI.openTicketId,
+      terminalFocusActive: useUiStore.getState().terminalFocusTarget !== null,
     }) !== null
   );
 }

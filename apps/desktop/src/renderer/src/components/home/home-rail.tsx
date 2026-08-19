@@ -429,7 +429,7 @@ function SessionsPage({ projectId }: { projectId: string }) {
                 </span>
               }
               className={row.open ? undefined : "text-muted-foreground"}
-              onActivate={() => openSession(projectId, row)}
+              onActivate={row.reopenable ? () => openSession(projectId, row) : null}
             />
           ))}
         </div>
@@ -445,9 +445,13 @@ const EMPTY_IDS: readonly string[] = [];
  *
  * Both kinds route through `openHome`, the same seam the sidebar's bands and
  * ⌘K use — a chat is adopted and given a tab first, because the strip cannot
- * bring forward a tab that does not exist yet. Reopening a CLOSED Session is
- * the case this page exists for: a Project Session outlives its tab, and until
- * now the only way back to one was the sidebar.
+ * bring forward a tab that does not exist yet. Reopening a CLOSED chat is the
+ * case this page exists for: a Project Session outlives its tab, and until now
+ * the only way back to one was the sidebar.
+ *
+ * Only ever called for a row that IS a door — `HomeSessionRow.reopenable`, which
+ * is where a dead terminal is turned away, and it is turned away by not being a
+ * target at all rather than by being one that lands nowhere.
  */
 function openSession(projectId: string, row: HomeSessionRow): void {
   const workspace = useWorkspaceStore.getState();
@@ -456,13 +460,6 @@ function openSession(projectId: string, row: HomeSessionRow): void {
     chat.adoptChatSession(row.id);
     chat.openChatTab(projectId, row.id);
     workspace.openHome(projectId, chatTabId(row.id));
-    return;
-  }
-  if (!row.open) {
-    // A terminal that has no tab has no PTY either — its pane died with the app
-    // or with its close. There is nothing to bring forward, so Home itself is
-    // where it would have been.
-    workspace.openHome(projectId);
     return;
   }
   useSessionsStore.getState().setActiveSession(projectId, row.id);

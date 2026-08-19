@@ -34,6 +34,19 @@ export interface RailToggleChrome {
   settingsOpen: boolean;
   /** The selected project's open ticket, or null on the plain board. */
   openTicketId: string | null;
+  /**
+   * Whether terminal focus holds the canvas — `terminalFocusTarget !== null`.
+   *
+   * ANY committed target, not one matching the surface in front. Zen mode takes
+   * the WHOLE canvas and both rails step aside for it (`home-surface.tsx` gates
+   * its strip on exactly this read; `ticket-detail.tsx` drops its rail on the
+   * matching one), so while a target is committed there is no rail on screen to
+   * talk about on either surface. Reading the narrower "matches this tab"
+   * question here would let the chord through during the frame a stale target
+   * is still being cleared — and this gate exists precisely to keep a keystroke
+   * from writing a persisted preference with nothing to show for it.
+   */
+  terminalFocusActive: boolean;
 }
 
 /** Whose rail is on screen. */
@@ -56,9 +69,19 @@ export type RailToggleTarget = "ticket" | "home";
  * The BOARD alone has no rail, which is why the board arm returns `null` rather
  * than falling through to Home's: Home's rail belongs to a Session, and the
  * board is not one.
+ *
+ * TERMINAL FOCUS answers for both surfaces at once — see
+ * {@link RailToggleChrome.terminalFocusActive}. Home's own terminals may enter
+ * it (`terminal-focus.ts`), so this is reachable from a Session tab and not
+ * only from a ticket's.
  */
 export function railToggleTargetForChrome(chrome: RailToggleChrome): RailToggleTarget | null {
-  if (chrome.selectedProjectId === null || chrome.settingsOpen || chrome.nav !== "home") {
+  if (
+    chrome.selectedProjectId === null ||
+    chrome.settingsOpen ||
+    chrome.nav !== "home" ||
+    chrome.terminalFocusActive
+  ) {
     return null;
   }
   if (isHomeBoardTab(chrome.homeActiveTab)) return chrome.openTicketId === null ? null : "ticket";

@@ -10,6 +10,7 @@ function chrome(over: Partial<RailToggleChrome> = {}): RailToggleChrome {
     homeActiveTab: HOME_BOARD_TAB_ID,
     settingsOpen: false,
     openTicketId: null,
+    terminalFocusActive: false,
     ...over,
   };
 }
@@ -55,6 +56,20 @@ describe("railToggleTargetForChrome", () => {
   it("names nothing with no project selected", () => {
     expect(
       railToggleTargetForChrome(chrome({ selectedProjectId: null, homeActiveTab: "chat:s1" })),
+    ).toBeNull();
+  });
+
+  it("names nothing from inside terminal focus, on either surface", () => {
+    // Zen takes the whole canvas and both rails step aside, so the chord has
+    // nothing on screen to collapse. Home's own terminals may enter it, which
+    // is what makes the Session-tab arm reachable and not just the ticket's.
+    expect(
+      railToggleTargetForChrome(
+        chrome({ homeActiveTab: "terminal-session-1", terminalFocusActive: true }),
+      ),
+    ).toBeNull();
+    expect(
+      railToggleTargetForChrome(chrome({ openTicketId: "t1", terminalFocusActive: true })),
     ).toBeNull();
   });
 });

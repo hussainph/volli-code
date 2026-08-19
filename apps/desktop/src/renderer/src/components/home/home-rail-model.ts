@@ -51,6 +51,19 @@ export interface HomeSessionRow {
   at: number;
   /** Whether a tab is holding it right now. */
   open: boolean;
+  /**
+   * Whether this row is a door back to the Session, or only a record that it
+   * happened.
+   *
+   * A chat always is: its transcript is durable, so a closed one is re-adopted
+   * and given a tab. A TERMINAL only is while a tab still holds it — a PTY dies
+   * with the app and with its own close, so a closed terminal row has nothing
+   * behind it to bring forward. That has to reach the DOM rather than being
+   * absorbed by a handler that quietly does nothing: `ui/list-row.tsx` draws an
+   * inert row for `onActivate: null`, and a row that hovers and depresses and
+   * then goes nowhere is, in that file's own words, a lie the pointer tells.
+   */
+  reopenable: boolean;
 }
 
 /**
@@ -75,6 +88,8 @@ export function homeSessionRows(
       state: chatState(row),
       at: row.lastActivityAt,
       open: openChatIds.includes(row.sessionId),
+      // Durable history, so a closed one is a door like any other.
+      reopenable: true,
     })),
     ...terminals.map((row) => {
       // A PTY dies with the app, so a durable terminal row is live exactly
@@ -89,6 +104,7 @@ export function homeSessionRows(
         state: (open && row.endedAt === null ? "ready" : "exited") as StatusDotState,
         at: row.lastActivityAt,
         open,
+        reopenable: open,
       };
     }),
   ];

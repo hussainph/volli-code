@@ -119,6 +119,19 @@ describe("homeSessionRows", () => {
     expect(terminalDot(terminal({ endedAt: 5 }), ["t1"])).toBe("exited");
   });
 
+  it("makes a chat a door whether or not a tab holds it", () => {
+    // A transcript is durable, so a closed chat is re-adopted rather than lost.
+    expect(homeSessionRows([chat()], [], ["c1"], [])[0]?.reopenable).toBe(true);
+    expect(homeSessionRows([chat()], [], [], [])[0]?.reopenable).toBe(true);
+  });
+
+  it("makes a terminal a door only while its tab still holds a PTY", () => {
+    // Nothing to bring forward once the pane is gone, so the row stops being a
+    // target rather than becoming one that lands nowhere.
+    expect(homeSessionRows([], [terminal()], [], ["t1"])[0]?.reopenable).toBe(true);
+    expect(homeSessionRows([], [terminal()], [], [])[0]?.reopenable).toBe(false);
+  });
+
   it("draws nothing for a project that has run nothing", () => {
     expect(homeSessionRows([], [], [], [])).toEqual([]);
   });
