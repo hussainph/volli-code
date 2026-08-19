@@ -985,8 +985,10 @@ export function TicketRepositorySummary({
   const fileCount = diff?.files.length ?? 0;
 
   // The status read is the cause and the watch dying is its consequence, so the
-  // direct read's message wins when both are set — they are almost always the
-  // same string anyway.
+  // direct read's message wins when both are set. A vanished directory IS the
+  // same string on both surfaces now: the watch manager maps its missing-dir
+  // ENOENT to the shared sentence (VC-113), so the Recreate offer fires whether
+  // the read or the watcher noticed first.
   const fault = loadError ?? watchError;
   // The one fault with a real way out rather than a Retry (VC-113). Matched on
   // the shared sentence main answers every worktree read with, so the two sides

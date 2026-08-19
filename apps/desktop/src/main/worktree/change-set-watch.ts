@@ -5,9 +5,10 @@
  * {@link WATCH_DEBOUNCE_MS} cadence and window-scoped subscription lifecycle
  * (teardown on unwatch / `destroyed` — never leaks across tickets).
  */
-import { statSync, watch as fsWatch } from "node:fs";
+import { existsSync, statSync, watch as fsWatch } from "node:fs";
 import { join } from "node:path";
 import type { WebContents } from "electron";
+import { WORKTREE_MISSING_ON_DISK } from "@volli/shared";
 import type {
   Result,
   VolliIpcEvent,
@@ -112,6 +113,22 @@ export class WorktreeChangeWatchManager {
   }
 
   /**
+   * The one watch fault the rail can act on (VC-113): an ENOENT from a
+   * vanished DIRECTORY is "missing" — the shared sentence the renderer matches
+   * to offer Recreate instead of Retry, the same one the direct worktree reads
+   * answer with, so both surfaces agree about what "gone" reads like. Anything
+   * else keeps its own message: mapping unknown faults would teach the UI to
+   * misdiagnose every watcher hiccup as a deleted checkout.
+   */
+  private watchErrorMessage(sub: WorktreeWatchSubscription, error: unknown): string {
+    if (!(error instanceof Error)) return String(error);
+    if ("code" in error && error.code === "ENOENT" && !existsSync(sub.worktreePath)) {
+      return WORKTREE_MISSING_ON_DISK;
+    }
+    return error.message;
+  }
+
+  /**
    * Idempotent: watching an already-watched ticket for this window is a no-op —
    * UNLESS the ticket's worktree has moved. A ticket can be removed and re-ensured
    * at a fresh path within one window's lifetime, and the old subscription would
@@ -153,12 +170,12 @@ export class WorktreeChangeWatchManager {
         // either: once we drop the subscription no further `worktree-changed`
         // arrives, and a frozen Change Set is indistinguishable from a quiet
         // worktree. Tell the renderer first, then tear down.
-        this.emitWatchError(sub, error.message);
+        this.emitWatchError(sub, this.watchErrorMessage(sub, error));
         this.teardown(key);
       });
     } catch (error) {
+      const message = this.watchErrorMessage(sub, error);
       this.teardown(key);
-      const message = error instanceof Error ? error.message : String(error);
       return { ok: false, error: message };
     }
     webContents.once("destroyed", sub.onDestroyed);

@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { WORKTREE_MISSING_ON_DISK } from "@volli/shared";
 
 import {
   WATCH_DEBOUNCE_MS,
@@ -226,6 +230,79 @@ describe("WorktreeChangeWatchManager", () => {
     watchCalls[0]!.cb("change", "after.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
     expect(webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a vanished-directory ENOENT to the shared missing sentence, so the rail can offer Recreate", () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const webContents = makeWebContents();
+
+    manager.watch(webContents as never, "t1", "/wt/does-not-exist");
+    const enoent = new Error("ENOENT: no such file or directory, watch '/wt/does-not-exist'");
+    Object.assign(enoent, { code: "ENOENT" });
+    watchCalls[0]!.watcher.fail(enoent);
+
+    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-watch-error", {
+      ticketId: "t1",
+      error: WORKTREE_MISSING_ON_DISK,
+    });
+  });
+
+  it("keeps the raw message when ENOENT does not mean the worktree is gone", () => {
+    const live = mkdtempSync(join(tmpdir(), "volli-watch-live-"));
+    try {
+      vi.useFakeTimers();
+      manager = makeManager();
+      const webContents = makeWebContents();
+
+      manager.watch(webContents as never, "t1", live);
+      const enoent = new Error(`ENOENT: no such file or directory, watch '${live}'`);
+      Object.assign(enoent, { code: "ENOENT" });
+      watchCalls[0]!.watcher.fail(enoent);
+
+      expect(webContents.send).toHaveBeenCalledWith("volli:worktree-watch-error", {
+        ticketId: "t1",
+        error: enoent.message,
+      });
+    } finally {
+      rmSync(live, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a synchronous arm-time ENOENT on a missing worktree as missing on disk", () => {
+    const enoent = new Error("ENOENT: no such file or directory, watch '/wt/gone'");
+    Object.assign(enoent, { code: "ENOENT" });
+    manager = new WorktreeChangeWatchManager({
+      watch: () => {
+        throw enoent;
+      },
+      debounceMs: WATCH_DEBOUNCE_MS,
+      maxWaitMs: WATCH_MAX_WAIT_MS,
+      gitPathIsDirectory: () => false,
+      now: () => Date.now(),
+    });
+    const webContents = makeWebContents();
+
+    const result = manager.watch(webContents as never, "t1", "/wt/gone");
+
+    expect(result).toEqual({ ok: false, error: WORKTREE_MISSING_ON_DISK });
+  });
+
+  it("reports a non-Error arm failure by string rather than guessing a cause", () => {
+    manager = new WorktreeChangeWatchManager({
+      watch: () => {
+        throw "boom";
+      },
+      debounceMs: WATCH_DEBOUNCE_MS,
+      maxWaitMs: WATCH_MAX_WAIT_MS,
+      gitPathIsDirectory: () => false,
+      now: () => Date.now(),
+    });
+    const webContents = makeWebContents();
+
+    const result = manager.watch(webContents as never, "t1", "/wt/t1");
+
+    expect(result).toEqual({ ok: false, error: "boom" });
   });
 
   it("refuses to report a watch on a destroyed window as started", () => {
