@@ -16,6 +16,22 @@ describe("SettingsPage (app-wide)", () => {
     // Orphan cleanup is app-wide (the sweep walks every project), so it lives
     // here rather than on the per-project Configure page.
     expect(html).toContain("Worktrees");
+    // Bring-your-own web search (VC-31), beside Model Access rather than under
+    // Harness Runtimes: it is an outside account, not a runtime.
+    expect(html).toContain("Web");
+  });
+
+  it("opens the web pane on its one control, with nothing configured", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="web" />);
+
+    // The resting shape before the bridge answers — effects never run under
+    // renderToStaticMarkup, so this is the pane's honest loading state rather
+    // than a claim about a setting it has not read yet.
+    expect(html).toContain("Web search");
+    expect(html).toContain("Loading…");
+    // And no key field, because a pane that has read nothing knows of no
+    // provider that needs one.
+    expect(html).not.toContain("API key");
   });
 
   // The pane's data arrives over the preload bridge in an effect, which never

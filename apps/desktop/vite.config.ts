@@ -116,6 +116,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
+        "src/components/pages/web-access-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/edge-region.ts",
