@@ -18,6 +18,7 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  BLOB_URL_SCHEME,
   diffManagedContent,
   displayTicketId,
   errorMessage,
@@ -55,9 +56,9 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectById, listProjects } from "./db/projects-repo";
 import { getTicket } from "./db/tickets-repo";
-import { listAttachments } from "./db/attachments-repo";
+import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
@@ -80,9 +81,12 @@ import {
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
+  assertCompactionLimitsUsable,
   assertDefaultModelAvailable,
+  readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
+  writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
 } from "./session-runtime/model-access-preferences";
@@ -105,6 +109,7 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
+  broadcastSessionActivity,
   broadcastSessionHarness,
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
@@ -167,6 +172,11 @@ import {
   PACKAGED_RENDERER_SCHEME,
   resolvePackagedRendererAsset,
 } from "./app-protocol";
+import { collectUnlinkedBlobs } from "./blob-collect";
+import { prepareTurnAttachments } from "./turn-attachments";
+import { blobProtocolResponse } from "./blob-protocol";
+import { blobsRoot } from "./blob-store";
+import { getBlob } from "./db/blobs-repo";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -174,6 +184,20 @@ import {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: PACKAGED_RENDERER_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+    },
+  },
+  // Attachment bytes (VC-50). Registered beside the renderer scheme and under
+  // the same rules — `standard` so Chromium parses `volli-blob://<hash>` as an
+  // origin rather than an opaque blob of text, `secure` so an <img> on the
+  // renderer's secure origin is not treated as mixed content, and no bypassCSP:
+  // the scheme is named explicitly in the renderer's img-src instead, so its
+  // reach stays visible in the policy rather than hidden in a privilege.
+  {
+    scheme: BLOB_URL_SCHEME,
     privileges: {
       standard: true,
       secure: true,
@@ -572,7 +596,32 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: describeDbOpenFailure(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
-  const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
+  // The one Session Engine in the process, wrapped once so every durable write
+  // anywhere downstream — the runtime's turns, the agent socket's commands, the
+  // IPC handlers' retitles — re-publishes the affected Session's listing row to
+  // every window. Wrapping HERE is what makes that claim true: this is the only
+  // construction site, so there is no unwatched engine for a caller to hold.
+  // See `session-control/activity-watch.ts`.
+  const sessionActivityWatch =
+    dbHandle.ok === true
+      ? watchSessionActivity(createDesktopSessionEngine(dbHandle.db), {
+          publish: broadcastSessionActivity,
+        })
+      : null;
+  const sessionEngine = sessionActivityWatch?.engine ?? null;
+  // Attachment bytes reach the renderer here (VC-50). Registered after the db
+  // opens because the media type is a `blobs` column, and read through the
+  // handle at request time rather than captured: a degraded db still serves
+  // bytes, just as `application/octet-stream`.
+  protocol.handle(BLOB_URL_SCHEME, (request) =>
+    blobProtocolResponse(
+      {
+        blobsRoot: blobsRoot(app.getPath("userData")),
+        lookupMime: (hash) => (dbHandle.ok ? getBlob(dbHandle.db, hash)?.mime : undefined),
+      },
+      request.url,
+    ),
+  );
   // Pure path joins off userData — safe to resolve well ahead of the window
   // it eventually feeds (registerTerminalIpcHandlers, further below). Moved
   // up from there so the CLI's bin dir is already known here, for the
@@ -633,6 +682,23 @@ app.whenReady().then(async () => {
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
+          // A turn's attachments (VC-50): materialize them into the Session's
+          // tree so the agent can open any of them by path, and read images
+          // back as base64 so the model can actually see them. Injected here
+          // because the adapter deliberately knows nothing about the database
+          // or the Blob store.
+          prepareTurnAttachments: (message, owner) =>
+            prepareTurnAttachments(dbHandle.db, blobsRoot(app.getPath("userData")), message, owner),
+          // The same Role-in/purpose-out resolution the Session defaults use
+          // (VC-53), for the runtime's own background work: a compaction summary
+          // is cost-efficient background work by definition, which is what the
+          // `utility` purpose names. Read per call, so retuning it in Settings
+          // reaches a Session already running.
+          utilityModel: () => resolveDefaultModel(readModelAccessDefaults(dbHandle.db), "utility"),
+          // Read per compaction rather than captured here, for the same reason:
+          // a Session outlives the Settings change that retunes it, and the
+          // next compaction should run under the policy configured now.
+          compactionPolicy: () => readCompactionPolicy(dbHandle.db),
           // Makes `volli` and every detected toolchain resolve inside a
           // structured Session's shell tool whether or not the background
           // install's `~/.local/bin/volli` link is reachable yet — the same
@@ -722,7 +788,7 @@ app.whenReady().then(async () => {
                 text: composeTicketBrief({
                   project,
                   ticket,
-                  attachments: listAttachments(dbHandle.db, ticket.id),
+                  attachments: listMaterializableLinks(dbHandle.db, null, ticket.id),
                 }),
               },
               provenance,
@@ -899,6 +965,22 @@ app.whenReady().then(async () => {
                   writeHiddenModels(sessionDb, hidden, Date.now());
                 }
               : undefined,
+          readCompactionPolicy:
+            sessionDb !== null ? () => readCompactionPolicy(sessionDb) : undefined,
+          writeCompactionPolicy:
+            sessionDb !== null && piRuntimeHost !== null
+              ? async (policy) => {
+                  // Refused against the catalog before it is stored, like a
+                  // default model is: a reserve the model's own window cannot
+                  // hold would compact after every reply, and the only place
+                  // that is legible is the control that set it.
+                  if (policy.modelLimits.length > 0) {
+                    const access = await piRuntimeHost.inspectModelAccess({});
+                    assertCompactionLimitsUsable(access, policy.modelLimits);
+                  }
+                  return writeCompactionPolicy(sessionDb, policy, Date.now());
+                }
+              : undefined,
           createSession: sessions?.create,
           attachSession: sessions?.attach,
         });
@@ -976,6 +1058,21 @@ app.whenReady().then(async () => {
       });
     } catch (error) {
       console.error("[volli] failed to recover stale attachments:", errorMessage(error));
+    }
+  }
+  // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
+  // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
+  // so leaves an unlinked Blob whenever a draft is thrown away. Housekeeping, so
+  // it runs at boot rather than on the user's turn, and a failure is logged
+  // rather than raised: garbage left behind is a disk cost, never a broken app.
+  if (dbHandle.ok) {
+    try {
+      const { collected } = collectUnlinkedBlobs(dbHandle.db, blobsRoot(app.getPath("userData")));
+      if (collected.length > 0) {
+        console.info(`[volli] collected ${collected.length} unreferenced attachment(s)`);
+      }
+    } catch (error) {
+      console.error("[volli] failed to collect unreferenced attachments:", errorMessage(error));
     }
   }
   // Read fresh per call rather than once at boot: `activate` can re-create the
@@ -1125,6 +1222,9 @@ app.whenReady().then(async () => {
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,
+    // Where attachment bytes live (VC-50) — the same root the volli-blob:
+    // protocol serves from and materialization copies out of.
+    blobsRoot: blobsRoot(app.getPath("userData")),
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt

@@ -94,7 +94,6 @@ import {
   droppedStopIndex,
   easedVibrancy,
   grainForAngle,
-  lcLabel,
   normalizeStopHex,
   padAnchor,
   percentLabel,
@@ -104,11 +103,18 @@ import {
   UNIT_STEP,
   UNIT_STEP_COARSE,
   type CanvasContrastReport,
-  type CanvasFloorReading,
 } from "@renderer/components/theme/canvas-editor-model";
+import {
+  SLIDER_SQUIGGLE_AMPLITUDE,
+  SLIDER_SQUIGGLE_WAVELENGTH,
+  SLIDER_SQUIGGLE_WIDTH,
+  SLIDER_THUMB_WIDTH,
+  sliderSeam,
+  sliderSquigglePath,
+  sliderSquiggleScale,
+} from "@renderer/components/theme/slider-squiggle";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 
@@ -643,6 +649,55 @@ function PrimaryColourRow({
 }
 
 /**
+ * The band the wave is drawn in, in px: the peak either side of the centreline
+ * plus room for the stroke's own width and its round caps.
+ */
+const WAVE_BAND = 2 * (SLIDER_SQUIGGLE_AMPLITUDE + 2);
+
+/**
+ * One pass of the fader's wave.
+ *
+ * Drawn twice by {@link UnitSlider} — once in the unfilled ink for the whole
+ * groove, then once in the accent clipped at the seam — because a fill that
+ * follows the wave's own shape has to BE the wave, not a bar behind it.
+ *
+ * `fill-box` makes `scaleY`'s origin the path's own centreline, so the wave
+ * flattens in place instead of sagging toward an edge, and `non-scaling-stroke`
+ * holds the ink's weight while it does — without it the wave would thin as it
+ * lay down and vanish before it arrived.
+ */
+function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string }) {
+  return (
+    <svg
+      aria-hidden
+      data-slot="slider-squiggle"
+      viewBox={`0 ${-WAVE_BAND / 2} ${SLIDER_SQUIGGLE_WIDTH} ${WAVE_BAND}`}
+      preserveAspectRatio="none"
+      style={{ clipPath: clip }}
+      className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 overflow-visible transition-[clip-path] duration-150 ease-out motion-reduce:transition-none!"
+    >
+      <path
+        d={sliderSquigglePath(
+          SLIDER_SQUIGGLE_WIDTH,
+          SLIDER_SQUIGGLE_WAVELENGTH,
+          SLIDER_SQUIGGLE_AMPLITUDE,
+        )}
+        fill="none"
+        vectorEffect="non-scaling-stroke"
+        strokeWidth={2}
+        strokeLinecap="round"
+        style={{
+          transform: `scaleY(${stand})`,
+          transformBox: "fill-box",
+          transformOrigin: "center",
+        }}
+        className={`${ink} transition-transform duration-150 ease-out motion-reduce:transition-none!`}
+      />
+    </svg>
+  );
+}
+
+/**
  * Vibrancy, as the platform's own slider.
  *
  * A track is the right shape for it — the value has a position along a line, so
@@ -657,6 +712,18 @@ function PrimaryColourRow({
  * `::-webkit-slider-runnable-track` rule reads it. The track is declared there
  * rather than left to `accent-color`, which cannot paint an unfilled half that
  * follows the appearance — see that rule.
+ *
+ * THE TRACK IS A WAVE, the Arc-lineage form VC-57 authored and VC-82 took out
+ * of the effort slider. Not a wave ON the track: the native paint is suppressed
+ * in globals.css for this one input and the groove is drawn here, so the thing
+ * you drag along IS the wave. Its amplitude ramps with the value, which is what
+ * earns it this control rather than any other — "vibrancy" is how vivid, and a
+ * groove that stands taller as it rises says that without a word of copy.
+ *
+ * The wave is part of THIS control, not an option on it — vibrancy is the only
+ * unit value in the editor, and a wave on a slider that does not mean "how
+ * vivid" would be decoration rather than report. If a second unit slider ever
+ * lands here, split the wave out with it rather than reaching for a flag.
  */
 function UnitSlider({
   id,
@@ -673,26 +740,48 @@ function UnitSlider({
   onInput(next: number): void;
   onSettle(): void;
 }) {
+  // The thumb's centre and the fill's seam are ONE x, read from one function —
+  // two objects arriving at the same pixel, not near it.
+  const seam = sliderSeam(value, SLIDER_SQUIGGLE_WIDTH, SLIDER_THUMB_WIDTH);
+  const stand = sliderSquiggleScale(value);
   return (
     <div className="flex items-center gap-4">
       {chip}
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={1}
-        step={UNIT_STEP}
-        value={value}
-        aria-label={label}
-        onChange={(event) => onInput(Number(event.target.value))}
-        // One write per gesture: the drag and the key repeat are previews, and
-        // the release is the commit.
-        onPointerUp={onSettle}
-        onKeyUp={onSettle}
-        onBlur={onSettle}
-        style={{ "--slider-fill": percentLabel(value) } as React.CSSProperties}
-        className="w-44"
-      />
+      <span className="relative inline-flex h-4 w-44 items-center">
+        <Wave stand={stand} ink="stroke-border-strong" />
+        <Wave
+          stand={stand}
+          ink="stroke-primary"
+          clip={`inset(0 ${SLIDER_SQUIGGLE_WIDTH - seam}px 0 0)`}
+        />
+        {/* The capsule, centred on the seam and overhanging the trough, which is
+            what makes it a fader handle rather than a dot on a line. */}
+        <span
+          aria-hidden
+          style={{ left: seam }}
+          className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
+        />
+        {/* Last, so it takes the pointer: the platform's own control with its
+            paint suppressed, which keeps click-to-jump, the keyboard, and the
+            focus ring while this file owns every pixel you can see. */}
+        <input
+          id={id}
+          type="range"
+          min={0}
+          max={1}
+          step={UNIT_STEP}
+          value={value}
+          aria-label={label}
+          data-slot="wave-slider"
+          onChange={(event) => onInput(Number(event.target.value))}
+          // One write per gesture: the drag and the key repeat are previews, and
+          // the release is the commit.
+          onPointerUp={onSettle}
+          onKeyUp={onSettle}
+          onBlur={onSettle}
+          className="absolute inset-0 w-full"
+        />
+      </span>
       <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
         {percentLabel(value)}
       </span>
@@ -838,29 +927,8 @@ function GrainDial({
   );
 }
 
-/** One measured floor: what it scored, and whether it had anywhere left to go. */
-function FloorReading({ reading }: { reading: CanvasFloorReading }) {
-  return (
-    <li className="flex items-baseline justify-between gap-4 text-ui leading-5">
-      <span className="text-muted-foreground">{reading.what}</span>
-      <span className="shrink-0 tabular-nums text-muted-foreground">
-        Lc{" "}
-        <span className={reading.capped ? "text-foreground" : undefined}>
-          {lcLabel(reading.achieved)}
-        </span>{" "}
-        <span className="text-muted-foreground/70">
-          {reading.capped
-            ? `— at this canvas's ceiling, ${lcLabel(reading.shortfall)} under a floor of ${lcLabel(reading.floor)}`
-            : `of ${lcLabel(reading.floor)}`}
-        </span>
-      </span>
-    </li>
-  );
-}
-
 /**
- * What this canvas's copy actually measures — and the one state the engine
- * cannot report for itself.
+ * The one state the engine cannot report for itself.
  *
  * `deriveCanvasTokens` never throws: a floor its surface cannot physically carry
  * is clamped to the best that surface allows, because the gradient is the user's
@@ -868,21 +936,21 @@ function FloorReading({ reading }: { reading: CanvasFloorReading }) {
  * the right call and it has a cost — the ask silently goes unmet — and this is
  * where the cost is paid back.
  *
- * Two registers, for the two sizes the miss comes in.
+ * NOTHING RENDERS UNTIL SOMETHING IS WRONG. This used to sit under an
+ * always-visible readout of every floor and its measured Lc. That readout was
+ * instrumentation: true, occasionally useful while the solver was being tuned,
+ * and a table of colour-science numbers on a settings page the rest of the time
+ * — the "contrast lecture" this file's own header was told to stop giving. It
+ * came out at the owner's call.
  *
- * The **readout is always there**, every floor and what it scored, with a
- * ceiling annotated inline. That is where the shipped canvas's own hairline
- * shortfall lives: `--sidebar` sits a couple of hundredths of an Lc under 75 at
- * several vibrancies, which is true, worth being able to look up, and not worth
- * an alarm. Three numbers that are usually fine are also what make the fourth
- * state legible when it arrives.
- *
- * The **alert** is for a floor stranded by more than the emitted hex can even
- * express, which only the user's own choice of colour and vibrancy can cause. It
- * says what is unreachable, by how much, what it costs, and — when one exists —
- * offers the slider position that recovers it.
+ * What stays is the ALERT, which is not instrumentation: a floor stranded by
+ * more than the emitted hex can even express, caused only by the user's own
+ * choice of colour and vibrancy, and invisible everywhere else in the app. It
+ * says what is unreachable and — when one exists — offers the slider position
+ * that recovers it. A canvas can still be authored into unreadable copy; this
+ * is the only thing that says so.
  */
-function ContrastReport({
+function ContrastAlert({
   report,
   eased,
   onEase,
@@ -891,49 +959,40 @@ function ContrastReport({
   eased: number | null;
   onEase(vibrancy: number): void;
 }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <SectionHeading as="p">Contrast</SectionHeading>
-        <ul data-testid="canvas-contrast-readout" className="mt-1 flex flex-col">
-          {report.readings.map((reading) => (
-            <FloorReading key={reading.token} reading={reading} />
-          ))}
-        </ul>
-      </div>
+  if (report.stranded.length === 0) return null;
 
-      {report.stranded.length === 0 ? null : (
-        <div
-          role="status"
-          data-testid="canvas-contrast-stranded"
-          className="flex gap-2 rounded-md border border-border bg-muted/50 p-4"
-        >
-          {/* Filled: this is the one thing on the page that went wrong, and the
-              only glyph in the editor that is not a control's own noun. */}
-          <WarningIcon weight="fill" className="mt-1 size-4 shrink-0 text-primary-text" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">
-              {report.stranded.length === 1
-                ? `${report.stranded[0].what} can't reach its contrast floor on this canvas.`
-                : `${report.stranded
-                    .map((reading) => reading.what.toLowerCase())
-                    .join(" and ")} can't reach their contrast floors on this canvas.`}
-            </p>
-            {eased === null ? null : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2"
-                onClick={() => onEase(eased)}
-                data-testid="canvas-contrast-ease"
-              >
-                <SlidersHorizontalIcon />
-                Ease vibrancy to {percentLabel(eased)}
-              </Button>
-            )}
-          </div>
+  return (
+    <div className="border-t border-border/50 pt-4">
+      <div
+        role="status"
+        data-testid="canvas-contrast-stranded"
+        className="flex gap-2 rounded-md border border-border bg-muted/50 p-4"
+      >
+        {/* Filled: this is the one thing on the page that went wrong, and the
+            only glyph in the editor that is not a control's own noun. */}
+        <WarningIcon weight="fill" className="mt-1 size-4 shrink-0 text-primary-text" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">
+            {report.stranded.length === 1
+              ? `${report.stranded[0].what} can't reach its contrast floor on this canvas.`
+              : `${report.stranded
+                  .map((reading) => reading.what.toLowerCase())
+                  .join(" and ")} can't reach their contrast floors on this canvas.`}
+          </p>
+          {eased === null ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={() => onEase(eased)}
+              data-testid="canvas-contrast-ease"
+            >
+              <SlidersHorizontalIcon />
+              Ease vibrancy to {percentLabel(eased)}
+            </Button>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1101,13 +1160,11 @@ export function CanvasEditor({
         </span>
       </SettingsRow>
 
-      <div className="border-t border-border/50 pt-2">
-        <ContrastReport
-          report={report}
-          eased={eased}
-          onEase={(vibrancy) => commit((current) => ({ ...current, vibrancy }))}
-        />
-      </div>
+      <ContrastAlert
+        report={report}
+        eased={eased}
+        onEase={(vibrancy) => commit((current) => ({ ...current, vibrancy }))}
+      />
     </>
   );
 }

@@ -129,7 +129,7 @@ export const HARNESS_LABELS: Record<FirstClassHarnessId, string> = {
 /**
  * Default harness for a freshly-started session. Ticket-side default lookup
  * removed with `Ticket.harnessId` — this is session-scoped only now (see
- * `apps/desktop/src/main/pty.ts`'s scratch/ticket-session boot paths).
+ * `apps/desktop/src/main/pty.ts`'s project/ticket-session boot paths).
  */
 export const DEFAULT_HARNESS_ID: HarnessId = "claude-code";
 

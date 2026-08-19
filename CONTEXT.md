@@ -23,6 +23,13 @@ _Avoid_: missing Attachment, broken Artifact
 The expanded working surface for one ticket, where its Ticket Body, sessions, files, artifacts, and Change Set coexist.
 _Avoid_: ticket worktree, artifact view
 
+**Home**:
+The project-level tabbed workspace, and the app's landing page. Its permanent
+first tab is the Board; the project's own Project Sessions open as tabs beside
+it. Opening a ticket takes Home over: the Ticket workspace fills the surface and
+Home's tab strip steps aside, so only one tab strip is ever on screen.
+_Avoid_: Board (for the page), Sessions page, dashboard
+
 **Project Files**:
 The project-level repository workspace for browsing and editing the Main checkout.
 _Avoid_: global files, project file tab
@@ -50,7 +57,9 @@ Project Sessions orchestrate project work; Ticket Sessions execute with explicit
 Ticket and worktree context; Subagent Sessions perform a bounded delegation and
 remain durable children of the Session that created them. Role determines the
 default context, tool bundle, and authority policy, not a separate Session type.
-_Avoid_: harness mode, agent mode, plan mode
+A Project Session runs on the Main checkout with no worktree and no board
+involvement, and is recorded in Session history exactly as a Ticket Session is.
+_Avoid_: harness mode, agent mode, plan mode, scratch session
 
 **Authority Snapshot**:
 The durable policy granted to one Session when it starts: which actions are
@@ -84,6 +93,18 @@ _Avoid_: edited transcript, current messages array
 One model response attempt on a Conversation Branch. Regeneration creates a
 sibling Attempt and retains the earlier result.
 _Avoid_: retry count, overwritten response
+
+**Context Compaction**:
+Replacing the older part of an Agent Thread's context with a summary of it, so
+the Session can continue past the model's window. It is linear and additive: the
+summary is appended, the history before it stays in durable local history, and
+only what the model is sent changes. It happens for one of three reasons — a
+reserve threshold, an overflow the provider refused, or an explicit request —
+and each one is a Session Event. Only the threshold is policy: a profile-wide
+switch decides whether a Session compacts before it is asked to, and a model may
+be given its own reserve. Switching the threshold off never withholds the
+recovery an overflow triggers.
+_Avoid_: truncation, trimming history, pruning the transcript
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
@@ -268,10 +289,7 @@ The ticket-scoped body of source changes relative to its base branch, including 
 _Avoid_: artifact, diff (when referring to the whole body of work)
 
 **Main checkout**:
-The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Scratch sessions and worktree-opt-out tickets run here.
-
-**Scratch session**:
-A ticket-less terminal session in a project's Sessions surface — main checkout, no worktree, no board involvement — still recorded in session history.
+The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
 Who a ticket event is attributed to: `user`, `session`, or `automation`. The app derives this from how the mutation arrived; callers never self-declare it.

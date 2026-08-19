@@ -175,7 +175,7 @@ function buildV8DbWithTicket(dbPath: string): Database.Database {
   return db;
 }
 
-/** Builds a populated v10 db to exercise the additive ticket_attachments table (migration 011). */
+/** Builds a populated v10 db to exercise the attachment-storage upgrade path. */
 function buildV10DbWithTicket(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
@@ -287,22 +287,56 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
-  it("creates ticket_attachments and its ticket index (migration 011)", () => {
+  it("replaces ticket_attachments with blobs + blob_links (migration 020)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(tableExists(db, "ticket_attachments")).toBe(true);
-    expect(indexExists(db, "idx_ticket_attachments_ticket")).toBe(true);
-    expect(columnNames(db, "ticket_attachments")).toEqual([
-      "id",
-      "ticket_id",
-      "kind",
-      "label",
-      "file_name",
-      "url",
+    // Migration 011's table is gone — it never held a row in any shipped build.
+    expect(tableExists(db, "ticket_attachments")).toBe(false);
+    expect(tableExists(db, "blobs")).toBe(true);
+    expect(tableExists(db, "blob_links")).toBe(true);
+    expect(indexExists(db, "idx_blob_links_ticket")).toBe(true);
+    expect(indexExists(db, "idx_blob_links_session")).toBe(true);
+    expect(indexExists(db, "idx_blob_links_blob")).toBe(true);
+    expect(columnNames(db, "blobs")).toEqual([
+      "hash",
+      "mime",
+      "size_bytes",
+      "original_name",
+      "width",
+      "height",
       "created_at",
     ]);
+    expect(columnNames(db, "blob_links")).toEqual([
+      "id",
+      "blob_hash",
+      "ticket_id",
+      "session_id",
+      "label",
+      "created_at",
+    ]);
+    db.close();
+  });
+
+  it("refuses a blob_link that names both owners, or neither (migration 020)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    const hash = "a".repeat(64);
+    db.prepare(
+      "INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at) VALUES (?, 'image/png', 1, 'a.png', 1)",
+    ).run(hash);
+
+    const insert = (ticketId: string | null, sessionId: string | null) =>
+      db
+        .prepare(
+          "INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at) VALUES (?, ?, ?, ?, 'l', 1)",
+        )
+        .run("l1", hash, ticketId, sessionId);
+
+    expect(() => insert(null, null)).toThrow();
+    expect(() => insert("t1", "s1")).toThrow();
     db.close();
   });
 
@@ -542,16 +576,16 @@ describe("migrate — 008 to 009 upgrade path (durable draft-PR url)", () => {
   });
 });
 
-describe("migrate — 010 to 011 upgrade path (ticket attachments)", () => {
-  it("adds ticket_attachments without touching an existing ticket", () => {
+describe("migrate — 010 to 020 upgrade path (attachment storage)", () => {
+  it("lands blobs + blob_links without touching an existing ticket", () => {
     const dbPath = tempDbPath();
     const db = buildV10DbWithTicket(dbPath);
 
     migrate(db, dbPath);
 
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
-    expect(tableExists(db, "ticket_attachments")).toBe(true);
-    expect(db.prepare("SELECT COUNT(*) as n FROM ticket_attachments").get()).toEqual({ n: 0 });
+    expect(tableExists(db, "blobs")).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT title FROM tickets WHERE id = 't1'").get()).toEqual({
       title: "Ticket",
     });

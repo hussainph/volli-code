@@ -18,9 +18,11 @@ import {
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelPurpose,
+  type ReasoningLevel,
   type RendererSessionEvent,
   type SessionPresentationProjection,
 } from "@volli/shared";
@@ -36,6 +38,7 @@ export type RendererSessionCommand =
       | { kind: "model.select" }
       | { kind: "executor.interrupt" }
       | { kind: "executor.retry" }
+      | { kind: "context.compact" }
       | { kind: "interaction.resolve" }
     >;
 
@@ -80,6 +83,21 @@ export interface SessionCreateInput {
    * Absent means none — injection is explicit selection, never ambient.
    */
   skills?: readonly string[];
+  /**
+   * An invocation-time model policy for THIS Session, merged onto the app
+   * default by the server and validated against Model Access before anything
+   * durable exists.
+   *
+   * The same parameter `volli session start --model/--reasoning` already
+   * carried, reaching the create door because a UI can now state it too: the
+   * New-ticket composer's Create & start picks a model and an effort for the
+   * Session it is about to open (VC-56). Absent means the configured default
+   * for the Role, which is what every other chat start still sends.
+   */
+  modelOverride?: {
+    model?: { providerId: string; modelId: string };
+    reasoningLevel?: ReasoningLevel;
+  };
 }
 
 export interface SessionAttachInput {
@@ -106,6 +124,10 @@ export interface SessionRouterContext {
   ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
   readHiddenModels?: () => readonly HiddenModelRef[];
   writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
+  readCompactionPolicy?: () => CompactionPolicy;
+  writeCompactionPolicy?: (
+    policy: CompactionPolicy,
+  ) => CompactionPolicy | Promise<CompactionPolicy>;
   /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -315,6 +337,18 @@ const modelSelectionSchema = z.object({
   modelId: nonEmptyString,
   reasoningLevel: z.enum(REASONING_LEVELS),
 });
+/**
+ * Both halves optional and both meaningful alone: a bare model keeps the
+ * default's level where the chosen model can run it, a bare level keeps the
+ * default model. The server owns that merge (`resolveModelSelection`) and the
+ * availability check behind it, so this edge only states the grammar.
+ */
+const modelOverrideSchema = z
+  .object({
+    model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).optional(),
+    reasoningLevel: z.enum(REASONING_LEVELS).optional(),
+  })
+  .optional();
 const modelPurposeSchema = z.enum(MODEL_PURPOSES);
 const modelAccessDefaultsSchema = z.object({
   global: modelSelectionSchema.nullable(),
@@ -330,6 +364,27 @@ const modelAccessDefaultsSchema = z.object({
 const hiddenModelsSchema = z
   .array(z.object({ providerId: nonEmptyString, modelId: nonEmptyString }))
   .max(2000);
+/**
+ * The compaction policy, whole in both directions: the switch and the full
+ * curated list of per-model reserves, never a delta.
+ *
+ * A reserve crosses as a positive whole token count and nothing more — whether
+ * one is larger than the model's own window is a question about a catalog this
+ * edge does not hold, and main refuses it against the snapshot before storing.
+ * The same count cap as the hidden models beside it, for the same reason.
+ */
+const compactionPolicySchema = z.object({
+  autoCompaction: z.boolean(),
+  modelLimits: z
+    .array(
+      z.object({
+        providerId: nonEmptyString,
+        modelId: nonEmptyString,
+        reserveTokens: positiveSafeInteger,
+      }),
+    )
+    .max(2000),
+});
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 const modelAccessSnapshotSchema = z.object({
   observedAt: z.number().finite(),
@@ -376,6 +431,10 @@ const modelAccessSnapshotSchema = z.object({
         // Absent when the catalog reports no usable size; the renderer's
         // context meter divides by this, so zero is not allowed through.
         contextWindow: positiveSafeInteger.optional(),
+        // Whether the attach affordance may offer images (VC-50). Defaults to
+        // permitting them: an older main process that does not send the field
+        // should not silently disable attachments across the whole catalog.
+        acceptsImageInput: z.boolean().optional().default(true),
       })
       .transform((model) => ({
         ...model,
@@ -434,6 +493,14 @@ const commandSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("executor.interrupt"), attachmentId: nonEmptyString.optional() }),
   z.object({ kind: z.literal("executor.retry"), attachmentId: nonEmptyString.optional() }),
+  z.object({
+    kind: z.literal("context.compact"),
+    attachmentId: nonEmptyString.optional(),
+    // Bounded like every other free string this edge takes: these words are
+    // headed for a summarization prompt, and an unbounded one is a way to
+    // spend a Session's whole window on the call meant to reclaim it.
+    instructions: z.string().max(4000).nullable().optional(),
+  }),
   z.object({
     kind: z.literal("interaction.resolve"),
     interactionId: nonEmptyString,
@@ -550,6 +617,9 @@ export function createSessionRouter() {
             // that has to carry the skills: `attach` composes the prompt from
             // the record `create` wrote, and never sees this input.
             skills: skillSlugs,
+            // Same reason, for the same door: a Session's model policy is
+            // recorded by the create and never revisited by the attach.
+            modelOverride: modelOverrideSchema,
           }),
         )
         .mutation(async ({ ctx, input }) => {
@@ -616,6 +686,20 @@ export function createSessionRouter() {
           }
           await ctx.writeHiddenModels(input);
           return input;
+        }),
+      compactionPolicy: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readCompactionPolicy) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return compactionPolicySchema.parse(ctx.readCompactionPolicy());
+      }),
+      setCompactionPolicy: instrumentedProcedure
+        .input(compactionPolicySchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeCompactionPolicy) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
         }),
     }),
     session: t.router({

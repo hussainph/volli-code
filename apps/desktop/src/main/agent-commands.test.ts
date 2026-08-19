@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -20,7 +20,8 @@ import type {
 } from "../ipc/contract";
 import { StructuredSessionsError, type SessionStartInput } from "./session-runtime/sessions";
 
-import { createAttachment } from "./db/attachments-repo";
+import { importBlob } from "./blob-import";
+import { blobsRoot } from "./blob-store";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
@@ -38,7 +39,6 @@ import {
   CHAT_PEEK_ENTRIES,
   composeProjectBrief,
   createAgentCommandService as createAgentCommandServiceBase,
-  DEFAULT_KICKOFF_MESSAGE,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
@@ -862,18 +862,26 @@ describe("agent command service", () => {
       args: { title: "Ship CLI", body: "Follow the implementation contract." },
       ctx: { cwd: "/repo/volli", env: {} },
     });
-    createAttachment(
+    const blobsRootDir = blobsRoot(mkdtempSync(join(tmpdir(), "volli-blobs-")));
+    importBlob(
       ctx.db,
-      { ticketId: "ticket-one", kind: "file", fileName: "spec.png", label: "homepage mock" },
+      blobsRootDir,
+      {
+        fileName: "spec.png",
+        bytes: Buffer.from("spec bytes"),
+        label: "homepage mock",
+        owner: { ticketId: "ticket-one" },
+      },
       100,
     );
-    createAttachment(
+    importBlob(
       ctx.db,
+      blobsRootDir,
       {
-        ticketId: "ticket-one",
-        kind: "url",
-        url: "https://example.com/design",
+        fileName: "design.pdf",
+        bytes: Buffer.from("design bytes"),
         label: "design doc",
+        owner: { ticketId: "ticket-one" },
       },
       200,
     );
@@ -895,8 +903,7 @@ describe("agent command service", () => {
           "## Attachments\n\n" +
           "Read each attached file before starting — they are part of the ticket's spec:\n" +
           "- `.volli/attachments/spec.png` — homepage mock\n" +
-          "Reference URLs:\n" +
-          "- https://example.com/design — design doc",
+          "- `.volli/attachments/design.pdf` — design doc",
       },
     });
   });
@@ -1394,7 +1401,10 @@ describe("agent command service", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-    insertSession(ctx.db, testSession("project-one", null, { id: sessionId, title: "Scratch" }));
+    insertSession(
+      ctx.db,
+      testSession("project-one", null, { id: sessionId, title: "Project chat" }),
+    );
     const observed: Array<{ sessionId: string; lines: number }> = [];
     const notifications: Array<{ title: string; message: string }> = [];
     const service = createAgentCommandService({
@@ -1857,7 +1867,7 @@ describe("agent command service", () => {
     expect(listed).not.toHaveBeenCalled();
   });
 
-  it("records scratch-session signals in the ledger and requires session context", async () => {
+  it("records Project-Session signals in the ledger and requires session context", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -3769,6 +3779,7 @@ describe("model.list", () => {
           label: "Claude Opus 5",
           state: "available",
           reasoningLevels: ["low", "medium", "high"],
+          acceptsImageInput: true,
         },
         {
           providerId: "anthropic",
@@ -3776,6 +3787,7 @@ describe("model.list", () => {
           label: "Claude Legacy",
           state: "unavailable",
           reasoningLevels: ["off"],
+          acceptsImageInput: true,
         },
         {
           providerId: "openai-codex",
@@ -3783,6 +3795,7 @@ describe("model.list", () => {
           label: "Terra",
           state: "authentication-required",
           reasoningLevels: ["medium", "high", "xhigh"],
+          acceptsImageInput: true,
         },
       ],
     };
@@ -4351,5 +4364,175 @@ describe("session.start", () => {
         ],
       },
     });
+  });
+});
+
+describe("worktree scope, told honestly to the agent (VC-98)", () => {
+  function projectFixture(): void {
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+  }
+
+  it("tells a worktree-scoped ticket that one is coming, not to move the board", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: true }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.status",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    // The old sentence ("Move it to Doing to create one") sent agents to do
+    // something that has never materialized a worktree; VC-81's agent moved
+    // the ticket, saw nothing appear, and carried on in the main checkout.
+    expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    if (res.ok) throw new Error("expected a refusal");
+    expect(res.error.message).toBe(
+      "Ticket VC-1 has no worktree yet. One is created when a session starts for it.",
+    );
+    expect(res.error.message).not.toContain("Doing");
+  });
+
+  it("tells a main-checkout ticket that no worktree is coming at all", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
+    );
+    const { git } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.diff",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    if (res.ok) throw new Error("expected a refusal");
+    expect(res.error.message).toBe(
+      "Ticket VC-1 runs in the project's main checkout, so it has no worktree.",
+    );
+  });
+
+  it("warns a session working outside its ticket's worktree", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: "ticket-one",
+        ticketNumber: 1,
+        usesWorktree: true,
+        worktreePath: "/wt/VC-1",
+      }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.0.0" });
+
+    // The VC-81 shape: a Session that attached before the worktree existed, so
+    // it is still bound to the main checkout while the ticket claims isolation.
+    const res = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        warning:
+          "You are working in /repo/volli, which is outside VC-1's worktree at /wt/VC-1. Move your work there before continuing.",
+      },
+    });
+  });
+
+  it("stops warning once the agent has moved into the worktree", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: "ticket-one",
+        ticketNumber: 1,
+        usesWorktree: true,
+        worktreePath: "/wt/VC-1",
+      }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.0.0" });
+
+    // Recomputed from the caller's cwd every time rather than stored, so an
+    // agent that migrates its own work clears the warning by doing so — there
+    // is no flag left behind to go stale, and nothing here can track a cwd the
+    // agent drives through bash.
+    const res = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/wt/VC-1/packages/shared", env: { session: created.session.id } },
+    });
+
+    if (!res.ok) throw new Error("expected identify to succeed");
+    expect(res.data).not.toHaveProperty("warning");
+  });
+
+  it("never warns a ticket that has no worktree to be outside of", async () => {
+    ctx = openTestDb();
+    projectFixture();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const created = await sessionEngine.createSession({
+      commandId: "create-structured",
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.0.0" });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+    });
+
+    if (!res.ok) throw new Error("expected identify to succeed");
+    expect(res.data).not.toHaveProperty("warning");
   });
 });

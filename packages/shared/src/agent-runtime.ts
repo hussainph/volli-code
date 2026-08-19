@@ -14,6 +14,7 @@
  * facts; an executor states what happened and never what to record.
  */
 
+import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
@@ -118,6 +119,17 @@ export interface ModelAccessModel {
    * not report a usable size, so a reader never mistakes "unknown" for zero.
    */
   contextWindow?: number;
+  /**
+   * Whether this model takes image input (Pi's `Model.input` including
+   * `"image"`), so the attach affordance can say a model cannot see pictures
+   * instead of discovering it a turn later (VC-50).
+   *
+   * Not knowing reads as `true`. The asymmetry is deliberate: an attachment
+   * always materializes into the workspace and is named in the brief, so a
+   * wrong `true` degrades to a path reference the agent can still open, while a
+   * wrong `false` removes an affordance the model actually supports.
+   */
+  acceptsImageInput: boolean;
 }
 
 /** The complete sanitized Model Access view at one observation time. */
@@ -615,6 +627,7 @@ export interface SettledAssistantMessage {
 export type RuntimeObservation =
   | AttachmentObservation
   | TurnObservation
+  | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
   | RuntimeActivityObservation
@@ -656,6 +669,72 @@ export interface TurnObservation {
   occurredAt?: number;
   recoveryCursor?: string;
 }
+
+/**
+ * Why a context was compacted, in the executor's own three words.
+ *
+ * Spelled out rather than imported: this package depends on nothing, and Pi
+ * names these same three reasons in its own `CompactionReason`. The two are
+ * held in step by the one place that can see both — `pi/runtime.ts` checks this
+ * list against Pi's type — rather than by an import this package may not have.
+ *
+ * All three have producers: the reserve threshold, the overflow a provider
+ * refused, and the `/compact` verb a person typed.
+ */
+export const COMPACTION_REASONS = ["threshold", "overflow", "manual"] as const;
+
+export type CompactionReason = (typeof COMPACTION_REASONS)[number];
+
+/**
+ * The Session's context was summarized — or an attempt to summarize it failed.
+ *
+ * Deliberately not a {@link TurnObservation}. Compaction is maintenance rather
+ * than a unit of the conversation: it says nothing the model said, an
+ * interrupted one must raise no partial-turn Attention on recovery, and the
+ * threshold path already runs inside a turn the person is waiting on.
+ *
+ * The two arms carry different facts because they are different facts. A
+ * compaction that happened has a durable entry behind it and a before and after
+ * worth reading; one that failed wrote nothing at all, and an entry id or a
+ * token count on that arm could only be invented. A failed summary is
+ * deliberately **not** an Attention: nothing is blocked by it, the message that
+ * paid for it is delivered anyway, and there is no action a person could take
+ * to clear it. What it does risk — the next turn refused for context length —
+ * has its own Attention, raised only once overflow recovery has been spent.
+ */
+export type CompactionObservation =
+  | {
+      kind: "compaction";
+      state: "compacted";
+      reason: CompactionReason;
+      /** The durable compaction entry in the executor's own history. */
+      entryId: string;
+      /**
+       * What the context held before, as the executor measured it: the model's
+       * own last reported usage, not a guess.
+       */
+      tokensBefore: number;
+      /**
+       * What the compacted context is expected to hold, as the executor
+       * estimates it.
+       *
+       * An estimate on purpose, and the asymmetry with `tokensBefore` is the
+       * honest one: nothing has measured the new context yet, and nothing can
+       * until the model next answers on it.
+       */
+      tokensAfter: number;
+      occurredAt?: number;
+      recoveryCursor?: string;
+    }
+  | {
+      kind: "compaction";
+      state: "failed";
+      reason: CompactionReason;
+      /** Sanitized; the same diagnostic discipline as {@link RuntimeFailure}. */
+      message: string;
+      occurredAt?: number;
+      recoveryCursor?: string;
+    };
 
 /** Transient stream delta. Never advances the durable recovery cursor. */
 export interface TranscriptDeltaObservation {
@@ -711,7 +790,8 @@ export type RuntimeActivityObservation =
  * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
  * then whitelisting this exact set — and it throws rather than skipping what it
  * does not recognise. Adding a whole new observation kind is therefore safe: the
- * sidecar never sees one, so no marker already on disk changes how it validates.
+ * sidecar holds none of them, so no marker already on disk changes how it
+ * validates — {@link CompactionObservation} was added exactly that way.
  * Adding a `reason` is not: every attention marker written by an older build is
  * re-validated against the new list on the next recovery, and a Session whose
  * marker no longer matches fails to attach outright.
@@ -781,17 +861,58 @@ export type ModelSelectionOutcome =
       message: string;
     };
 
+/**
+ * Observable outcome of one EXPLICIT compaction request.
+ *
+ * The threshold and overflow paths need no such answer: nobody asked them, so
+ * a compaction that found nothing to do is nothing to report, and only the
+ * durable {@link CompactionObservation} records what happened. A person who
+ * typed `/compact` did ask, and every way of not compacting has to reach them
+ * — which is why `nothing-to-compact` and `summary-failed` are refusals here
+ * rather than a quiet `false`.
+ *
+ * `summary-failed` overlaps a `CompactionObservation` deliberately. The
+ * observation is the durable fact and the refusal is the answer to the
+ * request; the same failure is both, exactly as a refused message is both a
+ * receipt and a transcript row.
+ */
+export type CompactionRequestOutcome =
+  | { kind: "compacted" }
+  | {
+      kind: "rejected";
+      reason: "busy-unsupported" | "closed" | "nothing-to-compact" | "summary-failed";
+      message: string;
+    };
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
     text: string,
     delivery?: RuntimeMessageDelivery,
     commandId?: string,
+    /**
+     * Images to send as content alongside `text`, for this turn (VC-50).
+     *
+     * Trailing and optional so every existing caller is untouched, and
+     * separate from `text` because they are not interchangeable: a runtime
+     * that cannot take images can ignore this and still deliver the message.
+     * The bytes live only as long as the call — what persists is the
+     * `volli-blob:` reference in the message parts.
+     */
+    images?: readonly RuntimeImageInput[],
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
   /** Retry the last failed run without duplicating its user message. */
   retry(commandId?: string): Promise<DeliveryOutcome>;
+  /**
+   * Compact this Session's context now, because someone asked.
+   *
+   * The third producer of a {@link CompactionObservation} and the only one
+   * with a caller waiting on it. `instructions` is free text handed to the
+   * summarizer — what to keep, what matters — and is prose, never arguments.
+   */
+  compact(instructions?: string): Promise<CompactionRequestOutcome>;
   /** Abort the current run and settle the resulting state honestly. */
   interrupt(): Promise<void>;
   /** Release local resources; the Session and its history remain. */

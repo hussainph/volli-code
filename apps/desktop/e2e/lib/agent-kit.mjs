@@ -92,10 +92,30 @@ export async function runVolliNode(args, extraEnv = {}) {
   return runCapturing(process.execPath, [CLI_BUNDLE, ...args], extraEnv);
 }
 
+/**
+ * The probe's own environment, minus the addressing an OUTER Volli session
+ * would otherwise donate to the CLI under test.
+ *
+ * `volli` resolves its context from `VOLLI_SESSION` / `VOLLI_TICKET` before it
+ * falls back to a registered cwd, and an agent runs these probes from inside a
+ * live session, so both are set in `process.env` and point at a Session in the
+ * DEVELOPER's database. Inherited into a probe they address the one app that
+ * cannot possibly know them — the scratch instance the probe just launched — and
+ * every shim call fails `SESSION_NOT_FOUND` for a reason that has nothing to do
+ * with what is being tested. Scrubbed here rather than in each probe: the
+ * probes that MEAN one pass it explicitly through `extraEnv`, which still wins.
+ */
+function probeEnv() {
+  const env = { ...process.env };
+  delete env.VOLLI_SESSION;
+  delete env.VOLLI_TICKET;
+  return env;
+}
+
 async function runCapturing(file, args, extraEnv, { cwd } = {}) {
   try {
     const { stdout, stderr } = await execFileAsync(file, args, {
-      env: { ...process.env, ...extraEnv },
+      env: { ...probeEnv(), ...extraEnv },
       maxBuffer: 8 * 1024 * 1024,
       ...(cwd ? { cwd } : {}),
     });

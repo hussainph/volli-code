@@ -123,7 +123,7 @@ class InMemorySessionLedger implements SessionLedger {
             return true;
           case "ticket":
             return session.ticketId === query.ticketId;
-          case "scratch":
+          case "project":
             return session.ticketId === null;
         }
       })
@@ -142,7 +142,7 @@ class InMemorySessionLedger implements SessionLedger {
           return true;
         case "ticket":
           return session.ticketId === query.ticketId;
-        case "scratch":
+        case "project":
           return session.ticketId === null;
       }
     }).length;

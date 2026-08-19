@@ -12,18 +12,19 @@ import {
   USER_ACTOR,
   validateUniquePrefix,
 } from "@volli/shared";
+import { attachBlob } from "./blob-attach";
+import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import type {
-  Label,
-  Project,
-  SessionListingRow,
-  SessionProjection,
-  Ticket,
-  TicketStatus,
-} from "@volli/shared";
+import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
+  BlobAttachInput,
+  BlobAttachResult,
+  BlobLinkDraftsInput,
+  BlobLinkIdInput,
+  BlobLinksResult,
+  BlobListInput,
   BootstrapPayload,
   BootstrapResult,
   CommentCreateInput,
@@ -90,6 +91,7 @@ import {
   countProjects,
   deleteProject,
   findProjectByPath,
+  getProjectById,
   insertProject,
   listProjects,
   nextSortOrder,
@@ -97,12 +99,10 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
+import { createDesktopSessionEngine, sessionListingRows } from "./session-control";
+import { prepared } from "./db/prepared";
 import {
-  chatSessionRecord,
-  createDesktopSessionEngine,
-  terminalSessionRecord,
-} from "./session-control";
-import {
+  getTicket,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
@@ -128,6 +128,7 @@ import {
   type AgentSiteReleaseReport,
   archiveAndClean,
   commitTicketRemaining,
+  ensure,
   getRetentionTtlDays,
   listBranches,
   publishTicketBranch,
@@ -223,24 +224,83 @@ function busyRefusal(site: BusyWorktreeSite): string {
     : "A terminal is still running in this worktree. Close it first.";
 }
 
-/**
- * The renderer's Session listing: a discriminated row per Session, so a
- * structured-only Session is visible instead of silently dropping out.
- *
- * PRECEDENCE: a Session that has ever opened a terminal attachment renders as
- * its terminal row, byte-for-byte what `terminalSessionRecord` always
- * returned; only an attachment-less or structured-only Session renders as a
- * chat row. The CLI socket (`agent-commands.ts`) applies the same precedence
- * to its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify,
- * peek, the hooks) stays terminal-only on purpose and never reaches here.
+/*
+ * The renderer's Session listing rows are built by `session-control/listing-row.ts`,
+ * which is also what the `volli:session-activity` push uses — the fetch and the
+ * push must produce the identical row or a Session changes appearance the moment
+ * it moves. The CLI socket (`agent-commands.ts`) applies the same precedence to
+ * its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify, peek,
+ * the hooks) stays terminal-only on purpose and never reaches here.
  */
-function sessionListingRows(sessions: readonly SessionProjection[]): SessionListingRow[] {
-  return sessions.map((session): SessionListingRow => {
-    const terminal = terminalSessionRecord(session);
-    return terminal !== null
-      ? { kind: "terminal", record: terminal }
-      : { kind: "chat", record: chatSessionRecord(session) };
+
+/**
+ * Tickets whose worktree is being materialized RIGHT NOW (VC-98).
+ *
+ * `ensure` is git work measured in seconds, and the rail control that starts it
+ * is the same one that can switch scope straight back off. That switch-off used
+ * to be permitted mid-flight: `updateTicketFieldsCommand` freezes scope only
+ * once `worktree_path` is stamped, and the stamp lands at the END of `ensure`.
+ * So the off-write committed against a still-null path, `ensure` then stamped a
+ * worktree onto a ticket that had just been scoped to the main checkout, and
+ * the freeze made the contradiction PERMANENT — `uses_worktree` 0 beside a real
+ * worktree on disk, with the destination control gone and no way back through
+ * the UI. Holding the ticket here for the duration closes that window.
+ */
+const materializingWorktrees = new Set<string>();
+
+/**
+ * Materializes the worktree of a ticket that was just switched INTO worktree
+ * scope (VC-98).
+ *
+ * `ensure` had exactly two callers, both Session boots, so switching scope on
+ * for a ticket whose Session already existed recorded `usesWorktree: true` and
+ * then had nothing create the checkout. Everything downstream believed the
+ * flag: the board showed the ticket as isolated, `volli worktree status`
+ * reported no worktree, and the agent already running went on writing to the
+ * main checkout. Scope is now a promise this keeps.
+ *
+ * Deliberately NOT inside `updateTicketFieldsCommand`'s transaction: `ensure`
+ * is git work, and no DB write may straddle it (ensure.ts). The flag is the
+ * user's recorded intent and stands committed whatever git does next — which
+ * is safe, because a ticket left worktree-scoped with no worktree refuses to
+ * bind a Session anywhere else (`prepare`, #38) rather than quietly falling
+ * back to the main checkout.
+ *
+ * Live Session bindings are left exactly where they are. A binding is fixed at
+ * attach and re-pointing one under a running agent would move its working
+ * directory mid-turn; the next attach picks up the materialized worktree on
+ * its own, and `volli identify` warns any agent still standing outside it.
+ */
+async function materializeSwitchedOnWorktree(
+  db: Database.Database,
+  ticketId: string,
+  committed: Ticket,
+): Promise<TicketResult> {
+  // Held across the whole await so a concurrent scope-off is refused rather
+  // than racing the identity stamp; released in `finally` so a throw cannot
+  // strand the ticket un-switchable forever.
+  materializingWorktrees.add(ticketId);
+  const outcome = await ensure(worktreeDeps(db), ticketId).finally(() => {
+    materializingWorktrees.delete(ticketId);
   });
+  // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
+  // new identity stamp to show. Failure has a scope flag that really did change
+  // under a renderer that is about to revert it optimistically off the back of
+  // the error below — and the re-hydrate is what puts the true value back. It
+  // lands last by construction rather than by luck: this event is sent before
+  // the reply, so the renderer starts its bootstrap round-trip before it sees
+  // the error, and a round-trip cannot outrun a message already queued.
+  broadcastDataChanged({ ticketId, projectId: committed.projectId, kind: "worktree" });
+  if (!outcome.ok) {
+    // Surfaced as a failed mutation so it reaches a toast rather than living
+    // only in the phase stream (CLAUDE.md: never swallow a failed mutation).
+    // The ticket stays worktree-scoped with no worktree, which is a state the
+    // app already knows how to be in — it is what every ticket looks like
+    // before its first Session — and the next session start retries `ensure`.
+    return { ok: false, error: `worktree scope is on, but ${outcome.error}` };
+  }
+  // Re-read: `ensure` stamped path/branch/base after `committed` was captured.
+  return { ok: true, ticket: getTicket(db, ticketId) ?? committed };
 }
 
 // ---- registration --------------------------------------------------------
@@ -293,6 +353,12 @@ export function registerDataIpcHandlers(
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
+    /**
+     * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
+     * the attach handler is the only thing that reads it, and it fails honestly
+     * rather than writing somewhere arbitrary.
+     */
+    blobsRoot?: string;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -302,6 +368,7 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
@@ -473,12 +540,32 @@ export function registerDataIpcHandlers(
       };
     },
 
-    "volli:ticket-update": (input: TicketUpdateInput): TicketResult => {
+    "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
       const now = Date.now();
-      return {
-        ok: true,
-        ticket: updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
-      };
+      // The one write that can race the `ensure` a previous call is still
+      // running: switching scope back OFF before the identity stamp lands.
+      // Refused rather than queued — the user is asking to undo something that
+      // is already half-done on disk, and the honest answer is to say so while
+      // it finishes. Re-asserting `true` is a no-op and passes through.
+      if (input.usesWorktree === false && materializingWorktrees.has(input.ticketId)) {
+        return {
+          ok: false,
+          error:
+            "The ticket's worktree is still being created, so its worktree scoping can't change yet. Try again once it's ready.",
+        };
+      }
+      // Read BEFORE the write: the returned ticket shows scope as it now stands,
+      // which cannot tell "just switched on" from "was already on" — and only
+      // the transition materializes.
+      const before = getTicketRow(db, input.ticketId);
+      const ticket = updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } });
+      // Only the one transition goes async. Every other update — a title, a
+      // body, a branch stamp — stays the synchronous write it has always been,
+      // the same split `volli:ticket-move` makes for its interrupt side effect.
+      const switchedOn =
+        before !== undefined && before.uses_worktree === 0 && ticket.usesWorktree === true;
+      if (!switchedOn) return { ok: true, ticket };
+      return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
     },
 
     "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => {
@@ -564,6 +651,80 @@ export function registerDataIpcHandlers(
       if (!getComment(db, input.commentId)) return { ok: false, error: "Unknown comment" };
       deleteComment(db, input.commentId);
       return { ok: true };
+    },
+
+    "volli:blob-attach": async (input: BlobAttachInput): Promise<BlobAttachResult> => {
+      try {
+        // The workspace an `@` ref resolves against is a fact about the
+        // Ticket's worktree and the project's checkout, so for an owned attach
+        // it is derived here — a renderer that guessed it wrong would silently
+        // turn repository files into frozen copies. The renderer supplies it
+        // only for an unowned attach (the new-Ticket composer), whose Ticket
+        // does not exist to derive from yet.
+        const refRoot = input.refRoot ?? resolveRefRoot(db, input.owner);
+        const outcome = await attachBlob(
+          db,
+          blobsRootPath,
+          { ...input, ...(refRoot === undefined ? {} : { refRoot }) },
+          Date.now(),
+        );
+        // Flattened to two nullable fields rather than passed through as the
+        // tagged union: every refusal on this channel already travels as
+        // `{ ok: false }`, and a second discriminant beside it would give the
+        // renderer two different shapes to branch on for one answer.
+        return {
+          ok: true,
+          relPath: outcome.kind === "blob" ? null : outcome.relPath,
+          blob: outcome.kind === "ref" ? null : outcome.blob,
+        };
+      } catch (error) {
+        // Attach failures are sentences written for a person — a file over the
+        // size ceiling, a chat at its image budget — so the message is the
+        // point and is surfaced verbatim.
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+
+    "volli:blob-list": (input: BlobListInput): BlobLinksResult => {
+      if (input.ticketId !== undefined) {
+        return { ok: true, blobs: listLinkViews(db, { ticketId: input.ticketId }) };
+      }
+      if (input.sessionId !== undefined) {
+        return { ok: true, blobs: listLinkViews(db, { sessionId: input.sessionId }) };
+      }
+      return { ok: false, error: "Attachments belong to a ticket or a session" };
+    },
+
+    "volli:blob-remove": (input: BlobLinkIdInput): Result => {
+      const removed = deleteBlobLink(db, input.linkId, Date.now(), { kind: "user" });
+      if (!removed) return { ok: false, error: "Unknown attachment" };
+      return { ok: true };
+    },
+
+    "volli:blob-link-drafts": (input: BlobLinkDraftsInput): BlobLinksResult => {
+      try {
+        const now = Date.now();
+        // One transaction: a composer's attachments arrive together, and a
+        // Ticket that kept three of five would be worse than one that kept none
+        // and said so.
+        db.transaction(() => {
+          for (const draft of input.blobs) {
+            createBlobLink(
+              db,
+              {
+                blobHash: draft.blobHash,
+                ...(draft.label === undefined ? {} : { label: draft.label }),
+                ticketId: input.ticketId,
+                eventActor: { kind: "user" },
+              },
+              now,
+            );
+          }
+        })();
+        return { ok: true, blobs: listLinkViews(db, { ticketId: input.ticketId }) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
     },
 
     "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => {
@@ -934,4 +1095,39 @@ export function registerDataIpcHandlers(
   };
 
   registerGuardedIpcHandlers(DATA_IPC, handlers);
+}
+
+/**
+ * The workspace root an `@` reference from this owner would resolve against
+ * (VC-50), or `undefined` when there is no such tree — which makes every file
+ * a snapshot, the safe answer.
+ *
+ * A Ticket with a worktree is briefed inside it; a Ticket without one runs in
+ * the project's own checkout, which is also where a ticketless Session runs. A
+ * Session is resolved through the Ticket it belongs to for exactly that reason:
+ * the tree is a fact about the work, not about the conversation.
+ */
+function resolveRefRoot(
+  db: Database.Database,
+  owner: BlobAttachInput["owner"],
+): string | undefined {
+  if ("unowned" in owner) return undefined;
+  const ticketId =
+    "ticketId" in owner
+      ? owner.ticketId
+      : (prepared<[string], { ticket_id: string | null }>(
+          db,
+          "SELECT ticket_id FROM sessions WHERE id = ?",
+        ).get(owner.sessionId)?.ticket_id ?? null);
+  if (ticketId === null) {
+    if ("ticketId" in owner) return undefined;
+    const projectId = prepared<[string], { project_id: string }>(
+      db,
+      "SELECT project_id FROM sessions WHERE id = ?",
+    ).get(owner.sessionId)?.project_id;
+    return projectId === undefined ? undefined : getProjectById(db, projectId)?.path;
+  }
+  const ticket = getTicketRow(db, ticketId);
+  if (ticket === undefined) return undefined;
+  return ticket.worktree_path ?? getProjectById(db, ticket.project_id)?.path;
 }

@@ -1,0 +1,68 @@
+/**
+ * The compaction boundary, drawn.
+ *
+ * What it says and where it sits are `chat/compaction-boundary.ts`'s; this is
+ * only what it looks like — the same split every other row in the transcript is
+ * built on.
+ *
+ * TWO DRESSES, and the difference is the fact itself rather than a severity
+ * ramp. A compaction that happened DIVIDES the conversation — from here down the
+ * model is working from a summary of what is above — so it wears a rule, which
+ * is the one thing in this transcript that means "boundary" and the reason no
+ * other row has one. A compaction that failed divides nothing: the summary was
+ * never written and the context is exactly as it was, so it is a line like any
+ * other quiet receipt, carrying the executor's own words about why. A rule there
+ * would draw a seam that does not exist.
+ *
+ * Memoized on one stable object, which is the whole of its props. This sits in
+ * the plane's own render, and the plane renders on every streamed frame of every
+ * turn; a compaction moves once or twice in a Session.
+ */
+import * as React from "react";
+import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+
+import { compactionBoundaryCopy } from "@renderer/chat/compaction-boundary";
+import type { TranscriptCompaction } from "@renderer/chat/transcript";
+import { Separator } from "@renderer/components/ui/separator";
+
+export const CompactionBoundary = React.memo(function CompactionBoundary({
+  compaction,
+}: {
+  compaction: TranscriptCompaction;
+}) {
+  const copy = compactionBoundaryCopy(compaction);
+  const compacted = compaction.outcome === "compacted";
+  return (
+    // The whole row hovers to its full sentence: both the reason and the note
+    // clip on a narrow window, and this is the only way back to the rest of one.
+    <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.description}>
+      <div className="flex min-w-0 items-center gap-2 text-ui">
+        {compacted ? (
+          <ArrowsInLineVerticalIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+        ) : (
+          // A failure that changed nothing is not a broken Session — the message
+          // that paid for it was delivered on the context that was already
+          // there. Attention, not destructive: something did not happen.
+          <WarningIcon aria-hidden className="size-3.5 shrink-0 text-attention" weight="fill" />
+        )}
+        <span className="shrink-0 font-medium">{copy.headline}</span>
+        <span className="min-w-0 truncate text-muted-foreground">{copy.reason}</span>
+        {/* The rule runs from the label to the count, so the two ends of the
+            row are the two things a glance wants and the line is what joins
+            them. Only the compacted arm draws one; see the module note. */}
+        {compacted ? <Separator aria-hidden className="min-w-4 flex-1" /> : null}
+        {copy.before === null ? null : (
+          <span className="shrink-0 tabular-nums text-muted-foreground">{copy.before}</span>
+        )}
+      </div>
+      {/* The row's actual job, said once: what a reader scrolling up is looking
+          at. Everything above this line is still here and still true; it is
+          simply not what the model is reading any more. */}
+      <p className="text-ui text-muted-foreground/70">{copy.note}</p>
+      {copy.detail === null ? null : (
+        <p className="truncate text-ui text-muted-foreground/70">{copy.detail}</p>
+      )}
+    </div>
+  );
+});

@@ -50,7 +50,7 @@ const deps = (git: ReturnType<typeof scriptedGit>["git"], statMtimeMs?: StatMtim
   db: ctx.db,
   git,
   statMtimeMs,
-  attachmentsRoot: "unused",
+  blobsRoot: "unused",
 });
 
 describe("listBranches", () => {

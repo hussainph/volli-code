@@ -251,6 +251,26 @@ describe("createChatSession", () => {
     expect(ticketStarts[1]).not.toHaveProperty("skills");
   });
 
+  it("carries a chosen model onto the create, and omits it when the surface picked none", async () => {
+    const { store, ticketStarts } = fixture();
+
+    // The New-ticket composer's Create & start states the Session's model and
+    // effort up front (VC-56); every other start leaves the Role's default to
+    // main, and "absent" is how it says so — never an explicit undefined.
+    await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: "Work on VC-1",
+      model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+    });
+    await store.getState().createChatSession({ projectId: "p1", ticketId: "t1", title: null });
+
+    expect(ticketStarts[0]).toMatchObject({
+      model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+    });
+    expect(ticketStarts[1]).not.toHaveProperty("model");
+  });
+
   it("keeps the durable Session when the background attach is refused", async () => {
     // A refused attach does not un-create the Session: the id came back before
     // the attach settled, and the error lands on the Session it belongs to.

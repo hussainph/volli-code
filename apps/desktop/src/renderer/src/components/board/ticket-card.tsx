@@ -4,6 +4,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { displayTicketId, type Label, type Ticket } from "@volli/shared";
 
+import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
@@ -48,17 +49,27 @@ export function TicketCardContent({
   ticketPrefix,
   projectLabels,
   selected = false,
+  sessionActivity = null,
 }: {
   ticket: Ticket;
   ticketPrefix: string;
   projectLabels: readonly Label[];
   selected?: boolean;
+  /**
+   * What is running on this ticket, or `null` for nothing (VC-100). Handed
+   * down from the board's single derivation rather than read per card — see
+   * `hooks/use-board-session-activity.ts`.
+   */
+  sessionActivity?: TicketSessionActivity | null;
 }) {
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
 
   return (
     <article
       className={cn(
+        // `relative` for the session ring below, which lies on the card's own
+        // border line rather than outside it.
+        "relative",
         // `shadow-raised` and not `shadow-card`: the tier names an elevation,
         // not a component noun. A board card is a tile lying ON its column, the
         // same lift an active tab takes; `shadow-card` is the deeper halo the
@@ -74,6 +85,13 @@ export function TicketCardContent({
         selected ? "border-primary/70" : "border-border hover:border-border-strong",
       )}
     >
+      {/* An agent is running on this ticket. Always rendered, never conditionally
+          mounted: `display: none` makes an inactive one free (no boxes, no
+          pseudo-element, no animation) and is what lets the ring fade OUT as
+          well as in, which React cannot do for an unmount on its own.
+          `aria-hidden` for the reason `StatusDot` gives — the card is not the
+          only place this is said, and the sidebar's band says it in words. */}
+      <span aria-hidden className="session-ring" data-activity={sessionActivity ?? undefined} />
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-label text-muted-foreground">{displayId}</span>
         <div className="flex items-center gap-1">
@@ -182,6 +200,8 @@ interface TicketCardProps {
   /** The board's owning project's label rows — constant for the whole board tree. */
   projectLabels: readonly Label[];
   selected: boolean;
+  /** What is running on this ticket, or `null` for nothing (VC-100). */
+  sessionActivity: TicketSessionActivity | null;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -201,6 +221,7 @@ export const TicketCard = React.memo(function TicketCard({
   ticketPrefix,
   projectLabels,
   selected,
+  sessionActivity,
   onSelect,
   onOpen,
 }: TicketCardProps) {
@@ -211,6 +232,7 @@ export const TicketCard = React.memo(function TicketCard({
         ticketPrefix={ticketPrefix}
         projectLabels={projectLabels}
         selected={selected}
+        sessionActivity={sessionActivity}
       />
     </SortableTicketShell>
   );

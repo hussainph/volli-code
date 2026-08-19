@@ -32,8 +32,13 @@ export interface MonacoDocumentEditorHandle {
    * Insert `text` at the caret, replacing any selected range, then focus. A
    * space is prepended when the preceding character would swallow the ref's
    * boundary (see `refInsertion`).
+   *
+   * Whether the text landed: false when the editor has not acquired its lease
+   * yet (Monaco still loading, or a host that never mounted one), which is the
+   * caller's cue to fall back — the Ticket detail appends to the body through
+   * the store rather than lose the ref (VC-106).
    */
-  insertAtCursor(text: string): void;
+  insertAtCursor(text: string): boolean;
   /**
    * Record that the host has persisted the model's current value. Clears the
    * registry dirty flag and advances the baseline revision — the FileView
@@ -76,7 +81,21 @@ export interface MonacoDocumentEditorProps {
    * editor's own inset instead.
    */
   className?: string;
+  /**
+   * Inline styles for the host. `maxHeight` here clamps the CSS box the editor
+   * lays out into (the same clamp a `max-h-*` class would apply), so a host can
+   * drive the cap from a policy constant instead of a parallel class string
+   * (VC-99 clamps the ticket body this way).
+   */
+  style?: React.CSSProperties;
   onBlur?(): void;
+  /**
+   * The editor's content height in px, reported on mount and every content
+   * change — the unclamped `getContentHeight()`. A host deciding whether a
+   * body overflows its cap needs exactly this number; the height section above
+   * explains why the host cannot measure it after the fact.
+   */
+  onContentHeightChange?(px: number): void;
   /** Accessible name for the editable region. */
   ariaLabel?: string;
   /** Enables the `@file` picker + chip decorations. Absent, neither appears. */
@@ -145,9 +164,10 @@ export function applyDocumentExternalValue({
  * and wrong for a ticket body sitting in a scrolling column. So the host's
  * height tracks `getContentHeight()`, and the editor is then laid out into the
  * host's `clientHeight` rather than into that number directly: `clientHeight` is
- * the CSS-CLAMPED box, so a caller's `min-h-*` / `max-h-*` classes keep working
- * (the composer bounds its body at 40vh and scrolls inside; the ticket body has
- * a floor and no ceiling) without this component knowing anything about them.
+ * the CSS-CLAMPED box, so a caller's `min-h-*` / `max-h-*` classes — or an
+ * inline `maxHeight` via `style` — keep working (the composer bounds its body
+ * at 40vh and scrolls inside; the ticket body clamps over a policy cap and
+ * expands on demand, VC-99) without this component knowing anything about them.
  */
 export const MonacoDocumentEditor = React.forwardRef<
   MonacoDocumentEditorHandle,
@@ -160,10 +180,12 @@ export const MonacoDocumentEditor = React.forwardRef<
     revision = null,
     onChange,
     onDirtyChange,
+    onBlur,
+    onContentHeightChange,
     placeholder,
     autoFocus,
     className,
-    onBlur,
+    style,
     ariaLabel,
     fileRefs,
   },
@@ -184,6 +206,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onChange,
     onDirtyChange,
     onBlur,
+    onContentHeightChange,
     placeholder,
     ariaLabel,
     autoFocus,
@@ -194,6 +217,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     onChange,
     onDirtyChange,
     onBlur,
+    onContentHeightChange,
     placeholder,
     ariaLabel,
     autoFocus,
@@ -248,7 +272,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         const view = editorRef.current;
         const lease = leaseRef.current;
         const selection = view?.getSelection() ?? null;
-        if (view === null || lease === null || selection === null) return;
+        if (view === null || lease === null || selection === null) return false;
         const model = lease.model;
         const start = model.getOffsetAt(selection.getStartPosition());
         const precedingChar = start === 0 ? "" : model.getValue().slice(start - 1, start);
@@ -260,6 +284,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         view.setPosition(position);
         view.revealPositionInCenterIfOutsideViewport(position);
         view.focus();
+        return true;
       },
       markSaved(nextRevision) {
         const lease = leaseRef.current;
@@ -333,11 +358,16 @@ export const MonacoDocumentEditor = React.forwardRef<
         attachmentRef.current = attachment;
 
         // The host owns the height; the editor is laid out into whatever CSS
-        // then allows (see the component note).
+        // then allows (see the component note). The content height is also
+        // reported up (VC-99): the ticket body clamps on it, and it is the one
+        // number the host cannot recover later — the CSS clamp erases it from
+        // every measurable box.
         const editorView = view;
         const fitToContent = (): void => {
-          host.style.height = `${editorView.getContentHeight()}px`;
+          const contentHeight = editorView.getContentHeight();
+          host.style.height = `${contentHeight}px`;
           editorView.layout({ width: host.clientWidth, height: host.clientHeight });
+          liveRef.current.onContentHeightChange?.(contentHeight);
         };
         subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
         fitToContent();
@@ -449,11 +479,17 @@ export const MonacoDocumentEditor = React.forwardRef<
         aria-label={ariaLabel}
         title={`Monaco unavailable: ${failure}`}
         className={cn("h-full overflow-auto whitespace-pre-wrap font-mono text-ui", className)}
+        style={style}
       >
         {value}
       </pre>
     );
   }
 
-  return <div ref={hostRef} className={cn(DOCUMENT_MODE_CLASS, className)} />;
+  // `style` lands on the host because the host IS the editor's layout box: a
+  // caller's `maxHeight` has to clamp THIS element for `clientHeight` (what
+  // `fitToContent` lays the editor into) to read as the clamped box. React only
+  // ever writes the keys it sees here, so the imperative `height` that
+  // `fitToContent` sets is left alone across re-renders.
+  return <div ref={hostRef} className={cn(DOCUMENT_MODE_CLASS, className)} style={style} />;
 });

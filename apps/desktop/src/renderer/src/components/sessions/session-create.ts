@@ -1,6 +1,6 @@
 /**
  * Booting Sessions outside the React tree, so every surface that can start one
- * (the Sessions page, the ticket overlay's tab strip, the ticket rail) shares
+ * (Home's strip, the ticket overlay's tab strip, the ticket rail) shares
  * one code path per kind. A terminal create boots a PTY in main (ticket scope
  * injects VOLLI_TICKET env there), pre-creates the renderer engine so output
  * arriving before the view mounts is buffered, and only then registers the
@@ -9,7 +9,7 @@
  * DO and on every race guard, which is {@link underOwnerGuard}. Every failure
  * toasts — a mutation is never silently swallowed (CLAUDE.md).
  */
-import { errorMessage, type HarnessId, type Project } from "@volli/shared";
+import { errorMessage, type HarnessId, type ModelSelection, type Project } from "@volli/shared";
 
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
@@ -19,7 +19,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
   ownerKey,
-  scratchScope,
+  projectScope,
   ticketScope,
   useSessionsStore,
   type SessionLaunch,
@@ -292,6 +292,18 @@ export interface ChatBoot {
    */
   skills?: readonly string[];
   /**
+   * The Session's durable title at birth. Chats normally start `null` and are
+   * named by their first delivered message; a kickoff names itself up front,
+   * because the message it is about to deliver is a stock instruction and
+   * "Begin work on this ticket…" is not what the rail should call it.
+   */
+  title?: string | null;
+  /**
+   * The model policy this Session is born with. Absent means the Role's
+   * configured default — every surface but the composer's Create & start.
+   */
+  model?: ModelSelection;
+  /**
    * Registers the tab against FRESH store state, returning whether it landed —
    * false ⇒ the owner vanished mid-flight, so this surface lets the Session go.
    */
@@ -336,39 +348,39 @@ function abandonChat(sessionId: string): void {
 /**
  * Start one of a project's ticketless Sessions and put its tab in front.
  *
- * Two callers, and they must not drift: the Sessions surface's split control
+ * Two callers, and they must not drift: Home's strip control
  * and the ⌘T / ⌥⌘T chords (`lib/new-session-shortcut.ts`). A chord that started
  * a Session the button would not have — or landed it somewhere the button
  * doesn't — is the class of bug you only find by pressing the key, so there is
  * one function per kind and both surfaces call it.
  *
- * The tab is recorded on `sessionsActiveTab` explicitly rather than left to the
- * container's own `activeSessionId`: {@link resolveActiveTabId} in
- * `sessions-layer.tsx` prefers the recorded id while it still names an open tab,
- * so a fresh terminal opened while another tab was recorded would otherwise land
- * behind it — the chord would look like it had done nothing at all.
+ * The tab is recorded on `homeActiveTab` explicitly rather than left to the
+ * container's own `activeSessionId`: `resolveHomeTabs` (`home-tabs.ts`) prefers
+ * the recorded id while it still names an open tab, and its DEFAULT is the
+ * permanent Board tab — so a fresh Session that recorded nothing would land
+ * behind the board, and the chord would look like it had done nothing at all.
  */
-export async function startScratchTerminal(projectId: string): Promise<void> {
-  const sessionId = await createTerminalSession(scratchScope(projectId));
+export async function startProjectTerminal(projectId: string): Promise<void> {
+  const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return;
-  useWorkspaceStore.getState().setSessionsActiveTab(projectId, sessionId);
+  useWorkspaceStore.getState().setHomeActiveTab(projectId, sessionId);
 }
 
 /**
- * The chat half of {@link startScratchTerminal}.
+ * The chat half of {@link startProjectTerminal}.
  *
  * The Session starts untitled. Its first delivered message supplies the name;
  * until then the strip's neutral `Chat` fallback is all the UI shows.
  */
-export async function startScratchChat(
+export async function startProjectChat(
   projectId: string,
   skills?: readonly string[],
 ): Promise<void> {
-  await bootChatSession(scratchScope(projectId), {
+  await bootChatSession(projectScope(projectId), {
     skills,
     land: (sessionId) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      useWorkspaceStore.getState().setSessionsActiveTab(projectId, chatTabId(sessionId));
+      useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -381,7 +393,7 @@ export async function startScratchChat(
 /**
  * Start one of a TICKET's Sessions and put its tab in front.
  *
- * The ticket half of {@link startScratchTerminal}, and it exists for the same
+ * The ticket half of {@link startProjectTerminal}, and it exists for the same
  * reason: ⌘T / ⌥⌘T resolve against what is on screen now
  * (`lib/new-session-shortcut.ts`), so inside a ticket the chord has to land a
  * Session exactly where the ticket's own control lands one. A chord that opened
@@ -400,44 +412,90 @@ export async function startTicketTerminal(projectId: string, ticketId: string): 
 }
 
 /**
+ * What a Ticket chat is opened WITH, beyond the ticket it belongs to.
+ *
+ * Everything here is absent for a plain "new chat on this ticket" — the ⌘T
+ * chord and the tab strip's "+" — which is the shape this door had before
+ * Create & start needed the other three (VC-56).
+ */
+export interface TicketChatStart {
+  /** Skill slugs to inject at attach time. */
+  skills?: readonly string[];
+  /** A durable title at birth, for a Session whose first message will not name it well. */
+  title?: string | null;
+  /** The model policy to record; absent leaves the Ticket default. */
+  model?: ModelSelection;
+  /**
+   * An opening turn, queued the moment the Session is addressable.
+   *
+   * QUEUED, not sent: `create` resolves as soon as the durable row exists, and
+   * the executor behind it is still coming up (VC-16's optimistic open). The
+   * Session's own release loop delivers this the instant it can, and holds it
+   * across a slow worktree materialization or a Retry — which is the whole
+   * reason a kickoff can land a tab in one gesture and still be honest about
+   * an attach that has not finished.
+   */
+  message?: string;
+}
+
+/**
  * The chat half of {@link startTicketTerminal}.
  *
- * A ticket chat also starts untitled. The Session's first delivered message is
- * the one subject this surface records; no per-ticket ordinal is needed.
+ * A ticket chat normally starts untitled and silent: its first delivered
+ * message names it, and that message is whatever the person types. A KICKOFF
+ * (`title` + `message`) is the one caller that arrives with both already
+ * decided — see {@link TicketChatStart}.
+ *
+ * Resolves the Session's id, or null when the boot never landed.
  */
 export async function startTicketChat(
   projectId: string,
   ticketId: string,
-  skills?: readonly string[],
-): Promise<void> {
-  await bootChatSession(ticketScope(projectId, ticketId), {
+  { skills, title, model, message }: TicketChatStart = {},
+): Promise<string | null> {
+  const sessionId = await bootChatSession(ticketScope(projectId, ticketId), {
     skills,
-    land: (sessionId) => {
+    title,
+    model,
+    land: (booted) => {
       // The ticket itself may have been deleted while the create was in flight;
       // a tab on a card that no longer exists is unreachable, so let the Session
       // go (its durable row stands — see {@link bootChatSession}).
       const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
-      useChatSessionsStore.getState().openChatTab(ticketId, sessionId);
-      useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(sessionId));
+      useChatSessionsStore.getState().openChatTab(ticketId, booted);
+      useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
       // So the rail's row for it appears without waiting on a terminal event.
       void useTicketSessionRecordsStore.getState().refresh(ticketId);
       return true;
     },
   });
+  // After the landing, never before it: a Session this surface let go of is one
+  // whose client was disposed, and an opening turn queued onto it would be
+  // words nothing will ever release.
+  if (sessionId !== null && message !== undefined) {
+    useChatSessionsStore.getState().enqueue(sessionId, { id: newMessageId(), text: message });
+  }
+  return sessionId;
+}
+
+/** A queued message's id — the composer's own `nextId`, for the one message this module sends. */
+function newMessageId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `queued-${Date.now()}-${Math.random()}`;
 }
 
 export async function bootChatSession(
   scope: SessionScope,
-  { skills, land }: ChatBoot,
+  { skills, title, model, land }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       const sessionId = await useChatSessionsStore.getState().createChatSession({
         projectId: scope.projectId,
         ticketId: scope.kind === "ticket" ? scope.ticketId : null,
-        title: null,
+        title: title ?? null,
         ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
+        ...(model === undefined ? {} : { model }),
       });
       if (sessionId === null) return null;
       // The owner may have been removed while `session.create` was in flight;

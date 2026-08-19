@@ -1,4 +1,4 @@
-import type { Ticket } from "@volli/shared";
+import type { ModelSelection, Ticket } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { type ComposerFields, runKickoff, runPlainCreate, type SubmitDeps } from "./submit";
@@ -17,6 +17,12 @@ function fields(overrides: Partial<ComposerFields> = {}): ComposerFields {
     ...overrides,
   };
 }
+
+const MODEL: ModelSelection = {
+  providerId: "anthropic",
+  modelId: "sonnet-4.5",
+  reasoningLevel: "high",
+};
 
 function madeTicket(overrides: Partial<Ticket> = {}): Ticket {
   return {
@@ -44,10 +50,8 @@ function madeTicket(overrides: Partial<Ticket> = {}): Ticket {
 function fakeDeps(overrides: Partial<SubmitDeps> = {}): SubmitDeps {
   return {
     addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket()),
-    startSession: vi.fn<SubmitDeps["startSession"]>(async () => "s1"),
+    startChat: vi.fn<SubmitDeps["startChat"]>(async () => "s1"),
     openTicketWorkspace: vi.fn<SubmitDeps["openTicketWorkspace"]>(),
-    focusSession: vi.fn<SubmitDeps["focusSession"]>(),
-    persistHarness: vi.fn<SubmitDeps["persistHarness"]>(),
     toastSuccess: vi.fn<SubmitDeps["toastSuccess"]>(),
     ...overrides,
   };
@@ -73,7 +77,7 @@ describe("runPlainCreate", () => {
       baseBranch: "main",
     });
     expect(deps.toastSuccess).toHaveBeenCalledWith("VC-12 created");
-    expect(deps.startSession).not.toHaveBeenCalled();
+    expect(deps.startChat).not.toHaveBeenCalled();
   });
 
   it("records no base branch for a ticket that works in the project checkout", async () => {
@@ -100,7 +104,7 @@ describe("runPlainCreate", () => {
 });
 
 describe("runKickoff", () => {
-  it("forces Doing, persists the harness, and (foreground) navigates + boots the session with the composed prompt", async () => {
+  it("forces Doing and (foreground) navigates, then starts the chat on the chosen model", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () =>
         madeTicket({ id: "tk", ticketNumber: 42, status: "doing" }),
@@ -109,11 +113,10 @@ describe("runKickoff", () => {
 
     const result = await runKickoff(fields({ status: "backlog", body: "the body" }), deps, {
       createMore: false,
-      harnessId: "codex",
+      model: MODEL,
     });
 
     expect(result).toEqual({ created: true });
-    expect(deps.persistHarness).toHaveBeenCalledWith("codex");
     // Status forced to doing regardless of the chip (backlog).
     expect(deps.addTicket).toHaveBeenCalledWith(
       "p1",
@@ -122,26 +125,27 @@ describe("runKickoff", () => {
       expect.objectContaining({ body: "the body" }),
     );
     expect(deps.openTicketWorkspace).toHaveBeenCalledWith("p1", "tk");
-    expect(deps.startSession).toHaveBeenCalledWith("p1", "tk", {
-      harnessId: "codex",
-      prompt: "VC-42: A ticket\n\nthe body",
+    // The ticket's own prose is NOT re-sent: the agent is handed the Ticket
+    // Brief at attach, so the opening turn is only the instruction to begin.
+    expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", {
+      title: "Work on VC-42",
+      message: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+      model: MODEL,
     });
-    // Landing surface is the terminal itself: the booted session's tab is focused.
-    expect(deps.focusSession).toHaveBeenCalledWith("p1", "tk", "s1");
   });
 
-  it("persists the chosen harness as the ticket's preferredHarnessId so later resume sessions match", async () => {
+  it("never starts a terminal harness — the ticket keeps the DB's terminal default", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
     });
 
-    await runKickoff(fields(), deps, { createMore: false, harnessId: "codex" });
+    await runKickoff(fields(), deps, { createMore: false, model: MODEL });
 
     expect(deps.addTicket).toHaveBeenCalledWith(
       "p1",
       "doing",
       "A ticket",
-      expect.objectContaining({ preferredHarnessId: "codex" }),
+      expect.not.objectContaining({ preferredHarnessId: expect.anything() }),
     );
   });
 
@@ -152,7 +156,7 @@ describe("runKickoff", () => {
 
     await runKickoff(fields({ baseBranch: "origin/main" }), deps, {
       createMore: false,
-      harnessId: "codex",
+      model: MODEL,
     });
 
     expect(deps.addTicket).toHaveBeenCalledWith(
@@ -163,46 +167,91 @@ describe("runKickoff", () => {
     );
   });
 
-  it("boots in the background without navigating when Create-more is on", async () => {
+  it("omits the model entirely when the composer had none to offer", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
     });
 
-    await runKickoff(fields(), deps, { createMore: true, harnessId: "claude-code" });
+    await runKickoff(fields(), deps, { createMore: false });
 
-    expect(deps.startSession).toHaveBeenCalledWith("p1", "tk", expect.anything());
-    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
-    expect(deps.focusSession).not.toHaveBeenCalled();
+    // Not `model: undefined`: the start reads "absent" as "take the Ticket
+    // default", and an explicit undefined key would be a second way to say it.
+    expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", {
+      title: "Work on VC-7",
+      message: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+    });
   });
 
-  it("still navigates (foreground) when the session boot fails, so the user can retry from the detail view", async () => {
+  it("starts in the background without navigating when Create-more is on", async () => {
     const deps = fakeDeps({
       addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
-      startSession: vi.fn<SubmitDeps["startSession"]>(async () => null),
     });
 
-    const result = await runKickoff(fields(), deps, {
-      createMore: false,
-      harnessId: "claude-code",
+    await runKickoff(fields(), deps, { createMore: true, model: MODEL });
+
+    expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", expect.anything());
+    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("still navigates (foreground) when the Session start fails, so the user can retry there", async () => {
+    const deps = fakeDeps({
+      addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
+      startChat: vi.fn<SubmitDeps["startChat"]>(async () => null),
     });
+
+    const result = await runKickoff(fields(), deps, { createMore: false, model: MODEL });
 
     expect(result).toEqual({ created: true });
     expect(deps.openTicketWorkspace).toHaveBeenCalledWith("p1", "tk");
-    // No session to focus — Doc stays active as the retry surface.
-    expect(deps.focusSession).not.toHaveBeenCalled();
   });
 
   it("does nothing further when the ticket create fails", async () => {
     const deps = fakeDeps({ addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => null) });
 
-    const result = await runKickoff(fields(), deps, {
-      createMore: false,
-      harnessId: "claude-code",
-    });
+    const result = await runKickoff(fields(), deps, { createMore: false, model: MODEL });
 
     expect(result).toEqual({ created: false });
-    expect(deps.startSession).not.toHaveBeenCalled();
+    expect(deps.startChat).not.toHaveBeenCalled();
     expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
     expect(deps.toastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe("composer attachments (VC-50)", () => {
+  it("attaches composer drafts to the ticket it just created", async () => {
+    const linkAttachments = vi.fn<NonNullable<SubmitDeps["linkAttachments"]>>(async () => {});
+    const deps = fakeDeps({ linkAttachments });
+
+    await runPlainCreate(fields(), deps);
+
+    expect(linkAttachments).toHaveBeenCalledWith("t1");
+  });
+
+  it("attaches them before the agent is briefed, not after", async () => {
+    const order: string[] = [];
+    const deps = fakeDeps({
+      linkAttachments: vi.fn(async () => {
+        order.push("link");
+      }),
+      startChat: vi.fn(async () => {
+        order.push("start");
+        return "s1";
+      }),
+    });
+
+    await runKickoff(fields(), deps, { createMore: true, model: MODEL });
+
+    // The kickoff brief names the attachments; a session booted first would
+    // read a brief pointing at files that had not been linked yet.
+    expect(order).toEqual(["link", "start"]);
+  });
+
+  it("creates nothing to attach to when the ticket was refused", async () => {
+    const linkAttachments = vi.fn<NonNullable<SubmitDeps["linkAttachments"]>>(async () => {});
+    const deps = fakeDeps({ addTicket: vi.fn(async () => null), linkAttachments });
+
+    await runPlainCreate(fields(), deps);
+
+    expect(linkAttachments).not.toHaveBeenCalled();
   });
 });

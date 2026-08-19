@@ -42,7 +42,7 @@ import {
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
-  SESSION_TAB_STRIP,
+  HOME_TAB_STRIP,
   sleep,
   stopButton,
   tabStrip,
@@ -85,11 +85,13 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ask-user-${slug}.log`)}`);
 }
 
-async function goToSessions(page) {
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+async function goToHome(page) {
+  await page.getByRole("button", { name: "Home", exact: true }).click();
   await waitUntil(
-    "the Sessions tab strip to mount",
-    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
+    "Home's tab strip to mount",
+    // >= 1 is the permanent Board tab alone: nothing auto-opens any more
+    // (VC-54 scope 2), so the Session below is created by an explicit press.
+    async () => (await tabStrip(page, HOME_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
 }
@@ -140,8 +142,8 @@ async function main() {
 
     await attempt(1, "seed the default model and open a scratch chat", async () => {
       const defaultModel = await seedDefaultModel(page);
-      await goToSessions(page);
-      const tab = await openNewChatTab(page, SESSION_TAB_STRIP);
+      await goToHome(page);
+      const tab = await openNewChatTab(page, HOME_TAB_STRIP);
       const textarea = page.getByPlaceholder("Ask, plan, or implement…");
       await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
       await waitUntil(

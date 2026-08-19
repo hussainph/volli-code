@@ -59,15 +59,25 @@ import {
   PromptInputTools,
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import {
+  COMPOSER_VERBS,
   expandCommandInvocation,
+  visibleModels,
+  type HiddenModelRef,
+  type ComposerVerb,
   type IndexedFile,
+  type ModelAccessModel,
+  type ModelAccessProvider,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
 } from "@volli/shared";
 
 import { reclampEffort } from "@renderer/chat/composer-effort";
+import type { BlobLinkView } from "@volli/shared";
 import type { SessionContextUsage } from "@renderer/chat/context-usage";
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
+import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
@@ -162,12 +172,33 @@ export interface SessionComposerProps {
    * durable transcript, so it cannot switch the memo boundary off.
    */
   contextUsage?: SessionContextUsage | null;
+  /**
+   * Files attached to the message being written (VC-50). Owned by the parent,
+   * because they outlive this box: a queued message releases with exactly what
+   * was attached when ⏎ was pressed.
+   */
+  attachments?: readonly BlobLinkView[];
+  /** Something was dropped, pasted or picked. Absent hides the attach affordance entirely. */
+  onAttachFiles?(files: readonly File[]): void;
+  onRemoveAttachment?(attachment: BlobLinkView): void;
+  /**
+   * The selected model takes no image input, so the affordance says so rather
+   * than letting a picture be attached to a model that cannot see it.
+   */
+  imagesUnsupported?: boolean;
   className?: string;
 }
 
 const NO_TEMPLATES: readonly PromptTemplate[] = [];
 const NO_SKILLS: readonly SkillReference[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
+const NO_ATTACHMENTS: readonly BlobLinkView[] = [];
+/**
+ * The two verb supplies, both module constants, because the picker's ranking
+ * memo takes this as a dependency and a fresh array per render would rank the
+ * whole file index again on every keystroke.
+ */
+const NO_VERBS: readonly ComposerVerb[] = [];
 
 /**
  * MEMOIZED, and this is the boundary that keeps typing off the stream's clock.
@@ -205,9 +236,15 @@ export const SessionComposer = React.memo(function SessionComposer({
   interactionOpen = false,
   answering = false,
   contextUsage = null,
+  attachments = NO_ATTACHMENTS,
+  onAttachFiles,
+  onRemoveAttachment,
+  imagesUnsupported = false,
   className,
 }: SessionComposerProps) {
-  const canSubmit = ready && value.trim().length > 0;
+  // An attachment makes an otherwise-empty message a real one (VC-50): a
+  // dropped screenshot with no words is a question.
+  const canSubmit = ready && (value.trim().length > 0 || attachments.length > 0);
   const effortStops = effortLevels(models, selection);
   // The menu's own event callbacks share this render. Keeping the selected id
   // in their closure lets close distinguish Edit from an ordinary dismissal
@@ -254,6 +291,12 @@ export const SessionComposer = React.memo(function SessionComposer({
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
       skills={skills}
+      // Offered only while the Session is idle. A verb RUNS — it is not queued
+      // and it does not join a turn in flight — so mid-turn it would be a row
+      // naming something the runtime is about to refuse. Typing it anyway
+      // still reaches the runtime and still gets that refusal, in words; what
+      // the list does not do is invite it.
+      verbs={working ? NO_VERBS : COMPOSER_VERBS}
       files={files}
       onFilePickerOpen={onFilePickerOpen}
       textareaRef={textareaRef}
@@ -269,6 +312,9 @@ export const SessionComposer = React.memo(function SessionComposer({
           className,
         )}
         onSubmit={() => send(composerIntent({ working, steer: false }))}
+        // Capture-phase, and that is load-bearing — see `file-drop.ts` for why
+        // this composer must take the drop before `PromptInput`'s own listener.
+        {...fileAttachHandlers(onAttachFiles)}
       >
         {queued.length > 0 ? (
           // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
@@ -362,6 +408,14 @@ export const SessionComposer = React.memo(function SessionComposer({
         ) : null}
 
         <PromptInputBody>
+          {/* Above the text, not below it: the strip is part of the message
+              being written, and a person scanning what they are about to send
+              reads top to bottom. */}
+          <AttachmentStrip
+            attachments={attachments}
+            {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
+            className="px-3 pt-2"
+          />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
               thing has to hold the caret between them, and threading it back
@@ -462,6 +516,12 @@ export const SessionComposer = React.memo(function SessionComposer({
               move at all — which is the whole reason the row was built with the
               cluster as the fixed half. */}
           <PromptInputTools className="min-w-0 flex-1 flex-wrap">
+            {onAttachFiles === undefined ? null : (
+              <ComposerAttachButton
+                onFiles={onAttachFiles}
+                imagesUnsupported={imagesUnsupported === true}
+              />
+            )}
             <ModelPill
               models={models}
               selection={selection}
@@ -578,6 +638,7 @@ function ComposerPickerStack({
   interactionOpen: boolean;
   promptTemplates: readonly PromptTemplate[];
   skills: readonly SkillReference[];
+  verbs: readonly ComposerVerb[];
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
@@ -734,11 +795,13 @@ function useComposerPicker(input: {
   interactionOpen: boolean;
   promptTemplates: readonly PromptTemplate[];
   skills: readonly SkillReference[];
+  verbs: readonly ComposerVerb[];
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
 }): ComposerPickerHandle {
-  const { value, onValueChange, ready, interactionOpen, promptTemplates, skills, files } = input;
+  const { value, onValueChange, ready, interactionOpen, promptTemplates, skills, verbs, files } =
+    input;
   const [caret, setCaret] = React.useState(0);
   const [active, setActive] = React.useState("");
   const [dismissed, setDismissed] = React.useState<ComposerPickerDismissal | null>(null);
@@ -820,9 +883,10 @@ function useComposerPicker(input: {
             query: deferredQuery,
             templates: promptTemplates,
             skills,
+            verbs,
             files,
           }),
-    [deferredQuery, files, mode, promptTemplates, skills],
+    [deferredQuery, files, mode, promptTemplates, skills, verbs],
   );
   // Rebuilt every render on purpose: the token half moves with the caret, so
   // this object is genuinely new whenever it is different, and nothing holds it
@@ -954,6 +1018,38 @@ export interface ComposerModelSelection {
   reasoningLevel: string;
 }
 
+/**
+ * The models a picker may offer, out of everything Model Access knows.
+ *
+ * Two filters and one mapping, in one place because two surfaces now ask the
+ * question: this composer, and the New-ticket composer's Create & start row
+ * (VC-56). Signed-in models only — Pi's catalog is every provider it knows,
+ * around a thousand models against the handful this profile has credentials
+ * for, and a picker listing the rest is a picker whose first "GPT-5.6 Luna" is
+ * whichever provider sorted first. Then the user's own curation comes off
+ * (`visibleModels`): what you toggled out of Model Access is not an option
+ * either. Catalog order is preserved throughout — it is the harness's answer to
+ * which provider matters, and re-sorting it here would be our opinion.
+ */
+export function offerableModels(
+  models: readonly ModelAccessModel[],
+  providers: readonly ModelAccessProvider[],
+  hidden: readonly HiddenModelRef[],
+): readonly ComposerModel[] {
+  return visibleModels(
+    models.filter((model) => model.state === "available"),
+    hidden,
+  ).map((model) => ({
+    id: `${model.providerId}/${model.modelId}`,
+    providerId: model.providerId,
+    providerLabel:
+      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
+    modelId: model.modelId,
+    label: model.label,
+    reasoningLevels: model.reasoningLevels,
+  }));
+}
+
 /** The selected model's own stop set, or nothing when the list does not hold it. */
 function effortLevels(
   models: readonly ComposerModel[],
@@ -1006,7 +1102,13 @@ export function modelPillLabel(
     : name;
 }
 
-function ModelPill({
+/**
+ * Exported for the New-ticket composer, which picks the model a Ticket Session
+ * will be BORN with (VC-56). The two surfaces answer the same question one
+ * moment apart — what will this Session run as — so a second pill shaped
+ * slightly differently would be the same control drawn twice.
+ */
+export function ModelPill({
   models,
   selection,
   selectionProviderLabel,

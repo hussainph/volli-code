@@ -141,6 +141,7 @@ describe("the Session's own model, against the catalog", () => {
       label: "GPT-5.6 Luna",
       state: "available",
       reasoningLevels: ["medium"],
+      acceptsImageInput: true,
     },
     {
       // The same model name, from a provider this profile never signed into.
@@ -149,6 +150,7 @@ describe("the Session's own model, against the catalog", () => {
       label: "GPT-5.6 Luna",
       state: "authentication-required",
       reasoningLevels: ["medium"],
+      acceptsImageInput: true,
     },
   ];
   const providers: readonly ModelAccessProvider[] = [
@@ -202,6 +204,7 @@ const ACTS: SessionBlockerActs = {
   retryRuntime: NO_OP,
   openSettings: NO_OP,
   signIn: NO_OP,
+  dismiss: NO_OP,
 };
 
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
@@ -263,15 +266,56 @@ function recorder(resolved: boolean) {
 }
 
 describe("sessionBlocker", () => {
-  it("reports a failed decision while its card is still on screen", () => {
+  it("reports a failed delivery even while a card is still on screen", () => {
+    // `sessionError` outranks the asked-card suppression: a decision that
+    // failed to reach the harness now toasts (VC-97), but the transports that
+    // still latch — a lost stream, a message the transport refused — speak over
+    // an open card, because the card is answering into the very breakage.
     const blocker = sessionBlocker(
-      blockerInput({ sessionError: "Decision not delivered: socket hang up" }),
+      blockerInput({ sessionError: "Message not delivered: socket hang up" }),
       ACTS,
       true,
     );
 
-    expect(blocker?.message).toBe("Decision not delivered: socket hang up");
+    expect(blocker?.message).toBe("Message not delivered: socket hang up");
     expect(blocker?.action?.label).toBe("Retry");
+  });
+
+  it("lets the reader retire the transport latch, and nothing durable", () => {
+    const dismissed: string[] = [];
+    const acts: SessionBlockerActs = { ...ACTS, dismiss: () => dismissed.push("dismissed") };
+
+    // The Session's own transport latch is renderer-local state: the row may
+    // be retired without anyone's permission, Retry staying for the recovery.
+    const latch = sessionBlocker(
+      blockerInput({ sessionError: "Lost the Session stream: socket hang up" }),
+      acts,
+      false,
+    );
+    expect(latch?.dismiss?.label).toBe("Dismiss");
+    latch?.dismiss?.act();
+    expect(dismissed).toEqual(["dismissed"]);
+
+    // Durable facts are not dismissable — a click cannot sign a provider in,
+    // refill a quota, or resurrect a stopped adapter.
+    expect(
+      sessionBlocker(raised(attention("adapter_unrecoverable")), acts, false)?.dismiss,
+    ).toBeUndefined();
+    expect(
+      sessionBlocker(raised(attention("auth_required")), acts, false)?.dismiss,
+    ).toBeUndefined();
+    expect(
+      sessionBlocker(blockerInput({ catalogState: "empty" }), acts, false)?.dismiss,
+    ).toBeUndefined();
+    expect(
+      sessionBlocker(
+        blockerInput({
+          sessionModel: { providerId: "openai", providerLabel: "OpenAI", state: "unavailable" },
+        }),
+        acts,
+        false,
+      )?.dismiss,
+    ).toBeUndefined();
   });
 
   it("keeps a harness attention the card cannot answer", () => {
@@ -771,6 +815,31 @@ describe("composerPress", () => {
       kind: "message",
     });
     expect(composerPress(ask([askPrompt()]), "   ")).toEqual({ kind: "message" });
+  });
+
+  it("is a compaction when the whole draft is the verb", () => {
+    expect(composerPress(null, "/compact")).toEqual({ kind: "compact", instructions: null });
+    // What the picker leaves in the box, and what someone types after it.
+    expect(composerPress(null, "/compact ")).toEqual({ kind: "compact", instructions: null });
+    expect(composerPress(null, "/compact keep the API work")).toEqual({
+      kind: "compact",
+      instructions: "keep the API work",
+    });
+  });
+
+  it("is a message wherever the verb does not own the whole draft", () => {
+    // The grammar and its reasons are `composer-verb.ts`'s. What is pinned
+    // here is that a draft it refuses still goes somewhere: claiming this
+    // would send nothing and silently drop the sentence around the verb.
+    expect(composerPress(null, "please /compact and carry on")).toEqual({ kind: "message" });
+    expect(composerPress(null, "/compacted")).toEqual({ kind: "message" });
+  });
+
+  it("lets a standing question outrank the verb", () => {
+    // The surface has already said twice that this box is answering: it is
+    // renamed Answer and the `/` picker is shut. A Session waiting on a
+    // question is mid-turn anyway, where a compaction would be refused.
+    expect(composerPress(ask([askPrompt()]), "/compact")).toMatchObject({ kind: "answer" });
   });
 });
 

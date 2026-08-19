@@ -16,7 +16,7 @@ import type {
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../../ipc/contract";
-import { attachmentsRoot } from "../attachment-store";
+import { blobsRoot } from "../blob-store";
 import type { DbHandle } from "../data-ipc";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
 import { createDesktopSessionEngine } from "../session-control";
@@ -122,7 +122,7 @@ function isOptionalResume(value: unknown): value is { sessionId: string } | unde
 }
 
 /**
- * `undefined` (scratch session) or a `{ ticketId: string; kickoff?; resume? }`
+ * `undefined` (Project Session) or a `{ ticketId: string; kickoff?; resume? }`
  * object (ticket session). A malformed kickoff or resume shape rejects the whole
  * ticket.
  */
@@ -168,7 +168,7 @@ export function registerTerminalIpcHandlers(
 ): PtyManager {
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
   // seam, `app.getPath("userData")`-derived.
-  const attachmentsRootPath = attachmentsRoot(app.getPath("userData"));
+  const blobsRootPath = blobsRoot(app.getPath("userData"));
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
@@ -179,10 +179,10 @@ export function registerTerminalIpcHandlers(
         undefined,
         undefined,
         agentRuntime,
-        attachmentsRootPath,
+        blobsRootPath,
         sessionEngine,
       )
-    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, attachmentsRootPath);
+    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
 
   // Closed over the live runtime object rather than a snapshot of it: the
   // trusted set lands there only once the wrappers are generated, which is

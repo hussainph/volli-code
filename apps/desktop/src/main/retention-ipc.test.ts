@@ -27,7 +27,7 @@ vi.mock("electron", () => ({
       handlers.set(channel, handler);
     },
   },
-  // `worktree-runtime`'s real `worktreeDeps` resolves `attachmentsRoot` off
+  // `worktree-runtime`'s real `worktreeDeps` resolves `blobsRoot` off
   // this — unused by the retention paths this suite exercises.
   app: {
     getPath: () => "/volli-test-userdata",

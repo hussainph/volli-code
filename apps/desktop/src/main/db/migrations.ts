@@ -113,7 +113,7 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
  * existing column is touched:
  *  - `sessions`: a durable trace + resume seed for a terminal session,
  *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
- *    project-scoped scratch session (no board involvement); `ON DELETE
+ *    Project Session (no board involvement); `ON DELETE
  *    CASCADE` off `project_id` and `ON DELETE SET NULL` off `ticket_id` mean
  *    a session outlives an archived-then-deleted ticket, purely as
  *    project-level history.
@@ -615,7 +615,62 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
 `;
 
 /**
- * Migration 020: the two homes Web Access needs, deliberately apart.
+ * Migration 020: Blobs (VC-50, `docs/plans/attachments.md`) — the bytes behind
+ * every user-supplied file, and the links naming where each one is attached.
+ * Replaces migration 011's `ticket_attachments`, which owned both at once:
+ * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
+ * referenced from a chat message. Dropping it costs nothing — `createAttachment`
+ * never had a caller, so the table has never held a row in any build that
+ * shipped. (Vibe Kanban shipped that same owner-keyed shape and had to migrate
+ * off it for exactly this reason; we get to skip the migration.)
+ *
+ * `blobs` is content-addressed: the sha256 IS the primary key, so re-attaching
+ * a file the user has already attached is an INSERT OR IGNORE rather than a
+ * second copy, and the file store needs no traversal guard beyond "is this a
+ * hash". `width`/`height` are NULL for anything that is not an image we could
+ * measure — readers must treat NULL as "unknown", never as zero.
+ *
+ * `blob_links` is the thin row naming where a Blob hangs: exactly one of
+ * `ticket_id` (spec material on the Ticket) or `session_id` (a file handed to
+ * the agent mid-chat), enforced by CHECK rather than convention. Two explicit
+ * nullable owners, not a generic owner_kind/owner_id pair — there are two
+ * surfaces, and a third should be a schema change somebody reviews rather than
+ * a new string value that slips in. `ON DELETE CASCADE` on both owners and on
+ * `blob_hash` mirrors `ticket_comments`: a link never outlives either end.
+ *
+ * Note what is NOT cascaded: deleting the last link to a Blob leaves the Blob
+ * row and its bytes, to be collected deliberately. An attachment removed by a
+ * misclick should not take the bytes with it while an undo is still plausible.
+ */
+const MIGRATION_020_BLOBS = `
+CREATE TABLE blobs (
+  hash          TEXT PRIMARY KEY CHECK (length(hash) = 64),
+  mime          TEXT NOT NULL CHECK (mime <> ''),
+  size_bytes    INTEGER NOT NULL CHECK (size_bytes >= 0),
+  original_name TEXT NOT NULL CHECK (original_name <> ''),
+  width         INTEGER,
+  height        INTEGER,
+  created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE blob_links (
+  id         TEXT PRIMARY KEY,
+  blob_hash  TEXT NOT NULL REFERENCES blobs(hash) ON DELETE CASCADE,
+  ticket_id  TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  label      TEXT NOT NULL CHECK (label <> ''),
+  created_at INTEGER NOT NULL,
+  CHECK ((ticket_id IS NULL) <> (session_id IS NULL))
+);
+CREATE INDEX idx_blob_links_ticket ON blob_links(ticket_id, created_at);
+CREATE INDEX idx_blob_links_session ON blob_links(session_id, created_at);
+CREATE INDEX idx_blob_links_blob ON blob_links(blob_hash);
+
+DROP TABLE ticket_attachments;
+`;
+
+/**
+ * Migration 021: the two homes Web Access needs, deliberately apart.
  *
  * **`secrets` holds ciphertext and nothing else.** One row per named secret,
  * the name being Volli's own constant rather than anything a caller composes,
@@ -638,7 +693,7 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
  * table that could hold two of them is a table someone has to write a
  * tie-breaker for.
  */
-const MIGRATION_020_WEB_ACCESS = `
+const MIGRATION_021_WEB_ACCESS = `
 CREATE TABLE secrets (
   name       TEXT PRIMARY KEY,
   ciphertext BLOB NOT NULL,
@@ -665,7 +720,7 @@ CREATE TABLE web_access_settings (
  * Nothing here touches `secrets`. A key stored under `web-access.exa.api-key`
  * is its own row and survives independently of which provider is selected.
  */
-const MIGRATION_021_WEB_ACCESS_EXA = `
+const MIGRATION_022_WEB_ACCESS_EXA = `
 CREATE TABLE web_access_settings_new (
   id          INTEGER PRIMARY KEY CHECK (id = 1),
   provider    TEXT NOT NULL CHECK (provider IN ('off', 'brave', 'searxng', 'exa')),
@@ -771,13 +826,18 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 20,
-    name: "web access — the BYO search provider setting, and ciphertext kept apart from it",
-    sql: MIGRATION_020_WEB_ACCESS,
+    name: "blobs + blob_links — content-addressed attachment bytes, replacing ticket_attachments",
+    sql: MIGRATION_020_BLOBS,
   },
   {
     version: 21,
+    name: "web access — the BYO search provider setting, and ciphertext kept apart from it",
+    sql: MIGRATION_021_WEB_ACCESS,
+  },
+  {
+    version: 22,
     name: "web access — Exa as a second keyed search provider",
-    sql: MIGRATION_021_WEB_ACCESS_EXA,
+    sql: MIGRATION_022_WEB_ACCESS_EXA,
   },
 ];
 

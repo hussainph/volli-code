@@ -1,10 +1,16 @@
 /**
- * The fresh-profile landing for the Sessions surface (VC-53).
+ * The fresh-profile landing for Model Access (VC-53).
  *
  * A profile with no resolvable global default cannot mint a chat — main
  * refuses the create before anything durable exists — so the surface must not
  * try, and must not toast about a state it can see coming. This is what stands
  * in the empty state instead: the sign-in path, inline.
+ *
+ * It stood in the Sessions page's empty state until VC-54 retired that page.
+ * Its home is now the BOARD's empty state (`board/board-empty.tsx`), which is
+ * the first thing a fresh profile sees and the only surface guaranteed to be on
+ * screen there — see that file for why the app needs one proactive auth surface
+ * at all.
  *
  * Two shapes of the same block. No available models means no provider is
  * signed in, so the primary act is choosing WHO to sign in to — the menu deep
@@ -29,9 +35,9 @@ import { useUiStore } from "@renderer/stores/ui";
 /**
  * Whether Session creation would resolve a model right now, re-read on every
  * Model Access change (sign-in, default saved). `null` while unanswered —
- * callers treat that as "not ready to auto-open" without drawing the blocked
- * state. A profile without the client (the lab) reads as ready: the create
- * path owns its own refusal there.
+ * callers draw neither branch then, which is what keeps a one-frame sign-in
+ * prompt off a perfectly configured profile. A profile without the client (the
+ * lab) reads as ready: the create path owns its own refusal there.
  */
 export function useModelAccessReady(active: boolean): boolean | null {
   const client = useModelAccessClient();

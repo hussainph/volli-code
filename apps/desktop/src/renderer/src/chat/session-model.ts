@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------- composer */
 
-import type { PromptResource } from "@volli/shared";
+import type { BlobLinkView, PromptResource } from "@volli/shared";
 
 /**
  * What ⏎ means right now.
@@ -28,19 +28,34 @@ export interface QueuedMessage {
    * when the person pressed ⏎. Absent means the text referenced no skill.
    */
   resources?: readonly PromptResource[];
+  /**
+   * Files attached to this message (VC-50), carried on the message for the
+   * same reason `resources` is: a queued or held copy must release with
+   * exactly what was attached when the person pressed ⏎. Absent means a
+   * message with no files.
+   */
+  attachments?: readonly BlobLinkView[];
 }
 
-/** Blank text is not a message; it never reaches the queue. */
+/**
+ * Blank text is not a message; it never reaches the queue — UNLESS something
+ * is attached to it. Dropping in a screenshot and pressing ⏎ without typing is
+ * an ordinary way to ask what it is (VC-50), so what makes a message real is
+ * having *something* in it, not having words.
+ */
 export function enqueueMessage(
   queue: readonly QueuedMessage[],
   message: QueuedMessage,
 ): QueuedMessage[] {
   const text = message.text.trim();
-  if (text.length === 0) return [...queue];
-  const entry: QueuedMessage =
-    message.resources === undefined
-      ? { id: message.id, text }
-      : { id: message.id, text, resources: message.resources };
+  const attachments = message.attachments ?? [];
+  if (text.length === 0 && attachments.length === 0) return [...queue];
+  const entry: QueuedMessage = {
+    id: message.id,
+    text,
+    ...(message.resources === undefined ? {} : { resources: message.resources }),
+    ...(attachments.length === 0 ? {} : { attachments }),
+  };
   return [...queue, entry];
 }
 

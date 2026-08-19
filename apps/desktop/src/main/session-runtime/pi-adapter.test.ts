@@ -12,6 +12,7 @@ import {
   promptResourceBlock,
   skillResourcePart,
   type AgentRuntime,
+  type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
@@ -99,6 +100,9 @@ class FakeRuntime implements AgentRuntime {
   interrupts = 0;
   retries = 0;
   closes = 0;
+  readonly compactions: Array<string | undefined> = [];
+  readonly compactionOutcomes: CompactionRequestOutcome[] = [];
+  compactionFailure: unknown = null;
   startFailure: unknown = null;
   readonly startupObservations: RuntimeObservation[] = [];
   submitFailure: unknown = null;
@@ -149,6 +153,11 @@ class FakeRuntime implements AgentRuntime {
         this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
         return this.outcomes.shift() ?? { kind: "delivered", delivery: "retry" };
+      },
+      compact: async (instructions): Promise<CompactionRequestOutcome> => {
+        this.compactions.push(instructions);
+        if (this.compactionFailure !== null) throw this.compactionFailure;
+        return this.compactionOutcomes.shift() ?? { kind: "compacted" };
       },
       close: async (): Promise<void> => {
         this.closes += 1;
@@ -1029,6 +1038,88 @@ describe("Pi native adapter dispatch", () => {
     expect(runtime.submissions).toEqual([]);
     expect(runtime.submissionCommandIds).toEqual(["command-retry"]);
     expect(receipt.status).toBe("accepted");
+  });
+
+  it("compacts the context on request and carries the instructions to the runtime", async () => {
+    const { binding, runtime } = await attached();
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: "keep the marker work",
+    });
+
+    expect(runtime.compactions).toEqual(["keep the marker work"]);
+    expect(runtime.submissions).toEqual([]);
+    expect(receipt.status).toBe("accepted");
+  });
+
+  it("reports a context with nothing left to summarize as a refusal, not a silence", async () => {
+    const { binding, runtime } = await attached();
+    runtime.compactionOutcomes.push({
+      kind: "rejected",
+      reason: "nothing-to-compact",
+      message: "There is nothing left to summarize.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    // No instructions is no instructions, not an empty string the summarizer
+    // would be handed as if it said something.
+    expect(runtime.compactions).toEqual([undefined]);
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_NOTHING_TO_COMPACT",
+      detail: "There is nothing left to summarize.",
+    });
+  });
+
+  it("reports a summary the provider refused as a rejected receipt", async () => {
+    const { binding, runtime } = await attached();
+    runtime.compactionOutcomes.push({
+      kind: "rejected",
+      reason: "summary-failed",
+      message: "the summarizer is unhappy",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_COMPACTION_FAILED",
+      detail: "the summarizer is unhappy",
+    });
+  });
+
+  it("reports a compaction that threw as an unknown outcome, never a refusal", async () => {
+    const { binding, runtime } = await attached();
+    runtime.compactionFailure = new Error("the runtime fell over");
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    // Not `rejected`: a refusal is the runtime answering, and this is the
+    // runtime failing to. The difference is what a reader needs to know.
+    expect(receipt).toMatchObject({ status: "unknown", detail: "the runtime fell over" });
   });
 
   it("refuses every command once released", async () => {

@@ -30,12 +30,14 @@ import {
   type MessageDelivery,
 } from "@renderer/chat/client";
 import type { QueuedMessage } from "@renderer/chat/session-model";
+import type { TranscriptCompaction } from "@renderer/chat/transcript";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const NO_PROMPT_RESOURCES: readonly string[] = [];
+const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
 
 /**
  * One Session's resident state, read field by field.
@@ -81,6 +83,13 @@ export interface SessionView {
    * chat surface say it happened.
    */
   promptResources: readonly string[];
+  /**
+   * Every compaction this Session has been through, each pinned to the message
+   * it happened after — what the transcript draws its boundaries from. Its own
+   * subscription for the reason all of these are: it moves once or twice in a
+   * Session, where the transcript beside it moves every frame.
+   */
+  compactions: readonly TranscriptCompaction[];
 }
 
 export interface SessionController {
@@ -105,6 +114,10 @@ export interface SessionController {
   /** The single action an error row offers; which one it is is the client's call. */
   recover(): Promise<boolean>;
   retryRuntime(): Promise<boolean>;
+  /** Clears the error band — see {@link ChatSessionClient.dismissError}. */
+  dismissError(): void;
+  /** Summarize the context now, on explicit request. False means it did not. */
+  compactContext(instructions: string | null): Promise<boolean>;
   close(): void;
 }
 
@@ -149,6 +162,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.promptResources ?? NO_PROMPT_RESOURCES,
   );
+  const compactions = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.compactions ?? NO_COMPACTIONS,
+  );
 
   const session = React.useMemo<SessionView>(
     () => ({
@@ -161,8 +178,10 @@ export function useSessionController(
       sessionError,
       queue,
       promptResources,
+      compactions,
     }),
     [
+      compactions,
       deliverable,
       durableMessages,
       messages,
@@ -204,6 +223,12 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
       getChatClient(sessionId)?.cancelInteraction(interactionId) ?? refused,
     recover: () => getChatClient(sessionId)?.recover() ?? refused,
     retryRuntime: () => getChatClient(sessionId)?.retryRuntime() ?? refused,
+    // No client is no band: there is nothing on screen asking to be dismissed.
+    dismissError: () => {
+      getChatClient(sessionId)?.dismissError();
+    },
+    compactContext: (instructions) =>
+      getChatClient(sessionId)?.compactContext(instructions) ?? refused,
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

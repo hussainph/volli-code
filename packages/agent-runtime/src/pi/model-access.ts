@@ -8,6 +8,7 @@ import type {
   ModelAccessState,
 } from "@volli/shared";
 
+import { contextWindowOf } from "./compaction";
 import type { PiModelAccess } from "./models";
 import { providerSignInMethods } from "./sign-in";
 
@@ -116,16 +117,15 @@ export async function inspectPiModelAccess(
       hasStoredCredential: stored.has(provider.id),
     });
     for (const model of known) {
+      // Only a size a meter can divide by, and the same sanitization
+      // compaction's threshold reads — one rule, in `contextWindowOf`, so a
+      // window this page calls unknown is one no Session compacts against.
+      const contextWindow = contextWindowOf(model);
       catalog.push({
         providerId: provider.id,
         modelId: model.id,
         label: model.name,
-        // Only a size a meter can divide by. Pi's catalog types the field as
-        // required, but a gateway entry can still carry 0 or garbage, and "no
-        // window" must stay distinguishable from a zero-token one.
-        ...(Number.isFinite(model.contextWindow) && model.contextWindow > 0
-          ? { contextWindow: Math.floor(model.contextWindow) }
-          : {}),
+        ...(contextWindow === undefined ? {} : { contextWindow }),
         state:
           refreshError !== undefined
             ? "unavailable"
@@ -135,6 +135,11 @@ export async function inspectPiModelAccess(
                 ? "authentication-required"
                 : "unavailable",
         reasoningLevels: getSupportedThinkingLevels(model),
+        // Same defensive stance as contextWindow above — Pi types `input` as
+        // required, a gateway entry need not honour that. An unreadable field
+        // reads as "takes images", because an attachment a model cannot see
+        // still materializes and is still named in the brief by path.
+        acceptsImageInput: !Array.isArray(model.input) || model.input.includes("image"),
       });
     }
   }

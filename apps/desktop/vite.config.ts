@@ -85,6 +85,7 @@ export default defineConfig(({ mode }) => ({
         "src/stores/**",
         "src/chat/activity.ts",
         "src/chat/client.ts",
+        "src/chat/compaction-boundary.ts",
         "src/chat/composer-effort.ts",
         "src/chat/composer-picker.ts",
         "src/chat/interaction.ts",
@@ -95,12 +96,23 @@ export default defineConfig(({ mode }) => ({
         "src/chat/session-model.ts",
         "src/chat/transcript.ts",
         "src/chat/wire.ts",
+        "src/components/attachments/attachment-model.ts",
+        // The drop/paste decision (VC-106) is a pure `.ts` beside the views
+        // that spread it, for the same reason as tab-focus.ts: four surfaces
+        // share it and its capture-phase subtleties are worth the gate.
+        "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
+        "src/components/board/board-session-activity.ts",
         "src/components/chat/chat-plane-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
+        // Home's tab resolution: which tab is in front AND what the persisted
+        // record owes a tab that names nothing on screen (VC-54). The ticket's
+        // highest correctness risk, so it is a pure module precisely so the
+        // gate can reach it.
+        "src/components/home/home-tabs.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -111,8 +123,13 @@ export default defineConfig(({ mode }) => ({
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
+        // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
+        // as tab-focus.ts: the squiggle's geometry is arithmetic the view
+        // renders but never owns.
+        "src/components/theme/slider-squiggle.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
+        "src/components/ticket/clamp-policy.ts",
         "src/components/ticket/label-picker-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
@@ -161,6 +178,10 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
+        "**/src/main/blob-attach.ts",
+        "**/src/main/blob-collect.ts",
+        "**/src/main/blob-protocol.ts",
+        "**/src/main/turn-attachments.ts",
         "**/src/main/ipc.ts",
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
@@ -184,6 +205,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/theme-repo.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
+        "**/src/main/session-control/activity-watch.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

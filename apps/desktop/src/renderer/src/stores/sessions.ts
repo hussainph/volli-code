@@ -1,11 +1,11 @@
 /**
- * The unified terminal-session store: ONE resident model for both project
- * scratch sessions (CONTEXT.md's "Scratch session") and ticket-scoped sessions
- * (ticket-detail-mvp decision #19). Every tab carries a {@link SessionScope}
- * discriminator; the always-mounted sessions layer reads it to route each live
- * terminal to its surface (the Sessions page for scratch, a rect-synced overlay
- * over the ticket plane for ticket sessions). Both scopes get the full split
- * tree, activity tracking, and rename.
+ * The unified terminal-session store: ONE resident model for both Project
+ * Sessions (CONTEXT.md's "Session Role": ticketless, main checkout) and
+ * ticket-scoped sessions (ticket-detail-mvp decision #19). Every tab carries a
+ * {@link SessionScope} discriminator; the always-mounted sessions layer reads
+ * it to route each live terminal to its surface (Home for a Project Session, a
+ * rect-synced overlay over the ticket plane for ticket sessions). Both scopes
+ * get the full split tree, activity tracking, and rename.
  *
  * A split leaf is the ownership boundary: exactly one renderer engine and one
  * main-process PTY session. Layout nodes own geometry only. This mirrors
@@ -13,7 +13,7 @@
  * asking one renderer instance to paint the same PTY into another canvas.
  *
  * Containers live in `byOwner`, keyed by the scope's OWNER id — a projectId for
- * scratch, a ticketId for ticket sessions (distinct UUID spaces, so one flat
+ * a Project Session, a ticketId for ticket sessions (distinct UUID spaces, so one flat
  * map never collides). Cross-cutting, sessionId-addressed actions (markExited,
  * bumpOutput, renameSession) route through the `sessionOwner` index so the
  * per-chunk hot path stays O(1).
@@ -33,29 +33,30 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
+import { useProjectSessionsStore } from "./project-sessions";
 import { useTicketSessionRecordsStore } from "./ticket-session-records";
 
 export type TerminalSplitDirection = "vertical" | "horizontal";
 
 /**
- * What a session is scoped to, stamped on every tab. `scratch` runs at the
+ * What a session is scoped to, stamped on every tab. `project` runs at the
  * project's main checkout with no board involvement; `ticket` is ticket-scoped
  * (env-injected PTY in main) and hosts in the ticket detail's tab plane. Both
  * carry `projectId` so a split can re-boot its PTY (cwd + optional ticket env)
  * without another lookup.
  */
 export type SessionScope =
-  | { kind: "scratch"; projectId: string }
+  | { kind: "project"; projectId: string }
   | { kind: "ticket"; projectId: string; ticketId: string };
 
-/** The container key for a scope: projectId for scratch, ticketId for ticket. */
+/** The container key for a scope: projectId for a project Session, ticketId for ticket. */
 export function ownerKey(scope: SessionScope): string {
-  return scope.kind === "scratch" ? scope.projectId : scope.ticketId;
+  return scope.kind === "project" ? scope.projectId : scope.ticketId;
 }
 
-/** A project's scratch-session scope. */
-export function scratchScope(projectId: string): SessionScope {
-  return { kind: "scratch", projectId };
+/** A project's own, ticketless scope — the Session Role CONTEXT.md calls `project`. */
+export function projectScope(projectId: string): SessionScope {
+  return { kind: "project", projectId };
 }
 
 /** A ticket's session scope. */
@@ -87,7 +88,7 @@ export interface SessionTab {
   /** The root pane's session id is also the stable tab id and the durable record id. */
   sessionId: string;
   title: string;
-  /** Where this session lives (scratch vs ticket) — the layer routes rendering off this. */
+  /** Where this session lives (project vs ticket) — the layer routes rendering off this. */
   scope: SessionScope;
   layout: SessionLayout;
   activePaneId: string;
@@ -167,7 +168,7 @@ export function sessionActivityState(
 }
 
 interface SessionsState {
-  /** Session containers keyed by owner id (projectId for scratch, ticketId for ticket). */
+  /** Session containers keyed by owner id (projectId for a project Session, ticketId for ticket). */
   byOwner: Record<string, SessionContainer>;
   /** sessionId → owning container key; the O(1) routing index for the hot path and rename. */
   sessionOwner: Record<string, string>;
@@ -426,7 +427,7 @@ export function launchAdapter(harnessId: HarnessId): HarnessAdapter | undefined 
  * through its own wrapper, so silence on the channel afterwards is a fact
  * about the wrapper — a stale PATH, a `volli doctor --fix` never run — and
  * worth saying out loud. A bare shell promised nothing: every split, every
- * ticket tab opened without a kickoff, every scratch terminal must be able to
+ * ticket tab opened without a kickoff, every project terminal must be able to
  * sit quietly for an hour without the sidebar accusing it of not reporting.
  *
  * A registered harness now earns one too, off the catalog: its manifest states
@@ -838,14 +839,25 @@ export function subscribeHarnessEvents(): () => void {
  * record only names WHICH harness, so it is repointed only when that moved. An
  * unconditional repoint would hand the rail a new record object per launch,
  * carrying the value it already had.
+ *
+ * Two durable caches are repointed, not one, because a terminal's record is
+ * cached per ticket (the rail) AND per project (the sidebar's bands, the
+ * board's indicator). An announce is the one Session fact that moves NEITHER
+ * cache on its own: it never touches the ledger, so `volli:session-activity`
+ * cannot see it, and a surface that missed this patch would go on naming the
+ * harness the terminal was launched with for the rest of the run.
  */
 export function subscribeSessionHarness(): () => void {
   return window.api.sessions.onHarnessChange((notice) => {
     useSessionsStore.getState().announceHarness(notice.sessionId, notice.harnessId, notice.at);
-    if (notice.changed && notice.ticketId !== null) {
+    if (!notice.changed) return;
+    if (notice.ticketId !== null) {
       useTicketSessionRecordsStore
         .getState()
         .setActiveHarness(notice.ticketId, notice.sessionId, notice.harnessId);
     }
+    useProjectSessionsStore
+      .getState()
+      .setActiveHarness(notice.projectId, notice.sessionId, notice.harnessId);
   });
 }

@@ -92,7 +92,7 @@ interface Session {
   /** The workspace this session is scoped to (future `volli` CLI/notifications consumer). */
   workspaceId: string;
   /**
-   * The ticket this session drives, or `null` for a scratch session. Held
+   * The ticket this session drives, or `null` for a Project Session. Held
    * in-memory so {@link PtyManager.interruptTicketSessions} can find every live
    * session of a ticket without a db round-trip (issue #78 backward-move interrupt).
    */
@@ -218,7 +218,7 @@ export class PtyManager {
    * @param parkConfig warm-park tuning; disabled config makes every park path a
    *                   no-op. Additive with defaults so existing callers/tests
    *                   need not pass it.
-   * @param attachmentsRootPath the userData attachment-bytes root (issue #77
+   * @param blobsRootPath the userData attachment-bytes root (issue #77
    *                   PR 2) a non-worktree ticket's kickoff materializes from
    *                   before spawn — see `resolveScope`. Defaults to `""`
    *                   (never used in production; `registerTerminalIpcHandlers`
@@ -231,7 +231,7 @@ export class PtyManager {
     private readonly inspector: ProcessInspector = createProcessInspector(),
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
-    private readonly attachmentsRootPath: string = "",
+    private readonly blobsRootPath: string = "",
     sessionEngine: SessionEngine | null = null,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
@@ -328,7 +328,7 @@ export class PtyManager {
       db,
       sessionEngine,
       request,
-      this.attachmentsRootPath,
+      this.blobsRootPath,
       this.wrapperFor,
       this.adapterFor,
     );
@@ -440,7 +440,7 @@ export class PtyManager {
       }
     }
 
-    // cwd resolution + guard. A renderer-supplied cwd (scratch / non-worktree
+    // cwd resolution + guard. A renderer-supplied cwd (project Session / non-worktree
     // ticket) must live inside a registered project, same defense-in-depth as
     // the filesystem handlers. A worktree cwd is MAIN-derived (ensure returns
     // it), not renderer input, so it's validated against the app-owned worktree
@@ -470,7 +470,7 @@ export class PtyManager {
     // `.cursor/hooks.json`, which it reads from its working directory and
     // nowhere else per-ticket. Worktree sessions only: the alternative is
     // writing into the user's own checkout, which nothing justifies, so a
-    // scratch session runs cursor unhooked rather than politely vandalized.
+    // Project Session runs cursor unhooked rather than politely vandalized.
     // Refreshed every boot, because the command line names this launch's socket.
     if (worktreeOutcome !== null && this.agentRuntime !== null) {
       await this.writeHarnessWorkspaceFiles(cwd, this.agentRuntime);
@@ -554,7 +554,7 @@ export class PtyManager {
         // HOME and every credential survive it untouched). Then force TERM so
         // the terminal emulator negotiates 256-color regardless of the parent's
         // TERM; layer the ticket env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top
-        // for ticket sessions, or just VOLLI_ARTIFACTS_DIR for scratch sessions.
+        // for ticket sessions, or just VOLLI_ARTIFACTS_DIR for Project Sessions.
         //
         // Scrubbed against the merged built-in + registered set when it exists,
         // falling back to the built-ins for the same reason {@link adapterFor}

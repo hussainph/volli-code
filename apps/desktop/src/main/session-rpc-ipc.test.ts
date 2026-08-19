@@ -585,6 +585,33 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("routes the compaction policy over IPC", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const stored = { autoCompaction: true, modelLimits: [] };
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      readCompactionPolicy: () => stored,
+      writeCompactionPolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+    });
+
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.compactionPolicy", input: undefined }),
+    ).resolves.toEqual({ ok: true, data: stored });
+    const saved = {
+      autoCompaction: false,
+      modelLimits: [{ providerId: "anthropic", modelId: "claude-sonnet", reserveTokens: 32_768 }],
+    };
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.setCompactionPolicy", input: saved }),
+    ).resolves.toEqual({ ok: true, data: saved });
+    expect(writes).toEqual([saved]);
+    await registration.close();
+  });
+
   it("routes the create-only Session start over IPC, answering identity alone", async () => {
     // VC-16's optimistic open: this is the fast half of a chat start, and what
     // makes it fast is that it answers a Session id and nothing about an
@@ -618,7 +645,7 @@ describe("registerSessionRpcIpcHandlers", () => {
           operationId: "project-create",
           projectId: "project-1",
           ticketId: null,
-          title: "Scratch",
+          title: "Project chat",
         },
       }),
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-2" } });
@@ -635,7 +662,12 @@ describe("registerSessionRpcIpcHandlers", () => {
       ],
       [
         "create",
-        { operationId: "project-create", projectId: "project-1", ticketId: null, title: "Scratch" },
+        {
+          operationId: "project-create",
+          projectId: "project-1",
+          ticketId: null,
+          title: "Project chat",
+        },
       ],
     ]);
     await registration.close();

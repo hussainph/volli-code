@@ -13,7 +13,7 @@
  * outlives every view — the store's three lifecycle actions are the whole of
  * what a client asks of it, plus the fold.
  */
-import { errorMessage, isDefaultModelRequired } from "@volli/shared";
+import { errorMessage, isDefaultModelRequired, type ModelSelection } from "@volli/shared";
 import { create } from "zustand";
 
 import {
@@ -38,6 +38,12 @@ export interface CreateChatSessionInput {
   title: string | null;
   /** Skill slugs the Session starts with — attach-time RESOURCE injection. */
   skills?: readonly string[];
+  /**
+   * The model policy this Session is born with, when the surface opening it
+   * chose one. Absent leaves the Role's configured default, which is what
+   * every start but the composer's Create & start means (VC-56).
+   */
+  model?: ModelSelection;
 }
 
 export interface ChatSessionsState extends ChatSessionWrites {
@@ -187,6 +193,7 @@ export function createChatSessionsStore(
             ...(input.skills !== undefined && input.skills.length > 0
               ? { skills: input.skills }
               : {}),
+            ...(input.model === undefined ? {} : { model: input.model }),
           });
         } catch (failure) {
           // A create refused for the missing default model is a predictable

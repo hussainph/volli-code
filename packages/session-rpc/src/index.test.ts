@@ -683,6 +683,7 @@ describe("Session tRPC router", () => {
               label: "GPT-5.6 Sol",
               state: "available" as const,
               reasoningLevels: ["off", "low", "medium", "high"] as const,
+              acceptsImageInput: true,
               headers: { authorization: "model-secret" },
             },
           ],
@@ -710,6 +711,7 @@ describe("Session tRPC router", () => {
       "state",
     ]);
     expect(Object.keys(access.models[0]!).toSorted()).toEqual([
+      "acceptsImageInput",
       "label",
       "modelId",
       "providerId",
@@ -757,6 +759,7 @@ describe("Session tRPC router", () => {
             label: "  GPT-5.6 Sol  ",
             state: "available" as const,
             reasoningLevels: ["off", "low", "medium", "high"] as const,
+            acceptsImageInput: true,
           },
         ],
       }),
@@ -809,6 +812,7 @@ describe("Session tRPC router", () => {
             label: "   ",
             state: "available" as const,
             reasoningLevels: ["off", "high"] as const,
+            acceptsImageInput: true,
           },
           {
             providerId: "anthropic",
@@ -816,6 +820,7 @@ describe("Session tRPC router", () => {
             label: "y".repeat(513),
             state: "available" as const,
             reasoningLevels: ["off"] as const,
+            acceptsImageInput: false,
           },
           {
             providerId: "anthropic",
@@ -823,6 +828,7 @@ describe("Session tRPC router", () => {
             label: "Claude Sonnet 5",
             state: "available" as const,
             reasoningLevels: ["off"] as const,
+            acceptsImageInput: true,
           },
         ],
       }),
@@ -919,6 +925,55 @@ describe("Session tRPC router", () => {
     expect(writes).toEqual([[{ providerId: "openai", modelId: "gpt-5.6-luna" }]]);
   });
 
+  it("round-trips the compaction policy whole, and refuses an unusable reserve", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readCompactionPolicy: () => ({ autoCompaction: true, modelLimits: [] }),
+      writeCompactionPolicy: (policy) => {
+        writes.push(policy);
+        return policy;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.compactionPolicy()).resolves.toEqual({
+      autoCompaction: true,
+      modelLimits: [],
+    });
+
+    const saved = {
+      autoCompaction: false,
+      modelLimits: [{ providerId: "anthropic", modelId: "claude-sonnet", reserveTokens: 32_768 }],
+    };
+    await expect(caller.modelAccess.setCompactionPolicy(saved)).resolves.toEqual(saved);
+    expect(writes).toEqual([saved]);
+
+    // A reserve is a positive whole count of tokens at this edge and nothing
+    // more. Whether it fits the model's window is a question about a catalog
+    // this edge does not hold, and main refuses that against the snapshot.
+    await expect(
+      caller.modelAccess.setCompactionPolicy({
+        autoCompaction: true,
+        modelLimits: [{ providerId: "anthropic", modelId: "claude-sonnet", reserveTokens: 0 }],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("says so rather than inventing a policy when preferences are unavailable", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.compactionPolicy()).rejects.toThrow("unavailable");
+    await expect(
+      caller.modelAccess.setCompactionPolicy({ autoCompaction: true, modelLimits: [] }),
+    ).rejects.toThrow("unavailable");
+  });
+
   it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
@@ -941,7 +996,7 @@ describe("Session tRPC router", () => {
       operationId: "operation-2",
       projectId: "project-1",
       ticketId: null,
-      title: "Scratch",
+      title: "Project chat",
     });
 
     expect(ticket).toEqual({ sessionId: "session-1" });
@@ -953,7 +1008,12 @@ describe("Session tRPC router", () => {
       ],
       [
         "create",
-        { operationId: "operation-2", projectId: "project-1", ticketId: null, title: "Scratch" },
+        {
+          operationId: "operation-2",
+          projectId: "project-1",
+          ticketId: null,
+          title: "Project chat",
+        },
       ],
     ]);
     expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
@@ -1004,6 +1064,62 @@ describe("Session tRPC router", () => {
         ticketId: "ticket-1",
         title: "VC-1",
         skills: ["not a slug"],
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("carries a model override on create, and refuses a level no model can run", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // The composer's Create & start states both halves; the merge onto the
+    // app default and the availability check are the server's, not this edge's.
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Work on VC-1",
+      modelOverride: {
+        model: { providerId: "anthropic", modelId: "sonnet-4.5" },
+        reasoningLevel: "high",
+      },
+    });
+    // A level alone is a legal override: it keeps the default model.
+    await caller.sessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+      modelOverride: { reasoningLevel: "low" },
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        modelOverride: {
+          model: { providerId: "anthropic", modelId: "sonnet-4.5" },
+          reasoningLevel: "high",
+        },
+      }),
+      expect.objectContaining({ modelOverride: { reasoningLevel: "low" } }),
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-3",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+        // @ts-expect-error — the wire grammar is the shipped level set, and a
+        // renderer that invented a level must be refused at the edge.
+        modelOverride: { reasoningLevel: "ludicrous" },
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -1179,6 +1295,57 @@ describe("Session tRPC router", () => {
       },
     ]);
     expect("attachmentId" in fixture.calls.command.at(-1)!.command).toBe(false);
+  });
+
+  it("passes an explicit compaction, with or without instructions", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "compact-command",
+      sessionId: "session-1",
+      command: { kind: "context.compact", instructions: "keep the API work" },
+    });
+    await caller.session.command({
+      commandId: "bare-compact-command",
+      sessionId: "session-1",
+      command: { kind: "context.compact" },
+    });
+
+    expect(fixture.calls.command.slice(-2)).toEqual([
+      {
+        commandId: "compact-command",
+        sessionId: "session-1",
+        command: { kind: "context.compact", instructions: "keep the API work" },
+      },
+      {
+        commandId: "bare-compact-command",
+        sessionId: "session-1",
+        command: { kind: "context.compact" },
+      },
+    ]);
+  });
+
+  it("refuses compaction instructions too long to be a summarizer's brief", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // These words are headed for the call meant to RECLAIM the window; an
+    // unbounded brief is a way to spend it instead.
+    await expect(
+      caller.session.command({
+        commandId: "overlong-compact",
+        sessionId: "session-1",
+        command: { kind: "context.compact", instructions: "x".repeat(4001) },
+      }),
+    ).rejects.toThrow();
+    expect(fixture.calls.command).toEqual([]);
   });
 
   it("passes a durable model selection without adapter or profile identity", async () => {

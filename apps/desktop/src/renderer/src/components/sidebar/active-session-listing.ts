@@ -44,7 +44,7 @@ import {
 } from "@volli/shared";
 
 import { sessionSourceLabel } from "../ticket/session-history";
-import { chatTabId, parseChatTabId } from "../ticket/ticket-chat-tab";
+import { chatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,
   sessionPanes,
@@ -114,7 +114,7 @@ export interface ActiveSessionRow {
   id: string;
   /**
    * The ticket this row belongs to, or `null` for a ticketless Session — a
-   * project scratch Session, or one whose ticket has left the board.
+   * project Project Session, or one whose ticket has left the board.
    */
   ticket: Ticket | null;
   title: string;
@@ -149,33 +149,45 @@ export interface ActiveSessionRow {
 }
 
 /**
- * Whether a ticketless row — a scratch terminal pane or a ticketless chat —
- * names the tab currently in front on the Sessions surface.
+ * Whether a ticketless row — a project terminal pane or a ticketless chat —
+ * names the tab currently in front on Home.
  *
  * A terminal target additionally has to name the split pane in front, since a
  * tab can hold several; a chat target is one surface, so naming its tab
- * (`sessionsActiveTab`, the workspace store's record of the last chat/terminal
- * tab activated from Sessions) is the whole answer.
+ * (`homeActiveTab`, the workspace store's record of which Home tab is in front)
+ * is the whole answer.
  *
- * The strip's two ledgers do not agree on their own: selecting a chat tab
- * writes `sessionsActiveTab` and deliberately leaves the terminal container's
- * `activeSessionId` where it was (sessions-layer.tsx), so the terminal branch
- * has to check that a chat is not the thing covering it — otherwise the
- * terminal the chat plane is painted over lights up beside the chat.
+ * BOTH kinds are decided by `homeActiveTab` alone — which is what VC-54 changed
+ * here, and it is a simplification rather than a translation. The terminal
+ * branch used to read the terminal CONTAINER's `activeSessionId` instead,
+ * because the old record could be `null` for a project that had never had a tab
+ * in front and so could not be trusted to name the terminal. It then needed a
+ * second clause to rule out a chat covering that terminal, since selecting a
+ * chat deliberately leaves the container's ledger where it was.
+ *
+ * `homeActiveTab` has no null: it defaults to the permanent Board tab and every
+ * path that puts a Session in front records it. So one comparison answers the
+ * whole question, the chat-covering clause dissolves into it, and the Board tab
+ * — which the container's ledger cannot represent at all — correctly lights
+ * nothing. Before this, standing on the board lit whichever terminal row the
+ * container still remembered, which claimed to be the thing you were looking at
+ * while you were looking at the board.
+ *
+ * The container is still consulted, for the one fact only it holds: WHICH PANE
+ * is in front inside a split tab.
  */
-export function isScratchRowSelected(
+export function isProjectSessionRowSelected(
   row: ActiveSessionRow | PreviousSessionRow,
-  sessionsVisible: boolean,
-  scratchContainer: SessionContainer | undefined,
-  sessionsActiveTab: string | null,
+  /** Home is the page in front (nav only — which TAB is `homeActiveTab`'s job). */
+  homeVisible: boolean,
+  projectContainer: SessionContainer | undefined,
+  homeActiveTab: string,
 ): boolean {
-  if (!sessionsVisible || row.ticket !== null) return false;
+  if (!homeVisible || row.ticket !== null) return false;
   const target = row.target;
-  if (target?.kind === "chat") return sessionsActiveTab === target.tabId;
-  if (target?.kind !== "terminal") return false;
-  if (sessionsActiveTab !== null && parseChatTabId(sessionsActiveTab) !== null) return false;
-  if (scratchContainer?.activeSessionId !== target.tabId) return false;
-  const activeTab = scratchContainer.tabs.find(({ sessionId }) => sessionId === target.tabId);
+  if (target === null || homeActiveTab !== target.tabId) return false;
+  if (target.kind === "chat") return true;
+  const activeTab = projectContainer?.tabs.find(({ sessionId }) => sessionId === target.tabId);
   return activeTab?.activePaneId === target.paneId;
 }
 
@@ -202,8 +214,8 @@ export function listingOutputStamps(input: {
   containers: Readonly<Record<string, SessionContainer>>;
   /** The project's ticket ids — the container keys its ticket Sessions live under. */
   ticketIds: Iterable<string>;
-  /** The project's own id, which is the container key its scratch Sessions live under. */
-  scratchOwnerId: string;
+  /** The project's own id, which is the container key its Project Sessions live under. */
+  projectOwnerId: string;
 }): Record<string, number> {
   const stamps: Record<string, number> = {};
   const take = (sessionId: string): void => {
@@ -221,7 +233,7 @@ export function listingOutputStamps(input: {
     }
   };
   for (const ticketId of input.ticketIds) takeContainer(ticketId);
-  takeContainer(input.scratchOwnerId);
+  takeContainer(input.projectOwnerId);
   return stamps;
 }
 
@@ -244,6 +256,101 @@ export interface PreviousSessionRow {
    * {@link SessionListingFilter.showCleaned} asked for it.
    */
   cleaned: boolean;
+}
+
+/**
+ * The Previous band's rows, arranged the way it draws them: one entry per
+ * ticket, plus a bare entry for each session that has no ticket to sit under.
+ *
+ * **Only Previous is grouped, and that is a decision rather than a first
+ * step** (VC-69). Grouping Active was prototyped and rejected: same-ticket
+ * concurrency is rare there (a typical Active band is a handful of rows on as
+ * many different tickets), so a parent row is usually a container for one
+ * child, and it puts a disclosure in front of a destination that is currently
+ * one click away — on the one surface whose whole job is to be the fastest in
+ * the app. Telling two live sessions on one ticket apart is a peeking problem,
+ * not a hierarchy problem, and belongs to hover-peek (VC-30).
+ *
+ * What that buys, beyond the click: **no entry here ever carries an attention
+ * cue, and none has to.** A Session needing a human is pinned to Active for as
+ * long as it is asking ({@link activeGroup} short-circuits the quiet window on
+ * `attention`), so nothing behind a collapsed ticket can be waiting on anyone.
+ * A dot on a ticket entry would be a signal that is structurally always the
+ * same, which is the kind of mark that teaches a reader to stop looking.
+ */
+export type PreviousListingEntry =
+  | {
+      kind: "session";
+      /** Stable across rebuilds: the row's own id. */
+      id: string;
+      row: PreviousSessionRow;
+    }
+  | {
+      kind: "ticket";
+      /** Stable across rebuilds: the ticket's id, which is also the expansion key. */
+      id: string;
+      ticket: Ticket;
+      /** This ticket's sessions, newest first. Never empty. */
+      rows: PreviousSessionRow[];
+      /**
+       * The newest child's stamp — the recency a collapsed entry stands in for,
+       * and the reason the entry does not have to be expanded to be placed.
+       */
+      newestAt: number;
+    };
+
+/**
+ * Arranges an already-built Previous band into {@link PreviousListingEntry}s.
+ *
+ * Separate from {@link buildActiveSessionListing} rather than a field on it,
+ * because it is a pure rearrangement of that function's own output: the band
+ * has already been cleaned, filtered and sorted, and grouping must not be able
+ * to change which rows survive or which order they are in. Keeping it a second
+ * function is what makes that guarantee checkable — this one cannot see any of
+ * the inputs those decisions were made from.
+ *
+ * **Order comes from first appearance, and that is the whole ordering rule.**
+ * The band arrives sorted by recency, so a ticket lands at the rank of its most
+ * recent session and its children are already newest-first. No second
+ * comparator, and no way for the two orders to disagree.
+ *
+ * **Every ticket gets an entry, including one with a single session.** Skipping
+ * those was tried and reverted: it saves nothing in the collapsed steady state
+ * — one unparented session row and one single-session ticket row are both one
+ * row — and it costs a band whose top level is sometimes a ticket and sometimes
+ * a session. A uniform field is worth the rows it costs when expanded.
+ *
+ * Ticketless (project) sessions are never grouped with each other: they have no
+ * ticket in common, only the absence of one, so they stay top-level as their
+ * own `session` entries — which is also what VC-54's Home taxonomy asks for.
+ */
+export function groupPreviousByTicket(rows: readonly PreviousSessionRow[]): PreviousListingEntry[] {
+  const entries: PreviousListingEntry[] = [];
+  const byTicket = new Map<string, Extract<PreviousListingEntry, { kind: "ticket" }>>();
+  for (const row of rows) {
+    const ticket = row.ticket;
+    if (ticket === null) {
+      entries.push({ kind: "session", id: row.id, row });
+      continue;
+    }
+    const existing = byTicket.get(ticket.id);
+    if (existing === undefined) {
+      const entry: Extract<PreviousListingEntry, { kind: "ticket" }> = {
+        kind: "ticket",
+        id: ticket.id,
+        ticket,
+        rows: [row],
+        // The first row of a recency-sorted band IS the newest for this ticket,
+        // so this is read once and never maximised over the rest.
+        newestAt: row.endedOrQuietAt,
+      };
+      byTicket.set(ticket.id, entry);
+      entries.push(entry);
+      continue;
+    }
+    existing.rows.push(row);
+  }
+  return entries;
 }
 
 export interface ActiveSessionListing {
@@ -281,16 +388,16 @@ export interface BuildActiveSessionListingInput {
   signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
   /**
-   * The project's scratch container — Sessions started outside any ticket.
+   * The project's project container — Sessions started outside any ticket.
    *
    * It arrives on its own key because {@link BuildActiveSessionListingInput.containers}
-   * is walked BY TICKET, while the store files a scratch container in that same
-   * flat map under the PROJECT's id (`ownerKey`: projectId for scratch, ticketId
-   * for ticket). A live scratch terminal therefore sat under a key no ticket
+   * is walked BY TICKET, while the store files a project container in that same
+   * flat map under the PROJECT's id (`ownerKey`: projectId for a project Session, ticketId
+   * for ticket). A live project terminal therefore sat under a key no ticket
    * loop would ever ask for, and reached neither band — only its ended siblings
    * got in, via the durable records below. Absent reads as none.
    */
-  scratchContainer?: SessionContainer;
+  projectContainer?: SessionContainer;
   /**
    * Chat Sessions across this project — structured Sessions with no terminal
    * attachment. They carry their own activity and recency, so they join both
@@ -440,7 +547,7 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
 
 /** The facts a cleanup rule may consult. Nothing here is derived from how a row renders. */
 export interface SessionCleanupFacts {
-  /** The Session's own ticket id; `null` for a ticketless (scratch) Session. */
+  /** The Session's own ticket id; `null` for a ticketless Session. */
   ticketId: string | null;
   /** That ticket as the board currently knows it; `null` once it is no longer there. */
   ticket: Ticket | null;
@@ -548,7 +655,7 @@ function activeGroup(
  *
  *   1. every ticket's live tabs, plus the Needs-Review promotion that hands one
  *      of them the ticket's latest attention signal, plus its exited tabs; then
- *      the project's scratch container's tabs on the same terms, ticketless;
+ *      the project's project container's tabs on the same terms, ticketless;
  *   2. durable terminal records and chat Sessions, which is where ended and
  *      ticketless Sessions enter;
  *   3. cleanup, filtering, ordering and the boundary clock.
@@ -574,7 +681,7 @@ export function buildActiveSessionListing(
 
   /**
    * How recently a terminal row did anything, when no quiet stamp can say. A
-   * ticket dates its own rows; a scratch tab has no ticket to borrow from and
+   * ticket dates its own rows; a project Session tab has no ticket to borrow from and
    * falls back to the Session's own newest durable fact, then to 0 — a sort key
    * we could not establish, never a stamp invented from `now`.
    */
@@ -584,10 +691,10 @@ export function buildActiveSessionListing(
   /**
    * Whether a terminal row's Session was born without a ticket. The durable
    * record answers wherever we have one; otherwise a `null` ticket here means
-   * the row came out of the SCRATCH container, and a scratch container holding
+   * the row came out of the PROJECT container, and a project container holding
    * a pane is itself proof of ticketless birth — the store files it under
-   * `ownerKey({kind: "scratch"})`, a key only a Session created with no ticket
-   * can ever land on. This matters because a live scratch pane's record is
+   * `ownerKey({kind: "project"})`, a key only a Session created with no ticket
+   * can ever land on. This matters because a live project Session pane's record is
    * routinely absent from `records` (that listing leads with ended Sessions),
    * and defaulting to `false` there would strip the cleanup exemption from
    * exactly the rows {@link isCleanupExempt} exists to protect.
@@ -723,17 +830,17 @@ export function buildActiveSessionListing(
     }
   }
 
-  // 1b. The project's scratch container, on exactly the terms a ticket's tabs
-  // get. A scratch Session has no ticket, so it can never be the Needs-Review
+  // 1b. The project's project container, on exactly the terms a ticket's tabs
+  // get. A Project Session has no ticket, so it can never be the Needs-Review
   // promotion; but it is a terminal the user started and is watching, and a
-  // band that omits it is wrong about what is running. Ended scratch Sessions
+  // band that omits it is wrong about what is running. Ended Project Sessions
   // already arrived through the durable records below; this is the live half
   // that had no route in.
-  const scratchTabs = input.scratchContainer?.tabs ?? [];
-  for (const tab of scratchTabs) {
+  const projectSessionTabs = input.projectContainer?.tabs ?? [];
+  for (const tab of projectSessionTabs) {
     for (const pane of sessionPanes(tab.layout)) mountedPaneIds.add(pane.sessionId);
   }
-  for (const tab of scratchTabs) {
+  for (const tab of projectSessionTabs) {
     const subject = tabSubject(tab, input);
     if (subject.activity === "exited") {
       fileExitedTab(tab, null);

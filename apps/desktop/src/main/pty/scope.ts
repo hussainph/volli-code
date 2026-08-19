@@ -18,12 +18,12 @@ import type {
   HarnessId,
   HarnessWrapperLookup,
 } from "@volli/shared";
-import { materializeAttachments } from "../attachment-materialize";
+import { materializeBlobs } from "../blob-materialize";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketSessionContext } from "../db/tickets-repo";
 import { terminalSessionRecord } from "../session-control";
 
-/** The db-resolved shape a PTY is spawned + persisted from (ticket or scratch). */
+/** The db-resolved shape a PTY is spawned + persisted from (ticket- or project-scoped). */
 export interface SessionScope {
   projectId: string;
   ticketId: string | null;
@@ -86,7 +86,7 @@ export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; e
 /**
  * Resolves a request to its session scope from the db: a ticket session
  * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
- * title) or a project-scoped scratch session (default harness, `Terminal N`).
+ * title) or a Project Session (default harness, `Terminal N`).
  * The only failure is a ticket request naming a ticket that does not exist.
  *
  * `wrapperFor` and `adapterFor` travel together for the same reason: both
@@ -97,7 +97,7 @@ export async function resolveScope(
   db: Database.Database,
   sessionEngine: SessionEngine,
   request: CreateTerminalSessionRequest,
-  attachmentsRootPath: string,
+  blobsRootPath: string,
   wrapperFor: HarnessWrapperLookup,
   adapterFor: HarnessAdapterLookup,
 ): Promise<ScopeResolution> {
@@ -208,9 +208,10 @@ export async function resolveScope(
     if (!usesWorktree && kickoff !== undefined) {
       let prompt = kickoff.prompt;
       try {
-        const materialized = await materializeAttachments(
+        const materialized = await materializeBlobs(
           db,
-          attachmentsRootPath,
+          blobsRootPath,
+          null,
           request.ticket.ticketId,
           ctx.projectPath,
         );
@@ -258,13 +259,13 @@ export async function resolveScope(
       },
     };
   }
-  // Scratch session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
+  // Project Session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
   // injected the same way a ticket session gets it (decision #9). A project
   // that can't be resolved still spawns (no artifacts env) rather than failing.
   const project = getProjectById(db, request.workspaceId);
   const sessionCount = await sessionEngine.countSessions({
     projectId: request.workspaceId,
-    scope: "scratch",
+    scope: "project",
   });
   return {
     ok: true,
@@ -278,11 +279,11 @@ export async function resolveScope(
       env: project ? projectSessionEnv(project.path) : {},
       title: `Terminal ${sessionCount + 1}`,
       artifactsRoot: project?.path ?? null,
-      // Scratch sessions never auto-launch a harness — just a bare shell.
+      // Project Sessions never auto-launch a harness — just a bare shell.
       launchCommand: null,
-      // Never worktree-backed — scratch sessions run in the renderer's cwd.
+      // Never worktree-backed — Project Sessions run in the renderer's cwd.
       worktree: null,
-      // Scratch sessions are never a resume.
+      // Project Sessions are never a resume.
       resume: null,
     },
   };

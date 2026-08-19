@@ -240,10 +240,15 @@ async function drag(page, sourceBox, target) {
   await sleep(500);
 }
 
-/** Click the Board nav item if present (nav is remembered per-workspace and defaults to Board, but re-assert after every reload to be robust). */
+/** Land on Home's Board tab (nav and tab are both remembered per-workspace and
+ *  both default to it, but re-assert after every reload to be robust). */
 async function goToBoard(page) {
-  const boardNav = page.getByRole("button", { name: "Board", exact: true });
-  if (await boardNav.count()) await boardNav.first().click();
+  const homeNav = page.getByRole("button", { name: "Home", exact: true });
+  if (await homeNav.count()) await homeNav.first().click();
+  const boardTab = page
+    .getByRole("tablist", { name: "Home tabs", exact: true })
+    .getByRole("tab", { name: "Board" });
+  if (await boardTab.count()) await boardTab.first().click();
   await sleep(500);
 }
 
@@ -307,6 +312,12 @@ async function columnCardIds(page, label) {
  * would be matching a typographic treatment; and a ticketless row prints a
  * globe instead of an id, so a row is not guaranteed to contribute an entry
  * here at all — which is exactly why the attribute exists.
+ *
+ * The two bands count differently, and have since VC-69: ACTIVE draws one row
+ * per Session, so a ticket with three of them contributes its id three times.
+ * PREVIOUS groups its Sessions under one row per ticket, so a ticket appears
+ * exactly once however many Sessions are behind it — the nested child rows
+ * deliberately drop the id their group row already prints.
  */
 async function sidebarSessionIds(page, band = "active") {
   return page.evaluate((name) => {

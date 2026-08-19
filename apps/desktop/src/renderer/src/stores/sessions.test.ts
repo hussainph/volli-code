@@ -18,7 +18,7 @@ import {
   findSessionPane,
   findTabBySessionId,
   hydrateHarnessCatalog,
-  scratchScope,
+  projectScope,
   sessionActivityState,
   sessionPanes,
   subscribeHarnessEvents,
@@ -29,7 +29,7 @@ import {
   type SessionLaunch,
 } from "./sessions";
 
-const P = scratchScope("p");
+const P = projectScope("p");
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
 const shellLaunch = (title: string): SessionLaunch => ({
@@ -113,7 +113,7 @@ describe("sessionActivityState", () => {
 });
 
 describe("addSession", () => {
-  it("appends a scratch tab with the given title, stamps its scope, and activates it", () => {
+  it("appends a project Session tab with the given title, stamps its scope, and activates it", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
@@ -122,7 +122,7 @@ describe("addSession", () => {
       {
         sessionId: "s1",
         title: "Terminal 1",
-        scope: { kind: "scratch", projectId: "p" },
+        scope: { kind: "project", projectId: "p" },
         layout: { kind: "pane", sessionId: "s1", exitCode: null },
         activePaneId: "s1",
       },
@@ -158,8 +158,8 @@ describe("addSession", () => {
 
   it("scopes sessions per owner", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
-    store.getState().addSession(scratchScope("b"), "b1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("b"), "b1", shellLaunch("Terminal 1"));
 
     expect(store.getState().byOwner["a"]?.tabs.map((t) => t.sessionId)).toEqual(["a1"]);
     expect(store.getState().byOwner["b"]?.tabs[0]?.title).toBe("Terminal 1");
@@ -670,7 +670,7 @@ describe("renameSession", () => {
 describe("markExited", () => {
   it("records the exit code on the matching tab, routing across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("a"), "a1", shellLaunch("Terminal 1"));
     store.getState().addSession(ticketScope("proj", "t1"), "b1", shellLaunch("Session 1"));
 
     store.getState().markExited("b1", 130);
@@ -699,7 +699,7 @@ describe("markExited", () => {
 
   it("is a no-op for an unknown session", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("a"), "a1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
 
     store.getState().markExited("ghost", 0);
@@ -751,8 +751,8 @@ describe("bumpOutput", () => {
   it("ignores an untracked session, and a post-close chunk is free", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
-    store.getState().bumpOutput("scratch", 5000);
-    expect(store.getState().lastOutputAt["scratch"]).toBeUndefined();
+    store.getState().bumpOutput("project-session", 5000);
+    expect(store.getState().lastOutputAt["project-session"]).toBeUndefined();
 
     store.getState().closeSession("p", "s1");
     store.getState().bumpOutput("s1", 9999);
@@ -839,12 +839,12 @@ describe("setStarting", () => {
 describe("forgetOwner", () => {
   it("drops the container, its sessions' indexes, and its starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
-    store.getState().addSession(scratchScope("a"), "a2", shellLaunch("Terminal 2"));
+    store.getState().addSession(projectScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("a"), "a2", shellLaunch("Terminal 2"));
     store.getState().bumpOutput("a1", 1000);
     store.getState().setParkState("a1", true, false);
     store.getState().setStarting("a", true);
-    store.getState().addSession(scratchScope("b"), "b1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("b"), "b1", shellLaunch("Terminal 1"));
 
     store.getState().forgetOwner("a");
 
@@ -865,7 +865,7 @@ describe("forgetOwner", () => {
 
   it("is a no-op for an owner with no sessions and no starting flag", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("a"), "a1", shellLaunch("Terminal 1"));
     const before = store.getState().byOwner;
     store.getState().forgetOwner("never-added");
     expect(store.getState().byOwner).toBe(before);
@@ -875,7 +875,7 @@ describe("forgetOwner", () => {
 describe("findTabBySessionId", () => {
   it("finds the owner + tab for a root session id across owners", () => {
     const store = createSessionsStore();
-    store.getState().addSession(scratchScope("a"), "a1", shellLaunch("Terminal 1"));
+    store.getState().addSession(projectScope("a"), "a1", shellLaunch("Terminal 1"));
     store.getState().addSession(ticketScope("proj", "t1"), "b1", shellLaunch("Session 1"));
 
     expect(findTabBySessionId(store.getState().byOwner, "b1")?.ownerId).toBe("t1");
@@ -1269,7 +1269,7 @@ describe("announceHarness / subscribeSessionHarness", () => {
     expect(useSessionsStore.getState().harness["s1"]?.startedAt).toBe(9000);
   });
 
-  it("has no record to mirror onto for a scratch session", () => {
+  it("has no record to mirror onto for a Project Session", () => {
     const channel = stubAnnounceChannel();
 
     subscribeSessionHarness();

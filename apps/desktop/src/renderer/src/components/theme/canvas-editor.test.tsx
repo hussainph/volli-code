@@ -125,15 +125,17 @@ describe("CanvasEditor", () => {
     expect(html).toContain('aria-valuemax="1"');
   });
 
-  it("reads out every floor it measured, in both modes, with nothing stranded", () => {
+  it("says nothing at all about contrast while nothing is wrong", () => {
+    // The always-on readout of every floor's measured Lc was instrumentation,
+    // and it came out. On a canvas with nothing stranded the editor is controls
+    // only — no heading, no numbers, no alarm.
     for (const resolved of ["light", "dark"] as const) {
       const html = render(DEFAULT_CANVAS, resolved);
 
-      expect(html).toContain('data-testid="canvas-contrast-readout"');
-      expect(html).toContain("Body copy");
-      expect(html).toContain("Secondary copy");
-      expect(html).toContain("Sidebar nav");
+      expect(html).not.toContain('data-testid="canvas-contrast-readout"');
       expect(html).not.toContain('data-testid="canvas-contrast-stranded"');
+      expect(html).not.toContain("Body copy");
+      expect(html).not.toContain("Lc ");
     }
   });
 
@@ -148,7 +150,6 @@ describe("CanvasEditor", () => {
   });
 
   // A blocked state earns one line and one action (AGENTS.md, UI copy). The
-  // numbers behind it are already on screen in the readout above, and the
   // reason is a property of colour space rather than of anything the user can
   // act on — so it belongs in the module comment, which is where it lives.
   it("does not lecture: no token names, no solver arithmetic, no colour-space essay", () => {
@@ -160,14 +161,17 @@ describe("CanvasEditor", () => {
     }
   });
 
-  it("annotates a hairline ceiling in the readout without raising an alarm over it", () => {
+  it("raises no alarm over a hairline ceiling, only over what is truly stranded", () => {
     // Body copy is also at its ceiling on this canvas, by a third of an Lc —
-    // finer than the hex it is emitted as. It is reported, and it is not alarmed
-    // about; the shipped canvas crosses that same hairline as vibrancy moves.
+    // finer than the hex it is emitted as, and the shipped canvas crosses that
+    // same hairline as vibrancy moves. Capped is not stranded: the alert names
+    // the sidebar and stays silent about the rest.
     const html = render(STRANDING, "light");
+    const alert = html.slice(html.indexOf('data-testid="canvas-contrast-stranded"'));
 
-    expect(html).toContain("at this canvas&#x27;s ceiling");
-    expect(html).not.toContain("Body copy</span> asks for Lc");
+    expect(alert).toContain("Sidebar nav");
+    expect(alert).not.toContain("Body copy");
+    expect(html).not.toContain("at this canvas&#x27;s ceiling");
   });
 
   it("offers the vibrancy that recovers it, as a slider position", () => {

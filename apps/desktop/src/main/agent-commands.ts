@@ -8,9 +8,10 @@ import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-en
 import {
   applyTicketBodyMutation,
   autoTitleFromKickoff,
-  attachmentsSectionInput,
+  blobsSectionInput,
   composeAttachmentsSection,
   composeTicketPrompt,
+  DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
   doctorSummary,
   effectiveHarnessId,
@@ -66,7 +67,7 @@ import type {
   WorktreeDiffMode,
 } from "../ipc/contract";
 
-import { listAttachments } from "./db/attachments-repo";
+import { listMaterializableLinks } from "./db/blobs-repo";
 import { listTicketEvents } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
 import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
@@ -116,7 +117,7 @@ export function composeTicketBrief(input: {
     Ticket,
     "id" | "ticketNumber" | "title" | "body" | "worktreePath" | "branch" | "baseBranch"
   >;
-  attachments: Parameters<typeof attachmentsSectionInput>[0];
+  attachments: Parameters<typeof blobsSectionInput>[0];
 }): string {
   const displayId = displayTicketId(input.project.ticketPrefix, input.ticket.ticketNumber);
   const ticketPrompt = composeTicketPrompt({
@@ -141,7 +142,7 @@ export function composeTicketBrief(input: {
   // the same deterministic relPath mapping main's `ensure` pipeline uses.
   // Relative paths are correct whether this session runs in the worktree or the
   // main checkout (cwd is the session root either way).
-  const attachmentsSection = composeAttachmentsSection(attachmentsSectionInput(input.attachments));
+  const attachmentsSection = composeAttachmentsSection(blobsSectionInput(input.attachments));
   const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
   return `${orientation}Board coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`;
 }
@@ -158,18 +159,6 @@ export function composeTicketBrief(input: {
 export function composeProjectBrief(input: { project: Pick<Project, "path"> }): string {
   return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
 }
-
-/**
- * The kickoff turn `session.start` submits when the caller sends no `-m`.
- *
- * A fresh structured Session idles until its first message — the Runtime Brief
- * is prepended to the FIRST delivered message, not sent on attach — so this is
- * what makes the agent begin as the session opens. Deliberately the manual,
- * one-off shape of an Automation sending its Instructions; the wording assumes
- * only what the Brief guarantees is above it.
- */
-export const DEFAULT_KICKOFF_MESSAGE =
-  "Begin work on this ticket. Your assignment is the Ticket Brief above.";
 
 /**
  * How many transcript messages a chat `session peek` shows when the caller
@@ -558,7 +547,7 @@ function projectForCreate(
 /**
  * The display id of the ticket an actor's session is itself working, for the
  * "via VC-9's session" attribution. `null` when the actor has no
- * session ticket (a scratch session) or it no longer resolves.
+ * session ticket (a Project Session) or it no longer resolves.
  */
 function actorSessionTicketDisplay(
   db: Database.Database,
@@ -760,6 +749,52 @@ function resolveWorktreeTicket(
         ok: false,
         response: failure("PROJECT_NOT_FOUND", "The resolved project no longer exists."),
       };
+}
+
+/**
+ * The refusal a worktree read verb returns when the ticket has no worktree.
+ *
+ * It used to say "Move it to Doing to create one" for every ticket, which was
+ * false twice over (VC-98): a board move has never run `ensure` — only a
+ * Session boot and, since VC-98, switching worktree scope on do — and a
+ * main-checkout ticket has no worktree to create at all. An agent that believed
+ * the old sentence moved the ticket, saw nothing appear, and carried on in the
+ * main checkout. Each arm now names what actually materializes a worktree.
+ */
+function noWorktreeRefusal(displayId: string, usesWorktree: boolean): string {
+  return usesWorktree
+    ? `Ticket ${displayId} has no worktree yet. One is created when a session starts for it.`
+    : `Ticket ${displayId} runs in the project's main checkout, so it has no worktree.`;
+}
+
+/**
+ * The warning an agent gets from `identify` when it is working somewhere other
+ * than its ticket's worktree (VC-98).
+ *
+ * A Session binds its directory once, at attach, and keeps it (see
+ * `SessionLocationResolver.prepare`) — so a Session that started before its
+ * ticket's worktree existed goes on running in the main checkout after one is
+ * materialized, which is precisely the state that let VC-81's work land in the
+ * wrong checkout. Volli deliberately does NOT re-point that live binding, so
+ * the divergence is real and the agent is the only party that can resolve it.
+ *
+ * Measured against the CALLER'S CWD rather than the binding, and recomputed on
+ * every call rather than stored: an agent drives its own working directory
+ * through bash, so where it actually is cannot be tracked from here, only
+ * observed at the moment it asks. That also makes the warning self-clearing —
+ * an agent that moves into the worktree simply stops being told it hasn't,
+ * with no flag left behind to go stale.
+ */
+function worktreeMisalignment(
+  displayId: string,
+  worktreePath: string | null,
+  cwd: string,
+): string | null {
+  // No stamped worktree means nothing to be misaligned WITH: either the ticket
+  // runs in the main checkout by choice, or its worktree has yet to be created.
+  if (worktreePath === null) return null;
+  if (isInside(worktreePath, cwd)) return null;
+  return `You are working in ${cwd}, which is outside ${displayId}'s worktree at ${worktreePath}. Move your work there before continuing.`;
 }
 
 function boardData(db: Database.Database, project: Project): Record<string, unknown> {
@@ -1248,14 +1283,22 @@ export function createAgentCommandService(
           // Session has no PTY, so its workspace is the ticket worktree — or
           // the project root a ticketless Session was pointed at.
           const terminal = sessions.find((candidate) => candidate.id === envSessionId);
+          const displayId = ticket
+            ? displayTicketId(project.ticketPrefix, ticket.ticketNumber)
+            : null;
+          const warning =
+            ticket && displayId
+              ? worktreeMisalignment(displayId, ticket.worktreePath, request.ctx.cwd)
+              : null;
           return {
             v: 1,
             ok: true,
             data: {
               project: { name: project.name, prefix: project.ticketPrefix, path: project.path },
-              ticket: ticket ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null,
+              ticket: displayId,
               session: shortSessionId(envSession.id),
               worktreePath: terminal?.cwd ?? ticket?.worktreePath ?? project.path,
+              ...(warning === null ? {} : { warning }),
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
             },
@@ -1442,7 +1485,7 @@ export function createAgentCommandService(
             const ticketProject = ticket ? projectById.get(ticket.projectId) : undefined;
             return {
               id: shortSessionId(session.id),
-              kind: session.ticketId ? "ticket" : "scratch",
+              kind: session.ticketId ? "ticket" : "project",
               status: session.endedAt === null ? "running" : "exited",
               ticket:
                 ticket && ticketProject
@@ -2177,7 +2220,7 @@ export function createAgentCommandService(
             prompt: composeTicketBrief({
               project: resolved.project,
               ticket: resolved.ticket,
-              attachments: listAttachments(options.db, resolved.ticket.id),
+              attachments: listMaterializableLinks(options.db, null, resolved.ticket.id),
             }),
           },
         };
@@ -2204,7 +2247,7 @@ export function createAgentCommandService(
           brief = composeTicketBrief({
             project,
             ticket: resolved.ticket,
-            attachments: listAttachments(options.db, resolved.ticket.id),
+            attachments: listMaterializableLinks(options.db, null, resolved.ticket.id),
           });
         } else {
           const resolved = projectForCreate(options.db, projects, envSession, request);
@@ -2253,10 +2296,7 @@ export function createAgentCommandService(
           case "missing-ticket":
             return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
           case "no-worktree":
-            return failure(
-              "INVALID_REQUEST",
-              `Ticket ${read.displayId} has no worktree. Move it to Doing to create one.`,
-            );
+            return failure("INVALID_REQUEST", noWorktreeRefusal(read.displayId, read.usesWorktree));
           case "missing-on-disk":
             return failure(
               "INVALID_REQUEST",
@@ -2293,10 +2333,7 @@ export function createAgentCommandService(
           case "missing-ticket":
             return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
           case "no-worktree":
-            return failure(
-              "INVALID_REQUEST",
-              `Ticket ${read.displayId} has no worktree. Move it to Doing to create one.`,
-            );
+            return failure("INVALID_REQUEST", noWorktreeRefusal(read.displayId, read.usesWorktree));
           case "missing-on-disk":
             return failure(
               "INVALID_REQUEST",

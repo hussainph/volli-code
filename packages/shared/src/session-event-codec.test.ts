@@ -303,6 +303,20 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       cause: "command.destructive-removal",
       reason: "rm -rf ~ discards more than this Session's workspace.",
     },
+    {
+      kind: "context.compacted",
+      attachmentId: "attachment-1",
+      reason: "threshold",
+      entryId: "pi-entry-9",
+      tokensBefore: 190_000,
+      tokensAfter: 12_000,
+    },
+    {
+      kind: "context.compaction_failed",
+      attachmentId: "attachment-1",
+      reason: "overflow",
+      detail: "Summarization failed: the model refused.",
+    },
     { kind: "adapter.observed", attachmentId: null, name: "session-wide", native: null },
     {
       kind: "adapter.observed",
@@ -333,6 +347,8 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       { kind: "executor.stop", attachmentId: "attachment-1" },
       { kind: "executor.interrupt", attachmentId: "attachment-1" },
       { kind: "executor.retry", attachmentId: "attachment-1" },
+      { kind: "context.compact", attachmentId: "attachment-1", instructions: "keep the API work" },
+      { kind: "context.compact", attachmentId: "attachment-1", instructions: null },
       {
         kind: "message.submit",
         reference: { id: "sha256:m", mediaType: null, digest: null },
@@ -490,6 +506,31 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.tool must be a string");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "context.compacted",
+          attachmentId: "attachment-1",
+          reason: "threshold",
+          entryId: "pi-entry-9",
+          // A count nothing in the pipeline can have written.
+          tokensBefore: 190_000.5,
+          tokensAfter: 12_000,
+        },
+        "payload",
+      ),
+    ).toThrow("payload.tokensBefore must be an integer");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "context.compaction_failed",
+          attachmentId: "attachment-1",
+          reason: "scheduled",
+          detail: "Summarization failed.",
+        },
+        "payload",
+      ),
+    ).toThrow("payload.reason has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         {
@@ -962,6 +1003,22 @@ describe("the renderer-safe scrub", () => {
         tool: "bash",
         cause: "command.destructive-removal",
         reason: "refused",
+      },
+      // An executor's entry id, which addresses its history and locates
+      // nothing on disk, and a diagnostic sanitized before it was recorded.
+      {
+        kind: "context.compacted",
+        attachmentId: "attachment-1",
+        reason: "manual",
+        entryId: "pi-entry-9",
+        tokensBefore: 190_000,
+        tokensAfter: 12_000,
+      },
+      {
+        kind: "context.compaction_failed",
+        attachmentId: "attachment-1",
+        reason: "threshold",
+        detail: "Summarization failed.",
       },
       { kind: "interaction.opened", interaction },
     ];

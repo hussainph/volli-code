@@ -254,10 +254,10 @@ async function main() {
     await snap("baseline (Board, 0 tabs)");
 
     // === Phase 2: N idle claude sessions =====================================
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Home", { exact: true }).click();
 
     for (let i = 1; i <= N_SESSIONS; i++) {
-      // The scratch strip's control is a split button (press = chat, caret =
+      // The Project Session strip's control is a split button (press = chat, caret =
       // the kinds); this benchmark measures PTYs, so EVERY tab takes the caret
       // — the surface's default Session is a structured chat now (which, with
       // no default model in this profile, refuses into the empty state), so

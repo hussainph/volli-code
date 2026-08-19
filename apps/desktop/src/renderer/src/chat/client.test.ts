@@ -28,8 +28,12 @@ import { getChatClient } from "@renderer/chat/registry";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { rejectedReceipt } from "@renderer/chat/wire";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { toast } from "sonner";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+/** The last error toast's message — the one surface event failures speak to. */
+const lastToast = (): unknown => vi.mocked(toast.error).mock.calls.at(-1)?.[0];
 
 /* ------------------------------------------------------------------ scripts */
 
@@ -510,7 +514,7 @@ describe("browserChatTransport", () => {
       operationId: "project-create",
       projectId: "project-1",
       ticketId: null,
-      title: "Scratch",
+      title: "Project chat",
     });
     await transport.createSession({
       operationId: "ticket-create",
@@ -526,7 +530,7 @@ describe("browserChatTransport", () => {
       operationId: "project-skill-create",
       projectId: "project-1",
       ticketId: null,
-      title: "Scratch",
+      title: "Project chat",
       skills: ["svg-logo-designer"],
     });
     await transport.createSession({
@@ -535,6 +539,16 @@ describe("browserChatTransport", () => {
       ticketId: "ticket-1",
       title: "VC-1",
       skills: ["svg-logo-designer"],
+    });
+    // A picked model becomes the wire's `modelOverride` — the same parameter
+    // `volli session start --model` carries, split into its two halves here
+    // (VC-56). The composer states both; nobody else states either.
+    await transport.createSession({
+      operationId: "ticket-kickoff-create",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Work on VC-1",
+      model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     });
     await transport.attachSession({
       operationId: "project-retry",
@@ -551,6 +565,7 @@ describe("browserChatTransport", () => {
       "sessions.create",
       "sessions.create",
       "sessions.create",
+      "sessions.create",
       "sessions.attach",
       "sessions.attach",
     ]);
@@ -560,6 +575,17 @@ describe("browserChatTransport", () => {
     expect(inputs[1]).not.toHaveProperty("skills");
     expect(inputs[2]).toMatchObject({ skills: ["svg-logo-designer"] });
     expect(inputs[3]).toMatchObject({ skills: ["svg-logo-designer"] });
+    expect(inputs[0]).not.toHaveProperty("modelOverride");
+    expect(inputs[4]).toMatchObject({
+      modelOverride: {
+        model: { providerId: "anthropic", modelId: "sonnet-4.5" },
+        reasoningLevel: "high",
+      },
+    });
+    // The selection is SPLIT, never forwarded whole: the wire's override names
+    // a model and a level, and a `model` key holding a reasoning level too
+    // would be a second spelling of the same policy.
+    expect(inputs[4]).not.toHaveProperty("model");
     vi.unstubAllGlobals();
   });
 });
@@ -1004,6 +1030,145 @@ describe("recover", () => {
     await expect(client.recover()).resolves.toBe(false);
     expect(rpc.commands).toHaveLength(0);
   });
+
+  it("reopens a stream it terminally lost — the failure the band names (VC-97)", async () => {
+    // The defect this regression pins: `Lost the Session stream` used to be
+    // answered with a reconcile alone, which repairs the durable binding and
+    // NOT the renderer's subscription — so Retry could report success, clear
+    // the band, and leave the transcript frozen behind it.
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up again");
+    const streamsAtLoss = rpc.streams.length;
+
+    await expect(client.recover()).resolves.toBe(true);
+    await settle();
+
+    expect(rpc.reconciles).toEqual([{ sessionId: expect.any(String), attachmentId: "attach-1" }]);
+    expect(rpc.streams.length).toBeGreaterThan(streamsAtLoss);
+    expect(rpc.streams.at(-1)!.unsubscribed).toBe(false);
+  });
+
+  it("stops when the reopen fails, so nothing clears the band behind it (VC-97)", async () => {
+    // The reopen and the reconcile settle the same latch, and the reconcile is
+    // the louder writer. Raced, a fast-failing reopen would latch the honest
+    // `Lost the Session stream` band and a reconcile landing after it would
+    // clear that band with no stream behind it — a Retry reporting success
+    // onto a silently frozen transcript, which is the whole defect. Ordered,
+    // the failed reopen ends the recovery and its band stands.
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    const streamsAtLoss = rpc.streams.length;
+    rpc.snapshotError = new Error("snapshot unavailable");
+
+    await expect(client.recover()).resolves.toBe(false);
+    await settle();
+
+    // Never issued: a reconcile the recovery cannot stand behind is one whose
+    // success would only hide the failure the band names.
+    expect(rpc.reconciles).toHaveLength(0);
+    expect(rpc.streams.length).toBe(streamsAtLoss);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    expect(slice()!.lifecycle).toBe("error");
+  });
+
+  it("does not churn a healthy stream on recover", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    await settle();
+    const streamsBefore = rpc.streams.length;
+
+    await expect(client.recover()).resolves.toBe(true);
+    await settle();
+
+    expect(rpc.streams.length).toBe(streamsBefore);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("latches a reconciliation the harness refused — recovery is plumbing", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+      fake.answerReconcile = () => REFUSED;
+    });
+
+    await expect(client.recover()).resolves.toBe(false);
+
+    expect(slice()!.sessionError).toBe("Reconcile: Pi is unavailable");
+  });
+
+  it("latches a reconciliation the transport dropped", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+      fake.answerReconcile = () => {
+        throw new Error("socket hang up");
+      };
+    });
+
+    await expect(client.recover()).resolves.toBe(false);
+
+    expect(slice()!.sessionError).toBe("Reconcile: socket hang up");
+  });
+});
+
+describe("dismissError", () => {
+  it("clears the latch without demanding anything of the transport", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    expect(slice()!.sessionError).not.toBeNull();
+    const streamsAtLoss = rpc.streams.length;
+
+    client.dismissError();
+    await settle();
+
+    expect(slice()!.sessionError).toBeNull();
+    expect(slice()!.lifecycle).toBe("ready");
+    // A dead stream is quietly reopened: a dismissal that left the transcript
+    // frozen would trade an honest band for an invisible one.
+    expect(rpc.streams.length).toBeGreaterThan(streamsAtLoss);
+    expect(rpc.reconciles).toHaveLength(0);
+  });
+
+  it("is a plain clear while the stream is healthy", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    rpc.streams[0]!.start();
+    await settle();
+    const streamsBefore = rpc.streams.length;
+
+    client.dismissError();
+    await settle();
+
+    expect(slice()!.sessionError).toBeNull();
+    expect(rpc.streams.length).toBe(streamsBefore);
+  });
 });
 
 describe("retryRuntime", () => {
@@ -1029,6 +1194,58 @@ describe("retryRuntime", () => {
     });
 
     await expect(client.retryRuntime()).resolves.toBe(false);
+    expect(rpc.commands).toEqual([]);
+  });
+});
+
+describe("compactContext", () => {
+  it("sends an explicit compaction, carrying instructions only when there are any", async () => {
+    const { client, rpc, sessionId } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+    });
+
+    await expect(client.compactContext("keep the API work")).resolves.toBe(true);
+    await expect(client.compactContext(null)).resolves.toBe(true);
+
+    expect(rpc.commands).toEqual([
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: {
+          kind: "context.compact",
+          attachmentId: "attach-1",
+          instructions: "keep the API work",
+        },
+      },
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: { kind: "context.compact", attachmentId: "attach-1" },
+      },
+    ]);
+    // Absent, not present-and-undefined: the ledger asserts strict JSON, and
+    // structured clone would have carried the key across.
+    expect("instructions" in rpc.commands.at(-1)!.command).toBe(false);
+  });
+
+  it("settles a refusal onto the Session, because somebody asked", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => REFUSED;
+    });
+
+    // The whole difference between this and the two compactions nobody asked
+    // for: a reason that reaches a person, rather than a fact filed away.
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe("Compact: Pi is unavailable");
+  });
+
+  it("refuses a compaction when the Session has no live attachment", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor(null);
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
     expect(rpc.commands).toEqual([]);
   });
 });
@@ -1120,6 +1337,75 @@ describe("submit", () => {
       "kind",
       "message",
     ]);
+  });
+
+  it("sends an attachment as a volli-blob file part, never as bytes (VC-50)", async () => {
+    const { client, rpc } = await ready();
+    const hash = "a".repeat(64);
+
+    await expect(
+      client.submit(
+        {
+          id: "queued-1",
+          text: "what is this?",
+          attachments: [
+            {
+              linkId: "l1",
+              blobHash: hash,
+              label: "shot.png",
+              originalName: "shot.png",
+              mime: "image/png",
+              sizeBytes: 12,
+            },
+          ],
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    const submitted = rpc.submissions()[0]!.command;
+    expect(submitted).toMatchObject({
+      kind: "message.submit",
+      message: {
+        parts: [
+          { type: "text", text: "what is this?" },
+          {
+            type: "file",
+            url: `volli-blob:${hash}`,
+            mediaType: "image/png",
+            filename: "shot.png",
+          },
+        ],
+      },
+    });
+    // The durable record holds a reference and nothing else. Base64 in the
+    // transcript is the failure this whole design is written against: it
+    // replays on every later turn until the session stops accepting even text.
+    expect(JSON.stringify(submitted)).not.toMatch(/base64|data:/i);
+  });
+
+  it("delivers a message that is nothing but an attachment (VC-50)", async () => {
+    const { client } = await ready();
+
+    await expect(
+      client.submit(
+        {
+          id: "queued-2",
+          text: "   ",
+          attachments: [
+            {
+              linkId: "l1",
+              blobHash: "b".repeat(64),
+              label: "shot.png",
+              originalName: "shot.png",
+              mime: "image/png",
+              sizeBytes: 12,
+            },
+          ],
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
   });
 
   it("sends a skill resource as its own part beside the intact text (VC-49)", async () => {
@@ -1382,33 +1668,47 @@ describe("commands addressed to an attachment", () => {
     expect(rpc.reconciles).toHaveLength(0);
   });
 
-  it("clears a standing failure once the next command lands", async () => {
-    let attempts = 0;
-    const { client, slice } = await adopted((fake) => {
-      fake.answerCancel = () => {
-        attempts += 1;
-        return attempts === 1 ? REFUSED : ACCEPTED;
-      };
+  it("keeps a standing transport failure until recovery, not the next command", async () => {
+    // The old bargain — any successful command clears the latch — is what let
+    // a reconcile round trip hide a frozen stream: an unrelated command's
+    // success proves nothing about the failure the band names. A transport
+    // failure now stands until recovered or dismissed (VC-97).
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
     });
-    await client.cancelInteraction("ask-1");
-    expect(slice()!.lifecycle).toBe("error");
+    rpc.streams[0]!.start();
+    rpc.streams[0]!.fail(new Error("socket hang up"));
+    await settle();
+    rpc.streams[1]!.fail(new Error("socket hang up again"));
+    await settle();
+    expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up again");
 
     await client.cancelInteraction("ask-1");
+
+    expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up again");
+
+    await client.recover();
 
     expect(slice()!.sessionError).toBeNull();
-    expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("reports a command the harness refused", async () => {
+  it("toasts a command the harness refused, without latching the Session", async () => {
     const { client, slice } = await adopted((fake) => {
       fake.answerCancel = () => REFUSED;
     });
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Decision not cancelled: Pi is unavailable");
+
+    // A refused withdrawal is a moment, not a state: the card it addressed is
+    // still on screen saying so, so the failure is toasted and the Session's
+    // plumbing is not implicated.
+    expect(lastToast()).toBe("Decision not cancelled: Pi is unavailable");
+    expect(slice()!.sessionError).toBeNull();
+    expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("reports a command the transport dropped", async () => {
+  it("toasts a command the transport dropped, without latching the Session", async () => {
     const { client, slice } = await adopted((fake) => {
       fake.answerCancel = () => {
         throw new Error("socket hang up");
@@ -1416,7 +1716,9 @@ describe("commands addressed to an attachment", () => {
     });
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Decision not cancelled: socket hang up");
+
+    expect(lastToast()).toBe("Decision not cancelled: socket hang up");
+    expect(slice()!.sessionError).toBeNull();
   });
 });
 

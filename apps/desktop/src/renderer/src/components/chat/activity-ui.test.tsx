@@ -43,29 +43,49 @@ const bashRow: DynamicToolUIPart = {
   } as DynamicToolUIPart["toolMetadata"],
 };
 
+// A failed row opens the bundle on its own (`bundleNeedsAttention`), which is
+// how both tests below get the capped window into static markup with no click.
+const failed: DynamicToolUIPart = {
+  type: "dynamic-tool",
+  toolName: "read",
+  toolCallId: "read-2",
+  state: "output-error",
+  input: null,
+  errorText: "boom",
+  toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
+};
+
+const openBundle = () =>
+  renderToStaticMarkup(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />);
+
 describe("ActivityBundle scroll window", () => {
   it("caps the open bundle without trapping the wheel inside it (VC-32)", () => {
-    // A failed row opens the bundle on its own (`bundleNeedsAttention`), so
-    // the capped window is in the markup without any click. The cap must
-    // stay — an uncapped payload shoves the feed off screen — but
-    // `overscroll-contain` must not come back: it turned the cap's edges
-    // into a dead zone where the transcript ignored the wheel entirely.
-    const failed: DynamicToolUIPart = {
-      type: "dynamic-tool",
-      toolName: "read",
-      toolCallId: "read-2",
-      state: "output-error",
-      input: null,
-      errorText: "boom",
-      toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
-    };
-    const html = renderToStaticMarkup(
-      <ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />,
-    );
+    // The cap must stay — an uncapped payload shoves the feed off screen — but
+    // `overscroll-contain` must not come back: it turned the cap's edges into a
+    // dead zone where the transcript ignored the wheel entirely.
+    const html = openBundle();
 
     expect(html).toContain("max-h-96");
     expect(html).toContain("overflow-auto");
     expect(html).not.toContain("overscroll-contain");
+  });
+
+  it("paints nothing over the window's own bottom edge (VC-60)", () => {
+    // The scrim this guards against covered the last row whole — 28 of 28px —
+    // and stayed there at the BOTTOM of the scroll, where there is no cut to
+    // announce. It is gone, with the hook that armed it; what says "there is
+    // more" is the app's overlay scrollbar, which retracts on its own.
+    //
+    // WHAT THIS CANNOT SEE: a scrim gated on a measurement. Effects do not run
+    // under `renderToStaticMarkup`, so a re-added `clipped ? … : null` renders
+    // as nothing here and passes. The standing guard is that nothing measures
+    // this box any more; this catches an unconditional re-add.
+    const html = openBundle();
+
+    // The scrim's own shape: an inert layer positioned over the window. (A bare
+    // `pointer-events-none` would match the button primitive's `[&_svg]:` rule.)
+    expect(html).not.toContain("pointer-events-none absolute");
+    expect(html).not.toContain("gradient");
   });
 });
 

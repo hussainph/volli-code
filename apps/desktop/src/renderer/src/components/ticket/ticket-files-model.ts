@@ -8,11 +8,11 @@
  */
 
 import {
-  attachmentsSectionInput,
+  blobsSectionInput,
   baseNameOf,
   dirNameOf,
   parseFileRefs,
-  type TicketAttachment,
+  type NamedBlobLink,
 } from "@volli/shared";
 
 export type TicketFileRefSource = "body" | "attachment";
@@ -31,7 +31,7 @@ export interface TicketWorktreeEntry {
 
 export interface TicketFilesNavigatorInput {
   body: string;
-  attachments: readonly TicketAttachment[];
+  attachments: readonly NamedBlobLink[];
   /** Already-flattened worktree entries (root listing and/or shallow walks). */
   worktreeEntries: readonly TicketWorktreeEntry[];
 }
@@ -73,7 +73,7 @@ export function buildTicketFilesNavigator(input: TicketFilesNavigatorInput): Tic
     bodyFileRefRows(input.body).map((row) => [row.relPath, row]),
   );
 
-  for (const file of attachmentsSectionInput(input.attachments).files) {
+  for (const file of blobsSectionInput(input.attachments).files) {
     byPath.set(file.relPath, {
       relPath: file.relPath,
       label: file.label,

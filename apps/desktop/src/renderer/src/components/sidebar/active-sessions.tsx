@@ -1,19 +1,19 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import {
-  errorMessage,
-  type ChatSessionRecord,
-  type LatestSessionSignal,
-  type Project,
-  type SessionRecord,
-  type Ticket,
-} from "@volli/shared";
+import { errorMessage, type LatestSessionSignal, type Project, type Ticket } from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
+import {
+  SidebarGroup,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuSub,
+} from "@renderer/components/ui/sidebar";
+import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import {
   buildActiveSessionListing,
-  isScratchRowSelected,
+  groupPreviousByTicket,
+  isProjectSessionRowSelected,
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -25,7 +25,12 @@ import {
   SessionBandHeader,
   type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-header";
-import { ActiveBandRow, PreviousBandRow } from "@renderer/components/sidebar/session-band-row";
+import {
+  ActiveBandRow,
+  PreviousBandRow,
+  sessionGroupPanelId,
+  TicketGroupRow,
+} from "@renderer/components/sidebar/session-band-row";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { delayUntil } from "@renderer/lib/boundary-timer";
@@ -33,26 +38,27 @@ import { nextAgeChangeAt } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import {
+  EMPTY_PROJECT_SESSION_ROWS,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
+const EMPTY_EXPANDED: readonly string[] = [];
 
 /**
- * How often the durable listing is re-read while this section is on screen.
- *
- * Chat activity changes in MAIN — a turn starting, a question being asked —
- * and there is no push channel for it: `onHarnessChange` announces a terminal's
- * harness and nothing else, and the fetch below is keyed on which Sessions are
- * live, which does not move when a live chat merely changes what it is doing.
- * So a chat row's word would sit stale until something else happened to
- * refetch. Ten seconds is chosen against the reader, not the data: it is
- * roughly how long a glance at the sidebar can be wrong before the wrongness
- * is what you notice. Replace it with a subscription the moment main grows one.
+ * The nesting rule under a ticket entry, tightened from `SidebarMenuSub`'s
+ * stock `mx-4 px-2` — the same call `file-tree.tsx` makes one section up, and
+ * for the same reason: stock spends ~48px a level, which a session row cannot
+ * pay out of a title that already truncates. The hairline itself is the
+ * primitive's own `border-sidebar-border-veil`, so a nested session is bracketed
+ * by the mark the file tree already taught this sidebar to mean "inside".
  */
-const CHAT_ACTIVITY_REFRESH_MS = 10_000;
+const SESSION_GROUP_NEST = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
 
 /** Re-indexes the batched durable Session projection for the pure listing model. */
 function indexSignalsByTicket(
@@ -113,13 +119,25 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   );
   const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
-  const setNav = useWorkspaceStore((state) => state.setNav);
-  const setSessionsActiveTab = useWorkspaceStore((state) => state.setSessionsActiveTab);
-  const sessionsActiveTab = useWorkspaceStore(
-    (state) => state.byProject[project.id]?.sessionsActiveTab ?? null,
+  const openHome = useWorkspaceStore((state) => state.openHome);
+  const homeActiveTab = useWorkspaceStore(
+    (state) => state.byProject[project.id]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
   );
-  const [records, setRecords] = React.useState<SessionRecord[]>([]);
-  const [chatSessions, setChatSessions] = React.useState<ChatSessionRecord[]>([]);
+  const expandedGroups = useWorkspaceStore(
+    (state) => state.byProject[project.id]?.expandedSessionGroups ?? EMPTY_EXPANDED,
+  );
+  const setSessionGroupExpanded = useWorkspaceStore((state) => state.setSessionGroupExpanded);
+  // The project's Session rows, shared with the board's active-session
+  // indicator and fed by `volli:session-activity` rather than by a timer —
+  // see `stores/project-sessions.ts`. This component used to own both the
+  // fetch and a ten-second poll on top of it; what it owns now is when the
+  // BASELINE is read, which is still its call because it is the surface that
+  // knows a project has come on screen.
+  const projectRows =
+    useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
+  const records = projectRows.terminal;
+  const chatSessions = projectRows.chat;
+  const refreshProjectSessions = useProjectSessionsStore((state) => state.refresh);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
     {},
   );
@@ -164,15 +182,15 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
         lastOutputAt: state.lastOutputAt,
         containers: state.byOwner,
         ticketIds: projectTicketIds,
-        scratchOwnerId: project.id,
+        projectOwnerId: project.id,
       }),
     ),
   );
-  // The project's SCRATCH container. The store files every container in one
-  // flat map keyed by `ownerKey` — a ticketId for ticket Sessions, the project
-  // id for scratch ones — and the listing model walks the map by ticket, so
+  // The project's OWN container. The store files every container in one
+  // flat map keyed by `ownerKey` — a ticketId for Ticket Sessions, the project
+  // id for Project Sessions — and the listing model walks the map by ticket, so
   // this one has to be handed over on its own key or its live tabs are invisible.
-  const scratchContainer = containers[project.id];
+  const projectContainer = containers[project.id];
   // Which of this project's Sessions are live on this surface — the key the one
   // fetch below re-reads the durable listing on. Both kinds count: a chat has no
   // PTY pane to name, so a signature made of panes alone left a streaming chat
@@ -184,7 +202,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           container.tabs
             .filter(
               (tab) =>
-                (tab.scope.kind === "scratch" && tab.scope.projectId === project.id) ||
+                (tab.scope.kind === "project" && tab.scope.projectId === project.id) ||
                 (tab.scope.kind === "ticket" &&
                   tab.scope.projectId === project.id &&
                   projectTicketIds.has(tab.scope.ticketId)),
@@ -202,28 +220,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [tickets],
   );
 
-  const sessionsFetch = useLatestAsync();
+  // The BASELINE read, and only that. A window that has just opened has missed
+  // every push that came before it, so the listing is read once per project and
+  // `volli:session-activity` carries it from there — which is why this no longer
+  // re-fires on `liveSignature`. A Session coming up IS a durable fact, so the
+  // channel announces it; refetching on the same trigger would just race the push
+  // to say the same thing. `refreshTick` survives for the one thing the channel
+  // genuinely cannot see: rows that changed while this project was off screen
+  // because its ticket left the board.
   React.useEffect(() => {
-    const token = sessionsFetch.claim();
-    window.api.sessions
-      .list({ projectId: project.id })
-      .then((result) => {
-        if (!sessionsFetch.isCurrent(token)) return;
-        if (!result.ok) {
-          toastError(`Couldn't load active sessions: ${result.error}`);
-          return;
-        }
-        setRecords(result.sessions.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])));
-        setChatSessions(
-          result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
-        );
-      })
-      .catch((error: unknown) => {
-        if (sessionsFetch.isCurrent(token))
-          toastError(`Couldn't load active sessions: ${errorMessage(error)}`);
-      });
-    return () => sessionsFetch.invalidate();
-  }, [project.id, liveSignature, refreshTick, sessionsFetch]);
+    void refreshProjectSessions(project.id);
+  }, [project.id, refreshTick, refreshProjectSessions]);
 
   // Two of the Previous band's cleanup rules need to know when a ticket entered
   // its CURRENT column, and neither guesses without it — a ticket missing here
@@ -250,25 +257,9 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       });
     return () => statusFetch.invalidate();
   }, [project.id, liveSignature, refreshTick, statusFetch]);
-
-  // A session's harness can change without its PTYs changing at all — quitting
-  // opencode and starting claude in the same shell is one terminal, one live
-  // pane, one signature. The refetch above is keyed on `liveSignature`, so it
-  // never fires for that switch; patch the record the announce names instead,
-  // or the row keeps naming the harness the session was launched with.
-  React.useEffect(
-    () =>
-      window.api.sessions.onHarnessChange((notice) => {
-        setRecords((current) =>
-          current.map((record) =>
-            record.id === notice.sessionId
-              ? { ...record, activeHarnessId: notice.harnessId }
-              : record,
-          ),
-        );
-      }),
-    [],
-  );
+  /* `liveSignature` still keys the ticket-history read above: a Session coming
+     up is usually a ticket about to move columns, and that history has no push
+     channel of its own. It no longer keys the SESSION listing — that is pushed. */
 
   const signalsFetch = useLatestAsync();
   const loadAttentionSignals = React.useCallback(() => {
@@ -320,26 +311,39 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     loadAttentionSignals();
   }, [needsReviewIds, planningChange, loadAttentionSignals]);
 
-  // See CHAT_ACTIVITY_REFRESH_MS: main has no push channel for chat activity,
-  // and this section is render-hidden rather than unmounted across nav
-  // switches, so `visible` is what stops it polling behind another page — and
-  // what triggers an immediate re-read on return, so coming back from Files
-  // never shows minutes-stale activity for up to another poll interval. The ref
-  // starts true so the mount fetch is not doubled.
+  // There is no poll here any more — `volli:session-activity` pushes a Session's
+  // row the moment its history moves, whether this section is on screen or not,
+  // so nothing goes stale behind another page and nothing has to be caught up on
+  // return. What survives is ONE re-read when the section comes back into view,
+  // for the facts the Session channel genuinely cannot announce: the two Previous
+  // cleanup rules read a ticket's column history, which moves on the board rather
+  // than in the ledger. The ref starts true so the mount fetch is not doubled.
+  const syncListingClocks = React.useCallback(() => {
+    const now = Date.now();
+    setListingNow(now);
+    setAgeNow(now);
+  }, []);
   const wasVisible = React.useRef(true);
   React.useEffect(() => {
     if (!visible) {
       wasVisible.current = false;
       return;
     }
-    if (!wasVisible.current) setRefreshTick((tick) => tick + 1);
+    if (!wasVisible.current) {
+      // A hidden Electron window may throttle or suspend timers. Refreshing the
+      // durable rows on return without also refreshing the listing clock can
+      // leave an idle chat in Active until some unrelated state change lands.
+      syncListingClocks();
+      setRefreshTick((tick) => tick + 1);
+    }
     wasVisible.current = true;
-    const timer = window.setInterval(
-      () => setRefreshTick((tick) => tick + 1),
-      CHAT_ACTIVITY_REFRESH_MS,
-    );
-    return () => window.clearInterval(timer);
-  }, [visible]);
+  }, [syncListingClocks, visible]);
+  // Window activation is a second return path: the nav can remain on the same
+  // page while macOS suspends the renderer behind another window or a sleep.
+  React.useEffect(() => {
+    window.addEventListener("focus", syncListingClocks);
+    return () => window.removeEventListener("focus", syncListingClocks);
+  }, [syncListingClocks]);
 
   // The sidebar's durable read catches chats started outside this renderer.
   // A resident title overlays it immediately, so the first exchange does not
@@ -358,7 +362,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       buildActiveSessionListing({
         tickets,
         containers,
-        scratchContainer,
+        projectContainer,
         signalsByTicket,
         records,
         chatSessions: titledChatSessions,
@@ -377,7 +381,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [
       tickets,
       containers,
-      scratchContainer,
+      projectContainer,
       signalsByTicket,
       records,
       titledChatSessions,
@@ -388,6 +392,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       filter,
       listingNow,
     ],
+  );
+
+  /**
+   * The Previous band as it is DRAWN: one entry per ticket, plus the ticketless
+   * sessions that have no ticket to sit under. Purely a rearrangement of
+   * `listing.previous` — which rows survive and what order they are in was
+   * settled by the builder above and cannot be changed here (VC-69).
+   */
+  const previousEntries = React.useMemo(
+    () => groupPreviousByTicket(listing.previous),
+    [listing.previous],
   );
 
   /**
@@ -444,10 +459,11 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   }, [nextAgeChange, ageNow]);
 
   // Which ticket the main view is actually SHOWING. Ticket detail renders only
-  // under the Board nav, and leaving for Sessions or Files deliberately keeps
-  // `openTicketId` set so returning lands where you were — so a remembered
-  // ticket is not a ticket on screen, and only one of those can light a row.
-  const shownTicketId = nav === "board" ? openTicketId : null;
+  // from Home's BOARD TAB, and leaving for Files, Configure or one of Home's own
+  // Session tabs deliberately keeps `openTicketId` set so returning lands where
+  // you were — so a remembered ticket is not a ticket on screen, and only one of
+  // those can light a row.
+  const shownTicketId = nav === "home" && isHomeBoardTab(homeActiveTab) ? openTicketId : null;
   const activeTabId =
     shownTicketId === null ? null : (ticketTabs[shownTicketId]?.active ?? TICKET_BODY_TAB_ID);
 
@@ -461,28 +477,82 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * tab is gone; it is never the tab in front of you.
    */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    isScratchRowSelected(row, nav === "sessions", scratchContainer, sessionsActiveTab) ||
+    isProjectSessionRowSelected(row, nav === "home", projectContainer, homeActiveTab) ||
     (row.ticket !== null &&
       shownTicketId === row.ticket.id &&
       row.target !== null &&
       activeTabId === row.target.tabId);
 
   /**
+   * The ticket entry holding the Session in front of you, when the Previous
+   * band is where that Session ended up.
+   *
+   * Asks {@link isSelected} rather than restating what makes a row current: a
+   * second copy of that predicate is how the group's mark and the row's own
+   * highlight would come to disagree about the same tab.
+   */
+  let selectedGroupId: string | null = null;
+  for (const entry of previousEntries) {
+    if (entry.kind !== "ticket" || !entry.rows.some(isSelected)) continue;
+    selectedGroupId = entry.id;
+    break;
+  }
+
+  /**
+   * Open that group. Rows arrive in this band ON THEIR OWN — a Session ages out
+   * of Active once its quiet window runs out, with nobody touching it — and
+   * `openTicketId`/`ticketTabs` are persisted while `expandedSessionGroups`
+   * deliberately is not. So without this, the tab you are looking at slides
+   * behind a closed disclosure half an hour after you last typed in it, and is
+   * behind one again on the first frame after every relaunch, with nothing in
+   * the sidebar marking where you are. Collapsed by default is the band's
+   * steady state; it was never meant to hide the thing in front of you.
+   *
+   * Keyed on the group id alone, so it fires when the selection MOVES rather
+   * than on every rebuild of the band — which is what lets a reader close the
+   * revealed group by hand and have it stay closed until they go somewhere else
+   * and come back.
+   */
+  React.useEffect(() => {
+    if (selectedGroupId === null) return;
+    setSessionGroupExpanded(project.id, selectedGroupId, true);
+  }, [selectedGroupId, project.id, setSessionGroupExpanded]);
+
+  /**
    * Where a row goes. A ticketed row reopens its exact session, or failing that
    * its ticket workspace.
    *
    * A TICKETLESS row has no ticket workspace to open — both terminal and chat
-   * targets land on the project's Sessions page instead, naming their tab in
-   * `sessionsActiveTab` (workspace.ts), which that page's strip reads to bring
-   * it forward. A ticketless chat is additionally adopted and given a tab under
-   * the project's owner key, the same two calls the ticketed chat case below
-   * makes — the tab has to exist before the strip can put it in front.
+   * targets land on HOME instead, through `openHome`, which switches the page
+   * and names the tab in one write. That seam deliberately leaves `openTicketId`
+   * alone: a Home Session tab is its own place and keeps the ticket remembered
+   * behind it (VC-54 decision 1), so reaching a chat from here never costs you
+   * the ticket you were in. A ticketless chat is additionally adopted and given
+   * a tab under the project's owner key, the same two calls the ticketed chat
+   * case below makes — the tab has to exist before the strip can put it in
+   * front.
    *
    * Stable across renders, and handed to every row AS IS rather than wrapped in
    * a per-row closure: both band rows are memoised, and a fresh handler per row
    * per render is exactly the prop that would make that memo do nothing. Its
    * dependencies are store actions and one id, none of which move.
    */
+  /**
+   * Opens or closes one ticket's group. Stable, and handed to every entry AS IS
+   * for the same reason `activate` is: `TicketGroupRow` is memoised, and a
+   * fresh `() => toggle(id)` per entry per render is exactly the prop that
+   * would make that memo do nothing — so the row hands its own ticket id back.
+   */
+  const toggleGroup = React.useCallback(
+    (ticketId: string) => {
+      const open = useWorkspaceStore
+        .getState()
+        .byProject[project.id]?.expandedSessionGroups.includes(ticketId);
+      setSessionGroupExpanded(project.id, ticketId, open !== true);
+    },
+    [project.id, setSessionGroupExpanded],
+  );
+
   const activate = React.useCallback(
     (row: ActiveSessionRow | PreviousSessionRow) => {
       const ticket = row.ticket;
@@ -492,14 +562,17 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           const sessions = useSessionsStore.getState();
           sessions.setActiveSession(project.id, target.tabId);
           sessions.setActivePane(project.id, target.tabId, target.paneId);
-          setSessionsActiveTab(project.id, target.tabId);
+          openHome(project.id, target.tabId);
         } else if (target?.kind === "chat") {
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(target.sessionId);
           chat.openChatTab(project.id, target.sessionId);
-          setSessionsActiveTab(project.id, target.tabId);
+          openHome(project.id, target.tabId);
+        } else {
+          // No target at all — a Session whose tab is gone. Home is still where
+          // it would live, so go there and leave the strip as it was.
+          openHome(project.id);
         }
-        setNav(project.id, "sessions");
         return;
       }
       const target = row.target;
@@ -520,7 +593,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       }
       openTicketSession(project.id, ticket.id, target.tabId, target.paneId);
     },
-    [project.id, setNav, setSessionsActiveTab, openTicketSession, openTicketWorkspace],
+    [project.id, openHome, openTicketSession, openTicketWorkspace],
   );
 
   return (
@@ -545,23 +618,61 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       </SidebarGroup>
 
       <SidebarGroup data-session-band="previous" className="gap-1 pt-0">
+        {/* The count stays the number of SESSIONS, not of entries. It is the
+            band's answer to "how much is back there", and collapsing the rows
+            under their tickets must not make that number shrink. */}
         <SessionBandHeader label="Previous" count={listing.previous.length}>
           <SessionBandFilterMenu filter={filter} onChange={setFilter} />
         </SessionBandHeader>
-        {listing.previous.length === 0 ? (
+        {previousEntries.length === 0 ? (
           <p className={EMPTY_INLINE}>Nothing yet</p>
         ) : (
           <SidebarMenu>
-            {listing.previous.map((row) => (
-              <PreviousBandRow
-                key={row.id}
-                row={row}
-                ticketPrefix={project.ticketPrefix}
-                now={ageNow}
-                selected={isSelected(row)}
-                onSelect={activate}
-              />
-            ))}
+            {previousEntries.map((entry) =>
+              entry.kind === "session" ? (
+                <PreviousBandRow
+                  key={entry.id}
+                  row={entry.row}
+                  ticketPrefix={project.ticketPrefix}
+                  now={ageNow}
+                  selected={isSelected(entry.row)}
+                  onSelect={activate}
+                />
+              ) : (
+                <SidebarMenuItem key={entry.id}>
+                  <TicketGroupRow
+                    ticket={entry.ticket}
+                    ticketPrefix={project.ticketPrefix}
+                    count={entry.rows.length}
+                    newestAt={entry.newestAt}
+                    now={ageNow}
+                    open={expandedGroups.includes(entry.id)}
+                    selected={entry.id === selectedGroupId}
+                    onToggle={toggleGroup}
+                  />
+                  {expandedGroups.includes(entry.id) ? (
+                    <SidebarMenuSub
+                      id={sessionGroupPanelId(entry.id)}
+                      className={SESSION_GROUP_NEST}
+                    >
+                      {entry.rows.map((row) => (
+                        <PreviousBandRow
+                          key={row.id}
+                          row={row}
+                          ticketPrefix={project.ticketPrefix}
+                          now={ageNow}
+                          selected={isSelected(row)}
+                          onSelect={activate}
+                          // The id is what the reader just expanded; repeating
+                          // it on every child costs ink and ~45px of title.
+                          showIdentity={false}
+                        />
+                      ))}
+                    </SidebarMenuSub>
+                  ) : null}
+                </SidebarMenuItem>
+              ),
+            )}
           </SidebarMenu>
         )}
       </SidebarGroup>

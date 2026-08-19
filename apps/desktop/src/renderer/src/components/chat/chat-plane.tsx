@@ -15,6 +15,8 @@
  * which cards have a decision in flight.
  */
 import * as React from "react";
+import { toast } from "sonner";
+import type { BlobLinkView } from "@volli/shared";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
@@ -22,6 +24,7 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   HiddenModelRef,
   ModelAccessModel,
@@ -29,12 +32,7 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import {
-  errorMessage,
-  readSkillResources,
-  visibleModels,
-  type PromptResource,
-} from "@volli/shared";
+import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -56,6 +54,7 @@ import {
   type ChatSegment,
 } from "@renderer/chat/activity";
 import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
+import { weaveCompactionBoundaries } from "@renderer/chat/compaction-boundary";
 import { sessionContextUsage } from "@renderer/chat/context-usage";
 import {
   composerAnswerPrompt,
@@ -70,6 +69,7 @@ import {
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
 import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
+import { CompactionBoundary } from "@renderer/components/chat/compaction-boundary-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -99,8 +99,8 @@ import {
   type SignInProviderOption,
 } from "@renderer/components/chat/chat-plane-model";
 import {
+  offerableModels,
   SessionComposer,
-  type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
 import {
@@ -130,6 +130,9 @@ import {
   useChatDraftsStore,
   type HeldMessage,
 } from "@renderer/stores/chat-drafts";
+import { useAttachments } from "@renderer/hooks/use-attachments";
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { transcriptAttachments } from "@renderer/components/attachments/attachment-model";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -146,6 +149,44 @@ const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
 const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
+/**
+ * The transcript's dissolve into the composer — 64px of ramp above an opaque bar.
+ *
+ * Something has to sit here: the scroller runs the full height of the plane and
+ * the composer is opaque, so without a ramp a line scrolling under it is cut by
+ * a straight horizontal edge, mid-glyph, with nothing to say it was scrolling
+ * rather than broken. That is the same cut `sidebar-scroll.tsx` softens at the
+ * nav and the footer.
+ *
+ * WHAT THE SHAPE IS FOR, and why it is not a plain linear ramp. Alpha has to
+ * reach 1 BEFORE the seam: a linear fade is still ~2% short one pixel above the
+ * composer, so the last of the ink survives to the seam and is then hard-cut by
+ * an opaque edge — the ghost this gradient has always been trying to avoid. The
+ * first fix for that was a flat 2rem of solid background at the bottom, which
+ * bought a clean seam by DELETING a whole line: text did not fade out, it hit
+ * an invisible wall 32px above the composer and vanished, leaving a stripe of
+ * half-glyphs at the wall and dead paper below it.
+ *
+ * So the ramp is EASED instead of flattened. Stops are sampled from smootherstep
+ * — S(x) = 6x⁵ − 15x⁴ + 10x³, alpha = 1 − S, over the band above the seam — so
+ * the curve is flat at both ends and steep in the middle: opaque with margin at
+ * the seam, imperceptible at the top edge where the fade begins, and dissolving
+ * fastest in between. Full background is reached 5px above the composer rather
+ * than 32, which is the whole gain: three lines dissolve where one used to be
+ * erased. The percentages are samples of that curve, not picks off the alpha
+ * ladder in docs/DESIGN.md — changing one in isolation puts a kink in a curve.
+ */
+const COMPOSER_SCRIM = [
+  "linear-gradient(to top",
+  "var(--background) 0 8%",
+  "color-mix(in oklab, var(--background) 95%, transparent) 25%",
+  "color-mix(in oklab, var(--background) 77%, transparent) 40%",
+  "color-mix(in oklab, var(--background) 48%, transparent) 55%",
+  "color-mix(in oklab, var(--background) 20%, transparent) 70%",
+  "color-mix(in oklab, var(--background) 3%, transparent) 85%",
+  "transparent 100%)",
+].join(",");
+
 export interface ChatPlaneProps {
   sessionId: string;
   /** Project scope for Model Access and file navigation. */
@@ -160,6 +201,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
+    compactContext,
     dequeueClaimed,
     enqueue,
     cancelInteraction,
@@ -170,6 +212,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     resolveInteraction,
     selectModel,
     submit,
+    dismissError,
   } = controller;
   const session = controller.session;
 
@@ -213,18 +256,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable = modelSelection !== null && catalogState !== "loading";
-  // Signed-in models only, minus the user's visibility curation. Pi's catalog
-  // is every provider it knows — around a thousand models against the handful
-  // this profile has credentials for — and a picker that lists the rest is a
-  // picker whose first "GPT-5.6 Luna" is whichever provider sorted first. What
-  // you cannot send to is not an option, and what you toggled off in Model
-  // Access is not one either (VC-53).
+  // What this picker may offer (VC-53), decided in one place because the
+  // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
-    () =>
-      visibleModels(
-        models.filter((model) => model.state === "available"),
-        hidden,
-      ).map((model) => composerModel(model, providers)),
+    () => offerableModels(models, providers, hidden),
     [hidden, models, providers],
   );
   const sessionModel = React.useMemo(
@@ -238,6 +273,22 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     },
     [selectModel],
   );
+
+  /**
+   * Whether the Session's model can read images (VC-50) — the same catalog the
+   * picker uses. Unknown reads as supported: the affordance's job is to warn,
+   * not to lock, and a wrong warning on a model that can see is worse than
+   * none.
+   */
+  const imagesUnsupported = React.useMemo(() => {
+    if (modelSelection === null) return false;
+    const model = models.find(
+      (candidate) =>
+        candidate.providerId === modelSelection.providerId &&
+        candidate.modelId === modelSelection.modelId,
+    );
+    return model !== undefined && !model.acceptsImageInput;
+  }, [modelSelection, models]);
 
   // The window belongs to the Session's model, read from the same catalog the
   // picker uses; null while the catalog has not answered or does not know.
@@ -309,19 +360,68 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * differently. A refused answer lands where a refused message lands: back in
    * the strip under the composer, as words nothing took.
    */
+  /**
+   * Files attached to the message being written (VC-50).
+   *
+   * Owned here rather than in the composer because they belong to the message,
+   * not to the box: they have to survive the composer's memo, ride the queued
+   * copy, and be readable by {@link send} at the moment ⏎ is pressed.
+   *
+   * A repository file resolves to an `@` reference instead of a copy, and that
+   * reference is appended to the draft — the same text the `@` picker would
+   * have inserted, so both routes to a repository file end in one thing.
+   */
+  const {
+    attachments,
+    attachFiles,
+    remove: removeAttachment,
+    clear: clearAttachments,
+    discardPending: discardPendingAttachments,
+  } = useAttachments({
+    owner: { sessionId },
+    onRefInsert: (relPath) => {
+      // `useAttachments` re-reads its callbacks every render, so `input` here
+      // is the draft as it stands, not as it stood when the drop began.
+      setDraft(sessionId, input.length === 0 ? `@${relPath} ` : `${input} @${relPath} `);
+    },
+    onError: (message) => toast.error(message),
+  });
+  // Read at submit rather than closed over, so `send` keeps its identity while
+  // the strip changes underneath it.
+  const attachmentsRef = React.useRef(attachments);
+  attachmentsRef.current = attachments;
+  // The strip dies with the pane (VC-50). Its links were made at attach time,
+  // and nothing else — no draft store, no message — points at them until ⏎
+  // carries them into one; a pane that unmounted (or switched Sessions) with
+  // files still in the strip would strand those links: invisible, unremovable,
+  // spending the Session's image budget and materializing on every boot.
+  // `discardPending` reads the hook's own synchronously-kept ref, so a message
+  // sent in this same tick (send() clears the strip before returning) keeps
+  // every link it references.
+  React.useEffect(
+    () => () => {
+      void discardPendingAttachments();
+    },
+    [discardPendingAttachments, sessionId],
+  );
+
   const dispatch = React.useCallback(
     (
       text: string,
       road: (message: QueuedMessage) => Promise<HeldDispatchOutcome>,
       resources?: readonly PromptResource[],
+      attached?: readonly BlobLinkView[],
     ) => {
       // Resources ride the message object itself — through hold, queue and
       // steer — so a copy released later delivers exactly what `/skill`
       // resolved to when ⏎ was pressed, not whatever the file says by then.
-      const message: QueuedMessage =
-        resources !== undefined && resources.length > 0
-          ? { id: nextId(), text, resources }
-          : { id: nextId(), text };
+      // Attachments ride it for the same reason (VC-50).
+      const message: QueuedMessage = {
+        id: nextId(),
+        text,
+        ...(resources !== undefined && resources.length > 0 ? { resources } : {}),
+        ...(attached !== undefined && attached.length > 0 ? { attachments: attached } : {}),
+      };
       holdMessage(sessionId, message);
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
@@ -343,9 +443,13 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
-      dispatch(text, (message) => deliver(message, intent), resources);
+      dispatch(text, (message) => deliver(message, intent), resources, attachmentsRef.current);
+      // The strip belongs to the message that just left, not to the box. It is
+      // cleared rather than detached: the links stay, because the message the
+      // agent received refers to them.
+      clearAttachments();
     },
-    [deliver, dispatch],
+    [clearAttachments, deliver, dispatch],
   );
 
   // What the Session is holding for you, from the two records that say it — see
@@ -543,10 +647,41 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   );
 
   /**
+   * The press that sends nothing.
+   *
+   * `/compact` is a request the runtime performs, so it takes none of
+   * {@link dispatch}'s road: there is no message to hold, nothing for the
+   * strip to hand back, and a durable copy of it already exists as the command
+   * itself. The words still leave the box on the press, because they have
+   * stopped being a draft — and they come back if nothing took them, which is
+   * the composer's standing promise and the reason a refusal here is never
+   * just a red line. Every way this does not happen is a refusal, including
+   * the two that are not failures: a turn still running, and a history with
+   * nothing left to summarize.
+   *
+   * Returned only over an empty box: a refusal that arrives after the reader
+   * has started typing again must not overwrite what they are writing.
+   */
+  const compactNow = React.useCallback(
+    (instructions: string | null) => {
+      const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
+      setDraft(sessionId, "");
+      void compactContext(instructions).then((accepted) => {
+        if (accepted) return;
+        if ((useChatDraftsStore.getState().drafts[sessionId]?.text ?? "") === "") {
+          setDraft(sessionId, typed);
+        }
+      });
+    },
+    [compactContext, sessionId, setDraft],
+  );
+
+  /**
    * One press of the composer, and the one place it is decided what that press
    * was.
    *
-   * The rule is `composerAnswer`'s and the reasons are there. What is here is
+   * The rules are `composerAnswer`'s and `composer-verb.ts`'s and the reasons
+   * are there; the order between them is `composerPress`'s. What is here is
    * the fallback, and it is the one that used to be the only behaviour: a
    * message, which while a turn is live joins the release queue. That is right
    * for words typed alongside a running turn and was a dead end for words typed
@@ -557,9 +692,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     (text: string, intent: ComposerIntent) => {
       const press = composerPress(pendingRef.current, text);
       if (press.kind === "answer") answerTyped(press.interactionId, press.submission, text);
+      else if (press.kind === "compact") compactNow(press.instructions);
       else send(text, intent);
     },
-    [answerTyped, send],
+    [answerTyped, compactNow, send],
   );
 
   const withdraw = React.useCallback(
@@ -603,6 +739,19 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     React.useMemo(() => groupTurns(messages), [messages]),
     sameMessages,
   );
+  // The turns with the Session's compaction boundaries laid between them. Both
+  // inputs are held to their identity — the turn list by `useStableList`, the
+  // compactions by the fold that only replaces the array when one lands — so
+  // this recomputes when the conversation moves and not once per frame.
+  const rows = React.useMemo(
+    () => weaveCompactionBoundaries(turns, session.compactions),
+    [session.compactions, turns],
+  );
+  // Identity, not an index. A boundary between the turns means a turn's place in
+  // `rows` is no longer its place in `turns` — and the last ROW can be a
+  // boundary, which would leave the turn still being written with nothing
+  // saying so.
+  const liveTurn = working ? (turns.at(-1) ?? null) : null;
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
 
@@ -620,8 +769,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      // The transport latch is the surface's own state; retiring it is the
+      // reader's call, not a recovery (VC-97).
+      dismiss: () => dismissError(),
     }),
-    [liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -666,24 +818,33 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>
-                {turns.map((turn, index) => (
-                  <ChatTurn
-                    key={turn[0]?.id}
-                    messages={turn}
-                    context={turnContext}
-                    live={working && index === turns.length - 1}
-                  />
-                ))}
+                {rows.map((row) =>
+                  row.kind === "compaction" ? (
+                    <CompactionBoundary
+                      key={`compaction:${row.compaction.sequence}`}
+                      compaction={row.compaction}
+                    />
+                  ) : (
+                    <ChatTurn
+                      key={row.messages[0]?.id}
+                      messages={row.messages}
+                      context={turnContext}
+                      live={row.messages === liveTurn}
+                    />
+                  ),
+                )}
                 {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
               </ContentColumn>
             )}
           </ConversationContent>
-          {/* A short fade keyed to the measured composer. It lives inside the
-              Conversation, ahead of the button, so paint order is structural:
-              content, then fade, then button. Its bottom 2rem is solid, not
-              ramping — a plain linear fade only reaches full background on its
-              last pixel, which left a legible ghost hard-cut by the card. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-[linear-gradient(to_top,var(--background)_0,var(--background)_2rem,transparent_100%)]" />
+          {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+              for the curve. It lives inside the Conversation, ahead of the
+              button, so paint order is structural: content, then fade, then
+              button. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+            style={{ backgroundImage: COMPOSER_SCRIM }}
+          />
 
           {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
@@ -734,9 +895,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // One thing parks above the composer at a time; a pending
               // question outranks a list you can reopen by typing.
               interactionOpen={pending !== null}
-              // The card above draws no box of its own while this holds; this
-              // one is it. Both read the same rule off the same interaction —
-              // see `ComposerInteractionStack`.
+              // What this box's words will do, not where the answer belongs.
+              // The card above keeps its own field and is the affordance; this
+              // is the fallback that stops a question standing over the
+              // composer from making it a dead end (VC-68). It changes the
+              // placeholder and the control's name, never the behaviour.
               answering={answering}
               models={composerModels}
               selection={selection}
@@ -751,6 +914,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               onSteerQueued={onSteerQueued}
               onSubmit={submitComposer}
               onStop={stopTurn}
+              attachments={attachments}
+              onAttachFiles={(picked) => void attachFiles(picked)}
+              onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
+              imagesUnsupported={imagesUnsupported}
             />
           </ComposerInteractionStack>
         </ContentColumn>
@@ -821,21 +988,6 @@ function useModelAccess(active: boolean): {
         catalogState: "pinned",
         catalogError: null,
       };
-}
-
-function composerModel(
-  model: ModelAccessModel,
-  providers: readonly ModelAccessProvider[],
-): ComposerModel {
-  return {
-    id: `${model.providerId}/${model.modelId}`,
-    providerId: model.providerId,
-    providerLabel:
-      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
-    modelId: model.modelId,
-    label: model.label,
-    reasoningLevels: model.reasoningLevels,
-  };
 }
 
 /* ---------------------------------------------------------------- running */
@@ -967,6 +1119,21 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           {blocker.secondaryAction.label}
         </Button>
       ) : null}
+      {/* The one row that reports this surface's own latch — Retry stays for
+          the recovery, and this retires the row when the reader has read it.
+          An icon, not a labeled button: it competes with nothing, and the row's
+          words are the retry's business, not its. */}
+      {blocker.dismiss ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0"
+          aria-label={blocker.dismiss.label}
+          onClick={blocker.dismiss.act}
+        >
+          <XIcon aria-hidden className="size-3" />
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -1038,16 +1205,30 @@ export const ChatTurn = React.memo(function ChatTurn({
     () => (role === "assistant" ? segmentTurn(messages) : null),
     [messages, role],
   );
-  // A user message is prose only; the assistant path owns every other shape.
+  // A user message is prose and attachment thumbs; the assistant path owns
+  // every other shape. Whitespace-only text parts are dropped rather than
+  // drawn: an attachment-only message still carries the empty text part the
+  // composer always writes, and rendering it would open a blank line above
+  // the thumbs it was sent with.
   const prose = React.useMemo<readonly { key: string; text: string }[]>(
     () =>
       role === "assistant"
         ? []
         : messages.flatMap((message) =>
             message.parts.flatMap((part, index) =>
-              part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
+              part.type === "text" && part.text.trim().length > 0
+                ? [{ key: `${message.id}:${index}`, text: part.text }]
+                : [],
             ),
           ),
+    [messages, role],
+  );
+  // The files this turn was sent with (VC-50), drawn from the message parts
+  // alone — no fetch, so the thumbs survive the attachment rows being removed
+  // later. Read-only: a sent message is a record, not an editable strip.
+  const attachedFiles = React.useMemo(
+    () =>
+      role === "user" ? messages.flatMap((message) => transcriptAttachments(message.parts)) : [],
     [messages, role],
   );
   const copyableText = React.useMemo(() => messageCopyText(messages), [messages]);
@@ -1078,6 +1259,13 @@ export const ChatTurn = React.memo(function ChatTurn({
   return (
     <Message from={role} className="relative max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+        {/* Thumbs above the words, matching the composer the message left from. */}
+        {attachedFiles.length > 0 ? (
+          <AttachmentStrip
+            attachments={attachedFiles}
+            {...(prose.length > 0 ? { className: "pb-3" } : {})}
+          />
+        ) : null}
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (

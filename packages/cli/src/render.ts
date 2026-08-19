@@ -401,6 +401,10 @@ function renderStableLines(command: string, data: unknown): string | null {
       "session",
       "worktree",
       "worktreePath",
+      // Present only when the agent is working outside its ticket's worktree
+      // (VC-98). Ordered directly after the path it contradicts, so the two
+      // read as one statement rather than a fact and an unrelated aside.
+      "warning",
       "socket",
       "appVersion",
     ] as const;

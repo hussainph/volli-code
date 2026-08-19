@@ -10,7 +10,7 @@
  * rules the whole module exists to enforce:
  *
  * 1. **Never in the user's own checkout.** Callers pass a worktree path; a
- *    scratch session in the project root gets nothing, and cursor there simply
+ *    Project Session in the project root gets nothing, and cursor there simply
  *    reports nothing (see the caller).
  * 2. **Never in `git status`.** A file the agent can see is a file the agent can
  *    `git add`, and a Volli socket path committed to the user's branch is a

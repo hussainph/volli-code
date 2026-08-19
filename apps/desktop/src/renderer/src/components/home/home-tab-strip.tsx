@@ -1,0 +1,411 @@
+import * as React from "react";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
+import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
+import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+
+import type { SkillReference } from "@volli/shared";
+
+import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import {
+  runOnLivePanes,
+  terminalTabDot,
+  terminalTabState,
+} from "@renderer/components/sessions/terminal-tab-state";
+import type { TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
+import { Tab, TabStrip, tabStopIndex, type TabProps } from "@renderer/components/ui/tab-strip";
+import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+
+/**
+ * What the Home strip draws, per kind.
+ *
+ * The `board` kind carries nothing at all: it is the permanent first tab, and
+ * every fact about it is a constant. It is the exact analogue of the ticket
+ * strip's always-present Body tab — same position, same permanence, same
+ * absence of a close — which is what makes Home read as the ticket workspace
+ * one scope up rather than as a new kind of thing.
+ *
+ * A terminal tab carries its whole store record — park state, panes and exit
+ * codes are all read off it — while a chat tab carries the two facts a chat has
+ * on a strip: its title and its liveness. `id` is the tab's identity in the
+ * merged strip and in `homeActiveTab`; a chat's is `chat:`-prefixed
+ * (`ticket-chat-tab.ts`) and the Board's is a bare word, so the three id spaces
+ * never collide.
+ */
+export type HomeTabDescriptor =
+  | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
+  | { kind: "terminal"; id: string; tab: SessionTab }
+  | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus };
+
+/** The Board tab, spelled once. */
+export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
+
+interface HomeTabStripProps {
+  tabs: readonly HomeTabDescriptor[];
+  activeTabId: string;
+  onSelect(tab: HomeTabDescriptor): void;
+  /** Never raised for the Board tab, which carries no close affordance. */
+  onClose(tab: HomeTabDescriptor): void;
+  /** Never raised for the Board tab, which is not renamable. */
+  onRename(tab: HomeTabDescriptor, title: string): void;
+  onNewSession(): void;
+  onNewChat(): void;
+  /** The project's skills — the "Chat with skill" submenu's rows. */
+  skills?: readonly SkillReference[];
+  /** Mints a chat Session with one named skill injected at attach time. */
+  onNewChatWithSkill?(name: string): void;
+  /** A Session of either kind is already booting. */
+  creating: boolean;
+}
+
+/**
+ * Home's tab strip: the FOLDER variant of `ui/tab-strip.tsx`, the same drawing
+ * the ticket workspace uses and in the same place — the top edge of the content
+ * card, with the active tab bleeding one pixel past the strip's border so it
+ * fuses with the plane below. That is not a coincidence to be tidied away
+ * later: Home and a ticket workspace are the same object at two scopes, and
+ * drawing them alike is how the app says so without prose.
+ *
+ * (It was the PILL variant while this strip belonged to the Sessions page,
+ * where it floated above a surface it did not own. It owns this one.)
+ *
+ * The permanent Board tab leads, then both kinds of Session a project can run
+ * without a ticket — terminals first and chats after, each in the order it was
+ * opened. A trailing split control starts either; every tab but the Board
+ * carries a hover-revealed close, a right-click menu, and double-click inline
+ * rename.
+ *
+ * Only the terminal kind talks about parking: the moon badge, the wake-on-click
+ * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
+ * #51), and a chat Session holds none.
+ */
+export function HomeTabStrip({
+  tabs,
+  activeTabId,
+  onSelect,
+  onClose,
+  onRename,
+  onNewSession,
+  onNewChat,
+  skills,
+  onNewChatWithSkill,
+  creating,
+}: HomeTabStripProps) {
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const stop = tabStopIndex(
+    tabs.length,
+    tabs.findIndex((tab) => tab.id === activeTabId),
+  );
+
+  return (
+    <TabStrip
+      variant="folder"
+      label="Home tabs"
+      actions={
+        // The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
+        // (`lib/new-session-shortcut.ts`), and on Home that is this project's
+        // ticketless Sessions — exactly what this control mints, from the Board
+        // tab as well as from a Session tab. `align="end"` so the menu hangs
+        // back into the window rather than off its edge.
+        <NewSessionControl
+          disabled={creating}
+          placement="strip"
+          align="end"
+          shortcuts
+          skills={skills}
+          onNewChat={onNewChat}
+          onNewChatWithSkill={onNewChatWithSkill}
+          onNewTerminal={onNewSession}
+        />
+      }
+    >
+      {tabs.map((descriptor, index) => {
+        const active = descriptor.id === activeTabId;
+        const tabStop = index === stop;
+        if (descriptor.kind === "board") {
+          return (
+            <BoardTab
+              key={descriptor.id}
+              active={active}
+              tabStop={tabStop}
+              onSelect={() => onSelect(descriptor)}
+            />
+          );
+        }
+        // One set of callbacks for both Session kinds — what differs between
+        // them is what each tab DRAWS and what its menu offers, never how the
+        // strip reports a selection, a close, or a rename.
+        const shared = {
+          active,
+          tabStop,
+          editing: editingId === descriptor.id,
+          onClose: () => onClose(descriptor),
+          onStartRename: () => setEditingId(descriptor.id),
+          onCommitRename: (next: string) => {
+            setEditingId(null);
+            onRename(descriptor, next);
+          },
+          onCancelRename: () => setEditingId(null),
+        };
+        return descriptor.kind === "terminal" ? (
+          <TerminalTab
+            key={descriptor.id}
+            {...shared}
+            tab={descriptor.tab}
+            onSelect={() => onSelect(descriptor)}
+          />
+        ) : (
+          <ChatTab
+            key={descriptor.id}
+            {...shared}
+            title={descriptor.title}
+            status={descriptor.status}
+            onSelect={() => onSelect(descriptor)}
+          />
+        );
+      })}
+    </TabStrip>
+  );
+}
+
+/**
+ * The permanent first tab.
+ *
+ * No close, no rename, no context menu — there is nothing to offer about a tab
+ * that cannot go away, and an empty menu is worse than none. The Kanban glyph
+ * stays with the board rather than following the nav row: on the nav row it had
+ * to name a whole environment and stopped fitting, while here it names exactly
+ * one tab among Sessions and is the one item that is neither a chat nor a
+ * terminal. It stays outline like its neighbours — `fill` is a different
+ * drawing rather than a heavier one (CLAUDE.md), and position plus shape
+ * already say this tab is not one of the others.
+ */
+function BoardTab({
+  active,
+  tabStop,
+  onSelect,
+}: {
+  active: boolean;
+  tabStop: boolean;
+  onSelect(): void;
+}) {
+  return (
+    <Tab
+      label="Board"
+      active={active}
+      tabStop={tabStop}
+      closable={false}
+      onActivate={onSelect}
+      // size-3 and `bold`, the leading-glyph tier the chat bubble and the moon
+      // beside it already take: at 12px regular draws lighter than the label.
+      leading={
+        <KanbanIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+      }
+    />
+  );
+}
+
+interface KindTabProps {
+  active: boolean;
+  tabStop: boolean;
+  editing: boolean;
+  onSelect(): void;
+  onClose(): void;
+  onStartRename(): void;
+  onCommitRename(next: string): void;
+  onCancelRename(): void;
+}
+
+/**
+ * The `Tab` props every kind here shares, so the two kinds cannot drift the
+ * rename plumbing apart. What a kind contributes on top is its label, its
+ * leading glyphs, its hover line and the menu its caller wraps the tab in.
+ */
+function sharedTabProps(
+  label: string,
+  {
+    active,
+    tabStop,
+    editing,
+    onClose,
+    onStartRename,
+    onCommitRename,
+    onCancelRename,
+  }: Omit<KindTabProps, "onSelect">,
+): Pick<TabProps, "active" | "tabStop" | "renaming" | "onClose" | "onDoubleClick"> {
+  return {
+    active,
+    tabStop,
+    renaming: editing ? { value: label, onCommit: onCommitRename, onCancel: onCancelRename } : null,
+    onClose,
+    onDoubleClick: onStartRename,
+  };
+}
+
+/** One terminal tab: a live PTY tree, with the warm-park tier's vocabulary on it. */
+function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionTab }) {
+  const parkState = useSessionsStore((state) => state.parkState);
+  // The derivation moved to `terminal-tab-state.ts` so the ticket strip could
+  // read it too — it was the reason a ticket's terminal tab used to say nothing
+  // about being parked or dead. Nothing about the reading changed.
+  const terminal = terminalTabState(tab, parkState);
+  const { exited, exitCode, parked, keptAwake, livePaneIds } = terminal;
+  const showParkControls = livePaneIds.length > 0;
+  const dot = terminalTabDot(terminal);
+  // Select the tab and, if it was fully parked, wake it — the explicit wake the
+  // visibility effect can't cover (see below). Shared by click and keyboard
+  // (Enter/Space) so both paths behave identically.
+  const activate = () => {
+    onSelect();
+    // Clicking/activating the ALREADY-active tab changes no visibility state,
+    // so the visibility effect never re-fires — the promised wake-on-click must
+    // be explicit. Idempotent for the select-a-different-tab case (visibility
+    // wiring wakes it too; the second wake is a no-op).
+    if (parked && !exited) {
+      runOnLivePanes(livePaneIds, (paneId) => window.api.terminal.wake(paneId), "Wake");
+    }
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <Tab
+          {...sharedTabProps(tab.title, shell)}
+          label={tab.title}
+          // Exited tabs read as muted; a parked (and live) tab explains itself
+          // on hover.
+          title={
+            exited
+              ? `Exited (${exitCode})`
+              : parked
+                ? "Parked to save memory. Click to wake."
+                : tab.title
+          }
+          labelClassName={exited ? "line-through" : undefined}
+          status={dot ?? undefined}
+          leading={
+            // size-3, the same as the chat bubble that shares this slot and the
+            // same as the ticket strip's moon — one leading glyph size now that
+            // the two strips are one tab.
+            dot === null ? (
+              <MoonIcon
+                aria-hidden
+                weight="bold"
+                className="size-3 shrink-0 text-muted-foreground"
+              />
+            ) : null
+          }
+          onActivate={activate}
+        />
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+          Rename
+        </ContextMenuItem>
+        {showParkControls && (
+          <>
+            <ContextMenuSeparator />
+            {!parked && (
+              <ContextMenuItem
+                icon={MoonIcon}
+                onSelect={() =>
+                  runOnLivePanes(livePaneIds, (paneId) => window.api.terminal.park(paneId), "Park")
+                }
+              >
+                Park Now
+              </ContextMenuItem>
+            )}
+            {parked && (
+              <ContextMenuItem
+                icon={SunIcon}
+                onSelect={() =>
+                  runOnLivePanes(livePaneIds, (paneId) => window.api.terminal.wake(paneId), "Wake")
+                }
+              >
+                Wake
+              </ContextMenuItem>
+            )}
+            <ContextMenuItem
+              icon={keptAwake ? PushPinSlashIcon : PushPinIcon}
+              onSelect={() =>
+                runOnLivePanes(
+                  livePaneIds,
+                  (paneId) => window.api.terminal.setKeepAwake(paneId, !keptAwake),
+                  keptAwake ? "Allow Parking" : "Keep Awake",
+                )
+              }
+            >
+              {keptAwake ? "Allow Parking" : "Keep Awake"}
+            </ContextMenuItem>
+          </>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
+          Close
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/**
+ * One chat tab. The dot sits in the same leading slot a terminal's does, so the
+ * column reads as liveness whatever the kind; the bubble beside it is the only
+ * thing that says this row is not a terminal — the exception is marked, the
+ * default is not.
+ *
+ * No park, no split: a chat Session's stream, fold and queue live in the
+ * resident client, which outlives every view, so there is nothing here to hold
+ * open or to hand memory back from.
+ */
+function ChatTab({
+  title,
+  status,
+  onSelect,
+  ...shell
+}: KindTabProps & { title: string; status: TicketTabStatus }) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <Tab
+          {...sharedTabProps(title, shell)}
+          label={title}
+          // The waiting dot's one line of hover, in the sidebar's own words: a
+          // tab is the only place that dot stands with nothing beside it to say
+          // what it means.
+          title={status === "waiting" ? `${title}\nWaiting for you` : title}
+          onActivate={onSelect}
+          status={status}
+          leading={
+            // Bold, not filled: the dot beside it is already a solid object,
+            // and two in a 12px row is one too many. Same treatment as the
+            // sidebar's kind glyph — at this size regular draws lighter than
+            // its own label and bold puts the pen back on the text stem.
+            <ChatCircleIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+          }
+        />
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+          Rename
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
+          Close
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}

@@ -43,7 +43,7 @@ function ticketSession(projectId: string, ticketId: string): Session {
 }
 
 describe("desktop Session location resolver", () => {
-  it("routes scratch Sessions to the Main checkout and ticket Sessions to their worktree", async () => {
+  it("routes Project Sessions to the Main checkout and ticket Sessions to their worktree", async () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
     const ticket = testTicket(project.id, {
@@ -56,7 +56,7 @@ describe("desktop Session location resolver", () => {
 
     await expect(
       resolver.resolve({
-        id: "scratch",
+        id: "project-session",
         projectId: project.id,
         ticketId: null,
         title: null,
@@ -130,7 +130,7 @@ describe("desktop Session location resolver", () => {
     ).rejects.toThrow(`Ticket ${foreignTicket.id} was not found in project ${project.id}`);
   });
 
-  // A scratch Session has no ticket and therefore no isolated checkout to
+  // A Project Session has no ticket and therefore no isolated checkout to
   // materialize — it runs in the project root. Pinned because `prepare` is the
   // attach path's only git seam, and a ticketless Session reaching `ensure`
   // would be asking for a worktree for a ticket that does not exist.
@@ -142,7 +142,7 @@ describe("desktop Session location resolver", () => {
 
     await expect(
       resolver.prepare({
-        id: "scratch",
+        id: "project-session",
         projectId: project.id,
         ticketId: null,
         title: null,
@@ -240,7 +240,7 @@ describe("desktop Session location resolver", () => {
     );
   });
 
-  // A scratch Session runs in the project root, which no pipeline materializes.
+  // A Project Session runs in the project root, which no pipeline materializes.
   it("refuses a project root that is gone instead of pretending it is there", async () => {
     testDb = openTestDb();
     const root = scratch();
@@ -248,7 +248,7 @@ describe("desktop Session location resolver", () => {
     insertProject(testDb.db, project);
     const resolver = createDesktopSessionLocationResolver(testDb.db);
     const session: Session = {
-      id: "scratch",
+      id: "project-session",
       projectId: project.id,
       ticketId: null,
       title: null,

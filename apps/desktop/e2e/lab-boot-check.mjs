@@ -24,7 +24,19 @@ import { chromium } from "playwright-core";
 // second checkout may be holding it.
 const PORT = process.env.VOLLI_LAB_PORT ?? "5174";
 const LAB = `http://localhost:${PORT}/lab/`;
-const SCRATCHES = ["app-shell", "ticket-right-sidebar", "rail-port-check", "hover-sidebar"];
+const SCRATCHES = [
+  "app-shell",
+  "ticket-right-sidebar",
+  "rail-port-check",
+  "hover-sidebar",
+  // Mounts a dialog and a context provider of its own, which is exactly the
+  // shape this check exists to catch (VC-56).
+  "ticket-kickoff",
+  // Draws the shipped session-band rows inside `SidebarProvider` over a
+  // 140-row fixture — the provider-shaped failure this check exists for is
+  // exactly what a scratch borrowing app components can hit.
+  "sidebar-nesting",
+];
 
 /**
  * A Chromium to drive.

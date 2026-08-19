@@ -14,6 +14,7 @@
 import type {
   Appearance,
   ArchivedTicket,
+  BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
   CreateTerminalSessionRequest,
@@ -162,6 +163,45 @@ export interface CommentUpdateInput {
 
 export interface CommentIdInput {
   commentId: string;
+}
+
+/**
+ * One attach gesture (VC-50). `bytes` and `sourcePath` are alternatives, not a
+ * pair: a paste has only bytes, a native-picker choice has only a path, and a
+ * drop can have both. `sourcePath` is what makes a repo file eligible to be
+ * named live with `@` instead of snapshotted, so a drop that supplies it gets
+ * the better behaviour.
+ */
+export interface BlobAttachInput {
+  fileName: string;
+  bytes?: Uint8Array;
+  sourcePath?: string;
+  mime?: string;
+  label?: string;
+  /** Absolute workspace root an `@` ref would resolve against. */
+  refRoot?: string;
+  /** Exactly one owner, or `unowned` for a Ticket still being composed. */
+  owner: { ticketId: string } | { sessionId: string } | { unowned: true };
+}
+
+/** Lists what is attached to one Ticket or one Session. */
+export interface BlobListInput {
+  ticketId?: string;
+  sessionId?: string;
+}
+
+export interface BlobLinkIdInput {
+  linkId: string;
+}
+
+/**
+ * Attaches Blobs imported before their Ticket existed. The new-Ticket composer
+ * imports eagerly (so size is refused and previews drawn while the file is
+ * still in hand) and calls this once `ticket.create` has returned an id.
+ */
+export interface BlobLinkDraftsInput {
+  ticketId: string;
+  blobs: { blobHash: string; label?: string }[];
 }
 
 /** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
@@ -336,11 +376,24 @@ export interface VolliDataIpcContract {
   /** Hard-deletes a comment; no event. */
   "volli:comment-remove": { args: [input: CommentIdInput]; result: Result };
 
-  /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
+  /**
+   * Attaches one file (VC-50). Decides in main whether the file is named live
+   * as an `@` ref or snapshotted into the Blob store, because only main knows
+   * the workspace and only main may read the bytes.
+   */
+  "volli:blob-attach": { args: [input: BlobAttachInput]; result: BlobAttachResult };
+  /** A Ticket's or a Session's attachments, chronological. */
+  "volli:blob-list": { args: [input: BlobListInput]; result: BlobLinksResult };
+  /** Detaches one attachment. Leaves the bytes for collection. */
+  "volli:blob-remove": { args: [input: BlobLinkIdInput]; result: Result };
+  /** Attaches Blobs that were imported before their Ticket existed. */
+  "volli:blob-link-drafts": { args: [input: BlobLinkDraftsInput]; result: BlobLinksResult };
+
+  /** Every durable session record in a project (ticket-scoped and project-scoped), newest first. */
   "volli:session-list": { args: [input: ProjectIdInput]; result: SessionsResult };
   /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
-  /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */
+  /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
@@ -1180,6 +1233,13 @@ export type VolliIpcEvent =
   // whose action opens that session's chat tab — and does nothing else: the
   // app must never navigate or steal focus because a start landed.
   | "volli:session-started"
+  // One Session's listing row, re-derived because its durable history moved —
+  // see {@link SessionActivityNotice}. This is the PUSH channel that replaced
+  // the ten-second `volli:session-list` poll every Session listing used to
+  // run: a turn opening, a question being asked, an attachment closing and a
+  // retitle all reach the sidebar and the board on the same frame main learns
+  // them, instead of within ten seconds of it.
+  | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
   // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
@@ -1284,7 +1344,7 @@ export interface SessionsInterruptedEvent {
 export interface HarnessEventNotice {
   sessionId: string;
   projectId: string;
-  /** The ticket this session drives, or `null` for a scratch session. */
+  /** The ticket this session drives, or `null` for a Project Session. */
   ticketId: string | null;
   harnessId: HarnessId;
   event: HarnessEvent;
@@ -1332,7 +1392,7 @@ export interface SessionHarnessNotice {
   /** The FULL session id — this addresses live renderer state, not a human reader. */
   sessionId: string;
   projectId: string;
-  /** The ticket this session drives, or `null` for a scratch session. */
+  /** The ticket this session drives, or `null` for a Project Session. */
   ticketId: string | null;
   /** The harness now running there. The session's LAUNCH harness is unchanged. */
   harnessId: HarnessId;
@@ -1370,6 +1430,34 @@ export interface SessionStartedNotice {
 }
 
 /**
+ * Main→renderer: one Session's listing row, re-derived after its durable
+ * history moved.
+ *
+ * It carries the WHOLE {@link SessionListingRow} rather than a compact
+ * activity delta, and that is the point. Every renderer listing already holds
+ * exactly these rows (`volli:session-list` returns them), so applying a notice
+ * is an upsert keyed by Session id and never a second vocabulary that has to
+ * be kept in step with the fetched one. A Session that has just been created
+ * arrives complete, so a listing learns about it without refetching anything;
+ * a retitle and a turn boundary travel the same way, so there is one channel to
+ * reason about rather than one per fact.
+ *
+ * `projectId` rides at the top level even though both record shapes carry it,
+ * because a window filters on it before it looks inside: a listing scoped to
+ * one project must be able to drop another project's notice without
+ * discriminating the union first.
+ *
+ * Broadcast to every window, like every other Session notice — a Session's rows
+ * are visible wherever its project is open.
+ */
+export interface SessionActivityNotice {
+  projectId: string;
+  /** The ticket this Session drives, or `null` for a Project Session. */
+  ticketId: string | null;
+  row: SessionListingRow;
+}
+
+/**
  * Result types below travel as typed discriminated unions rather than
  * thrown errors: `ipcMain.handle` rejections serialize into useless
  * strings across the IPC boundary, and every failure must be surfaceable
@@ -1380,6 +1468,18 @@ export interface SessionStartedNotice {
  * `Result` (no payload) is a plain ok/error ack.
  */
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+
+/**
+ * What one attach produced (VC-50). `relPath` is present when the file was
+ * named live as an `@` ref; `blob` when bytes were stored. A repository image
+ * carries both.
+ */
+export type BlobAttachResult = Result<{
+  relPath: string | null;
+  blob: BlobLinkView | null;
+}>;
+
+export type BlobLinksResult = Result<{ blobs: BlobLinkView[] }>;
 
 export type PickFolderResult =
   | { canceled: true }

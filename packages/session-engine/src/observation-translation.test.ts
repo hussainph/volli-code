@@ -137,6 +137,89 @@ describe("live observation translation", () => {
     expect(sink.observations[0].id).toBe("pi:turn:turn-1:interrupted");
   });
 
+  it("records a compaction under the summary the executor wrote", async () => {
+    const { translate, sink } = composition();
+
+    await translate({
+      kind: "compaction",
+      state: "compacted",
+      reason: "overflow",
+      entryId: "entry-9",
+      tokensBefore: 190_000,
+      tokensAfter: 12_000,
+      recoveryCursor: "marker-9",
+    });
+
+    expect(sink.observations).toEqual([
+      {
+        // The executor's own entry id names the fact, so the same compaction
+        // seen live and replayed after a restart lands under one durable id.
+        id: "pi:compaction:entry-9",
+        kind: "context.compacted",
+        occurredAt: 1000,
+        cursor: { entryId: "marker-9" },
+        reason: "overflow",
+        entryId: "entry-9",
+        tokensBefore: 190_000,
+        tokensAfter: 12_000,
+      },
+    ]);
+  });
+
+  it("records a compaction that produced nothing as its own fact", async () => {
+    const { translate, sink } = composition();
+
+    // No entry to name it by, because none was written — so it falls back to
+    // the executor's marker, exactly as an attention does.
+    await translate({
+      kind: "compaction",
+      state: "failed",
+      reason: "threshold",
+      message: "Summarization failed: the summarizer is unhappy",
+      recoveryCursor: "marker-4",
+    });
+
+    expect(sink.observations).toEqual([
+      {
+        id: `pi:compaction:${ATTACHMENT_ID}:failed:marker-4`,
+        kind: "context.compaction_failed",
+        occurredAt: 1000,
+        cursor: { entryId: "marker-4" },
+        reason: "threshold",
+        detail: "Summarization failed: the summarizer is unhappy",
+      },
+    ]);
+  });
+
+  it("leaves a message mid-word alone when its turn compacts around it", async () => {
+    const { translate, sink } = composition();
+
+    await translate({ kind: "delta", turnId: "turn-1", channel: "text", text: "half" });
+    await translate({
+      kind: "compaction",
+      state: "compacted",
+      reason: "overflow",
+      entryId: "entry-9",
+      tokensBefore: 190_000,
+      tokensAfter: 12_000,
+    });
+    await translate({ kind: "delta", turnId: "turn-1", channel: "text", text: " written" });
+
+    // Compaction retires nothing: it is not a turn boundary, and the message the
+    // user is watching arrive belongs to the turn it is still in.
+    expect(sink.kinds()).toEqual([
+      "transcript.delta",
+      "transcript.delta",
+      "context.compacted",
+      "transcript.delta",
+    ]);
+    expect(sink.of("transcript.delta").at(-1)?.delta).toEqual({
+      op: "part.append",
+      key: "text",
+      text: " written",
+    });
+  });
+
   it("opens a streamed message with a reset and grows it with appends", async () => {
     const { translate, sink } = composition();
 
@@ -897,11 +980,29 @@ describe("cold replay translation", () => {
         occurredAt: 105,
       },
       {
+        kind: "compaction",
+        state: "compacted",
+        reason: "overflow",
+        entryId: "compaction-1",
+        tokensBefore: 190_000,
+        tokensAfter: 12_000,
+        occurredAt: 106,
+        recoveryCursor: "marker-5",
+      },
+      {
+        kind: "compaction",
+        state: "failed",
+        reason: "threshold",
+        message: "Summarization failed.",
+        occurredAt: 107,
+        recoveryCursor: "marker-6",
+      },
+      {
         kind: "turn",
         state: "completed",
         turnId: "turn-1",
-        occurredAt: 106,
-        recoveryCursor: "marker-5",
+        occurredAt: 108,
+        recoveryCursor: "marker-7",
       },
     ];
     for (const observation of durable) await translator.translate(observation, sink.emit);

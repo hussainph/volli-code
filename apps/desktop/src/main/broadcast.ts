@@ -10,6 +10,7 @@ import { BrowserWindow } from "electron";
 import type {
   DataChangedEvent,
   HarnessEventNotice,
+  SessionActivityNotice,
   SessionHarnessNotice,
   SessionsInterruptedEvent,
   SessionStartedNotice,
@@ -116,6 +117,28 @@ export function broadcastUpdateState(state: UpdateUiState): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
     window.webContents.send("volli:update-state" satisfies VolliIpcEvent, state);
+  }
+}
+
+/**
+ * Fans one Session's re-derived listing row out to every window — the push
+ * channel that replaced the poll.
+ *
+ * Chat activity was the one Session fact with no way to reach a renderer on its
+ * own: a turn opening in main moved nothing on screen, so every listing that
+ * showed it re-read `volli:session-list` on a ten-second timer and was wrong
+ * for up to ten seconds by construction. Terminal output has always been push
+ * (`volli:terminal-data` bumps the store); this is the structured half finally
+ * arriving the same way.
+ *
+ * Every window, for the reason the harness fan-outs give: a Session's rows are
+ * visible wherever its project is open, and a listing lit in one window and
+ * stale in another makes "what is running?" depend on where you are looking.
+ */
+export function broadcastSessionActivity(notice: SessionActivityNotice): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:session-activity" satisfies VolliIpcEvent, notice);
   }
 }
 

@@ -1,6 +1,6 @@
 /**
  * The Now page's Properties fold — status, priority and labels as one wrapping
- * run of pills (lab/scratches/ticket-right-sidebar.tsx `PropertiesSection`).
+ * run of pills (the retired ticket-right-sidebar lab scratch's `PropertiesSection`).
  *
  * Properties used to be a page of its own behind a fourth icon mode, with each
  * field under an uppercase caption. It is three editable values; a page was

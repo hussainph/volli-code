@@ -182,7 +182,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             {items.sessions.map((item) => {
               const context =
                 item.ticketDisplayId === null
-                  ? `${item.projectName} · Scratch`
+                  ? `${item.projectName} · Project Session`
                   : `${item.ticketDisplayId} · ${item.ticketTitle}`;
               return (
                 <Command.Item
@@ -202,19 +202,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                             tabId: chatTabId(item.sessionId),
                           });
                       } else {
+                        // Home, with this Session's tab named in the same write.
+                        // `openHome` leaves `openTicketId` alone — a Home Session
+                        // tab keeps the ticket remembered behind it (VC-54).
                         chat.openChatTab(item.projectId, item.sessionId);
-                        useWorkspaceStore.getState().setNav(item.projectId, "sessions");
                         useWorkspaceStore
                           .getState()
-                          .setSessionsActiveTab(item.projectId, chatTabId(item.sessionId));
+                          .openHome(item.projectId, chatTabId(item.sessionId));
                       }
                     } else if (item.scope.kind === "ticket") {
                       useWorkspaceStore
                         .getState()
                         .openTicketSession(item.projectId, item.scope.ticketId, item.sessionId);
                     } else {
-                      useWorkspaceStore.getState().setNav(item.projectId, "sessions");
+                      // Both ledgers: the terminal container's own active session
+                      // AND Home's recorded tab. Recording is not optional now
+                      // that the record defaults to the permanent Board tab —
+                      // without it the palette would land you on the board.
                       useSessionsStore.getState().setActiveSession(item.projectId, item.sessionId);
+                      useWorkspaceStore.getState().openHome(item.projectId, item.sessionId);
                     }
                     finishNavigation();
                   }}

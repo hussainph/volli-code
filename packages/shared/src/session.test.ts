@@ -91,14 +91,14 @@ describe("createSessionRecord", () => {
     expect(session.createdAt).toBe(1000);
   });
 
-  it("defaults ticketId to null (project-scoped scratch session)", () => {
+  it("defaults ticketId to null (Project Session)", () => {
     const session = createSessionRecord({
       id: "session-1",
       projectId: "proj-1",
       harnessId: "codex",
       launchKind: "shell",
       placement: "split",
-      title: "Scratch",
+      title: "Project chat",
       cwd: "/Users/dev/project",
       now: 0,
     });
@@ -152,17 +152,17 @@ describe("createSessionRecord", () => {
   });
 
   it("derives bornTicketless from whether a ticketId was supplied", () => {
-    const scratch = createSessionRecord({
+    const projectSession = createSessionRecord({
       id: "session-1",
       projectId: "proj-1",
       harnessId: "claude-code",
       launchKind: "agent",
       placement: "tab",
-      title: "Scratch",
+      title: "Project chat",
       cwd: "/Users/dev/project",
       now: 0,
     });
-    expect(scratch.bornTicketless).toBe(true);
+    expect(projectSession.bornTicketless).toBe(true);
 
     const ticketed = createSessionRecord({
       id: "session-2",
@@ -190,7 +190,7 @@ describe("SessionRecord", () => {
       launchKind: "unknown",
       placement: "unknown",
       harnessSessionId: null,
-      title: "Scratch",
+      title: "Project chat",
       cwd: "/Users/dev/project",
       createdAt: 0,
       endedAt: null,

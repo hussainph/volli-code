@@ -100,7 +100,7 @@ describe("ticketSessionEnv", () => {
 });
 
 describe("projectSessionEnv", () => {
-  it("builds the env map for a project-scoped scratch session (just the artifacts dir)", () => {
+  it("builds the env map for a Project Session (just the artifacts dir)", () => {
     expect(projectSessionEnv("/Users/dev/project")).toEqual({
       VOLLI_ARTIFACTS_DIR: "/Users/dev/project/.volli/artifacts",
     });

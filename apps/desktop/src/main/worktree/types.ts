@@ -35,7 +35,7 @@ export type { WorktreePhase } from "../../ipc/contract";
  * The single injected dependency bundle every public entrypoint takes. `home`
  * overrides `~` so tests can point `.volli/worktrees` at a temp dir; `onPhase`
  * is the broadcast seam (wired to IPC later) invoked on every phase transition;
- * `attachmentsRoot` is the userData attachment-bytes root `ensure`'s post-copy
+ * `blobsRoot` is the userData Blob-bytes root `ensure`'s post-copy
  * materialize step reads from (issue #77 PR 2) — tests/scripted harnesses point
  * it at a temp dir; functions that never touch attachments ignore it.
  */
@@ -56,7 +56,7 @@ export interface WorktreeDeps {
   statMtimeMs?: StatMtimeMs;
   home?: string;
   onPhase?: (ticketId: string, phase: WorktreePhase) => void;
-  attachmentsRoot: string;
+  blobsRoot: string;
 }
 
 /**

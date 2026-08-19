@@ -730,7 +730,7 @@ Session 7 implementation decisions (2026-08-10):
   `app_state` rows are preserved — migrations are append-only and nothing
   deletes them.
 - The two Session 6 lost proofs were restored Pi-backed
-  (`pi-scratch-chat-smoke.mjs`, `pi-sessions-host-smoke.mjs`);
+  (`pi-project-chat-smoke.mjs`, `pi-sessions-host-smoke.mjs`);
   `pi-ticket-chat-smoke.mjs` was repaired (broken since Session 5's
   default-model requirement); a live Model Access bug (whitespace-padded
   catalog labels rejecting the whole snapshot) was fixed in `session-rpc`.

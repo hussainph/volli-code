@@ -6,7 +6,7 @@
  * this module are the only places a session's engine is disposed or PTY killed.
  *
  * Everything is addressed by the unified sessions store's OWNER id — a projectId
- * for scratch sessions, a ticketId for ticket sessions (ticket-scoped wrappers
+ * for Project Sessions, a ticketId for ticket sessions (ticket-scoped wrappers
  * kept as named entry points so `stores/projects.ts` keeps its stable API).
  */
 import { errorMessage } from "@volli/shared";

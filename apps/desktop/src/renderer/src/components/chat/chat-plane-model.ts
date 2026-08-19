@@ -17,7 +17,7 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { REASONING_LEVELS } from "@volli/shared";
+import { findComposerVerb, REASONING_LEVELS } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { composerAnswer, type InteractionSubmission } from "@renderer/chat/interaction";
@@ -179,33 +179,51 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 /**
  * What one press of the composer turns out to have been.
  *
- * Two things, and only the first of them is new: a message is what every press
- * has always been, and an answer is what a press becomes while a question is
- * standing open above the box that can take its words
- * ({@link composerAnswer}, which owns the rule and the reasons).
+ * Three things, and a message is still what every press is unless something
+ * more specific claims it. An **answer** is what a press becomes while a
+ * question is standing open above the box that can take its words
+ * ({@link composerAnswer}, which owns the rule and the reasons). A **verb** is
+ * what a draft that is nothing but `/compact` becomes: an operation the client
+ * runs, with no message sent at all (`composer-verb.ts`).
  *
  * It is a decision rather than a mode, and that distinction is the whole
  * design: the composer is not put into an answering state that a reader has to
  * leave, and no press is ever refused for being the wrong kind. What the words
  * are is read off the request that is open at the moment they are sent, and
- * where they are not an answer they are a message — which is exactly what the
- * surface did before, and remains the road for everything a question cannot
- * take: a permission waiting on a verdict, a walk through several questions, a
- * model that asked for one of its own listed answers.
+ * where they are neither an answer nor a verb they are a message — which is
+ * exactly what the surface did before, and remains the road for everything a
+ * question cannot take: a permission waiting on a verdict, a walk through
+ * several questions, a model that asked for one of its own listed answers.
+ *
+ * **A standing question outranks a verb**, and the surface has already said so
+ * twice by the time this is asked: the box is renamed to Answer and the `/`
+ * picker is shut, so a `/compact` typed in that state was typed at a question,
+ * not chosen from a list. It is also the arm that gives way harmlessly —
+ * `composerAnswer` only claims a press for a question that takes free text at
+ * all, and a Session waiting on one is mid-turn, where an explicit compaction
+ * would be refused anyway.
  */
 export type ComposerPress =
   | { kind: "answer"; interactionId: string; submission: InteractionSubmission }
+  | { kind: "compact"; instructions: string | null }
   | { kind: "message" };
 
 export function composerPress(
   pending: RendererSessionInteraction | null,
   text: string,
 ): ComposerPress {
-  if (pending === null) return { kind: "message" };
-  const submission = composerAnswer(pending, text);
-  return submission === null
-    ? { kind: "message" }
-    : { kind: "answer", interactionId: pending.id, submission };
+  const submission = pending === null ? null : composerAnswer(pending, text);
+  if (submission !== null && pending !== null) {
+    return { kind: "answer", interactionId: pending.id, submission };
+  }
+  const invocation = findComposerVerb(text);
+  if (invocation === null) return { kind: "message" };
+  // Switched rather than assumed: `ComposerVerbName` is closed, so a second
+  // verb stops this compiling instead of being quietly compacted.
+  switch (invocation.verb.name) {
+    case "compact":
+      return { kind: "compact", instructions: invocation.instructions };
+  }
 }
 
 export type HeldDispatchOutcome = "delivered" | "recorded" | "refused" | "held";
@@ -538,6 +556,14 @@ export interface SessionBlockerState {
   secondaryAction?: SessionBlockerAction | null;
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
+  /**
+   * Present only where the row reports renderer-local state the reader may
+   * retire without anyone's permission — the Session's own transport latch.
+   * Durable facts (attention, the catalog, the pinned model) carry no dismiss:
+   * they block typing for reasons a click cannot change, and a row that hid
+   * one would be promising the typing works when it does not.
+   */
+  dismiss?: SessionBlockerAction;
 }
 
 /** What the plane reads to decide whether anything is stopping the typing. */
@@ -562,6 +588,8 @@ export interface SessionBlockerActs {
   openSettings(): void;
   /** Opens Model Access AT the named provider's sign-in — never merely the category. */
   signIn(providerId: string): void;
+  /** Retires the transport latch the error row reports; see {@link SessionBlockerState.dismiss}. */
+  dismiss(): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -586,7 +614,9 @@ export function terminalCompanionTabId(
  * Four sources, in the order they answer:
  *
  * 1. `sessionError` — this Session's own transport. If the stream is gone the
- *    attention we hold is a memory, so it does not get to speak over it.
+ *    attention we hold is a memory, so it does not get to speak over it. It is
+ *    also the one row carrying a dismiss, because it alone reports state this
+ *    surface owns rather than a durable fact about the harness.
  * 2. `sessionModel` — the Session is pinned to a model this profile cannot run.
  *    It outranks the attention because every failure such a Session will ever
  *    raise is downstream of this one fact, the harness's own report of it names
@@ -614,7 +644,15 @@ export function sessionBlocker(
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
   if (input.sessionError !== null) {
-    return { message: input.sessionError, detail: null, tone: "error", action: retry };
+    return {
+      message: input.sessionError,
+      detail: null,
+      tone: "error",
+      action: retry,
+      // The latch is this surface's own state, so the reader may retire it —
+      // the failure it names stays recoverable through Retry either way.
+      dismiss: { label: "Dismiss", act: acts.dismiss },
+    };
   }
   // Only a catalog that has answered may accuse the Session's model: while it
   // loads, every model reads as unavailable.
@@ -749,8 +787,9 @@ function providerRecovery(input: {
  *   every attempt it makes on its own; the run itself is still there to try
  *   again, and re-running it is not the same act as re-establishing a
  *   connection that never dropped.
- * - **Nothing** — `context_limit_reached` (compaction does not exist yet, so the
- *   only true answer is a new Session); `quota_exhausted` (a spent allowance is
+ * - **Nothing** — `context_limit_reached` (the runtime has already compacted
+ *   this Session and been refused again, so there is nothing left to summarize
+ *   and no button that could); `quota_exhausted` (a spent allowance is
  *   not retryable and no local setting refills it); `partial_turn_interrupted`
  *   (a stopped turn left the composer usable — resending is typing, not
  *   recovering); `input_required` and `permission_required` (the answer lives on

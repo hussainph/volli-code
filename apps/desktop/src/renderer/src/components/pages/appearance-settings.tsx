@@ -1,7 +1,6 @@
 import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
-import { CircleHalfIcon } from "@phosphor-icons/react/dist/csr/CircleHalf";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
@@ -92,7 +91,6 @@ export function AppearanceSettings() {
   return (
     <>
       <AppThemeSection />
-      <AppearanceModeSection />
 
       <SettingsSection title="Editor" icon={BracketsCurlyIcon}>
         <EditorThemeRow />
@@ -138,16 +136,25 @@ export function AppearanceSettings() {
 const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
 
 /**
- * The app-wide canvas.
+ * The app-wide canvas, and the mode it is seen in.
  *
  * Reads `globalCanvas` rather than whatever is on screen, and that distinction
  * is the page's one subtlety: a project can override the canvas, so the window
  * you are looking at while you edit may not be the one this section owns. The
  * note below says so instead of letting an edit look like it failed.
  *
- * The mode it renders the pad and the contrast report at is the GLOBAL scope's
+ * The mode it renders the pad and the contrast alert at is the GLOBAL scope's
  * own resolution too — the same reason. A project pinned to light must not
  * make this section describe a light canvas the app-wide setting never asked for.
+ *
+ * LIGHT/DARK SITS HERE, above the canvas, because to anyone changing how the app
+ * looks they are one subject; two sections read as bureaucracy. What has not
+ * changed is the thing that split was protecting: THE CANVAS DOES NOT NAME A
+ * MODE. The per-mode dials exist precisely so one authored gradient renders
+ * correctly in both, and a project may override the mode or the canvas alone.
+ * So this control is a SIBLING of `CanvasEditor`, never a child of it — inside
+ * the editor it would claim the canvas is per-mode, and it would ride the editor
+ * onto the per-project page, where a global-only setting has no business being.
  */
 function AppThemeSection() {
   const canvas = useThemeStore((state) => state.globalCanvas);
@@ -158,6 +165,13 @@ function AppThemeSection() {
 
   return (
     <SettingsSection title="App theme" icon={PaletteIcon}>
+      <SettingsRow label="Mode">
+        <AppearanceModeChoice
+          value={appearance}
+          testId="appearance-mode"
+          onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
+        />
+      </SettingsRow>
       <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
       {shadowed ? <CanvasShadowedNote /> : null}
     </SettingsSection>
@@ -177,31 +191,6 @@ export function CanvasShadowedNote() {
     <p data-testid="appearance-canvas-shadowed" className="pt-2">
       <ThemeOriginPill emphasized={false}>Project override</ThemeOriginPill>
     </p>
-  );
-}
-
-/**
- * Light, dark, or follow the system — its own section because it is its own
- * setting.
- *
- * The canvas does not name a mode: the per-mode dials exist precisely so ONE
- * authored gradient renders correctly in both, and the two are scoped
- * independently (a project may override either alone). A mode control living
- * inside the canvas editor would quietly claim the opposite.
- */
-function AppearanceModeSection() {
-  const appearance = useThemeStore((state) => state.globalAppearance);
-
-  return (
-    <SettingsSection title="Light & dark" icon={CircleHalfIcon}>
-      <SettingsRow label="Mode">
-        <AppearanceModeChoice
-          value={appearance}
-          testId="appearance-mode"
-          onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
-        />
-      </SettingsRow>
-    </SettingsSection>
   );
 }
 

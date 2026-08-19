@@ -354,9 +354,12 @@ describe("persistence", () => {
       railCollapsed: true,
       railMode: "files",
       diffPresentation: "side-by-side",
-      lastHarnessId: "claude-code",
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
+    // The New-ticket composer's terminal harness left with the terminal kickoff
+    // it chose for (VC-15/VC-56); nothing reads a last-harness preference now,
+    // so nothing writes one either.
+    expect(persisted.state).not.toHaveProperty("lastHarnessId");
   });
 
   it("rehydrates diffPresentation from storage; missing/unknown values default to inline", async () => {
@@ -396,31 +399,21 @@ describe("persistence", () => {
     expect(createUiStore(nonString).getState().diffPresentation).toBe("inline");
   });
 
-  it("persists lastHarnessId and rehydrates it; missing/unknown ids default to claude-code", async () => {
-    const storage = createMemoryStorage();
-    createUiStore(storage).getState().setLastHarnessId("codex");
-    const reloaded = createUiStore(storage);
-    await reloaded.persist.rehydrate();
-    expect(reloaded.getState().lastHarnessId).toBe("codex");
-
-    // Older state without the key defaults to the first-class harness.
-    const missing = createMemoryStorage();
-    missing.setItem(
-      "volli:ui",
-      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
-    );
-    expect(createUiStore(missing).getState().lastHarnessId).toBe("claude-code");
-
-    // A since-removed / bogus harness id falls back to the default.
-    const corrupt = createMemoryStorage();
-    corrupt.setItem(
+  it("ignores a retired lastHarnessId left in older persisted state", () => {
+    // Profiles updating from a build that had the composer's harness picker
+    // still carry the key. It is read by nothing and re-written by nothing;
+    // what matters is that its presence disturbs no neighbour on the way past.
+    const stale = createMemoryStorage();
+    stale.setItem(
       "volli:ui",
       JSON.stringify({
         state: { sidebarWidth: 320, uiScale: 1, lastHarnessId: "gpt-5" },
         version: 1,
       }),
     );
-    expect(createUiStore(corrupt).getState().lastHarnessId).toBe("claude-code");
+    const store = createUiStore(stale);
+    expect(store.getState()).not.toHaveProperty("lastHarnessId");
+    expect(store.getState().sidebarWidth).toBe(320);
   });
 
   it("rehydrates workspaceRailHidden from storage; corrupt/missing values default to visible", async () => {

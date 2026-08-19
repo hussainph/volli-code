@@ -27,3 +27,6 @@ export {
 } from "./terminal-attachment";
 export type { TerminalAttachmentDetail } from "./terminal-attachment";
 export { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";
+export { sessionListingRow, sessionListingRows } from "./listing-row";
+export { watchSessionActivity } from "./activity-watch";
+export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";

@@ -13,6 +13,28 @@
  * is Pi's own grammar under a parity test — and offers the project's skills
  * beside the commands, same grammar, different expansion (`skill.ts`).
  *
+ * ## The row that is not text
+ *
+ * A third kind of `/` row exists and it breaks the family resemblance: a VERB
+ * (`@volli/shared`'s `composer-verb.ts`) runs an operation and sends no
+ * message at all. `/compact` is the one there is.
+ *
+ * It still WRITES text when picked — `/compact ` staged in the box, caret
+ * after the space, exactly like a command still waiting for its arguments —
+ * and that is the part worth being careful about, because writing the literal
+ * `/compact` into the draft is also precisely how this could go wrong. What
+ * makes it honest is that the same text never reaches the model: a reserved
+ * name expands to nothing in `expandCommandInvocation`, and a draft that IS
+ * the verb is claimed at submit by `composerPress`, which runs the operation
+ * instead of sending. So the row offers an act and the press performs that
+ * act.
+ *
+ * Picked rather than fired on selection for two reasons, and both are about
+ * this surface rather than about compaction. Free text after the verb is how
+ * instructions are supplied, so a pick cannot be the end of the sentence; and
+ * ⏎ is the only key on this surface that ever DOES anything, which is a
+ * property worth more than one saved keystroke.
+ *
  * ## Where each trigger fires
  *
  * `@` fires at any ref boundary. `/` fires at a word boundary — the start of
@@ -26,7 +48,9 @@
 import {
   formatPromptTemplateInvocation,
   promptTemplateTakesArgs,
+  visiblePromptTemplates,
   visibleSkills,
+  type ComposerVerb,
   type IndexedFile,
   type PromptTemplate,
   type SkillReference,
@@ -44,6 +68,13 @@ export type ComposerPickerMode = "command" | "file";
 
 /** One row, with everything both the list and the insertion need. */
 export type ComposerPickerRow =
+  | {
+      readonly kind: "verb";
+      readonly value: string;
+      readonly label: string;
+      readonly detail: string;
+      readonly verb: ComposerVerb;
+    }
   | {
       readonly kind: "command";
       /** cmdk's item value: unique per row, and what "active" names. */
@@ -140,6 +171,46 @@ function commandMatchTier(query: string, template: PromptTemplate): number | nul
   if (query === "" || name.startsWith(query)) return 0;
   if (name.includes(query)) return 1;
   if (template.description.toLowerCase().includes(query)) return 2;
+  return null;
+}
+
+/**
+ * Rank the built-in verbs for the same `/` query — the same three tiers, so a
+ * row that is not text is still found the way every other row is.
+ *
+ * Verbs lead the combined list rather than sorting into it. They are the app's
+ * own, there are very few of them, and a row whose meaning is "do this now"
+ * should not move down the list as a project's template collection grows. The
+ * card groups them under their own heading, and the flat order has to agree
+ * with the visual one or the arrow keys walk a different list than the eye.
+ */
+export function rankVerbCompletions(input: {
+  query: string;
+  verbs: readonly ComposerVerb[];
+}): readonly ComposerPickerRow[] {
+  const query = input.query.toLowerCase();
+  return input.verbs
+    .map((verb) => ({ verb, tier: verbMatchTier(query, verb) }))
+    .filter((entry): entry is { verb: ComposerVerb; tier: number } => entry.tier !== null)
+    .toSorted((a, b) => a.tier - b.tier || a.verb.name.localeCompare(b.verb.name))
+    .map(({ verb }) => ({
+      kind: "verb" as const,
+      // Prefixed like the skill rows', and now load-bearing in both
+      // directions: a verb's name is reserved, so no template can answer to
+      // this value, and cmdk's "active" is a value lookup.
+      value: `verb:${verb.name}`,
+      label: `/${verb.name}`,
+      detail: verb.description,
+      verb,
+    }));
+}
+
+/** The command tiers, over a verb's name and description. */
+function verbMatchTier(query: string, verb: ComposerVerb): number | null {
+  const name = verb.name.toLowerCase();
+  if (query === "" || name.startsWith(query)) return 0;
+  if (name.includes(query)) return 1;
+  if (verb.description.toLowerCase().includes(query)) return 2;
   return null;
 }
 
@@ -288,15 +359,28 @@ export function composerPickerRows(input: {
   query: string;
   templates: readonly PromptTemplate[];
   skills?: readonly SkillReference[];
+  /**
+   * The built-in verbs this Session can run right now. Empty while a turn is
+   * live: an explicit compaction is refused mid-turn (rewriting the context
+   * under a running turn corrupts it), and a control naming something the
+   * runtime will refuse is worse than no control — the rule the model pill and
+   * the mode segment already follow.
+   */
+  verbs?: readonly ComposerVerb[];
   files: readonly IndexedFile[];
 }): readonly ComposerPickerRow[] {
   if (input.mode === "command") {
+    // A verb owns its name outright, so a template spelled `compact` is gone
+    // before anything is ranked — the same removal `expandCommandInvocation`
+    // performs at submit, which is what keeps the offer and the press agreed.
+    const templates = visiblePromptTemplates(input.templates);
     return [
-      ...rankCommandCompletions({ query: input.query, templates: input.templates }),
+      ...rankVerbCompletions({ query: input.query, verbs: input.verbs ?? [] }),
+      ...rankCommandCompletions({ query: input.query, templates }),
       ...rankSkillCompletions({
         query: input.query,
         skills: input.skills ?? [],
-        templates: input.templates,
+        templates,
       }),
     ];
   }
@@ -329,6 +413,8 @@ export interface ComposerPickerInsertion {
  * showing a name for it. One that DOES read arguments cannot: they have not
  * been typed. It stages `/name ` and leaves the caret after the space, and the
  * expansion happens at submit, via `@volli/shared`'s `expandCommandInvocation`.
+ * A verb stages for the same reason and expands for no reason at all — see the
+ * module header.
  *
  * Either way a trailing space follows the insertion, which is what closes the
  * picker: the caret ends up outside the token it just replaced. The space is
@@ -344,35 +430,46 @@ export function applyPickerRow(input: {
   const rest = text.slice(state.to);
   const spaced = (body: string): string => (/^\s/.test(rest) ? body : `${body} `);
 
-  const written =
-    row.kind === "command"
-      ? promptTemplateTakesArgs(row.template)
-        ? spaced(`/${row.template.name}`)
-        : spaced(formatPromptTemplateInvocation(row.template))
-      : row.kind === "skill"
-        ? // Always staged, never expanded at pick — twice deliberate. A skill
-          // body is a document, and pasting fifteen kilobytes into the box the
-          // reader is typing in is not "showing the prompt you are about to
-          // send", it is losing the draft under it. And the reference IS what
-          // gets sent: at submit the text keeps `/name` and its arguments as
-          // typed, while the body rides beside the message as its own resource
-          // part (`expandCommandInvocation`) — so the caret parks after the
-          // space, exactly like a command that still wants its arguments.
-          spaced(`/${row.skill.name}`)
-        : spaced(
-            refInsertion({
-              // `fileRefTokenAt` only matches at a ref boundary, so this is
-              // already whitespace, `(`, or start-of-text. Asking anyway is what
-              // keeps the one grammar answering the question.
-              precedingChar: state.from === 0 ? "" : text.charAt(state.from - 1),
-              text: `@${row.relPath}`,
-            }),
-          );
+  const written = spaced(writtenFor(row, text, state));
 
   return {
     text: `${text.slice(0, state.from)}${written}${rest}`,
     caret: state.from + written.length,
   };
+}
+
+/** What one row writes, before {@link applyPickerRow}'s trailing space. */
+function writtenFor(row: ComposerPickerRow, text: string, state: ComposerPickerState): string {
+  switch (row.kind) {
+    // Staged, never performed at pick, and never expanded into anything: the
+    // text IS the invocation, and ⏎ is what runs it. See the module header —
+    // this is the row whose written text and performed act must not disagree,
+    // and they agree because nothing ever expands a reserved name.
+    case "verb":
+      return `/${row.verb.name}`;
+    case "command":
+      return promptTemplateTakesArgs(row.template)
+        ? `/${row.template.name}`
+        : formatPromptTemplateInvocation(row.template);
+    // Always staged, never expanded at pick — twice deliberate. A skill body is
+    // a document, and pasting fifteen kilobytes into the box the reader is
+    // typing in is not "showing the prompt you are about to send", it is losing
+    // the draft under it. And the reference IS what gets sent: at submit the
+    // text keeps `/name` and its arguments as typed, while the body rides
+    // beside the message as its own resource part (`expandCommandInvocation`)
+    // — so the caret parks after the space, exactly like a command that still
+    // wants its arguments.
+    case "skill":
+      return `/${row.skill.name}`;
+    case "file":
+      return refInsertion({
+        // `fileRefTokenAt` only matches at a ref boundary, so this is already
+        // whitespace, `(`, or start-of-text. Asking anyway is what keeps the
+        // one grammar answering the question.
+        precedingChar: state.from === 0 ? "" : text.charAt(state.from - 1),
+        text: `@${row.relPath}`,
+      });
+  }
 }
 
 /**

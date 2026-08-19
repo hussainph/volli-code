@@ -77,7 +77,7 @@ describe("Sessions", () => {
       operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
-      title: "Scratch",
+      title: "Project chat",
     });
 
     // Both are durable and addressable NOW — the attach follows separately,
@@ -126,7 +126,7 @@ describe("Sessions", () => {
     });
     // No Ticket, no Ticket Event — planner history is Ticket history.
     await door.create({
-      operationId: "operation-scratch",
+      operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
       title: null,
@@ -294,6 +294,7 @@ describe("Sessions", () => {
           label: "Claude Opus",
           state: "available",
           reasoningLevels: ["low", "medium", "high"],
+          acceptsImageInput: true,
         },
         {
           providerId: "openai-codex",
@@ -301,6 +302,7 @@ describe("Sessions", () => {
           label: "GPT",
           state: "available",
           reasoningLevels: ["high", "xhigh"],
+          acceptsImageInput: true,
         },
         {
           providerId: "anthropic",
@@ -308,6 +310,7 @@ describe("Sessions", () => {
           label: "Signed out",
           state: "authentication-required",
           reasoningLevels: ["medium"],
+          acceptsImageInput: true,
         },
       ],
     };

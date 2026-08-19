@@ -255,6 +255,47 @@ describe("observationPayload", () => {
     expect(observationPayload({ ...observation, turnId: null })).toMatchObject({ turnId: null });
   });
 
+  it("round-trips both halves of a compaction into their matching payloads", () => {
+    const observed = {
+      id: "context-compacted-1",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: systemProvenance,
+      attachmentId: "attachment-1",
+    } as const;
+
+    expect(
+      observationPayload({
+        ...observed,
+        kind: "context.compacted",
+        reason: "overflow",
+        entryId: "pi-entry-9",
+        tokensBefore: 190_000,
+        tokensAfter: 12_000,
+      }),
+    ).toEqual({
+      kind: "context.compacted",
+      attachmentId: "attachment-1",
+      reason: "overflow",
+      entryId: "pi-entry-9",
+      tokensBefore: 190_000,
+      tokensAfter: 12_000,
+    });
+    expect(
+      observationPayload({
+        ...observed,
+        kind: "context.compaction_failed",
+        reason: "threshold",
+        detail: "Summarization failed.",
+      }),
+    ).toEqual({
+      kind: "context.compaction_failed",
+      attachmentId: "attachment-1",
+      reason: "threshold",
+      detail: "Summarization failed.",
+    });
+  });
+
   it("maps every externally observed fact without inventing a command", () => {
     const attachment = {
       id: "attachment-1",
@@ -936,6 +977,38 @@ describe("projectSession turn activity", () => {
       }),
     ]);
     expect(failed.turnActive).toBe(false);
+  });
+
+  it("leaves a compacting Session exactly as active as it already was", () => {
+    // Compaction changes what the executor sends next, not what this Session is
+    // doing: a turn compacting mid-run is still working, and the same fact
+    // between turns leaves an idle Session idle.
+    const midTurn = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(3, {
+        kind: "context.compacted",
+        attachmentId: attachment.id,
+        reason: "overflow",
+        entryId: "pi-entry-9",
+        tokensBefore: 190_000,
+        tokensAfter: 12_000,
+      }),
+    ]);
+    expect(midTurn.turnActive).toBe(true);
+
+    const betweenTurns = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, {
+        kind: "context.compaction_failed",
+        attachmentId: attachment.id,
+        reason: "threshold",
+        detail: "Summarization failed.",
+      }),
+    ]);
+    // And a failed one raises nothing a person has to clear.
+    expect(betweenTurns).toMatchObject({ turnActive: false });
+    expect(betweenTurns.attention.active).toEqual([]);
   });
 
   it("tracks the live attachment's turn across a second attachment", () => {

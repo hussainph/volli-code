@@ -288,7 +288,7 @@ async function main() {
     // terminal under test is minted explicitly through the session-start
     // control's caret. `.first()` because an empty surface mounts the control
     // twice (tab strip + empty state).
-    await page.getByText("Sessions", { exact: true }).click();
+    await page.getByText("Home", { exact: true }).click();
     await page.getByLabel("Other session kinds").first().click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await waitForLiveCanvas(page);

@@ -87,6 +87,21 @@ describe("projectTranscriptMessages", () => {
     ).toEqual(["assistant-1"]);
   });
 
+  it("keeps a user turn that is nothing but an attachment (VC-50)", () => {
+    // A dropped screenshot sent without words: the text part is empty, the
+    // file part is the message. It must survive projection — the transcript
+    // draws its thumb where prose would have been.
+    expect(
+      projectTranscriptMessages([
+        frame(1, {
+          id: "user-1",
+          role: "user",
+          parts: [{ type: "file", url: `volli-blob:${"a".repeat(64)}`, mediaType: "image/png" }],
+        }),
+      ]).map(({ id }) => id),
+    ).toEqual(["user-1"]);
+  });
+
   it("skips a durable frame that carries no transcript message at all", () => {
     // Not every durable frame is a message — a tool-only or interaction event
     // shares the same log without ever setting `transcript`.

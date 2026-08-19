@@ -10,8 +10,8 @@
  *   - **ticket** — the ticket detail, the folder variant again, with a Doc tab
  *     (not closable) beside a live terminal Session tab (leading status dot,
  *     closable, renamable).
- *   - **sessions** — the project Sessions page, the pill variant, with two
- *     terminal tabs.
+ *   - **home** — Home, the folder variant again, with its permanent Board tab
+ *     (not closable) leading two terminal Session tabs.
  *
  * Each surface is shot twice: at rest, and with the second tab hovered so the
  * hover-revealed close is visible. No assertions beyond "it rendered" — a human
@@ -215,25 +215,28 @@ try {
     stripBand(page, "Ticket tabs"),
   );
 
-  // ---- sessions ----------------------------------------------------------
+  // ---- home --------------------------------------------------------------
   await page.keyboard.press("Escape");
   await sleep(600);
-  await navButton(page, "Sessions").click();
+  await navButton(page, "Home").click();
   await sleep(1200);
-  const sessionsStrip = stripBand(page, "Session tabs");
+  const homeStrip = stripBand(page, "Home tabs");
   await startTerminalSession(page);
-  await waitUntil("first session tab", async () => (await sessionsStrip.count()) === 1, {
-    timeout: 30000,
-  });
+  // The Board tab is always there, so a fresh terminal is the SECOND tab.
+  await waitUntil(
+    "first session tab",
+    async () => (await homeStrip.getByRole("tab").count()) >= 2,
+    { timeout: 30000 },
+  );
   await sleep(1200);
   await startTerminalSession(page);
   await waitUntil(
     "a second session tab",
-    async () => (await sessionsStrip.getByRole("tab").count()) >= 2,
+    async () => (await homeStrip.getByRole("tab").count()) >= 3,
     { timeout: 30000 },
   );
   await sleep(1500);
-  await shootStrip(page, "sessions", sessionsStrip);
+  await shootStrip(page, "home", homeStrip);
 
   console.log(`\nshots in ${OUT_DIR}`);
 } finally {

@@ -1,6 +1,6 @@
 /**
  * G1 — the interview dry run, scripted, against the BUILT app: a fresh Python
- * project, one scratch chat, and TEN consecutive real Pi turns that mirror the
+ * project, one Project Session chat, and TEN consecutive real Pi turns that mirror the
  * Mars-rover pairing exercise (small prompts, tests-first, one design
  * question) — then a relaunch that must render the whole exchange from
  * durable data.
@@ -37,7 +37,7 @@
  * verdicts come from files on disk, independent command reruns, and the
  * doctor evidence — prose style already cost this smoke one false FAIL.
  *
- * The chat is a Sessions-strip scratch chat on purpose: a ticketless Session
+ * The chat is a Sessions-strip Project Session chat on purpose: a ticketless Session
  * executes in the selected project's own directory (`location.ts`), which is
  * exactly the shape of the pairing round — one repo, one chat, no worktree
  * indirection.
@@ -75,7 +75,7 @@ import {
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
-  SESSION_TAB_STRIP,
+  HOME_TAB_STRIP,
   sleep,
   stopButton,
   tabStrip,
@@ -133,12 +133,14 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `g1-${slug}.log`)}`);
 }
 
-/** Navigate to Sessions and wait for its tab strip to mount. */
-async function goToSessions(page) {
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+/** Navigate to Home and wait for its tab strip to mount. */
+async function goToHome(page) {
+  await page.getByRole("button", { name: "Home", exact: true }).click();
   await waitUntil(
-    "the Sessions tab strip to mount",
-    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
+    "Home's tab strip to mount",
+    // >= 1 is the permanent Board tab alone: nothing auto-opens any more
+    // (VC-54 scope 2), so the Session below is created by an explicit press.
+    async () => (await tabStrip(page, HOME_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
 }
@@ -239,11 +241,11 @@ async function main() {
 
     await attempt(
       1,
-      "seed the app default model and open a scratch chat on the project",
+      "seed the app default model and open a Project Session chat on the project",
       async () => {
         const defaultModel = await seedDefaultModel(page);
-        await goToSessions(page);
-        chatTabLabel = await openNewChatTab(page, SESSION_TAB_STRIP);
+        await goToHome(page);
+        chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
         const textarea = page.getByPlaceholder("Ask, plan, or implement…");
         await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
         await waitUntil(
@@ -264,7 +266,7 @@ async function main() {
       );
       // First delivered message retitles the Session; capture what the tab —
       // and the relaunch's sidebar row — is actually called now.
-      chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
+      chatTabLabel = await activeTabLabel(page, HOME_TAB_STRIP);
       // Substance over prose everywhere below: the file on disk (or an
       // independent rerun) is the verdict; the reply is recorded, not judged —
       // the first run of this smoke failed a green check on the model
