@@ -1380,9 +1380,10 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 50 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(50);
+    it("covers all 51 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(51);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
       expect(DATA_CHANNELS).toContain("volli:blob-list");
       expect(DATA_CHANNELS).toContain("volli:blob-remove");

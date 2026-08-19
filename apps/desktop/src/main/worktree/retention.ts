@@ -17,13 +17,21 @@
  *    (dirty ALWAYS refuses via the shared refusal contract) and the existing
  *    archive path, adding no new git call site (decision #42).
  */
+import { existsSync } from "node:fs";
 import type Database from "better-sqlite3";
-import type { TicketEventActor, TicketEventPayload } from "@volli/shared";
+import {
+  computeWorktreeReclaim,
+  type TicketEventActor,
+  type TicketEventPayload,
+  type TicketStatus,
+} from "@volli/shared";
 
 import { getAllAppState, setAppState } from "../db/app-state-repo";
+import { recordTicketEvent } from "../db/events-repo";
 import { prepared } from "../db/prepared";
 import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
+import type { AgentSiteReleaseReport } from "./agent-sites";
 import { remove, type WorktreeRemoveOptions } from "./remove";
 import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
@@ -152,4 +160,99 @@ export async function archiveAndClean(
 
   archiveTicketCommand(deps.db, ticketId, { now: Date.now(), actor: USER_ACTOR });
   return ok(undefined);
+}
+
+// ---- reclaim (VC-113) ------------------------------------------------------
+
+/** System-driven, no session: the reclaim is attributed to automation. */
+const AUTOMATION_ACTOR: TicketEventActor = { kind: "automation" };
+
+/** The seams {@link reclaimIfStale} needs beyond the worktree bundle. */
+export interface ReclaimDeps {
+  worktree: WorktreeDeps;
+  now: () => number;
+  /** Ends the bindings rooted in the checkout, exactly as the manual remove does. */
+  releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
+  /** Where work is genuinely in flight; a busy directory is never reclaimed. */
+  busyWorktreeSites?: (target: string) => Promise<readonly { directory: string }[]>;
+}
+
+/** Why a reclaim did or didn't happen — the caller logs/notifies off this. */
+export type ReclaimOutcome =
+  | { kind: "reclaimed"; branch: string | null; daysInDone: number }
+  | { kind: "skipped"; reason: string };
+
+const SKIP = (reason: string): ReclaimOutcome => ({ kind: "skipped", reason });
+
+/**
+ * The DURATION gate on automatic worktree removal (VC-113).
+ *
+ * The bug this answers is not that Volli reclaimed disk; it is WHEN. A branch
+ * becomes "clean" the instant it is pushed — which is the instant a PR opens —
+ * so cleanliness alone made a checkout disposable at the exact moment its
+ * review started, and the review is precisely when a person comes back to it to
+ * make the small fix the PR earned. Time is the honest signal instead: a ticket
+ * that has sat in Done for the whole retention window, with nothing uncommitted
+ * in it and no PR still open, is finished in the way that matters.
+ *
+ * What it takes is the DIRECTORY and nothing else. The ticket stays on the
+ * board, the branch stays in git with every commit on it, `pr_url` stays
+ * stamped, and `worktree-recreate` puts the checkout back on that branch on
+ * demand. That is why this may run unattended where an archive may not: it is a
+ * cache eviction, and every part of it is undoable.
+ *
+ * Every gate below is a refusal, in the order that costs least to answer, and
+ * the removal itself goes through `remove(force: false)` — so the dirty
+ * predicate is re-run immediately before deletion and ANY uncommitted work,
+ * mid-flight rebase, lock, or unreadable git aborts the whole thing.
+ */
+export async function reclaimIfStale(
+  deps: ReclaimDeps,
+  ticketId: string,
+  prState: "open" | "merged" | "closed" | null,
+): Promise<ReclaimOutcome> {
+  const db = deps.worktree.db;
+  const ticket = getTicketRow(db, ticketId);
+  if (!ticket) return SKIP("unknown ticket");
+  if (ticket.worktree_path === null) return SKIP("no worktree");
+  // Already gone from disk: leave the stamp alone. Clearing it here would race
+  // the recreate path and cost the ticket the only pointer it has left.
+  if (!existsSync(ticket.worktree_path)) return SKIP("worktree already missing");
+  if (ticket.retention_keep !== 0) return SKIP("kept");
+
+  const doneEntryAt = doneEntryTimestamp(db, ticketId);
+  const ttlMs = retentionTtlMs(db);
+  const now = deps.now();
+  // The pure verdict (@volli/shared): dwell alone, never a merge — see
+  // `computeWorktreeReclaim` for why those are different questions.
+  const verdict = computeWorktreeReclaim({
+    status: ticket.status as TicketStatus,
+    keep: false, // the Keep pin is checked above, before any of this costs a read
+    prUrl: ticket.pr_url,
+    prState,
+    doneEntryAt,
+    now,
+    ttlMs,
+  });
+  if (!verdict.reclaim) return SKIP("not stale enough");
+
+  const busy = (await deps.busyWorktreeSites?.(ticket.worktree_path)) ?? [];
+  if (busy.length > 0) return SKIP("work in flight");
+
+  const removed = await remove(deps.worktree, ticketId, {
+    force: false,
+    releaseAgentSites: deps.releaseAgentSites,
+  });
+  if (!removed.ok) return SKIP(removed.error);
+
+  const daysInDone =
+    doneEntryAt === null ? 0 : Math.floor((now - doneEntryAt) / (24 * 60 * 60 * 1000));
+  recordTicketEvent(
+    db,
+    ticketId,
+    { kind: "worktree_reclaimed", branch: ticket.branch, daysInDone },
+    now,
+    AUTOMATION_ACTOR,
+  );
+  return { kind: "reclaimed", branch: ticket.branch, daysInDone };
 }

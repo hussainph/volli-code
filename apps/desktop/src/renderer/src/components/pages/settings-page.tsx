@@ -9,7 +9,11 @@ import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure"
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage } from "@volli/shared";
-import type { DirtyWorktreeOrphan } from "../../../../ipc/contract";
+import type {
+  DirtyWorktreeOrphan,
+  KeptWorktreeOrphan,
+  RemovedWorktreeOrphan,
+} from "../../../../ipc/contract";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { CliSettings } from "@renderer/components/pages/cli-settings";
@@ -120,11 +124,16 @@ export function parseTtlDaysInput(raw: string): number | null {
 }
 
 /**
- * Global Done-TTL setting (issue #76, CONCEPT #16): a PR-less ticket sitting in
- * Done this many days is offered for archive & clean. App-wide (stored in
- * `app_state`, not per project), so it applies to every project regardless of
- * the current selection. Loads once via `getTtlDays`; saves via `setTtlDays`
- * and reflects the clamped stored value main returns.
+ * The global retention window (issue #76, CONCEPT #16; VC-113). It is now ONE
+ * number governing three things that were always the same question — how long a
+ * finished ticket's checkout is worth keeping:
+ *  - a PR-less ticket this long in Done is offered for archive & clean;
+ *  - its worktree FOLDER is reclaimed automatically once it has sat that long
+ *    (branch, commits, ticket and PR url all kept);
+ *  - a leftover orphan folder is only swept once nothing has touched it for the
+ *    same window.
+ * App-wide (stored in `app_state`, not per project). Loads once via
+ * `getTtlDays`; saves via `setTtlDays` and reflects the clamped stored value.
  */
 function DoneTtlField() {
   const [days, setDays] = useState("");
@@ -176,9 +185,11 @@ function DoneTtlField() {
 
   return (
     <SettingsRow
-      label="Archive Done tickets after"
+      label="Clean up Done worktrees after"
       htmlFor="done-ttl-days"
-      description="Only tickets with no open PR."
+      // Says what is taken AND what survives, because the fear this setting has
+      // to answer (VC-113) is "will I lose my work?" — and the answer is no.
+      description="The folder goes; the branch, commits, and ticket stay. Never while a PR is open."
     >
       <Input
         id="done-ttl-days"
@@ -213,7 +224,12 @@ function WorktreesSettings() {
 
 type OrphansState =
   | { status: "loading" }
-  | { status: "loaded"; dirty: DirtyWorktreeOrphan[] }
+  | {
+      status: "loaded";
+      dirty: DirtyWorktreeOrphan[];
+      removed: RemovedWorktreeOrphan[];
+      kept: KeptWorktreeOrphan[];
+    }
   /**
    * Carries its own reason: the pane reports the failure now, so nothing else
    * has to. `rescan` is the read that failed, so Retry can be exactly "do that
@@ -271,7 +287,12 @@ function DirtyWorktreesList() {
           setState({ status: "error", message: result.error, rescan });
           return;
         }
-        setState({ status: "loaded", dirty: result.dirty });
+        setState({
+          status: "loaded",
+          dirty: result.dirty,
+          removed: result.removedClean,
+          kept: result.keptRecent,
+        });
       } catch (error) {
         if (orphansFetch.isCurrent(token))
           setState({ status: "error", message: errorMessage(error), rescan });
@@ -305,6 +326,8 @@ function DirtyWorktreesList() {
   }
 
   const dirty = state.status === "loaded" ? state.dirty : [];
+  const removed = state.status === "loaded" ? state.removed : [];
+  const kept = state.status === "loaded" ? state.kept : [];
 
   const refreshAction = (
     <Button
@@ -384,6 +407,59 @@ function DirtyWorktreesList() {
           ))
         )}
       </div>
+
+      {/*
+       * What the sweep DID, not just what it left behind (VC-113). A launch
+       * that quietly deleted 44 checkouts is indistinguishable from work going
+       * missing unless the app says so somewhere, so both halves are stated:
+       * what was taken (and the branch that survived it), and what is being
+       * kept for now, with the date it stops being kept.
+       */}
+      {removed.length > 0 ? (
+        <div className="mt-3 flex flex-col gap-1">
+          <p className="text-ui text-muted-foreground">
+            Removed this launch — the branches are still in git.
+          </p>
+          {removed.map((entry) => (
+            <div
+              key={entry.path}
+              className="rounded-md border border-border/50 bg-background/30 px-4 py-2"
+            >
+              <p className="truncate font-mono text-ui text-foreground" title={entry.path}>
+                {truncateMiddle(entry.path)}
+              </p>
+              <p className="mt-1 text-ui text-muted-foreground">
+                {entry.branch === null
+                  ? "No branch was checked out here."
+                  : `Branch ${entry.branch} kept.`}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {kept.length > 0 ? (
+        <div className="mt-3 flex flex-col gap-1">
+          <p className="text-ui text-muted-foreground">
+            Kept for now — clean, but touched too recently to clear.
+          </p>
+          {kept.map((entry) => (
+            <div
+              key={entry.path}
+              className="rounded-md border border-border/50 bg-background/30 px-4 py-2"
+            >
+              <p className="truncate font-mono text-ui text-foreground" title={entry.path}>
+                {truncateMiddle(entry.path)}
+              </p>
+              <p className="mt-1 text-ui text-muted-foreground">
+                {entry.removableAt === null
+                  ? "Kept until it can be dated."
+                  : `Removable after ${new Date(entry.removableAt).toLocaleDateString()}.`}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <AlertDialog
         open={pendingDelete !== null}

@@ -38,6 +38,15 @@ function resolveHome(): string {
 }
 
 /**
+ * The `~` every worktree path is built from — the same value `deps.home`
+ * carries, exposed for the callers that need to ask an ownership question
+ * (containers.ts) outside a `WorktreeDeps` bundle.
+ */
+export function worktreeHomeDir(): string {
+  return resolveHome();
+}
+
+/**
  * The standard runtime deps bundle for every worktree module call.
  * `blobsRoot` — the userData Blob-bytes root the post-copy
  * materialize step reads from (issue #77 PR 2) — resolves off

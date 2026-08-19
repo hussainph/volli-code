@@ -78,8 +78,20 @@ export {
   getRetentionTtlDays,
   setRetentionTtlDays,
   archiveAndClean,
+  reclaimIfStale,
   DEFAULT_RETENTION_TTL_DAYS,
 } from "./retention";
+export type { ReclaimDeps, ReclaimOutcome } from "./retention";
+// Worktree OWNERSHIP (VC-113): which containers under the shared
+// `~/.volli/worktrees` root belong to THIS database, and therefore which paths
+// any destructive route may touch.
+export {
+  isOwnedWorktreePath,
+  ownedContainers,
+  projectContainerName,
+  projectContainerPath,
+} from "./containers";
+export type { OwnedContainer } from "./containers";
 export {
   RetentionWatcher,
   createRetentionStore,

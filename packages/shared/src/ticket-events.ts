@@ -52,6 +52,13 @@ export const TICKET_EVENT_KINDS = [
   // (no session — the system-level watch), exactly once per branch (a dedup set
   // guards re-firing), and paired with the single native "PR merged" notification.
   "pr_merged",
+  // Retention reclaim (VC-113): the background watch removed a Done ticket's
+  // worktree DIRECTORY after it sat clean and finished for the whole retention
+  // window. Written with an `automation` actor, and paired with the
+  // `worktree_changed` the removal itself records — that one says the pointer
+  // moved, this one says WHY, and names the branch the deletion kept. A
+  // deletion nobody can account for is how VC-113 read as lost work.
+  "worktree_reclaimed",
   // Attachments (`ticket_attachments`, migration 011, issue #77): spec
   // material — a file or URL — attached to a ticket. Mirrors `commented`'s
   // shape (the attachment itself lives in `ticket_attachments`, `label` here
@@ -126,6 +133,14 @@ export type TicketEventPayload =
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
   | { kind: "pr_merged"; url: string }
+  /**
+   * The retention watch reclaimed the worktree directory (VC-113). `branch` is
+   * what survived it — the checkout can be put back on that branch at any time,
+   * which is what makes the reclaim a cache eviction rather than a destruction.
+   * `daysInDone` is the dwell that earned it, so the History line can say what
+   * rule fired instead of leaving the reader to infer one.
+   */
+  | { kind: "worktree_reclaimed"; branch: string | null; daysInDone: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: string };
@@ -159,6 +174,17 @@ export type WorktreeFailureStage =
  * (git broke, path vanished) must never offer "discard work" as the remedy.
  */
 export const WORKTREE_DIRTY_REFUSAL_PREFIX = "Worktree has uncommitted work";
+
+/**
+ * The stable sentence every worktree read answers with when the ticket still
+ * points at a checkout that is no longer on disk (main's `worktree/read.ts`
+ * `missing-on-disk` arm). The rail matches on it to offer RECREATE instead of
+ * Retry: a directory somebody deleted is not a transient read failure, and a
+ * Retry that can only fail again is what made a swept worktree read as lost
+ * work (VC-113). The branch and its commits survive in git, so the recovery is
+ * real — `ensure` puts the checkout back where it was, on the branch it was on.
+ */
+export const WORKTREE_MISSING_ON_DISK = "This ticket's worktree directory is missing on disk.";
 
 /**
  * Upper bound on a stored `worktree_failed` `stderr` excerpt. Git can emit a

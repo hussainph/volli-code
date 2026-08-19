@@ -11,6 +11,7 @@ import {
   sanitizeLegacyProjects,
   USER_ACTOR,
   validateUniquePrefix,
+  WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
 import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
@@ -80,6 +81,7 @@ import type {
   WorktreeOrphansResult,
   WorktreePushPrResult,
   WorktreeRemoveInput,
+  WorktreeRecreateResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
 } from "../ipc/contract";
@@ -146,9 +148,9 @@ import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
-  samePath as samePathAs,
 } from "./worktree/paths";
-import { worktreeDeps, worktreesHome } from "./worktree-runtime";
+import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
+import { worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
@@ -808,6 +810,44 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
+    /**
+     * Recreate (VC-113): put a ticket's worktree back after something outside
+     * this app took the directory away — a sweep from a second install, a
+     * `git worktree remove` in a terminal, a `rm -rf` while tidying.
+     *
+     * The branch is the identity and it survives all of those, so this is a
+     * real recovery rather than a fresh start: `ensure` reuses the stamped
+     * branch and path, and its reconcile already owns "registered, directory
+     * missing → prune, then recreate". It is the same pipeline a Session boot
+     * runs, exposed as its own verb because the rail could previously offer
+     * only Retry — a read that had no way of succeeding — and starting a
+     * whole Session was the only unwritten route back.
+     *
+     * Idempotent by construction (`ensure` is single-flight and answers
+     * `already-present` for a live checkout), so a double-click costs a git
+     * read, not a second worktree.
+     */
+    "volli:worktree-recreate": async (input: TicketIdInput): Promise<WorktreeRecreateResult> => {
+      const ticket = getTicketRow(db, input.ticketId);
+      if (!ticket) return { ok: false, error: "Unknown ticket" };
+      if (ticket.uses_worktree === 0) {
+        return { ok: false, error: "This ticket runs in the main checkout." };
+      }
+      const outcome = await ensure(worktreeDeps(db), input.ticketId);
+      if (!outcome.ok) return { ok: false, error: outcome.error };
+      const worktreePath = outcome.value.identity.worktreePath;
+      if (worktreePath === null) return { ok: false, error: "Worktree path was not resolved" };
+      // The identity moved (or came back), so every board re-hydrates and this
+      // ticket's own surfaces refresh promptly — same targeting the scope
+      // switch and the terminal boot use.
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        projectId: ticket.project_id,
+        kind: "worktree",
+      });
+      return { ok: true, worktreePath };
+    },
+
     "volli:worktree-branches": (input: ProjectIdInput): WorktreeBranchesResult => {
       const result = listBranches(worktreeDeps(db), input.projectId);
       return result.ok ? { ok: true, ...result.value } : { ok: false, error: result.error };
@@ -826,6 +866,7 @@ export function registerDataIpcHandlers(
         ok: true,
         pruned: report.pruned,
         removedClean: report.removedClean,
+        keptRecent: report.keptRecent,
         dirty: report.dirty,
       };
     },
@@ -834,15 +875,16 @@ export function registerDataIpcHandlers(
       input: WorktreeOrphanDeleteInput,
     ): Promise<WorktreeOrphanDeleteResult> => {
       const { path } = input;
-      // The ONLY dir this channel may touch is a leaf inside the app-owned
-      // worktree home — canonicalized on both sides, so no symlink or
-      // `../escape` can point the recursive delete anywhere else. The Settings
-      // dialog has already shown the dirtiness reason and taken explicit
-      // confirmation; this is the one sanctioned rm -rf in the app.
-      const home = worktreesHome();
+      // The ONLY dir this channel may touch is a leaf inside a container THIS
+      // database owns — canonicalized on both sides, so no symlink or
+      // `../escape` can point the recursive delete anywhere else, and (VC-113)
+      // no second install's container under the same shared root is reachable
+      // from this app's Settings list either. The dialog has already shown the
+      // dirtiness reason and taken explicit confirmation; this is the one
+      // sanctioned rm -rf in the app.
       const target = canonicalizeWorktreePath(path);
-      if (!isInsideWorktreeHome(home, target) || samePathAs(home, target)) {
-        return { ok: false, error: "Path is outside the worktree home" };
+      if (!isOwnedWorktreePath(ownedContainers(db, worktreeHomeDir()), target)) {
+        return { ok: false, error: "Path is not inside this workspace's worktree folder" };
       }
       // Re-verify RIGHT before the irreversible delete — the Settings report is
       // a snapshot that can have gone stale since it was shown.
@@ -898,7 +940,7 @@ export function registerDataIpcHandlers(
         case "no-worktree":
           return { ok: false, error: "This ticket has no worktree." };
         case "missing-on-disk":
-          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
           return { ok: true, status: read.status };
       }
@@ -912,7 +954,7 @@ export function registerDataIpcHandlers(
         case "no-worktree":
           return { ok: false, error: "This ticket has no worktree." };
         case "missing-on-disk":
-          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "diff-error":
           return { ok: false, error: read.error };
         case "ok":
@@ -933,7 +975,7 @@ export function registerDataIpcHandlers(
         case "no-worktree":
           return { ok: false, error: "This ticket has no worktree." };
         case "missing-on-disk":
-          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "change-set-error":
           return { ok: false, error: read.error };
         case "ok":
@@ -956,7 +998,7 @@ export function registerDataIpcHandlers(
         case "no-worktree":
           return { ok: false, error: "This ticket has no worktree." };
         case "missing-on-disk":
-          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "base-read-error":
           return { ok: false, error: read.error };
         case "ok": {
@@ -976,7 +1018,7 @@ export function registerDataIpcHandlers(
         case "no-worktree":
           return { ok: false, error: "This ticket has no worktree." };
         case "missing-on-disk":
-          return { ok: false, error: "This ticket's worktree directory is missing on disk." };
+          return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
           return changeWatchManager.watch(sender, input.ticketId, status.worktreePath);
       }

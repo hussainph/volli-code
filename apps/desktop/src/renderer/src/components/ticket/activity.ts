@@ -215,6 +215,13 @@ export function describeEvent(payload: TicketEventPayload): string | null {
     }
     case "worktree_committed":
       return "committed remaining work";
+    // VC-113: the reclaim says what it took AND what it kept, in one line. A
+    // worktree that disappears with no account of itself is indistinguishable
+    // from work going missing, which is the whole reason this event exists.
+    case "worktree_reclaimed":
+      return payload.branch === null
+        ? `removed the worktree folder after ${payload.daysInDone} days in Done`
+        : `removed the worktree folder after ${payload.daysInDone} days in Done (branch ${payload.branch} kept)`;
     case "pr_opened":
       return "opened a draft pull request";
     case "pr_merged":

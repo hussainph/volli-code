@@ -398,10 +398,14 @@ export interface VolliDataIpcContract {
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
-  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` has no channel
-  // on purpose — it only ever runs implicitly inside terminal-create (§1).
+  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` runs implicitly
+  // inside terminal-create (§1) and on a Session boot; `worktree-recreate`
+  // below is its ONE explicit door, for putting back a checkout that something
+  // outside the app deleted (VC-113).
   /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
   "volli:worktree-remove": { args: [input: WorktreeRemoveInput]; result: WorktreeRemoveResult };
+  /** Re-materializes a ticket's worktree on its existing branch after the directory went missing. */
+  "volli:worktree-recreate": { args: [input: TicketIdInput]; result: WorktreeRecreateResult };
   /** A project's local branch names, for the base-branch picker. */
   "volli:worktree-branches": { args: [input: ProjectIdInput]; result: WorktreeBranchesResult };
   /**
@@ -1660,22 +1664,57 @@ export interface DirtyWorktreeOrphan {
 }
 
 /**
- * A `volli:worktree-orphans` sweep report: metadata pruned per project, clean
- * orphan dirs auto-removed (branches retained), and dirty orphans left in
- * place for the user (§7 — never auto-removed).
+ * One orphan the sweep DID delete (VC-113). It names the branch the deletion
+ * kept, so the Settings list can say what was taken and what survived it — a
+ * removal nobody can audit is indistinguishable from work going missing.
+ */
+export interface RemovedWorktreeOrphan {
+  path: string;
+  projectId?: string;
+  /** The branch the directory was on; retained in git, so nothing committed is lost. */
+  branch: string | null;
+  /** Epoch ms of the last thing that touched it (dir mtime or branch tip). */
+  lastTouchedAt: number | null;
+}
+
+/**
+ * One clean orphan the sweep SPARED because it is still inside the retention
+ * window (VC-113). `removableAt` is when it becomes eligible, so the list can
+ * say "in 9 days" instead of leaving the user to guess whether it is safe.
+ */
+export interface KeptWorktreeOrphan {
+  path: string;
+  projectId?: string;
+  branch: string | null;
+  lastTouchedAt: number | null;
+  removableAt: number | null;
+}
+
+/**
+ * A `volli:worktree-orphans` sweep report: metadata pruned per project, stale
+ * clean orphan dirs auto-removed (branches retained), clean orphans kept for
+ * now, and dirty orphans left in place for the user (§7 — never auto-removed).
  */
 export type WorktreeOrphansResult = Result<{
   pruned: string[];
-  removedClean: string[];
+  removedClean: RemovedWorktreeOrphan[];
+  keptRecent: KeptWorktreeOrphan[];
   dirty: DirtyWorktreeOrphan[];
 }>;
 
 /**
  * Ack for a `volli:worktree-orphan-delete` — the Settings list's explicit,
  * user-confirmed deletion of a dirty orphan dir. Main re-validates the path
- * lives inside the app-owned worktree home before touching anything.
+ * lives inside a container this database owns before touching anything.
  */
 export type WorktreeOrphanDeleteResult = Result;
+
+/**
+ * A `volli:worktree-recreate` ack (VC-113): the path the checkout was put back
+ * at. The branch is unchanged — recreating is a re-materialization of the same
+ * identity, never a new one.
+ */
+export type WorktreeRecreateResult = Result<{ worktreePath: string }>;
 
 // ---- Done flow (docs/plans/done-flow.md) -----------------------------------
 
