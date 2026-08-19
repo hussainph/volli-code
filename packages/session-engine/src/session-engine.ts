@@ -13,6 +13,7 @@ import type {
   CommandReceiptResult,
   GetSessionQuery,
   ListSessionsQuery,
+  ListSessionStartsQuery,
   ListLatestTicketSignalsQuery,
   ListSessionEventsQuery,
   Session,
@@ -107,6 +108,12 @@ export interface SessionEngine {
   getBaseSession(query: GetSessionQuery): Promise<Session | null>;
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
+  /**
+   * When Sessions were started, across every project — the practice chart's
+   * whole input. Stamps rather than Sessions, so a 26-week window costs one
+   * indexed read and no folds.
+   */
+  listSessionStarts(query: ListSessionStartsQuery): Promise<readonly number[]>;
   listLatestTicketSignals(
     query: ListLatestTicketSignalsQuery,
   ): Promise<readonly LatestSessionSignal[]>;
@@ -553,6 +560,10 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async countSessions(query) {
       return ports.ledger.transaction((transaction) => transaction.countSessions(query));
+    },
+
+    async listSessionStarts(query) {
+      return ports.ledger.transaction((transaction) => transaction.listSessionStarts(query));
     },
 
     async listLatestTicketSignals(query) {

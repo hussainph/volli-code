@@ -103,7 +103,16 @@ export default defineConfig(({ mode }) => ({
         "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
         "src/components/board/board-session-activity.ts",
+        // What the board's header says now that it no longer says its own name
+        // (VC-55): the count that qualifies itself under a filter, and the live
+        // pair that deliberately does not.
+        "src/components/board/board-summary.ts",
         "src/components/chat/chat-plane-model.ts",
+        // Which drawing an empty chat may offer, per scope (VC-55). A pure
+        // `.ts` beside the views precisely so the gate can reach it: the menu
+        // a scope offers IS the identity signal, so a scope quietly gaining an
+        // option it cannot fill is the failure worth a test.
+        "src/components/chat/empty-visual.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
@@ -113,6 +122,8 @@ export default defineConfig(({ mode }) => ({
         // highest correctness risk, so it is a pure module precisely so the
         // gate can reach it.
         "src/components/home/home-tabs.ts",
+        // Home's rail pages and their persisted-value sanitizer (VC-55).
+        "src/components/home/home-rail-model.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -146,6 +157,10 @@ export default defineConfig(({ mode }) => ({
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
+        // Which rail ⌥⌘B is talking about (VC-55) — the same chrome-predicate
+        // shape as its two neighbours here, and gated for the same reason: it
+        // decides whether a keystroke may write a PERSISTED preference.
+        "src/lib/rail-toggle.ts",
         "src/lib/relative-time.ts",
         "src/lib/terminal-focus.ts",
         "src/lib/debounce.ts",

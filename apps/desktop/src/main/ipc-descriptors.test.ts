@@ -899,6 +899,59 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:session-starts", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-starts"];
+
+    it("accepts a finite epoch-ms window", () => {
+      expect(guard([{ sinceMs: 0 }])).toBe(true);
+      expect(guard([{ sinceMs: 1_767_225_600_000 }])).toBe(true);
+    });
+
+    it("rejects a window that is not a finite number", () => {
+      expect(guard([{ sinceMs: "yesterday" }])).toBe(false);
+      expect(guard([{ sinceMs: Number.NaN }])).toBe(false);
+      expect(guard([{ sinceMs: Number.POSITIVE_INFINITY }])).toBe(false);
+      expect(guard([{}])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session window");
+    });
+  });
+
+  describe("volli:venue-snapshot", () => {
+    const { guard, invalidError } = DATA_IPC["volli:venue-snapshot"];
+
+    it("accepts both scopes a Session can have", () => {
+      expect(guard([{ projectId: "p1", ticketId: null }])).toBe(true);
+      expect(guard([{ projectId: "p1", ticketId: "t1" }])).toBe(true);
+    });
+
+    it("rejects an omitted ticket scope — absent is not the same claim as null", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(false);
+      expect(guard([{ projectId: "p1", ticketId: 7 }])).toBe(false);
+    });
+
+    it("rejects a missing or non-string project", () => {
+      expect(guard([{ ticketId: null }])).toBe(false);
+      expect(guard([{ projectId: 1, ticketId: null }])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid venue");
+    });
+  });
+
   describe("volli:session-rename", () => {
     const { guard, invalidError } = DATA_IPC["volli:session-rename"];
 
@@ -1382,8 +1435,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 50 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(50);
+    it("covers all 52 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(52);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
       expect(DATA_CHANNELS).toContain("volli:blob-list");
@@ -1396,6 +1449,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-base-read");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-watch");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
+      expect(DATA_CHANNELS).toContain("volli:session-starts");
+      expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
     });
   });
 });

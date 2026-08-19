@@ -36,6 +36,9 @@ const SCRATCHES = [
   // 140-row fixture — the provider-shaped failure this check exists for is
   // exactly what a scratch borrowing app components can hit.
   "sidebar-nesting",
+  // Borrows Button/TabStrip/Tooltip and mounts its own Tooltip provider at the
+  // root — the provider-shaped failure this check exists for (VC-55).
+  "project-session-identity",
 ];
 
 /**

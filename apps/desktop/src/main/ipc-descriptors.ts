@@ -436,6 +436,26 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
   },
+  "volli:session-starts": {
+    guard: (args): args is IpcArgs<"volli:session-starts"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["sinceMs"] === "number" &&
+      Number.isFinite(args[0]["sinceMs"]),
+    invalidError: "Invalid session window",
+  },
+  "volli:venue-snapshot": {
+    guard: (args): args is IpcArgs<"volli:venue-snapshot"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      // `ticketId: null` is the Project-Session arm and must pass; `undefined`
+      // must not — a caller that forgot the key is asking a different question
+      // from one that said "no ticket".
+      return input["ticketId"] === null || typeof input["ticketId"] === "string";
+    },
+    invalidError: "Invalid venue",
+  },
   "volli:session-rename": {
     guard: (args): args is IpcArgs<"volli:session-rename"> => {
       if (args.length !== 1) return false;

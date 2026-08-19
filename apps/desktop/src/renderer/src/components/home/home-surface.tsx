@@ -24,6 +24,11 @@
  *   Board      | set          | TicketDetail, full-bleed, NO Home strip
  *   a Session  | either       | Home strip + that Session's plane
  *
+ * A Home SESSION additionally gets the right rail (VC-55) — the ticket
+ * workspace's panel at this scope, on the same ⌥⌘B and the same persisted
+ * collapse. The board has none: a rail about where this Session runs, over a
+ * board, would be about nothing.
+ *
  * A ticket workspace TAKES HOME OVER rather than nesting under its strip. The
  * alternative puts two tab strips on one screen, which is the very confusion
  * this ticket exists to end. What is deliberately given up is the nav item as a
@@ -51,6 +56,7 @@ import type { SkillReference } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { HOME_BOARD_TAB, HomeTabStrip, type HomeTabDescriptor } from "./home-tab-strip";
+import { HomeRail } from "./home-rail";
 import { isHomeBoardTab, resolveHomeTabs } from "./home-tabs";
 import { Board } from "@renderer/components/board/board";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
@@ -59,6 +65,7 @@ import {
   startProjectChat,
   startProjectTerminal,
 } from "@renderer/components/sessions/session-create";
+import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import {
   chatTabId,
@@ -206,6 +213,18 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const zen = useUiStore((state) => state.terminalFocusTarget !== null);
   const stripVisible = visible && selected !== null && !ticketTakesOver && !zen;
 
+  // ── The rail ─────────────────────────────────────────────────────────────
+  // Home's own details panel (VC-55), on the SAME persisted collapse the ticket
+  // workspace's uses — one ⌥⌘B preference, honoured by both, because they are
+  // one object at two scopes and a reader who hides one has said what they
+  // want. It belongs to a SESSION, so the Board tab has none: the board is not
+  // a Session, and a rail about "where this Session runs" over a board would be
+  // about nothing.
+  const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const railWidth = useUiStore((state) => state.railWidth);
+  const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
+  const railVisible = stripVisible && !boardTabActive && !railCollapsed;
+
   // ── Starting a Session ───────────────────────────────────────────────────
   const startingTerminal = useSessionsStore((state) =>
     selectedId === null ? false : (state.starting[selectedId] ?? false),
@@ -292,13 +311,34 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           onNewChat={() => void startProjectChat(selectedId)}
           onNewChatWithSkill={(name) => void startProjectChat(selectedId, [name])}
           onNewSession={() => void startProjectTerminal(selectedId)}
+          railCollapsed={railCollapsed}
+          railTogglable={!boardTabActive}
+          onToggleRail={toggleRailCollapsed}
         />
       ) : null}
 
       {/* Always mounted, panes-only: it owns every live terminal in the app, so
           it is never unmounted for a nav, project or tab change. Visible only
           when a Home SESSION tab is in front — the board covers the same box. */}
-      <SessionsLayer visible={visible && !boardTabActive} activeTabId={activeTabId} />
+      <SessionsLayer
+        visible={visible && !boardTabActive}
+        activeTabId={activeTabId}
+        rail={
+          railVisible && selectedId !== null ? (
+            // Resizable, on the same grip and the same persisted width the
+            // ticket rail uses — the two are one panel at two scopes, so a
+            // reader who sizes one has sized both. `relative` makes the aside
+            // the grip's positioning context.
+            <aside
+              className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+              style={{ width: railWidth }}
+            >
+              <RailResizeHandle />
+              <HomeRail projectId={selectedId} activeTabId={activeTabId} />
+            </aside>
+          ) : null
+        }
+      />
 
       {visible && selected !== null && boardTabActive ? (
         ticket !== undefined ? (
@@ -371,6 +411,9 @@ function HomeTabs({
   onNewSession,
   onNewChat,
   onNewChatWithSkill,
+  railCollapsed,
+  railTogglable,
+  onToggleRail,
 }: {
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
@@ -383,6 +426,10 @@ function HomeTabs({
   onNewSession(): void;
   onNewChat(): void;
   onNewChatWithSkill(name: string): void;
+  /** The rail's collapse state and its corner control — see `home-rail.tsx`. */
+  railCollapsed: boolean;
+  railTogglable: boolean;
+  onToggleRail(): void;
 }) {
   const chatTitles = useChatSessionsStore(
     useShallow((state) =>
@@ -421,6 +468,9 @@ function HomeTabs({
       onNewSession={onNewSession}
       onNewChat={onNewChat}
       onNewChatWithSkill={onNewChatWithSkill}
+      railCollapsed={railCollapsed}
+      railTogglable={railTogglable}
+      onToggleRail={onToggleRail}
     />
   );
 }

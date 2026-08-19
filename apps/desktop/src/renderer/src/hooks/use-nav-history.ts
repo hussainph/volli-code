@@ -44,6 +44,7 @@ function toNavKeyEvent(event: KeyboardEvent): NavKeyEvent {
     repeat: event.repeat,
   };
 }
+import { railToggleTargetForChrome } from "@renderer/lib/rail-toggle";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
@@ -74,11 +75,29 @@ function currentSnapshot(): NavSnapshot {
   };
 }
 
-/** Whether a ticket is open in the selected project — the details rail's own condition. */
-function hasOpenTicket(): boolean {
+/**
+ * Whether a rail is on screen for ⌥⌘B to collapse — the ticket workspace's or
+ * Home's own (VC-55).
+ *
+ * The decision itself is pure and lives in `lib/rail-toggle.ts` with this
+ * renderer's other chrome predicates; this is only the store read that feeds
+ * it. WHICH rail it is does not matter here — both honour one persisted
+ * `railCollapsed`, because they are one panel at two scopes.
+ */
+function hasRailOnScreen(): boolean {
   const projectId = useProjectsStore.getState().selectedProjectId;
-  if (projectId === null) return false;
-  return useWorkspaceStore.getState().byProject[projectId]?.openTicketId != null;
+  const workspace =
+    projectId === null ? undefined : useWorkspaceStore.getState().byProject[projectId];
+  return (
+    railToggleTargetForChrome({
+      selectedProjectId: projectId,
+      nav: workspace?.nav ?? DEFAULT_WORKSPACE_UI.nav,
+      homeActiveTab: workspace?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+      settingsOpen: useUiStore.getState().settingsOpen,
+      openTicketId: workspace?.openTicketId ?? DEFAULT_WORKSPACE_UI.openTicketId,
+      terminalFocusActive: useUiStore.getState().terminalFocusTarget !== null,
+    }) !== null
+  );
 }
 
 /** Record the live location as an organic navigation, unless mid-apply. */
@@ -148,10 +167,10 @@ export function navForward(): void {
  * navigation via store subscriptions, and binds the nav shortcuts:
  *   - ⌘[ / ⌘] → back / forward, suppressed inside inputs / Monaco (where
  *     ⌘[ means outdent).
- *   - ⌥⌘B → toggle the ticket-detail right rail, and only while a ticket is
- *     open. Bound in the CAPTURE phase and stops propagation so it preempts the
- *     left-sidebar ⌘B handler in ui/sidebar.tsx (a plain window listener we
- *     don't own).
+ *   - ⌥⌘B → toggle the right rail — the ticket workspace's or Home's, whichever
+ *     is on screen — and only while one is. Bound in the CAPTURE phase and stops
+ *     propagation so it preempts the left-sidebar ⌘B handler in ui/sidebar.tsx
+ *     (a plain window listener we don't own).
  */
 export function useNavHistory(): void {
   React.useEffect(() => {
@@ -191,12 +210,12 @@ export function useNavHistory(): void {
       if (!isRailToggleKeyEvent(toNavKeyEvent(event))) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      // The details rail exists only around an open ticket, and `railCollapsed`
-      // is persisted — so an ungated shortcut let a keystroke on the board flip
-      // a preference with nothing on screen to show for it, and the next ticket
-      // you opened arrived with its rail already gone. Same condition the
-      // chrome-band toggle uses to decide whether to render at all.
-      if (!hasOpenTicket()) return;
+      // `railCollapsed` is persisted and two surfaces honour it, so an ungated
+      // shortcut let a keystroke on the board flip a preference with nothing on
+      // screen to show for it — and the next surface you opened arrived with
+      // its rail already gone. Same condition each strip's corner control uses
+      // to decide whether to render at all.
+      if (!hasRailOnScreen()) return;
       useUiStore.getState().toggleRailCollapsed();
     };
     window.addEventListener("keydown", onKeyDownCapture, true);

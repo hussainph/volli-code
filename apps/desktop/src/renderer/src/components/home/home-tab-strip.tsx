@@ -5,6 +5,7 @@ import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
@@ -25,6 +26,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { Button } from "@renderer/components/ui/button";
 import { Tab, TabStrip, tabStopIndex, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 
@@ -68,6 +70,14 @@ interface HomeTabStripProps {
   onNewChatWithSkill?(name: string): void;
   /** A Session of either kind is already booting. */
   creating: boolean;
+  /** Whether Home's details rail is collapsed — the corner control's state. */
+  railCollapsed: boolean;
+  /**
+   * Whether there is a rail to talk about at all. The Board tab has none: a
+   * rail about the Session in front, over a board, would be about nothing.
+   */
+  railTogglable: boolean;
+  onToggleRail(): void;
 }
 
 /**
@@ -102,6 +112,9 @@ export function HomeTabStrip({
   skills,
   onNewChatWithSkill,
   creating,
+  railCollapsed,
+  railTogglable,
+  onToggleRail,
 }: HomeTabStripProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const stop = tabStopIndex(
@@ -114,21 +127,45 @@ export function HomeTabStrip({
       variant="folder"
       label="Home tabs"
       actions={
-        // The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
-        // (`lib/new-session-shortcut.ts`), and on Home that is this project's
-        // ticketless Sessions — exactly what this control mints, from the Board
-        // tab as well as from a Session tab. `align="end"` so the menu hangs
-        // back into the window rather than off its edge.
-        <NewSessionControl
-          disabled={creating}
-          placement="strip"
-          align="end"
-          shortcuts
-          skills={skills}
-          onNewChat={onNewChat}
-          onNewChatWithSkill={onNewChatWithSkill}
-          onNewTerminal={onNewSession}
-        />
+        <>
+          {/* The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
+              (`lib/new-session-shortcut.ts`), and on Home that is this project's
+              ticketless Sessions — exactly what this control mints, from the Board
+              tab as well as from a Session tab. `align="end"` so the menu hangs
+              back into the window rather than off its edge. */}
+          <div className="flex items-center">
+            <NewSessionControl
+              disabled={creating}
+              placement="strip"
+              align="end"
+              shortcuts
+              skills={skills}
+              onNewChat={onNewChat}
+              onNewChatWithSkill={onNewChatWithSkill}
+              onNewTerminal={onNewSession}
+            />
+          </div>
+          {/* The rail's collapse control, in the same corner the ticket strip
+              puts it — same glyph, same chord, same full-height rectangular
+              hover, because it is the same control one scope up. It is ABSENT
+              on the Board tab rather than disabled: the strip's right corner
+              sits over the box the rail would occupy, and on the board there is
+              no such box. */}
+          {railTogglable ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="ml-1 h-full rounded-none"
+              onClick={onToggleRail}
+              aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
+              title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
+            >
+              {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
+                  RIGHT panel (VS Code's secondary-sidebar convention). */}
+              <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
+            </Button>
+          ) : null}
+        </>
       }
     >
       {tabs.map((descriptor, index) => {

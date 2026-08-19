@@ -112,6 +112,7 @@ import type {
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
+  SessionStartsResult,
   TerminalOverlayWriteResult,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -141,6 +142,7 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
+  VenueSnapshotResult,
   WorktreeBaseReadResult,
   WorktreeBranchesResult,
   WorktreeChangeSetResult,
@@ -408,6 +410,13 @@ const api = {
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
     /**
+     * When Sessions were started, across every project, from `sinceMs` onward
+     * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count
+     * per day needs no titles and no histories.
+     */
+    starts: (sinceMs: number): Promise<SessionStartsResult> =>
+      invoke("volli:session-starts", { sinceMs }),
+    /**
      * Subscribes to backward-move interrupt announcements (issue #78, CONCEPT
      * #20): fired only when a ticket move out of the active columns actually
      * Esc'd live agent sessions — the renderer toasts it, never silently.
@@ -668,6 +677,16 @@ const api = {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
+  },
+  /**
+   * The venue a Session runs in, measured (VC-55) — its own door rather than a
+   * `worktree` verb, because the question is not about a worktree: a Project
+   * Session's venue is the project's main checkout, and a ticket's may be too.
+   */
+  venue: {
+    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Project Session. */
+    snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
+      invoke("volli:venue-snapshot", { projectId, ticketId }),
   },
   worktree: {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */

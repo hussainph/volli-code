@@ -61,6 +61,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
+  VenueSnapshot,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -208,6 +209,22 @@ export interface BlobLinkDraftsInput {
 export interface SessionRenameInput {
   sessionId: string;
   title: string;
+}
+
+/** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
+export interface SessionStartsInput {
+  sinceMs: number;
+}
+
+/**
+ * Whose venue to measure. The pair is the Session's own scope, not a path — a
+ * renderer never names a directory main will run git in; main resolves it from
+ * its own rows, by the rule the Session runtime binds a directory with.
+ */
+export interface VenueSnapshotInput {
+  projectId: string;
+  /** `null` for a Project Session, which runs in the project's main checkout. */
+  ticketId: string | null;
 }
 
 export interface LabelSetColorInput {
@@ -395,6 +412,19 @@ export interface VolliDataIpcContract {
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  /**
+   * When Sessions were started, across EVERY project, from `sinceMs` onward
+   * (VC-55). Stamps only: the Home empty chat draws a count per day, and
+   * `session-list` would fold every Session's whole history to answer it.
+   */
+  "volli:session-starts": { args: [input: SessionStartsInput]; result: SessionStartsResult };
+  /**
+   * The venue a Session of this scope runs in, measured (VC-55): the checkout,
+   * its branch, the four-state file partition, and the lines moved against the
+   * base. `ticketId: null` is a Project Session, which stands in the project's
+   * main checkout.
+   */
+  "volli:venue-snapshot": { args: [input: VenueSnapshotInput]; result: VenueSnapshotResult };
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
@@ -1575,6 +1605,12 @@ export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
+
+/** Session creation stamps in the requested window, ascending — every project's. */
+export type SessionStartsResult = Result<{ startedAt: number[] }>;
+
+/** One venue reading (`venue-snapshot`); the error arm carries git's own message. */
+export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
 
 // ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 

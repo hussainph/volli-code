@@ -42,6 +42,17 @@ interface SessionsLayerProps {
    * that module's doc.
    */
   activeTabId: string;
+  /**
+   * Home's right rail, or `null` when it is collapsed (VC-55).
+   *
+   * A NODE rather than a decision: whether Home shows a rail is Home's call and
+   * lives in `home-surface.tsx` with the rest of that composition, but the BOX
+   * it stands in is this layer's — the panes are the row's other half, and a
+   * rail composed one level up would either wrap this layer (hiding the ticket
+   * terminal overlay it also hosts) or float over the panes it is meant to
+   * narrow. Same seam the ticket rail's own navigators arrive through.
+   */
+  rail?: React.ReactNode;
 }
 
 /**
@@ -56,9 +67,10 @@ interface SessionsLayerProps {
  * and the ⌘T binding are all mounted here and nowhere else.
  *
  * Two regions: the Project Session planes (split trees plus whichever chat is
- * in front, hidden with `visible`), and the resident
- * {@link TicketTerminalOverlay} (positioned over the ticket detail's plane when
- * a ticket session tab is active). Both read the one unified store.
+ * in front, hidden with `visible`) beside Home's own rail when the composition
+ * one level up hands one down, and the resident {@link TicketTerminalOverlay}
+ * (positioned over the ticket detail's plane when a ticket session tab is
+ * active). Both read the one unified store.
  *
  * THE TAB STRIP used to live inside this file's `hidden` wrapper. It moved to
  * `home-surface.tsx` in VC-54 for one reason: Home's strip has to stay on
@@ -72,7 +84,7 @@ interface SessionsLayerProps {
  * empty state (`board/board-empty.tsx`) — removing the Sessions page removed
  * the app's only proactive auth surface, and VC-52 shipped deliberately silent.
  */
-export function SessionsLayer({ visible, activeTabId }: SessionsLayerProps) {
+export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps) {
   const byOwner = useSessionsStore((state) => state.byOwner);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const setSplitRatio = useSessionsStore((state) => state.setSplitRatio);
@@ -282,10 +294,15 @@ export function SessionsLayer({ visible, activeTabId }: SessionsLayerProps) {
 
   return (
     <>
-      {/* The Project Session planes — flow layout, hidden (not unmounted) when
-          the Board tab or another page is in front. */}
-      <div className={cn("flex min-h-0 flex-1 flex-col bg-background", !visible && "hidden")}>
-        <div className="relative min-h-0 flex-1" onKeyDownCapture={handleTerminalShortcut}>
+      {/* The Project Session planes and, beside them, Home's rail — flow
+          layout, hidden (not unmounted) when the Board tab or another page is
+          in front. The row is the outer box so the rail narrows the planes
+          rather than covering them. */}
+      <div className={cn("flex min-h-0 flex-1", !visible && "hidden")}>
+        <div
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+          onKeyDownCapture={handleTerminalShortcut}
+        >
           {/* Keep-alive: render every project's Project-Session split tree; only
               the selected project's active tab is visible, the rest stay mounted. */}
           {Object.entries(byOwner).flatMap(([ownerId, container]) =>
@@ -332,11 +349,16 @@ export function SessionsLayer({ visible, activeTabId }: SessionsLayerProps) {
                 key={activeChatSessionId}
                 sessionId={activeChatSessionId}
                 projectId={selected.id}
+                // Ticketless by construction: this layer hosts the project's
+                // OWN Sessions, which is what makes their venue the main
+                // checkout.
+                ticketId={null}
                 onOpenFile={openProjectFile}
               />
             </div>
           )}
         </div>
+        {rail}
       </div>
 
       {/* Resident host for ticket-session terminals — positioned over the ticket

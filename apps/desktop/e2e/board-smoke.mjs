@@ -1101,10 +1101,12 @@ async function main() {
       18,
       'Plain "c" hotkey opens the New-ticket composer; typing a title + ⌘Enter creates VC-14 and closes it',
       async () => {
-        // Click neutral static text (the "Board" heading) so focus lands
-        // somewhere that is definitely not a text-entry target, matching how
-        // the hotkey is meant to fire "anywhere in the app".
-        await page.getByRole("heading", { name: "Board", exact: true }).click();
+        // Click the permanent Board tab so focus lands somewhere that is
+        // definitely not a text-entry target, matching how the hotkey is meant
+        // to fire "anywhere in the app". (It was the "Board" heading until that
+        // heading went sr-only — the tab says the word now, VC-55. Clicking the
+        // already-active tab changes nothing on screen.)
+        await page.getByRole("tab", { name: "Board", exact: true }).click();
         await page.keyboard.press("c");
         await sleep(400);
         const dialogOpenCount = await page.getByRole("dialog").count();
@@ -1266,6 +1268,8 @@ async function main() {
         const panel = await badPage
           .getByText("Volli couldn't load its data", { exact: true })
           .count();
+        // Still the heading, not the tab: this asserts the board did NOT
+        // render, and an `sr-only` h1 is in the DOM exactly when it did.
         const boardRendered = await badPage
           .getByRole("heading", { name: "Board", exact: true })
           .count();

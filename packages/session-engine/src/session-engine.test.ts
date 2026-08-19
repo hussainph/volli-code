@@ -879,6 +879,28 @@ describe("SessionEngine creation and explicit commands", () => {
     ]);
   });
 
+  it("lists Session start stamps from every project, ascending, from the window's edge", async () => {
+    const ledger = createInMemorySessionLedger();
+    let now = 10;
+    const plane = createSessionEngine({ ledger, clock: { now: () => now }, ids: ids() });
+    await plane.createSession(createRequest("command-starts-old"));
+    now = 20;
+    await plane.createSession({
+      ...createRequest("command-starts-other-project"),
+      projectId: "project-2",
+      ticketId: null,
+    });
+    now = 30;
+    await plane.createSession(createRequest("command-starts-recent"));
+
+    // Every project, because the chart this backs is about the person rather
+    // than about any one project.
+    await expect(plane.listSessionStarts({ sinceMs: 0 })).resolves.toEqual([10, 20, 30]);
+    // Inclusive lower bound, and nothing older comes with it.
+    await expect(plane.listSessionStarts({ sinceMs: 20 })).resolves.toEqual([20, 30]);
+    await expect(plane.listSessionStarts({ sinceMs: 31 })).resolves.toEqual([]);
+  });
+
   it("lists each ticket's latest signal in stable ticket order without projecting unsignaled Sessions", async () => {
     const { plane } = composition();
     const ticketBFirst = await plane.createSession({

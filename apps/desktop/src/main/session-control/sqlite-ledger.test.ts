@@ -80,6 +80,37 @@ describe("SqliteSessionLedger", () => {
     );
   });
 
+  it("reads Session start stamps across every project from the window's edge", async () => {
+    const { control, projectId } = setup();
+    const other = testProject({ id: "project-2", name: "Other", ticketPrefix: "OT" });
+    insertProject(ctx.db, other);
+    // The injected clock steps by one per id, so each create lands on its own
+    // stamp: 101, 102, 103 in creation order.
+    const first = await control.createSession({
+      commandId: "create-a",
+      projectId,
+      ticketId: null,
+      title: "One",
+      provenance,
+    });
+    const elsewhere = await control.createSession({
+      commandId: "create-b",
+      projectId: other.id,
+      ticketId: null,
+      title: "Two",
+      provenance,
+    });
+
+    const starts = await control.listSessionStarts({ sinceMs: 0 });
+    expect(starts).toEqual([first.session.createdAt, elsewhere.session.createdAt]);
+    await expect(
+      control.listSessionStarts({ sinceMs: elsewhere.session.createdAt }),
+    ).resolves.toEqual([elsewhere.session.createdAt]);
+    await expect(
+      control.listSessionStarts({ sinceMs: elsewhere.session.createdAt + 1 }),
+    ).resolves.toEqual([]);
+  });
+
   it("serializes async transactions and rolls a failed transaction back", async () => {
     const { ledger, control, projectId } = setup();
     const created = await control.createSession({

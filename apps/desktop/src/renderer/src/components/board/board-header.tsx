@@ -13,10 +13,13 @@ import {
 } from "@volli/shared";
 
 import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
+import { boardSummary, type BoardSummaryInput } from "@renderer/components/board/board-summary";
 import { FilterBar } from "@renderer/components/board/filter-bar";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { StatusDot } from "@renderer/components/ui/status-dot";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,10 +38,17 @@ import {
 
 interface BoardHeaderProps {
   projectId: string;
+  /** Tickets on screen now, and what the board holds behind the filter. */
   ticketCount: number;
   /** Unfiltered — passed through to the filter bar for facet options. */
   tickets: readonly Ticket[];
   filter: TicketFilter;
+  /**
+   * Which tickets have an agent on them, for the WHOLE board — the derivation
+   * the cards' own rings already read (`use-board-session-activity.ts`), handed
+   * down rather than subscribed again here.
+   */
+  activityByTicket: BoardSummaryInput["activityByTicket"];
 }
 
 /**
@@ -133,8 +143,21 @@ function ViewToggle({ projectId }: { projectId: string }) {
   );
 }
 
-/** Compact board page header: title · count · filter bar · ordering + view controls. */
-export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHeaderProps) {
+/**
+ * Compact board page header: what the board holds and what it is doing · filter
+ * bar · ordering + view controls.
+ *
+ * The title is `sr-only` (see the `titleHidden` note below), so the summary is
+ * what actually opens this row — see `board-summary.ts` for what it says and
+ * why the live half ignores the filter.
+ */
+export function BoardHeader({
+  projectId,
+  ticketCount,
+  tickets,
+  filter,
+  activityByTicket,
+}: BoardHeaderProps) {
   // The Archive dialog's one entry point is the button below, so its open
   // state lives here (not in the ui store — no hotkey or second surface needs
   // it, unlike the New-ticket dialog's app-wide "c" shortcut).
@@ -143,6 +166,10 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   return (
     <PageHeader
       title="Board"
+      // Named by the permanent tab directly above this row (VC-54), so the word
+      // stays in the outline and leaves the screen — the two are one object at
+      // one scope, and it only has one name.
+      titleHidden
       actions={
         <>
           <OrderingMenu projectId={projectId} />
@@ -176,8 +203,77 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
         </>
       }
     >
-      <Badge variant="count">{ticketCount}</Badge>
+      <BoardSummary
+        visible={ticketCount}
+        total={tickets.length}
+        activityByTicket={activityByTicket}
+      />
       <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
     </PageHeader>
+  );
+}
+
+/**
+ * The row's opening statement: how much is here, and how much of it is moving.
+ *
+ * The two halves are separated by the app's own middot rather than boxed apart:
+ * they are one reading of one board, and a second chip would read as a second
+ * object. Each half draws only when it has something to say — a board with
+ * nothing running says nothing about it, which is what makes the dots mean
+ * something when they do appear.
+ */
+function BoardSummary({
+  visible,
+  total,
+  activityByTicket,
+}: {
+  visible: number;
+  total: number;
+  activityByTicket: BoardSummaryInput["activityByTicket"];
+}) {
+  const summary = boardSummary({ visible, total, activityByTicket });
+  const live = summary.working + summary.waiting > 0;
+  if (summary.count === null && !live) return null;
+
+  return (
+    <span className="flex items-center gap-2">
+      {summary.count === null ? null : <Badge variant="count">{summary.count}</Badge>}
+      {live ? (
+        <span className="flex items-center gap-2 text-ui text-muted-foreground">
+          <span aria-hidden>·</span>
+          {/* Waiting leads working, the precedence every surface in the app
+              gives it: an agent that has stopped to ask something is the one
+              thing here a person can act on. */}
+          {summary.waiting > 0 ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex cursor-default items-center gap-1 tabular-nums">
+                  <StatusDot state="waiting" />
+                  {summary.waiting} needs you
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                {summary.waiting} {summary.waiting === 1 ? "ticket has" : "tickets have"} an agent
+                blocked on a person
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+          {summary.working > 0 ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex cursor-default items-center gap-1 tabular-nums">
+                  <StatusDot state="working" />
+                  {summary.working} working
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                {summary.working} {summary.working === 1 ? "ticket has" : "tickets have"} an agent
+                producing right now
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+        </span>
+      ) : null}
+    </span>
   );
 }

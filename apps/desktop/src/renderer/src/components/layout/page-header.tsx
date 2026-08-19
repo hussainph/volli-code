@@ -37,16 +37,25 @@ const TIERS = {
  * between the title and that cluster and wraps with the row. Board relies on
  * exactly that split — its filter chips wrap onto a second line without ever
  * dragging the ordering/view/new cluster off the right edge with them.
+ *
+ * `titleHidden` keeps that `<h1>` in the document and takes it off the screen,
+ * for the one case where the surface is ALREADY named where you are looking:
+ * the board, whose permanent tab says "Board" 60px above this row (VC-54/VC-55).
+ * Deleting the title instead would leave the page with no top at all, and
+ * printing it twice is the app saying the same word to itself.
  */
 export function PageHeader({
   title,
   description,
   actions,
   variant = "workbench",
+  titleHidden = false,
   className,
   children,
 }: {
   title: ReactNode;
+  /** Keep the title for the outline, off the screen — see the doc above. */
+  titleHidden?: boolean;
   /** One line under the title. */
   description?: ReactNode;
   /** The right-parked cluster. */
@@ -66,8 +75,8 @@ export function PageHeader({
         className,
       )}
     >
-      <div className={tier.identity}>
-        <h1 className={cn(tier.title, "font-semibold")}>{title}</h1>
+      <div className={titleHidden ? "contents" : tier.identity}>
+        <h1 className={titleHidden ? "sr-only" : cn(tier.title, "font-semibold")}>{title}</h1>
         {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {children}

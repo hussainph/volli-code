@@ -3,6 +3,7 @@ import type {
   CommandReceipt,
   ListSessionEventsQuery,
   ListLatestTicketSignalsQuery,
+  ListSessionStartsQuery,
   ListSessionsQuery,
   LatestSessionSignal,
   Session,
@@ -123,6 +124,26 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       )
       .get(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown;
     return readInteger(rowValue(row, "count", "session count"), "session count");
+  }
+
+  listSessionStarts(query: ListSessionStartsQuery): readonly number[] {
+    this.assertOpen();
+    // No project predicate, and no join: the practice chart counts Sessions
+    // across every project, and a count per day needs the stamp and nothing
+    // else. `sessions_project(project_id, created_at)` does not serve an
+    // unscoped range, so this is a scan of one integer column over a table with
+    // one row per Session ever started.
+    const rows = this.db
+      .prepare(
+        `SELECT created_at
+           FROM sessions
+          WHERE created_at >= @sinceMs
+          ORDER BY created_at ASC`,
+      )
+      .all(query) as unknown[];
+    return rows.map((row) =>
+      readInteger(rowValue(row, "created_at", "session start"), "session start"),
+    );
   }
 
   listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
