@@ -1,6 +1,6 @@
 {
   "name": "@volli/desktop",
-  "version": "0.1.0-canary.8",
+  "version": "0.1.0-canary.9",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.cjs",
