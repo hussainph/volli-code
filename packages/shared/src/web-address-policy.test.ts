@@ -66,9 +66,11 @@ describe("web address classification", () => {
     ["fd00:ec2::254", "unique-local"],
     ["ff02::1", "multicast"],
     ["2001:db8::1", "documentation"],
-    // 64:ff9b:1::/48 is local-use IPv4/IPv6 translation space. Its sibling
-    // 64:ff9b::/96 is globally reachable, so the third group is what separates
-    // a refusal from an ordinary public address.
+    // 64:ff9b:1::/48 is local-use IPv4/IPv6 translation space, refused whole
+    // because its embedded address only means anything inside one network. Its
+    // sibling 64:ff9b::/96 is globally *routable* but not therefore safe — see
+    // the translation cases below, where the address that matters is the IPv4
+    // one inside it.
     ["64:ff9b:1::1", "reserved"],
     ["64:ff9b:1:abcd::1", "reserved"],
     // `::/96` below the IPv4-compatible range: not loopback, not unspecified,
@@ -116,6 +118,50 @@ describe("web address classification", () => {
     ["::ffff:10.0.0.1", "private-use"],
   ])("applies the IPv4 policy through mapped form %s", (address, cls) => {
     expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
+  });
+
+  /**
+   * The two transition formats that carry an IPv4 destination inside an IPv6
+   * address, and the reason a prefix being globally routable is not the same
+   * claim as the address being safe to dial.
+   *
+   * On a network with a NAT64 gateway, `64:ff9b::` plus four octets is
+   * *translated* to those octets and delivered over IPv4; 6to4 does the same
+   * through a relay. So a name resolving to `64:ff9b::a9fe:a9fe` reaches
+   * 169.254.169.254 — the cloud metadata service — having passed a check that
+   * only read the prefix. Both are in the same IANA registry as every other
+   * case in this file, and both have to be unpacked rather than admitted.
+   */
+  it.each([
+    ["64:ff9b::7f00:1", "loopback", "NAT64 carrying 127.0.0.1"],
+    ["64:ff9b::a9fe:a9fe", "link-local", "NAT64 carrying the metadata address"],
+    ["64:ff9b::c0a8:1", "private-use", "NAT64 carrying 192.168.0.1"],
+    ["64:ff9b::a00:1", "private-use", "NAT64 carrying 10.0.0.1"],
+    ["2002:7f00:0001::", "loopback", "6to4 carrying 127.0.0.1"],
+    ["2002:a9fe:a9fe::", "link-local", "6to4 carrying the metadata address"],
+    ["2002:c0a8:0001::", "private-use", "6to4 carrying 192.168.0.1"],
+  ])("refuses %s as %s: %s", (address, cls) => {
+    expect(classifyWebAddress(address)).toMatchObject({ outcome: "refuse", class: cls });
+  });
+
+  /**
+   * The other half of that rule: unpacking the embedded address must not turn
+   * into refusing the prefix. A NAT64 or 6to4 address carrying a genuinely
+   * public IPv4 destination is a public destination.
+   */
+  it.each([
+    ["64:ff9b::5db8:d822", "NAT64 carrying 93.184.216.34"],
+    ["2002:5db8:d822::", "6to4 carrying 93.184.216.34"],
+    // The rest of 64:ff9b::/32 is neither the well-known /96 nor the local-use
+    // /48, so none of it carries an embedded address to unpack. One case per
+    // group that separates them, because the check reads all four and a test
+    // that only varies the first would leave the other three unexercised.
+    ["64:ff9b:2::1", "a 64:ff9b: address that is neither prefix"],
+    ["64:ff9b:0:1::1", "the same, differing in the fourth group"],
+    ["64:ff9b:0:0:1::1", "the same, differing in the fifth"],
+    ["64:ff9b::1:0:1", "the same, differing in the sixth"],
+  ])("admits %s: %s", (address) => {
+    expect(classifyWebAddress(address)).toEqual({ outcome: "public" });
   });
 
   /**

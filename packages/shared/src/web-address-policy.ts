@@ -154,6 +154,17 @@ function ipv6Groups(address: string): Ipv6Groups | undefined {
   return groups;
 }
 
+/**
+ * The IPv4 address two 16-bit groups spell.
+ *
+ * Shared by every format that embeds one — v4-mapped, v4-compatible, NAT64 and
+ * 6to4 — so there is one way to read those four octets and no chance of two
+ * call sites disagreeing about which half is which.
+ */
+function embeddedIpv4(high: number, low: number): Ipv4Octets {
+  return [(high >> 8) & 0xff, high & 0xff, (low >> 8) & 0xff, low & 0xff];
+}
+
 /** Classify eight expanded IPv6 groups against the IANA special-purpose registry. */
 function classifyIpv6(groups: Ipv6Groups): WebAddressVerdict {
   const [g0, g1] = groups;
@@ -163,12 +174,7 @@ function classifyIpv6(groups: Ipv6Groups): WebAddressVerdict {
   // and the deprecated compatible (`::a.b.c.d`) forms reach an IPv4 host, so
   // the IPv4 policy has to be the one that answers for them.
   if (leadingZero && (groups[5] === 0xffff || groups[5] === 0)) {
-    const embedded: Ipv4Octets = [
-      (groups[6] >> 8) & 0xff,
-      groups[6] & 0xff,
-      (groups[7] >> 8) & 0xff,
-      groups[7] & 0xff,
-    ];
+    const embedded = embeddedIpv4(groups[6], groups[7]);
     const allZero = groups.every((group) => group === 0);
     if (allZero) return refuse("unspecified", ":: is not a routable destination.");
     if (groups[5] === 0 && groups[6] === 0 && groups[7] === 1)
@@ -184,8 +190,29 @@ function classifyIpv6(groups: Ipv6Groups): WebAddressVerdict {
     return refuse("unique-local", "fc00::/7 is a private network, and hosts cloud metadata.");
   if (g0 === 0x2001 && g1 === 0x0db8)
     return refuse("documentation", "2001:db8::/32 is reserved for documentation.");
-  if (g0 === 0x0064 && g1 === 0xff9b && groups[2] === 1)
-    return refuse("reserved", "64:ff9b:1::/48 is local-use translation space.");
+
+  // The two transition formats that carry an IPv4 destination inside an IPv6
+  // address. Both are in the same IANA registry as everything above, and both
+  // are reached by ordinary routing where they are deployed, so the address a
+  // socket ends up talking to is the embedded one — which means the IPv4 policy
+  // has to be what answers for them, exactly as it does for `::ffff:a.b.c.d`.
+  //
+  // The local-use translation prefix is refused outright rather than unpacked:
+  // 64:ff9b:1::/48 is reserved for a network's *own* translator, so its
+  // embedded address is meaningful only inside that network.
+  if (g0 === 0x0064 && g1 === 0xff9b) {
+    if (groups[2] === 1)
+      return refuse("reserved", "64:ff9b:1::/48 is local-use translation space.");
+    // 64:ff9b::/96 — the well-known prefix, whose last 32 bits are the IPv4
+    // address a NAT64 gateway will translate this to.
+    if (groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0) {
+      return classifyIpv4(embeddedIpv4(groups[6], groups[7]));
+    }
+  }
+  // 2002::/16 — 6to4, which carries its IPv4 address in the two groups after
+  // the prefix.
+  if (g0 === 0x2002) return classifyIpv4(embeddedIpv4(g1, groups[2]));
+
   return { outcome: "public" };
 }
 
