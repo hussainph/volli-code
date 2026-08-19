@@ -59,8 +59,8 @@ import {
   PromptInputTools,
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import {
-  COMPOSER_VERBS,
   expandCommandInvocation,
+  offeredComposerVerbs,
   visibleModels,
   type HiddenModelRef,
   type ComposerVerb,
@@ -143,6 +143,15 @@ export interface SessionComposerProps {
   promptTemplates?: readonly PromptTemplate[];
   /** The `/` picker's second supply: skills, delivered as message-scoped RESOURCE blocks. */
   skills?: readonly SkillReference[];
+  /**
+   * The verbs the `/` picker offers — the actions that run instead of
+   * sending. Caller's supply, because the offer rule reads Session facts this
+   * box does not have (whether a turn is live is here as `working`; whether
+   * there is a reply to copy is not). The fallback when absent is the same
+   * rule with no reply behind it, so a caller that passes nothing still gets
+   * an honest list rather than every verb regardless of state.
+   */
+  verbs?: readonly ComposerVerb[];
   /** `@` picker rows — the project file index, ranked by the shared grammar. */
   files?: readonly IndexedFile[];
   /** The `@` picker opened; a cache-gated index refresh is worth kicking. */
@@ -186,6 +195,15 @@ export interface SessionComposerProps {
    * than letting a picture be attached to a model that cannot see it.
    */
   imagesUnsupported?: boolean;
+  /**
+   * The model picker's open state, when a caller needs to open it from
+   * elsewhere — `/model`'s press is the one there is. Optional and
+   * uncontrolled by default, so a composer that never opens it by typing
+   * keeps its own state exactly as before.
+   */
+  modelPickerOpen?: boolean;
+  /** The other half of a controlled model picker — the popover's own close travels back through here. */
+  onModelPickerOpenChange?(open: boolean): void;
   className?: string;
 }
 
@@ -194,11 +212,54 @@ const NO_SKILLS: readonly SkillReference[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
 const NO_ATTACHMENTS: readonly BlobLinkView[] = [];
 /**
- * The two verb supplies, both module constants, because the picker's ranking
- * memo takes this as a dependency and a fresh array per render would rank the
- * whole file index again on every keystroke.
+ * The fallback verb supplies, precomputed for the four combinations of the two
+ * facts this box holds by itself.
+ *
+ * Module scope rather than a `useMemo`, for two independent reasons: the
+ * picker's ranking memo takes `verbs` as a dependency, so a fresh array per
+ * render would re-rank the whole file index on every keystroke; and this
+ * component's body must stay hook-free, because the tests call it directly to
+ * read the tree it returns (`SessionComposer.type`).
+ *
+ * Only what this box can see is claimed — `hasReply` and `hasProject` read
+ * false, so the honest consequence is a shorter list rather than a row that
+ * would refuse the press. The plane passes its own supply, where all four
+ * facts are real; this is for the caller that has no Session behind it.
  */
-const NO_VERBS: readonly ComposerVerb[] = [];
+const FALLBACK_VERBS = {
+  idle: {
+    withModels: offeredComposerVerbs({
+      working: false,
+      hasReply: false,
+      hasModels: true,
+      hasProject: false,
+    }),
+    none: offeredComposerVerbs({
+      working: false,
+      hasReply: false,
+      hasModels: false,
+      hasProject: false,
+    }),
+  },
+  working: {
+    withModels: offeredComposerVerbs({
+      working: true,
+      hasReply: false,
+      hasModels: true,
+      hasProject: false,
+    }),
+    none: offeredComposerVerbs({
+      working: true,
+      hasReply: false,
+      hasModels: false,
+      hasProject: false,
+    }),
+  },
+} as const;
+
+function fallbackVerbs(working: boolean, hasModels: boolean): readonly ComposerVerb[] {
+  return FALLBACK_VERBS[working ? "working" : "idle"][hasModels ? "withModels" : "none"];
+}
 
 /**
  * MEMOIZED, and this is the boundary that keeps typing off the stream's clock.
@@ -231,6 +292,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   onStop,
   promptTemplates = NO_TEMPLATES,
   skills = NO_SKILLS,
+  verbs,
   files = NO_FILES,
   onFilePickerOpen,
   interactionOpen = false,
@@ -240,6 +302,8 @@ export const SessionComposer = React.memo(function SessionComposer({
   onAttachFiles,
   onRemoveAttachment,
   imagesUnsupported = false,
+  modelPickerOpen,
+  onModelPickerOpenChange,
   className,
 }: SessionComposerProps) {
   // An attachment makes an otherwise-empty message a real one (VC-50): a
@@ -291,12 +355,13 @@ export const SessionComposer = React.memo(function SessionComposer({
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
       skills={skills}
-      // Offered only while the Session is idle. A verb RUNS — it is not queued
-      // and it does not join a turn in flight — so mid-turn it would be a row
-      // naming something the runtime is about to refuse. Typing it anyway
-      // still reaches the runtime and still gets that refusal, in words; what
-      // the list does not do is invite it.
-      verbs={working ? NO_VERBS : COMPOSER_VERBS}
+      // The caller's supply, or the same offer rule with no reply behind it.
+      // A verb RUNS — it is not queued and does not join a turn in flight —
+      // so the verbs a live turn would refuse are already out of whichever
+      // list this is, decided by `offeredComposerVerbs` beside the rule
+      // itself. Typing one anyway still reaches the press, which hands the
+      // words back in words, exactly as a runtime refusal does.
+      verbs={verbs ?? fallbackVerbs(working, models.length > 0)}
       files={files}
       onFilePickerOpen={onFilePickerOpen}
       textareaRef={textareaRef}
@@ -528,6 +593,8 @@ export const SessionComposer = React.memo(function SessionComposer({
               selectionProviderLabel={selectionProviderLabel}
               disabled={modelChoiceDisabled}
               onChange={onSelectionChange}
+              open={modelPickerOpen}
+              onOpenChange={onModelPickerOpenChange}
             />
             {/* A peer of the model pill, not a property of it. Effort is the
                 per-task decision and model is the set-and-forget one, so the
@@ -1114,14 +1181,29 @@ export function ModelPill({
   selectionProviderLabel,
   disabled,
   onChange,
+  open: openProp,
+  onOpenChange,
 }: {
   models: readonly ComposerModel[];
   selection: ComposerModelSelection;
   selectionProviderLabel?: string;
   disabled: boolean;
   onChange(next: ComposerModelSelection): void;
+  /** Controlled open, for the caller that opens this list by typing (`/model`). */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }) {
-  const [open, setOpen] = React.useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  // Controlled when `open` is present, uncontrolled otherwise — the ordinary
+  // Radix shape, so a caller that never types `/model` notices nothing. The
+  // internal state stays the uncontrolled half and is written either way:
+  // a popover that closes itself while controlled must not leave the local
+  // half stuck open for the next uncontrolled mount.
+  const setOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
+  const open = openProp ?? uncontrolledOpen;
   // First-appearance order: the catalog's own ordering is the harness's answer
   // to "which provider matters", and re-sorting it here would be our opinion.
   const providers = models.reduce<Array<{ id: string; label: string }>>((result, model) => {
