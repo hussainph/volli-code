@@ -73,6 +73,11 @@ const IGNORED_PACKAGES = new Set([
   // uses the binary rebuild:native already produced (npmRebuild: false, see
   // electron-builder.yml), never prebuild-install's fetch/build path.
   "prebuild-install",
+  // node-pty declares this as a regular dependency, but it is C++ headers for
+  // node-gyp: nothing under node-pty's lib/ (its runtime code) ever
+  // require()s it — it exists so `node-gyp rebuild` can compile the addon.
+  // The packaged app ships the binary rebuild:native already produced.
+  "node-addon-api",
 ]);
 
 if (!existsSync(TARGET_DIR) || !statSync(TARGET_DIR).isDirectory()) {
@@ -116,11 +121,25 @@ function stripComments(source) {
   );
 }
 
-const REQUIRE_CALL = /require\(\s*(['"])((?:\\.|(?!\1).)*)\1\s*\)/g;
+// Dynamic import() literals are load-bearing too: the chunks keep them as
+// real native imports (node-pty arrives via a lazy `import("node-pty")`), so
+// a package reached ONLY that way must still be in the shipped tree — and
+// must seed the transitive walk below like any require()d package. BARE
+// specifiers only: a relative dynamic import of an internal module comes out
+// of the CJS build as a require() (already scanned), while JSDoc type
+// annotations like `{import('./request').default}` — real text in bundled
+// node-fetch comments that the stripper cannot always win against — are
+// exactly relative-shaped. Bare-only keeps the signal without the lexer.
+const REQUIRE_CALL = /\brequire\(\s*(['"])((?:\\.|(?!\1).)*)\1\s*\)/g;
+const IMPORT_CALL = /\bimport\(\s*(['"])((?:\\.|(?!\1).)*)\1\s*\)/g;
 function extractRequireSpecifiers(source) {
   const specifiers = [];
-  for (const match of stripComments(source).matchAll(REQUIRE_CALL)) {
+  const stripped = stripComments(source);
+  for (const match of stripped.matchAll(REQUIRE_CALL)) {
     specifiers.push(match[2]);
+  }
+  for (const match of stripped.matchAll(IMPORT_CALL)) {
+    if (!match[2].startsWith(".")) specifiers.push(match[2]);
   }
   return specifiers;
 }
@@ -171,23 +190,25 @@ function resolveRelative(specifier, chunkDir) {
 // Locates a package's directory to read its own package.json even when the
 // package doesn't export "./package.json" (ERR_PACKAGE_PATH_NOT_EXPORTED) —
 // walk up from its resolved entry file to the nearest package.json instead.
-// Returns null (skip, not a violation) for anything require.resolve can't
-// find from apps/desktop at all. Two distinct reasons that happens: "electron"
-// is a devDependency and never a real production dependency of a kept
-// package, and pnpm's isolated node_modules means a package two or more
-// levels deep (e.g. jsdom's dependency whatwg-url's own dependency tr46) has
-// no path reachable from apps/desktop at all — only jsdom's own direct
-// dependencies are. Those deeper names still get asserted against the
-// whitelist the moment they show up in a resolvable parent's `dependencies`;
-// this only means the walk can't recurse past them to go one level deeper.
-function resolvePackageDir(packageName) {
+// Resolution starts FROM THE DEPENDENT PACKAGE'S OWN DIRECTORY (`fromDir`),
+// exactly like Node would at runtime: under pnpm's isolated node_modules a
+// transitive package (jsdom → @asamuzakjp/dom-selector → bidi-js) has no path
+// reachable from apps/desktop at all, only from its parent. The first version
+// of this script resolved everything from apps/desktop, so the walk stopped
+// one level deep — and bidi-js, missing from the whitelist, sailed through
+// while the packaged canary.7 died on it at boot. Returns null (skip, not a
+// violation) only for names Node itself couldn't resolve from the dependent —
+// "electron" being the standing example (a devDependency, provided by the
+// runtime).
+function resolvePackageDir(packageName, fromDir) {
+  const paths = [fromDir, DESKTOP_DIR];
   try {
-    return dirname(require.resolve(`${packageName}/package.json`, { paths: [DESKTOP_DIR] }));
+    return dirname(require.resolve(`${packageName}/package.json`, { paths }));
   } catch (err) {
     if (err?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") return null;
   }
   try {
-    let dir = dirname(require.resolve(packageName, { paths: [DESKTOP_DIR] }));
+    let dir = dirname(require.resolve(packageName, { paths }));
     while (true) {
       if (existsSync(join(dir, "package.json"))) return dir;
       const parent = dirname(dir);
@@ -248,10 +269,10 @@ for (const chunkFile of chunkFiles) {
 // css-tree had stayed an external require of jsdom instead of getting bundled,
 // this walk is what proves jsdom's dependency tree is fully whitelisted.
 const visited = new Set(directSeeds);
-const queue = [...directSeeds];
+const queue = [...directSeeds].map((name) => ({ name, fromDir: DESKTOP_DIR }));
 while (queue.length > 0) {
-  const packageName = queue.shift();
-  const packageDir = resolvePackageDir(packageName);
+  const { name: packageName, fromDir } = queue.shift();
+  const packageDir = resolvePackageDir(packageName, fromDir);
   if (!packageDir) continue;
 
   for (const depName of productionDependencyNames(packageDir)) {
@@ -264,7 +285,9 @@ while (queue.length > 0) {
     }
     visited.add(depName);
     externalPackages.add(depName);
-    queue.push(depName);
+    // The dep resolves from ITS parent's directory, not from apps/desktop —
+    // that chaining is what lets the walk cross pnpm's isolation boundary.
+    queue.push({ name: depName, fromDir: packageDir });
   }
 }
 
