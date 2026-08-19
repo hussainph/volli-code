@@ -18,6 +18,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   buildBoardSessionActivity,
   type BoardSessionActivity,
+  type TicketSessionActivity,
 } from "@renderer/components/board/board-session-activity";
 import { delayUntil } from "@renderer/lib/boundary-timer";
 import {
@@ -28,6 +29,31 @@ import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import type { SessionContainer } from "@renderer/stores/sessions";
 
 const EMPTY_ACTIVITY: BoardSessionActivity = { byTicket: {}, nextBoundaryAt: null };
+
+/**
+ * Whether two derived maps say the same thing about the same tickets.
+ *
+ * The values are the two words, so this is a complete comparison rather than a
+ * cheap approximation of one — there is nothing deeper for it to miss.
+ *
+ * It exists because `buildBoardSessionActivity` mints a fresh object every time
+ * it runs, and it runs on every input bump — and a busy terminal bumps its
+ * output stamp about once a second (`stores/sessions.ts`: "at most one
+ * `lastOutputAt` write per session per second") for the whole ten seconds of
+ * {@link WORKING_WINDOW_MS}. So a card that is simply STILL working produced
+ * ~10 map identities that each said what the last one said, and every one of
+ * them re-rendered the board. Holding the previous object when nothing moved
+ * turns "an agent is producing" from a render per second into a render per
+ * actual change of word.
+ */
+export function sameActivity(
+  previous: Readonly<Record<string, TicketSessionActivity>>,
+  next: Readonly<Record<string, TicketSessionActivity>>,
+): boolean {
+  const previousIds = Object.keys(previous);
+  if (previousIds.length !== Object.keys(next).length) return false;
+  return previousIds.every((ticketId) => previous[ticketId] === next[ticketId]);
+}
 
 /**
  * The output stamps THIS board's derivation can read, and no others.
@@ -112,5 +138,15 @@ export function useBoardSessionActivity(
     return () => window.clearTimeout(timer);
   }, [nextBoundaryAt]);
 
-  return activity.byTicket;
+  // The identity the board actually sees, held across every rebuild that
+  // changed nothing. The ref is a memo cache, not state — the same shape, and
+  // the same justification, as `previousSorted` in `board.tsx`: writing it
+  // during render is idempotent, and a value cached by a render React later
+  // discards is still key-for-key equal to what the next build would produce,
+  // so reuse can only ever hand back a correct map, never a stale one.
+  const stable = React.useRef(activity.byTicket);
+  if (!sameActivity(stable.current, activity.byTicket)) {
+    stable.current = activity.byTicket;
+  }
+  return stable.current;
 }

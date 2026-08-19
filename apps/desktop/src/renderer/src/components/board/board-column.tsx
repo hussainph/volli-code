@@ -5,7 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
-import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
+import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Badge } from "@renderer/components/ui/badge";
@@ -21,12 +21,6 @@ interface BoardColumnProps {
   /** The board's owning project's label rows — constant for the whole board tree. */
   projectLabels: readonly Label[];
   selectedId: string | null;
-  /**
-   * ticketId → what is running on it; absent means nothing is (VC-100). Passed
-   * down whole rather than per card so the board holds one derivation and one
-   * store subscription — the same reasoning as `projectLabels` above.
-   */
-  sessionActivity: Readonly<Record<string, TicketSessionActivity>>;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -44,13 +38,19 @@ export function BoardColumn({
   ticketPrefix,
   projectLabels,
   selectedId,
-  sessionActivity,
   onSelect,
   onOpen,
   composerInitiallyOpen,
   onComposerClose,
   animateEnter,
 }: BoardColumnProps) {
+  // ticketId → what is running on it; absent means nothing is (VC-100). Read
+  // from the board's single derivation rather than handed down as a prop: the
+  // provider hangs BELOW `Board`, so an output bump re-renders this column
+  // without ever touching the `DndContext` above it (session-activity-context.tsx).
+  // Each card still gets its own word as a plain string, so `TicketCard`'s memo
+  // keeps holding for every card whose word did not change.
+  const sessionActivity = useBoardSessionActivityMap();
   // The body is the column's droppable so cards can be dropped onto the empty
   // space below the list (or into a column emptied mid-drag).
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });

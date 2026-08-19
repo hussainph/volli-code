@@ -59,6 +59,7 @@ import { HOME_BOARD_TAB, HomeTabStrip, type HomeTabDescriptor } from "./home-tab
 import { HomeRail } from "./home-rail";
 import { isHomeBoardTab, resolveHomeTabs } from "./home-tabs";
 import { Board } from "@renderer/components/board/board";
+import { BoardBoundary } from "@renderer/components/board/board-boundary";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
 import {
@@ -353,7 +354,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             ticket={ticket}
           />
         ) : (
-          <Board projectId={selected.id} ticketPrefix={selected.ticketPrefix} />
+          // Contained: a board that faults mid-render costs the board and a
+          // retry, not the whole window. See board-boundary.tsx.
+          <BoardBoundary projectId={selected.id}>
+            <Board projectId={selected.id} ticketPrefix={selected.ticketPrefix} />
+          </BoardBoundary>
         )
       ) : null}
 
