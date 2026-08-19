@@ -185,12 +185,13 @@ function DoneTtlField() {
 
   return (
     <SettingsRow
-      label="Remove Done worktrees after"
+      label="Done worktree retention"
       htmlFor="done-ttl-days"
-      // Names what is taken and what survives, because the question this setting
-      // has to answer (VC-113) is "will I lose my work?". Same verb as the
-      // "Remove worktree" menu item: one name per act.
-      description="Volli removes the folder and keeps the branch, its commits, and the ticket. It never touches a ticket with an open PR."
+      // The one-line trust-boundary exception to "let controls talk" (VC-113):
+      // this setting now governs an automatic deletion, so the row states what
+      // is taken and what survives — the question a retention setting has to
+      // answer before anyone will trust it.
+      description="Volli removes the folder and keeps the branch, its commits, and the ticket."
     >
       <Input
         id="done-ttl-days"

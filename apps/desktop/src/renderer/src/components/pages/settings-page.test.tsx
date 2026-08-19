@@ -37,7 +37,7 @@ describe("SettingsPage (app-wide)", () => {
   it("shows the global retention window in the default General category", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
-    expect(html).toContain("Remove Done worktrees after");
+    expect(html).toContain("Done worktree retention");
     expect(html).toContain('id="done-ttl-days"');
     // VC-113: the number now governs a deletion, so the row states what the
     // deletion takes and what it leaves — the question a retention setting has
