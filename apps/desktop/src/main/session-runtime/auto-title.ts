@@ -29,7 +29,7 @@
  */
 import {
   AUTO_TITLE_SYSTEM_PROMPT,
-  autoTitleSubject,
+  autoTitlePrompt,
   errorMessage,
   resolveAutoTitleModel,
   resolveDefaultModel,
@@ -167,9 +167,10 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       raw = await options.completeUtility({
         model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel: "off" },
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
-        // Capped: a title is six words, and the opening decides them. A pasted
-        // file behind the question is billed input that buys nothing.
-        user: autoTitleSubject(request.firstMessage),
+        // Capped and delimited: a title is six words, and the opening decides
+        // them. A pasted file behind the question is billed input that buys
+        // nothing, and unbounded text is where instruction-shaped content hides.
+        user: autoTitlePrompt(request.firstMessage),
         signal,
       });
     } catch (failure) {
