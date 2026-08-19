@@ -984,6 +984,50 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:session-refine-title", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-refine-title"];
+
+    it("accepts a valid payload", () => {
+      expect(
+        guard([
+          { sessionId: "s1", firstMessage: "Fix the parser", heuristicTitle: "Fix the parser" },
+        ]),
+      ).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a non-string sessionId", () => {
+      expect(guard([{ sessionId: 1, firstMessage: "x", heuristicTitle: "x" }])).toBe(false);
+    });
+
+    it("rejects a non-string firstMessage", () => {
+      expect(guard([{ sessionId: "s1", firstMessage: 1, heuristicTitle: "x" }])).toBe(false);
+    });
+
+    it("rejects a blank firstMessage", () => {
+      expect(guard([{ sessionId: "s1", firstMessage: "  ", heuristicTitle: "x" }])).toBe(false);
+    });
+
+    it("rejects a non-string heuristicTitle", () => {
+      expect(guard([{ sessionId: "s1", firstMessage: "x", heuristicTitle: 1 }])).toBe(false);
+    });
+
+    it("rejects a blank heuristicTitle", () => {
+      expect(guard([{ sessionId: "s1", firstMessage: "x", heuristicTitle: "  " }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session title refinement request");
+    });
+  });
+
   describe("volli:label-set-color", () => {
     const { guard, invalidError } = DATA_IPC["volli:label-set-color"];
 
@@ -1435,8 +1479,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 53 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(53);
+    it("covers all 54 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(54);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
@@ -1446,6 +1490,7 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:ticket-move");
       expect(DATA_CHANNELS).toContain("volli:app-state-set");
       expect(DATA_CHANNELS).toContain("volli:retention-poll");
+      expect(DATA_CHANNELS).toContain("volli:session-refine-title");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-set");
       expect(DATA_CHANNELS).toContain("volli:worktree-base-read");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-watch");

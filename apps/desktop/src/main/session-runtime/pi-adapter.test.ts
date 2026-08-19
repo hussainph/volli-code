@@ -22,6 +22,7 @@ import {
   type RuntimeObservation,
   type SessionInteractionResolution,
   type SessionRuntimeSpec,
+  type UtilityCompletion,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -101,6 +102,8 @@ class FakeRuntime implements AgentRuntime {
   retries = 0;
   closes = 0;
   readonly compactions: Array<string | undefined> = [];
+  readonly utilityCompletions: UtilityCompletion[] = [];
+  readonly utilityReplies: string[] = [];
   readonly compactionOutcomes: CompactionRequestOutcome[] = [];
   compactionFailure: unknown = null;
   startFailure: unknown = null;
@@ -123,6 +126,11 @@ class FakeRuntime implements AgentRuntime {
   }): Promise<ModelAccessSnapshot> {
     this.modelAccessInputs.push(input);
     return { observedAt: 0, providers: [], models: [] };
+  }
+
+  async completeUtility(input: UtilityCompletion): Promise<string> {
+    this.utilityCompletions.push(input);
+    return this.utilityReplies.shift() ?? "utility answer";
   }
 
   async startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle> {

@@ -73,6 +73,10 @@ class SpecRecordingRuntime implements AgentRuntime {
     throw new Error("not used");
   }
 
+  async completeUtility(): Promise<never> {
+    throw new Error("not used");
+  }
+
   async startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle> {
     this.spec = spec;
     return {

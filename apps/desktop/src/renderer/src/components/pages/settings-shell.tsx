@@ -187,7 +187,8 @@ export function SettingsRow({
   testId,
   children,
 }: {
-  label: string;
+  /** The row's name; a node when the label carries its own affordance (a hover helper). */
+  label: ReactNode;
   description?: ReactNode;
   htmlFor?: string;
   align?: "center" | "start";

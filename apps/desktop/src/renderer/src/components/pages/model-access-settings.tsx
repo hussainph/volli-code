@@ -23,6 +23,7 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import * as React from "react";
 import {
   compactionReserveChoices,
@@ -54,15 +55,27 @@ import {
 } from "@renderer/components/ui/select";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { Switch } from "@renderer/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
-/** The rows of the Default models section, in resolution order. */
-const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string }[] = [
+/**
+ * The rows of the Default models section, in resolution order.
+ *
+ * `help` is the hover helper a row carries when its purpose is not obvious
+ * from its two-word label (VC-81 asked for one on the utility row): what the
+ * slot is FOR, so a person picking a model for it knows what the bill is
+ * for. The tooltip is a helper, not a tutorial — one thought, one hover.
+ */
+const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string; help?: string }[] = [
   { purpose: "global", label: "Project chats" },
   { purpose: "ticket", label: "Ticket Sessions" },
-  { purpose: "utility", label: "Utility" },
+  {
+    purpose: "utility",
+    label: "Utility",
+    help: "Background jobs that keep a Session healthy: auto-titling new chats and summarizing long conversations. An inexpensive model here keeps those calls cheap.",
+  },
 ];
 
 /** The Select value that says "no explicit choice — resolve the project default". */
@@ -210,11 +223,12 @@ export function ModelAccessSettings({
           </Button>
         }
       >
-        {PURPOSE_ROWS.map(({ purpose, label }) => (
+        {PURPOSE_ROWS.map(({ purpose, label, help }) => (
           <DefaultModelRow
             key={purpose}
             purpose={purpose}
             label={label}
+            help={help}
             selection={defaults[purpose]}
             models={models}
             offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
@@ -292,10 +306,15 @@ export function ModelAccessSettings({
  * than a blank: unset is a real, resolvable value, and a Select that shows
  * nothing when the purpose inherits would read as unconfigured — which is the
  * one thing it is not.
+ *
+ * A row with a `help` string carries it as a hover helper beside the label:
+ * an info glyph that reads the purpose aloud on hover, so the slot explains
+ * itself without a paragraph under the control (CLAUDE.md's copy rule).
  */
 function DefaultModelRow({
   purpose,
   label,
+  help,
   selection,
   models,
   offerable,
@@ -305,6 +324,7 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
+  help?: string;
   selection: ModelSelection | null;
   models: readonly ModelAccessModel[];
   offerable: readonly ModelAccessModel[];
@@ -326,7 +346,32 @@ function DefaultModelRow({
         : "";
 
   return (
-    <SettingsRow label={label} testId={`default-model-${purpose}`}>
+    <SettingsRow
+      label={
+        help === undefined ? (
+          label
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            {label}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={0}
+                  aria-label={help}
+                  className="inline-flex cursor-help text-muted-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring/45"
+                >
+                  <InfoIcon aria-hidden className="size-3.5" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-64">
+                {help}
+              </TooltipContent>
+            </Tooltip>
+          </span>
+        )
+      }
+      testId={`default-model-${purpose}`}
+    >
       <Select
         value={value}
         disabled={disabled}

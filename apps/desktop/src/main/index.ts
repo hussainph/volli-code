@@ -74,6 +74,7 @@ import {
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
+import { createAutoTitler } from "./session-runtime/auto-title";
 import {
   createSessions,
   StructuredSessionsError,
@@ -984,6 +985,54 @@ app.whenReady().then(async () => {
           createSession: sessions?.create,
           attachSession: sessions?.attach,
         });
+  /**
+   * Model-call titling (VC-81): the one main-side hook both doors feed.
+   *
+   * The model ladder is the owner's recorded chain — the explicit utility
+   * default, then the Session's own recorded model, then the Role's default
+   * — resolved here where the policy lives, never in the runtime. Absent
+   * with any of its three dependencies (the same rule as `sessions` above),
+   * which reads as pure heuristic titling: the shipped fallback.
+   */
+  const autoTitler =
+    sessionEngine !== null && sessionDb !== null && piRuntimeHost !== null
+      ? createAutoTitler({
+          readSession: async (sessionId) => {
+            const projection = await sessionEngine.getSession({ sessionId });
+            if (projection === null) return null;
+            return {
+              title: projection.session.title,
+              ticketId: projection.session.ticketId,
+              model: projection.modelSelection,
+            };
+          },
+          // Rung one is the explicit utility choice only — inheritance is
+          // what rung three states, and reading it here would shadow the
+          // Session's own model on every profile that never set one.
+          readUtilityDefault: () => readModelAccessDefaults(sessionDb).utility,
+          readRoleDefault: (role) =>
+            resolveDefaultModel(
+              readModelAccessDefaults(sessionDb),
+              role === "ticket" ? "ticket" : "global",
+            ),
+          inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          completeUtility: (input) => piRuntimeHost.completeUtility(input),
+          retitle: async (sessionId, title) => {
+            const submitted = await sessionEngine.submit({
+              commandId: randomUUID(),
+              sessionId,
+              intent: { kind: "session.retitle", title },
+              provenance: {
+                source: { kind: "system", id: "auto-title", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+            });
+            if (submitted.receipt?.status !== "completed") {
+              throw new Error("Session retitle was not completed");
+            }
+          },
+        })
+      : null;
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
   // database open recorded above, Node-ABI classification included). Left
@@ -1225,6 +1274,8 @@ app.whenReady().then(async () => {
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
+    // The renderer door of auto-titling (VC-81); absent with the runtime.
+    autoTitle: autoTitler === null ? undefined : (input) => void autoTitler.refine(input),
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
@@ -1846,6 +1897,12 @@ app.whenReady().then(async () => {
                   });
                 },
               }
+            : {}),
+          // The CLI door of auto-titling (VC-81): a kickoff-derived heuristic
+          // title gets one model refinement behind it. Absent with the
+          // runtime, which reads as pure heuristic titling.
+          ...(autoTitler !== null
+            ? { refineAutoTitle: (input) => void autoTitler.refine(input) }
             : {}),
           // The no-redirect rule (VC-13 decision 2): a start pushes a toast
           // notice; the toast's action is the only thing that ever opens the

@@ -109,6 +109,7 @@ import type {
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
+  SessionRefineTitleInput,
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
@@ -410,6 +411,15 @@ const api = {
     /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
+    /**
+     * Asks main to refine a just-written heuristic title with one model call
+     * (VC-81). Fire-and-forget: the promise is an acceptance ack, not the
+     * model's answer, and a rejection here never toasts (CLAUDE.md's toast
+     * rule is for failed mutations a person requested; this one is best
+     * effort and keeps the heuristic on failure).
+     */
+    refineTitle: (input: SessionRefineTitleInput): Promise<SessionRenameResult> =>
+      invoke("volli:session-refine-title", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count

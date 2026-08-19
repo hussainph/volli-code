@@ -211,6 +211,18 @@ export interface SessionRenameInput {
   title: string;
 }
 
+/**
+ * The renderer's auto-titling request (VC-81): the heuristic title it just
+ * wrote, plus the first user message a model may derive a sharper title from.
+ * Main owns the model call and the byte-identical guard; the renderer only
+ * names what it saw and moves on.
+ */
+export interface SessionRefineTitleInput {
+  sessionId: string;
+  firstMessage: string;
+  heuristicTitle: string;
+}
+
 /** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
 export interface SessionStartsInput {
   sinceMs: number;
@@ -412,6 +424,15 @@ export interface VolliDataIpcContract {
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  /**
+   * Requests one model-call title refinement behind a just-written heuristic
+   * title (VC-81). Fire-and-forget: the ack says main accepted the request,
+   * not that the model answered — failures keep the heuristic and log.
+   */
+  "volli:session-refine-title": {
+    args: [input: SessionRefineTitleInput];
+    result: SessionRenameResult;
+  };
   /**
    * When Sessions were started, across EVERY project, from `sinceMs` onward
    * (VC-55). Stamps only: the Home empty chat draws a count per day, and

@@ -469,6 +469,21 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session title",
   },
+  "volli:session-refine-title": {
+    guard: (args): args is IpcArgs<"volli:session-refine-title"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["sessionId"] === "string" &&
+        typeof input["firstMessage"] === "string" &&
+        input["firstMessage"].trim().length > 0 &&
+        typeof input["heuristicTitle"] === "string" &&
+        input["heuristicTitle"].trim().length > 0
+      );
+    },
+    invalidError: "Invalid session title refinement request",
+  },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {
       if (args.length !== 1) return false;

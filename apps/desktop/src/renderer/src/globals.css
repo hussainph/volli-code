@@ -607,6 +607,33 @@
   }
 }
 
+/* A tab label's title reveal (ui/title-reveal.tsx): one word's entrance when
+ * a landing auto-title replaces the heuristic one. Opacity and a 2px rise on
+ * the compositor, the strong ease-out token, `backwards` so a delayed word
+ * holds its start state rather than flashing in. Reduced motion drops the
+ * animation outright — same rule as the sweep: a frozen half-revealed word
+ * reads as a bug, a static label reads as a label. */
+@keyframes title-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.title-reveal-word {
+  animation: title-word-in 140ms var(--ease-out) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title-reveal-word {
+    animation: none;
+  }
+}
+
 /* The transcript's own sweep — the sidebar's effect, paid for differently.
  *
  * The row above animates `mask-position`, which is a repaint of the glyphs on

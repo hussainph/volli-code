@@ -1321,6 +1321,45 @@ describe("volli:session-rename", () => {
   });
 });
 
+describe("volli:session-refine-title", () => {
+  it("acks and hands a valid request to the titling seam", () => {
+    const requests: Array<{ sessionId: string; firstMessage: string; heuristicTitle: string }> = [];
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { autoTitle: (input) => requests.push(input) },
+    );
+
+    const result = invoke<SessionRenameResult>("volli:session-refine-title", {
+      sessionId: "s1",
+      firstMessage: "Fix the parser",
+      heuristicTitle: "Fix the parser",
+    });
+    expect(result).toEqual({ ok: true });
+    expect(requests).toEqual([
+      { sessionId: "s1", firstMessage: "Fix the parser", heuristicTitle: "Fix the parser" },
+    ]);
+  });
+
+  it("acks without a titling seam — a degraded boot refines nothing", () => {
+    const result = invoke<SessionRenameResult>("volli:session-refine-title", {
+      sessionId: "s1",
+      firstMessage: "Fix the parser",
+      heuristicTitle: "Fix the parser",
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("refuses a request missing its heuristic baseline", () => {
+    expect(
+      invoke<SessionRenameResult>("volli:session-refine-title", {
+        sessionId: "s1",
+        firstMessage: "Fix the parser",
+        heuristicTitle: "   ",
+      }),
+    ).toEqual({ ok: false, error: "Invalid session title refinement request" });
+  });
+});
+
 describe("volli:worktree-remove", () => {
   it("acks on success and broadcasts data-changed", async () => {
     vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });

@@ -928,6 +928,25 @@ export interface RuntimeAttachmentHandle {
   readonly recovery: RuntimeRecoveryRef | undefined;
 }
 
+/**
+ * One standalone utility completion: prompt in, text out, nothing else.
+ *
+ * The third door on the runtime, beside Session start and Model Access
+ * inspection — what a background job like auto-titling runs through so it
+ * stays structurally outside the chat: no Session is created, no attachment,
+ * no transcript and no ledger entry. The caller owns which model this runs
+ * on, resolved and validated against its own policy first; the runtime is the
+ * executor, not the chooser, and refuses a model it does not hold rather than
+ * substituting one (no silent fallback).
+ */
+export interface UtilityCompletion {
+  /** The model the caller's policy resolved; its reasoning level is sent as-is. */
+  model: ModelSelection;
+  systemPrompt: string;
+  /** The single user message. */
+  user: string;
+}
+
 /** The singular runtime port. Not a registry; there is exactly one executor. */
 export interface AgentRuntime {
   /** Inspect provider accounts and models without exposing runtime credentials or native types. */
@@ -936,4 +955,10 @@ export interface AgentRuntime {
     signal?: AbortSignal;
   }): Promise<ModelAccessSnapshot>;
   startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle>;
+  /**
+   * Run one utility completion and resolve its text. Throws when the model is
+   * not one this runtime holds or the call failed; a caller that cannot afford
+   * the throw (a title that keeps its heuristic) catches and logs.
+   */
+  completeUtility(input: UtilityCompletion): Promise<string>;
 }

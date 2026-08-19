@@ -5286,3 +5286,166 @@ describe("autoRetryDelayMs", () => {
     expect(autoRetryDelayMs(9)).toBeLessThan(8100);
   });
 });
+
+// --- completeUtility -------------------------------------------------------
+
+/**
+ * A `Models` whose `streamSimple` answers one call with a fixed reply, while
+ * recording what the runtime asked for. `completeSimple` is Pi's own
+ * `streamSimple(...).result()`, so scripting the stream scripts both.
+ */
+function utilityModels(
+  reply: {
+    text?: string;
+    thinking?: string;
+    stopReason?: "stop" | "error" | "aborted";
+    errorMessage?: string;
+  },
+  onCall?: (call: {
+    model: Model<string>;
+    context: Context;
+    options: { reasoning?: string } | undefined;
+  }) => void,
+): Models {
+  const faux = fauxProvider({
+    api: "anthropic-messages",
+    provider: PROVIDER_ID,
+    models: [{ id: MODEL_ID, reasoning: true }],
+  });
+  const models = createModels();
+  models.setProvider({
+    ...faux.provider,
+    streamSimple: ((model, context, options) => {
+      onCall?.({
+        model: model as Model<string>,
+        context,
+        options: options as { reasoning?: string } | undefined,
+      });
+      const stream = createAssistantMessageEventStream();
+      const message = baseMessage(model as Model<string>);
+      message.stopReason = reply.stopReason ?? "stop";
+      if (reply.errorMessage !== undefined) message.errorMessage = reply.errorMessage;
+      if (reply.text !== undefined) {
+        message.content.push({ type: "text", text: reply.text });
+        stream.push({ type: "text_start", contentIndex: 0, partial: message });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: reply.text, partial: message });
+        stream.push({ type: "text_end", contentIndex: 0, content: reply.text, partial: message });
+      }
+      if (reply.thinking !== undefined) {
+        message.content.push({ type: "thinking", thinking: reply.thinking });
+      }
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end(message);
+      return stream;
+    }) as typeof faux.provider.streamSimple,
+  });
+  return models;
+}
+
+describe("completeUtility", () => {
+  it("runs the named model with the prompt and the requested reasoning, and resolves its text", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }, (call) => calls.push(call)),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "The login button is broken",
+      }),
+    ).resolves.toBe("Fix the login flow");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.model.id).toBe(MODEL_ID);
+    expect(calls[0]!.context.systemPrompt).toBe("Title this conversation.");
+    expect(calls[0]!.context.messages).toEqual([
+      { role: "user", content: "The login button is broken", timestamp: expect.any(Number) },
+    ]);
+    expect(calls[0]!.options).toEqual({});
+  });
+
+  it("passes a non-off reasoning level through verbatim", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }, (call) => calls.push(call)),
+    });
+    await runtime.completeUtility({
+      model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "low" },
+      systemPrompt: "Title this conversation.",
+      user: "The login button is broken",
+    });
+    expect(calls[0]!.options).toEqual({ reasoning: "low" });
+  });
+
+  it("throws when the model is not in the runtime's catalog", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: "not-a-model", reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("not in this runtime's catalog");
+  });
+
+  it("throws on a failed stop reason, with the failure's message", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error", errorMessage: "Provider refused the call." }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("Provider refused the call.");
+  });
+
+  it("states the failure itself when a failed stop reason carries no message", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error" }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("The utility completion failed.");
+  });
+
+  it("throws when the answer holds no text", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({}),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("returned no text");
+  });
+
+  it("throws when the answer is reasoning alone, with no text blocks", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ thinking: "pondering" }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("returned no text");
+  });
+});

@@ -53,6 +53,7 @@ import type {
   RetentionTtlSetInput,
   SessionRenameInput,
   SessionRenameResult,
+  SessionRefineTitleInput,
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
@@ -360,6 +361,16 @@ export function registerDataIpcHandlers(
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
+    /**
+     * The renderer door of model-call titling (VC-81): kicks one refinement
+     * off behind a just-written heuristic title. Absent (tests, degraded
+     * boot) means the request is acknowledged and nothing is refined.
+     */
+    autoTitle?: (input: {
+      sessionId: string;
+      firstMessage: string;
+      heuristicTitle: string;
+    }) => void;
     /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
@@ -786,6 +797,23 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "Session rename was not completed" };
       }
       return { ok: true };
+    },
+
+    "volli:session-refine-title": (input: SessionRefineTitleInput): SessionRenameResult => {
+      // Accepted, not awaited: the ack says main took the request; the
+      // refinement runs detached and keeps the heuristic on every failure.
+      if (
+        typeof input.sessionId === "string" &&
+        input.sessionId.trim().length > 0 &&
+        typeof input.firstMessage === "string" &&
+        input.firstMessage.trim().length > 0 &&
+        typeof input.heuristicTitle === "string" &&
+        input.heuristicTitle.trim().length > 0
+      ) {
+        options.autoTitle?.(input);
+        return { ok: true };
+      }
+      return { ok: false, error: "Invalid session title refinement request." };
     },
 
     "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {

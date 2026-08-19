@@ -241,6 +241,19 @@ export interface AgentCommandServiceOptions {
    */
   submitSessionMessage?: (input: { sessionId: string; text: string }) => Promise<void>;
   /**
+   * Fires one model-call title refinement (VC-81) behind a kickoff-derived
+   * heuristic title, on the owner's ladder — utility default, then the
+   * Session's own model, then the Role's default. Never fires for an
+   * explicit `--title` (that is already a person's choice), and never
+   * rejects: the heuristic is the fallback the titler keeps on failure.
+   * Absent means no model refinement this launch — heuristic only.
+   */
+  refineAutoTitle?: (input: {
+    sessionId: string;
+    firstMessage: string;
+    heuristicTitle: string;
+  }) => void;
+  /**
    * Called after `session.start` opens a Session, with everything the
    * renderer's toast says and targets. A notice, not a navigation: the app
    * must never move or steal focus because a start landed — the toast's
@@ -1665,6 +1678,17 @@ export function createAgentCommandService(
                   `[volli] kickoff for session ${shortSessionId(started.sessionId)} was not delivered: ${errorMessage(error)}`,
                 );
               });
+          }
+          // Only the heuristic door refines: a session started with an
+          // explicit --title is a person's naming and gets zero title calls.
+          // The kickoff is the first user message, so the refinement rides
+          // right behind its delivery, detached and never blocking the reply.
+          if (typeof title !== "string") {
+            options.refineAutoTitle?.({
+              sessionId: started.sessionId,
+              firstMessage: kickoff,
+              heuristicTitle: sessionTitle,
+            });
           }
           options.onMutation?.({
             ticketId: resolved.ticket.id,

@@ -241,6 +241,9 @@ function TicketTab({
       // Preview File tabs are italic (same convention as Project Files); an
       // exited terminal is struck through, the same as on the other strip.
       labelClassName={cn(preview && "italic", exited && "line-through")}
+      // A landing auto-title reveals here word by word (VC-81); file and
+      // terminal tabs stay static.
+      revealLabel={tab.kind === "chat"}
       status={tab.status ?? terminalDot ?? undefined}
       leading={
         terminalDot === null && terminal !== null ? (

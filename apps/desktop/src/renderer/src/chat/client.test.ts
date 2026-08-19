@@ -1561,7 +1561,10 @@ describe("auto-title on delivery", () => {
   it("names an untitled Session once its first message delivers", async () => {
     const { client, sessionId } = await readyWithTitle(null);
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const refineMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", {
+      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
+    });
 
     await expect(
       client.submit({ id: "m1", text: "Fix the parser\nmore detail" }, "steer"),
@@ -1569,12 +1572,99 @@ describe("auto-title on delivery", () => {
     await settle();
 
     expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
+    // The model refinement rides behind the heuristic write, over the full
+    // first user message, guarded by the heuristic title it replaces.
+    expect(refineMock).toHaveBeenCalledWith({
+      sessionId,
+      firstMessage: "Fix the parser\nmore detail",
+      heuristicTitle: "Fix the parser",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("refines an attachment-only message from the file label", async () => {
+    const { client, sessionId } = await readyWithTitle(null);
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    const refineMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", {
+      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
+    });
+
+    await expect(
+      client.submit(
+        {
+          id: "m1",
+          text: "",
+          attachments: [
+            {
+              linkId: "l1",
+              blobHash: "a".repeat(64),
+              label: "shot.png",
+              originalName: "shot.png",
+              mime: "image/png",
+              sizeBytes: 12,
+            },
+          ],
+        },
+        "steer",
+      ),
+    ).resolves.toBe("delivered");
+    await settle();
+
+    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "shot.png" });
+    expect(refineMock).toHaveBeenCalledWith({
+      sessionId,
+      firstMessage: "shot.png",
+      heuristicTitle: "shot.png",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("does not request a refinement when the heuristic rename did not stick", async () => {
+    const { client } = await readyWithTitle(null);
+    const renameMock = vi.fn().mockResolvedValue({ ok: false });
+    const refineMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", {
+      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
+    });
+
+    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
+      "delivered",
+    );
+    await settle();
+
+    expect(renameMock).toHaveBeenCalled();
+    expect(refineMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("swallows a refinement refusal — the heuristic title already stands", async () => {
+    const { client } = await readyWithTitle(null);
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    const refineMock = vi.fn().mockRejectedValue(new Error("no handler"));
+    vi.stubGlobal("window", {
+      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
+    });
+
+    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
+      "delivered",
+    );
+    await settle();
+
+    expect(renameMock).toHaveBeenCalledWith({
+      sessionId: client.sessionId,
+      title: "Fix the parser",
+    });
+    expect(refineMock).toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
   it("fires through a queue release too — the one choke point both paths share", async () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const refineMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", {
+      api: { sessions: { rename: renameMock, refineTitle: refineMock } },
+    });
     // No live executor yet, so the message queues; setProjection below is what
     // the queue's release rule reacts to, exactly as it would off a stream
     // frame that just brought one up.
