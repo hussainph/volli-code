@@ -18,8 +18,8 @@
  *
  * The scenario boots a ticket session so main's ensure pipeline materializes the
  * worktree (worktree-smoke.mjs is the template for that), dirties the worktree
- * from the test, then drives the REAL rail UI — open the ticket detail, expand
- * the "Details" drawer, wait for and click the ONE adaptive primary button
+ * from the test, then drives the REAL rail UI — open the ticket detail, wait
+ * for and click the ONE adaptive primary button
  * (decision #45), which reads "Commit & create draft PR" for a dirty tree with
  * no PR and runs the whole stacked flow (commit → push → draft PR) in a single
  * click. The git/DB/gh side effects are the assertions:
@@ -232,30 +232,20 @@ async function main() {
       throw new Error("detail view never opened after double-click");
     }
 
-    /** Ensure the right rail's collapsed "Details" drawer is expanded. */
-    async function expandDetailsDrawer() {
-      const aside = page.locator("aside");
-      const details = aside.getByRole("button", { name: "Details", exact: true });
-      await waitUntil("Details drawer button", async () => (await details.count()) >= 1);
-      if ((await details.getAttribute("aria-expanded")) !== "true") {
-        await details.click();
-      }
-      await waitUntil(
-        "Details drawer expanded (Status visible)",
-        async () => (await aside.getByText("Status", { exact: false }).count()) >= 1,
-      );
-    }
-
     /**
-     * Click a Done-flow rail button by its accessible name, opening the detail +
-     * expanding the drawer first. Returns "ui" on success, or throws so the
-     * caller can fall back to the bridge. `timeout` bounds how long we wait for
-     * the button to appear (it only renders once the section's status fetch says
-     * the action applies).
+     * Click a Done-flow rail button by its accessible name, opening the detail
+     * first. Returns "ui" on success, or throws so the caller can fall back to
+     * the bridge. `timeout` bounds how long we wait for the button to appear (it
+     * only renders once the section's status fetch says the action applies).
+     *
+     * VC-55 folded the old collapsed "Details" drawer into the repository card
+     * on the rail's resting Now page, so there is nothing to expand anymore —
+     * the adaptive primary is in the rail (`aside`) as soon as the detail view
+     * opens. The drawer-expanding step waited forever for a button that no
+     * longer exists.
      */
     async function clickRailButton(displayId, name, { timeout = 15000 } = {}) {
       if ((await docTab(displayId).count()) !== 1) await openDetail(displayId);
-      await expandDetailsDrawer();
       const button = page.locator("aside").getByRole("button", { name });
       await waitUntil(`rail button "${name}" to appear`, async () => (await button.count()) >= 1, {
         timeout,
@@ -430,7 +420,6 @@ async function main() {
 
         // The primary button now resolves to "View PR" (prUrl set) — check via the real UI.
         if ((await docTab(displayId).count()) !== 1) await openDetail(displayId);
-        await expandDetailsDrawer();
         const viewPrShown = await waitUntil(
           '"View PR" primary button',
           async () =>
