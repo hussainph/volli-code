@@ -1670,7 +1670,8 @@ export interface DirtyWorktreeOrphan {
  */
 export interface RemovedWorktreeOrphan {
   path: string;
-  projectId?: string;
+  /** The project whose container held it — every sweep tier knows this, so the type says so. */
+  projectId: string;
   /** The branch the directory was on; retained in git, so nothing committed is lost. */
   branch: string | null;
   /** Epoch ms of the last thing that touched it (dir mtime or branch tip). */
@@ -1684,7 +1685,7 @@ export interface RemovedWorktreeOrphan {
  */
 export interface KeptWorktreeOrphan {
   path: string;
-  projectId?: string;
+  projectId: string;
   branch: string | null;
   lastTouchedAt: number | null;
   removableAt: number | null;
