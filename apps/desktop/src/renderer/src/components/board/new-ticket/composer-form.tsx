@@ -388,8 +388,6 @@ export function ComposerForm({
       <div className="border-t border-border px-4 py-2">
         <ComposerFooter
           onAttachFiles={(picked) => void attachFiles(picked)}
-          fileIndex={fileIndex}
-          onInsertRef={(relPath) => editorRef.current?.insertAtCursor(`@${relPath}`)}
           run={run}
           createMore={createMore}
           onCreateMoreChange={setCreateMore}

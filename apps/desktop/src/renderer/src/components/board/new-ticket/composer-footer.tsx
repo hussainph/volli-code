@@ -1,5 +1,4 @@
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
-import { ComposerFileAttach } from "@renderer/components/board/new-ticket/composer-file-attach";
 import {
   ComposerRunRow,
   type ComposerRun,
@@ -12,12 +11,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@renderer/components/ui/tooltip";
-import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
 
 /**
- * The composer's bottom rail: the paperclip file-ref picker and what a kickoff
- * will RUN on the left, a "Create more" toggle, and the two ways to commit —
- * the secondary "Create" and the primary "Create & start"
+ * The composer's bottom rail: one attachment affordance, what a kickoff will
+ * RUN on the left, a "Create more" toggle, and the two ways to commit — the
+ * secondary "Create" and the primary "Create & start"
  * (`data-testid="composer-kickoff"`).
  *
  * ONE ROW FOR THE RUN, AND IT IS THIS ONE. The model and effort pills sit here
@@ -60,8 +58,6 @@ import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
  * never a twitch).
  */
 export function ComposerFooter({
-  fileIndex,
-  onInsertRef,
   onAttachFiles,
   run,
   createMore,
@@ -70,9 +66,7 @@ export function ComposerFooter({
   onKickoff,
   disabled,
 }: {
-  fileIndex: FileIndexHandle;
-  onInsertRef: (relPath: string) => void;
-  /** Attach a file from anywhere (VC-50) — the repository-file picker beside it stays. */
+  /** Attach images/files from anywhere on disk (VC-50). */
   onAttachFiles?: (files: readonly File[]) => void;
   /** The model + effort a kickoff will run on — see {@link ComposerRunRow}. */
   run: ComposerRun;
@@ -84,11 +78,9 @@ export function ComposerFooter({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
-      {/* Two paperclips, two questions. This one searches the repository index
-          and writes `@path`; the one beside it takes a file from anywhere. A
-          repository file chosen through either ends as the same `@` reference,
-          because main resolves that, not the button. */}
-      <ComposerFileAttach fileIndex={fileIndex} onInsert={onInsertRef} />
+      {/* One paperclip: images and files from anywhere. Project files are not a
+          second icon — typing `@` in the description completes against the same
+          file index (VC-115). */}
       {onAttachFiles === undefined ? null : <ComposerAttachButton onFiles={onAttachFiles} />}
       <ComposerRunRow run={run} />
 
