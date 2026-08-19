@@ -272,7 +272,17 @@ export default defineConfig(({ mode }) => ({
       // the npm package's binary-path shim over the runtime-provided module.
       // The real `electron` API only exists as a require() left for Electron
       // itself to resolve.
-      neverBundle: ["electron"],
+      //
+      // jsdom is unbundleable: its computed-style helper, css-tree's data
+      // module, and the sync-XHR worker all read files relative to their own
+      // package layout at MODULE LOAD (`__dirname`-relative stylesheet,
+      // `require("mdn-data/css/*.json")`, `require.resolve("./xhr-sync-
+      // worker.js")` + that worker's own `require("../../../..")`). Bundled
+      // into main.cjs every one of those resolves against dist-electron/ and
+      // the app crashed at boot. It must stay a runtime require() of the real
+      // package — the same treatment electron gets — which is why apps/desktop
+      // declares it directly and electron-builder.yml whitelists its tree.
+      neverBundle: ["electron", "jsdom"],
     },
     ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
   },
