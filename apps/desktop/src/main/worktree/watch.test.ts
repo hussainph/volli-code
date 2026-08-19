@@ -369,6 +369,43 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
     expect(notifications).toEqual([]);
     expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
   });
+
+  it("does not reclaim when a PR was SEEN this cycle but its stamp failed — no PR verdict, no deletion", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-unstamped-"));
+    tempDirs.push(wt);
+    seedTicket({
+      status: "done",
+      prUrl: null,
+      branch: "volli/VC-1-x",
+      worktreePath: wt,
+      doneAt: 0,
+    });
+    const { deps } = makeDeps((_file, args) => {
+      if (args[1] === "list") {
+        return {
+          stdout: JSON.stringify([{ url: "https://x/pull/9", state: "OPEN", updatedAt: "z" }]),
+        };
+      }
+      return { stdout: "" };
+    }, 100 * DAY);
+    const brokenDeps: RetentionPollDeps = {
+      ...deps,
+      db: dbWithBrokenTransaction(ctx.db),
+      reclaim: {
+        worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+        now: () => 100 * DAY,
+      },
+    };
+
+    const result = await pollRetention(brokenDeps, createRetentionStore());
+
+    // The ticket is ancient and clean, but the cycle saw an OPEN PR it could
+    // not persist — reclaiming on a "no PR" verdict a failed write faked would
+    // be exactly the too-aggressive deletion this ticket is about.
+    expect(result.changed).toBe(false);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
 });
 
 describe("pollRetention — checks & conflicts surfacing", () => {

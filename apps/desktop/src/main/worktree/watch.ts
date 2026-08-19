@@ -203,6 +203,11 @@ export async function pollRetention(
       if (cwd === null) continue;
 
       let prUrl = ticket.pr_url;
+      // A PR the discovery saw but could not durably stamp (VC-113): the
+      // reclaim below must read this ticket as having an UNKNOWN PR this cycle,
+      // because "no PR" is exactly the verdict a failed write would fake — and
+      // acting on it is a deletion, not a stale read.
+      let prUnresolved = false;
 
       // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
       if (prUrl === null && ticket.branch) {
@@ -226,6 +231,8 @@ export async function pollRetention(
           if (stampDiscoveredPr(deps, ticket, discovered.value.url)) {
             prUrl = discovered.value.url;
             result.changed = true;
+          } else {
+            prUnresolved = true;
           }
         }
       }
@@ -234,9 +241,11 @@ export async function pollRetention(
       // honest. The reclaim still runs: a Done ticket that never had a PR is
       // finished by dwell alone, and skipping it here is how the tidiest
       // tickets would have been the ones that kept their checkouts forever.
+      // It does NOT run when a PR was seen this cycle but not stamped: an open
+      // PR is half the reclaim question, and we have no answer for it yet.
       if (prUrl === null) {
         if (store.observations.delete(ticket.id)) result.changed = true;
-        if (await maybeReclaim(deps, ticket, null)) result.changed = true;
+        if (!prUnresolved && (await maybeReclaim(deps, ticket, null))) result.changed = true;
         continue;
       }
 
