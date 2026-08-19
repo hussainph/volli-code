@@ -48,6 +48,39 @@ export type WorkLocationKind = "worktree" | "main-checkout";
 export type CodingToolId = "read" | "edit" | "write" | "execute";
 
 /**
+ * The tools a Session can be offered that are not coding tools, named so a
+ * policy can tell them from a tool Volli does not offer at all.
+ *
+ * Neither one is a bundle member and neither should become one: a name added to
+ * {@link CodingToolId} is a name every rule, every durable Snapshot and every
+ * bundle then has an opinion about, and these have no file, no command and no
+ * environment for a rule to read. They are wired as ports on the Session spec
+ * instead — a Session that was given nowhere to send a question, or no web
+ * boundary, is never offered the tool.
+ *
+ * This list is vocabulary and nothing more. It changes no rule: `tool.not-bundled`
+ * still refuses every name outside `snapshot.tools`, which is typed to hold
+ * coding tools only, so the day a Snapshot is wired these tools are denied as
+ * unknown names — the landmine VC-3 exists to defuse. Recording the names here
+ * is what lets that ticket decide *how* they are judged (an allowlist beside the
+ * bundle, or the rule's deletion) without first having to discover which names
+ * are at stake. Anything registered beside the bundle belongs in this list.
+ *
+ * The order is registration order, and nothing hashes it: {@link AUTHORITY_RULE_IDS}
+ * is the pack's identity, and naming a tool is not a rule.
+ */
+export const NON_CODING_TOOL_IDS = [
+  /** Asking the person driving the Session a question, and blocking on the answer. */
+  "ask_user",
+  /** Reading one public web document through Volli's own fetch boundary. */
+  "web_fetch",
+  /** Asking the configured search provider for references, through Volli's own search boundary. */
+  "web_search",
+] as const;
+
+export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
+
+/**
  * When silent denial stops being the right answer and the user should be asked.
  *
  * Counting is the caller's job, not the rule's: a single call is allowed or

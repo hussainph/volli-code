@@ -7,6 +7,7 @@ import {
   net,
   Notification,
   protocol,
+  safeStorage,
   session,
   shell,
 } from "electron";
@@ -64,6 +65,14 @@ import { sessionRootThreadId } from "@volli/session-engine";
 import { describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
+import { registerWebAccessIpcHandlers } from "./web/ipc";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+} from "./web/credential";
+import { WebAccessSettings } from "./web/settings";
+import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
 import {
   createSessions,
@@ -646,6 +655,27 @@ app.whenReady().then(async () => {
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
   const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  // Web Access: the BYO search provider, and the one credential Volli stores
+  // itself. `safeStorage` is passed as the cipher rather than imported inside
+  // the owner, which is what keeps that owner (and everything it decides about
+  // refusing to store a key in the clear) testable outside Electron.
+  const webAccess = dbHandle.ok
+    ? new WebAccessSettings({
+        db: dbHandle.db,
+        credentials: {
+          brave: new WebCredentialStore({
+            db: dbHandle.db,
+            cipher: safeStorage,
+            secretName: BRAVE_SEARCH_KEY_SECRET,
+          }),
+          exa: new WebCredentialStore({
+            db: dbHandle.db,
+            cipher: safeStorage,
+            secretName: EXA_SEARCH_KEY_SECRET,
+          }),
+        },
+      })
+    : null;
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null
       ? createPiRuntimeHost({
@@ -698,6 +728,13 @@ app.whenReady().then(async () => {
               },
             });
           },
+          // What this profile's Web Access setting amounts to, read once per
+          // attachment. A profile that configured nothing answers `{}`, and a
+          // Session given `{}` is offered no `web_fetch` and no `web_search` at
+          // all — absent rather than present and refusing. This is the only
+          // call path in the app that reads the stored key, and it hands it
+          // straight to the provider constructor.
+          resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
           // recorded once before the first runtime construction; every later
@@ -974,6 +1011,14 @@ app.whenReady().then(async () => {
     dbHandle.ok
       ? undefined
       : `Sign-in is unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
+  // The Web Access surface, on its own door beside sign-in and for the same
+  // reason: one of its arguments is an API key.
+  registerWebAccessIpcHandlers(
+    webAccess,
+    dbHandle.ok
+      ? undefined
+      : `Web access settings are unavailable — the local database failed to open: ${dbHandle.error}`,
   );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot

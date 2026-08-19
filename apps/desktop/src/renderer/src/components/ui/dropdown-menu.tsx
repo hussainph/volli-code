@@ -203,7 +203,7 @@ function DropdownMenuSubContent({
         MENU_SURFACE,
         MENU_SURFACE_PAD,
         MENU_SURFACE_MOTION,
-        "origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden",
+        "max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
         className,
       )}
       {...props}

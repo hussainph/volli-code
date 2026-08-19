@@ -13,6 +13,8 @@ export * from "./model-access-sign-in";
 export * from "./compaction-policy";
 export * from "./authority";
 export * from "./authority-policy";
+export * from "./web-address-policy";
+export * from "./web-target-policy";
 export * from "./session-activity";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
