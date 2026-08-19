@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       desktop-smoke:
-        description: "Also run the macOS desktop smoke lane (bills ~40 min)"
+        description: "Also run the macOS desktop smoke lane (bills ~45 min)"
         type: boolean
         default: false
 
@@ -110,7 +110,7 @@ jobs:
     name: Desktop smoke (manual)
     if: github.event_name == 'workflow_dispatch' && inputs.desktop-smoke
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -139,20 +139,38 @@ jobs:
           # and never once executed. Add new smokes here as they land, or they
           # prove nothing on this lane no matter how deliberately it is fired.
           #
+          # Audited 2026-08 by running all 43 apps/desktop/e2e/*-smoke.mjs
+          # locally: the list below had covered 14 of them. That gap is not
+          # theoretical — a jsdom bundling bug crashed the Electron main process
+          # at module load on every launch path, and every app-booting smoke
+          # here would have caught it, but the lane is manual-only and was not
+          # fired. Everything that passes and needs no developer credentials is
+          # now listed.
+          #
+          # The four pi-*-smoke.mjs probes are deliberately NOT here: they drive
+          # a live model turn and need a real ~/.pi/agent/auth.json, which this
+          # runner has no way to hold. They stay local-only (`pnpm smoke:pi`).
+          #
           # session-rpc-transport-smoke no longer opens any settings pane: the
           # Runtime Catalog surface it used to drive is gone, and what remains
           # is the thing it exists for — that the preload door, the IPC channel,
           # and the router agree on every routed procedure name. Nothing about
           # it depends on a runtime being installed.
           smokes=(
+            # board / ticket surfaces
             board-smoke.mjs
             ticket-detail-smoke.mjs
+            home-taxonomy-smoke.mjs
             global-artifacts-smoke.mjs
+            park-smoke.mjs
+            # composer
             composer-basics-smoke.mjs
             composer-draft-smoke.mjs
             composer-kickoff-smoke.mjs
+            # agent / CLI plumbing
             agent-socket-smoke.mjs
             agent-cli-roundtrip-smoke.mjs
+            agent-cli-relaunch-smoke.mjs
             agent-cli-token-bench.mjs
             agent-pty-env-smoke.mjs
             agent-installer-smoke.mjs
@@ -160,6 +178,26 @@ jobs:
             agent-board-live-move-smoke.mjs
             session-rpc-transport-smoke.mjs
             bare-path-env-smoke.mjs
+            harness-doctor-smoke.mjs
+            harness-wrapper-smoke.mjs
+            ghostty-config-smoke.mjs
+            # worktree lifecycle
+            worktree-smoke.mjs
+            worktree-cli-smoke.mjs
+            retention-smoke.mjs
+            done-flow-smoke.mjs
+            # terminal / session lifecycle
+            terminal-smoke.mjs
+            interrupt-resume-smoke.mjs
+            sigstop-smoke.mjs
+            quit-window-lifecycle-smoke.mjs
+            memory-smoke.mjs
+            # editor / rendering
+            monaco-reconciliation-smoke.mjs
+            editor-theme-smoke.mjs
+            canvas-theming-smoke.mjs
+            changeset-diff-tabs-smoke.mjs
+            changeset-navigators-smoke.mjs
           )
 
           # This lane used to gate two probes behind `command -v opencode`,
