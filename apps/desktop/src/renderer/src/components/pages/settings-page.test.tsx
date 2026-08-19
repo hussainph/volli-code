@@ -50,11 +50,15 @@ describe("SettingsPage (app-wide)", () => {
 
   // Its app-wide scope is structural (it lives here, not on Configure) rather
   // than something the copy has to state — see the base-branch test below.
-  it("shows the global Done-TTL in the default General category", () => {
+  it("shows the global retention window in the default General category", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
-    expect(html).toContain("Archive Done tickets after");
+    expect(html).toContain("Done worktree retention");
     expect(html).toContain('id="done-ttl-days"');
+    // VC-113: the number now governs a deletion, so the row states what the
+    // deletion takes and what it leaves — the question a retention setting has
+    // to answer before anyone will trust it.
+    expect(html).toContain("keeps the branch, its commits, and the ticket");
   });
 
   it("no longer hosts the project-scoped base branch field (moved to Configure)", () => {

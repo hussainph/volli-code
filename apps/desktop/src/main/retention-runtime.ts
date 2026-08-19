@@ -14,16 +14,31 @@ import { Notification } from "electron";
 import type Database from "better-sqlite3";
 
 import { broadcastDataChanged } from "./broadcast";
-import { RetentionWatcher, retentionConfigFromEnv, runNet } from "./worktree";
+import { RetentionWatcher, retentionConfigFromEnv, runNet, type ReclaimDeps } from "./worktree";
+import { worktreeDeps } from "./worktree-runtime";
 
 let watcher: RetentionWatcher | null = null;
+
+/**
+ * The seams the duration-gated reclaim (VC-113) needs beyond the worktree
+ * bundle, handed in by `index.ts` because only it can answer them: whether work
+ * is in flight in a directory, and how to end what is bound to one. They are
+ * captured on FIRST construction — whichever entrypoint builds the singleton
+ * first — so `index.ts` passes them, and `data-ipc.ts`'s later reads share the
+ * same watch. Absent means the watch keeps its old read-only behaviour: prompts
+ * still appear, nothing is ever deleted.
+ */
+export type RetentionReclaimSeams = Pick<ReclaimDeps, "releaseAgentSites" | "busyWorktreeSites">;
 
 /**
  * The retention watch singleton, built lazily against `db`. The first caller
  * (index.ts on boot, or the first retention IPC) constructs it; everyone after
  * shares it. Timing is env-overridable through {@link retentionConfigFromEnv}.
  */
-export function getRetentionWatcher(db: Database.Database): RetentionWatcher {
+export function getRetentionWatcher(
+  db: Database.Database,
+  reclaimSeams?: RetentionReclaimSeams,
+): RetentionWatcher {
   watcher ??= new RetentionWatcher(
     {
       db,
@@ -31,6 +46,12 @@ export function getRetentionWatcher(db: Database.Database): RetentionWatcher {
       now: () => Date.now(),
       notify: (title, body) => new Notification({ title, body }).show(),
       onChange: broadcastDataChanged,
+      // No seams, no reclaim: an app that cannot ask whether a directory is
+      // busy has no business deleting one.
+      reclaim:
+        reclaimSeams === undefined
+          ? undefined
+          : { worktree: worktreeDeps(db), now: () => Date.now(), ...reclaimSeams },
     },
     retentionConfigFromEnv(process.env),
   );

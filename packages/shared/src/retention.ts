@@ -63,9 +63,7 @@ export interface ArchiveReadiness {
 export function computeArchiveReadiness(input: ArchiveReadinessInput): ArchiveReadiness {
   if (input.keep) return { archiveReady: false, reason: null };
 
-  // A PR exists but its state hasn't been observed yet — this is UNKNOWN,
-  // not "no PR", and must block the TTL path the same as "open" does.
-  const prUnknown = input.prUrl !== null && input.prState === null;
+  const prUnknown = isPrUnknown(input);
 
   let reason: RetentionReason | null = null;
   if (input.prState === "merged") {
@@ -80,4 +78,49 @@ export function computeArchiveReadiness(input: ArchiveReadinessInput): ArchiveRe
     reason = "ttl-expired";
   }
   return { archiveReady: reason !== null && !input.dismissed, reason };
+}
+
+/**
+ * A PR exists but its state hasn't been observed yet — UNKNOWN, not "no PR",
+ * and it must block the TTL the same way "open" does: a very-online open PR
+ * would otherwise lose its checkout purely because the watch hadn't caught up.
+ */
+function isPrUnknown(input: Pick<ArchiveReadinessInput, "prUrl" | "prState">): boolean {
+  return input.prUrl !== null && input.prState === null;
+}
+
+/** The inputs the automatic worktree reclaim is a pure function of (VC-113). */
+export type WorktreeReclaimInput = Omit<ArchiveReadinessInput, "dismissed">;
+
+/**
+ * Whether a ticket's worktree DIRECTORY may be reclaimed automatically
+ * (VC-113) — deliberately a different question from {@link
+ * computeArchiveReadiness}, and a strictly narrower one.
+ *
+ * The prompt fires on EITHER a merge or the dwell, because a person deciding
+ * to wrap a ticket up wants to know about both. The reclaim fires on the DWELL
+ * ALONE, because only time is evidence that nobody is coming back. A merge is
+ * an event: it arrives while the review is still on screen, often from an agent
+ * that merged its own PR, and treating it as permission to delete is what made
+ * pushing a PR feel like losing a workspace.
+ *
+ * So merging never triggers this — but it never blocks it either. A ticket that
+ * merged three weeks ago and has sat in Done since is reclaimed on the dwell,
+ * exactly as an unmerged, closed, or never-PR'd one is. What blocks is an OPEN
+ * or not-yet-observed PR (the work is still live), a Keep pin (an explicit
+ * "don't"), a column other than Done, and a Done entry we cannot date.
+ *
+ * Dismissal is absent from the inputs on purpose: it silences a launch's
+ * prompt, and disk policy is not a prompt.
+ */
+export function computeWorktreeReclaim(input: WorktreeReclaimInput): {
+  reclaim: boolean;
+  reason: RetentionReason | null;
+} {
+  if (input.keep) return { reclaim: false, reason: null };
+  if (input.status !== "done") return { reclaim: false, reason: null };
+  if (input.prState === "open" || isPrUnknown(input)) return { reclaim: false, reason: null };
+  if (input.doneEntryAt === null) return { reclaim: false, reason: null };
+  const stale = input.now - input.doneEntryAt >= input.ttlMs;
+  return stale ? { reclaim: true, reason: "ttl-expired" } : { reclaim: false, reason: null };
 }

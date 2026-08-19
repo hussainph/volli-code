@@ -74,6 +74,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   worktree_scope_changed: GitBranchIcon,
   worktree_failed: WarningCircleIcon,
   worktree_committed: GitCommitIcon,
+  worktree_reclaimed: GitBranchIcon,
   pr_opened: GitPullRequestIcon,
   pr_merged: GitMergeIcon,
   attachment_added: PaperclipIcon,

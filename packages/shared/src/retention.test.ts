@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { computeArchiveReadiness } from "./retention";
+import { computeArchiveReadiness, computeWorktreeReclaim } from "./retention";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -139,6 +139,91 @@ describe("computeArchiveReadiness", () => {
     ).toEqual({
       archiveReady: true,
       reason: "ttl-expired",
+    });
+  });
+});
+
+// VC-113. The reclaim is the prompt's narrower sibling: the prompt asks "is
+// this worth wrapping up?", the reclaim asks "is it safe to delete the folder
+// without asking?". Only time can answer the second one.
+describe("computeWorktreeReclaim", () => {
+  const base = {
+    status: "done" as const,
+    keep: false,
+    prUrl: null,
+    prState: null,
+    doneEntryAt: 0,
+    now: 100 * DAY,
+    ttlMs: 14 * DAY,
+  };
+
+  it("reclaims a Done ticket that has sat past the TTL", () => {
+    expect(computeWorktreeReclaim(base)).toEqual({ reclaim: true, reason: "ttl-expired" });
+  });
+
+  // The bug in one case: a merge is not a dwell. The prompt reacts to it; the
+  // deletion must not.
+  it("does NOT reclaim on a merge alone, however fresh the merge is", () => {
+    expect(
+      computeWorktreeReclaim({
+        ...base,
+        status: "needs_review",
+        prUrl: "https://x/pull/1",
+        prState: "merged",
+        doneEntryAt: null,
+      }),
+    ).toEqual({ reclaim: false, reason: null });
+  });
+
+  it("reclaims a long-merged ticket once the dwell is what earned it", () => {
+    expect(
+      computeWorktreeReclaim({
+        ...base,
+        prUrl: "https://x/pull/1",
+        prState: "merged",
+        doneEntryAt: 80 * DAY,
+      }),
+    ).toEqual({ reclaim: true, reason: "ttl-expired" });
+  });
+
+  it("never reclaims while a PR is open", () => {
+    expect(computeWorktreeReclaim({ ...base, prUrl: "https://x/pull/1", prState: "open" })).toEqual(
+      { reclaim: false, reason: null },
+    );
+  });
+
+  it("never reclaims while a PR exists but has not been observed yet", () => {
+    expect(computeWorktreeReclaim({ ...base, prUrl: "https://x/pull/1", prState: null })).toEqual({
+      reclaim: false,
+      reason: null,
+    });
+  });
+
+  it("never reclaims a Keep-pinned ticket", () => {
+    expect(computeWorktreeReclaim({ ...base, keep: true })).toEqual({
+      reclaim: false,
+      reason: null,
+    });
+  });
+
+  it("never reclaims outside Done", () => {
+    expect(computeWorktreeReclaim({ ...base, status: "doing" })).toEqual({
+      reclaim: false,
+      reason: null,
+    });
+  });
+
+  it("never reclaims a ticket whose Done entry cannot be dated", () => {
+    expect(computeWorktreeReclaim({ ...base, doneEntryAt: null })).toEqual({
+      reclaim: false,
+      reason: null,
+    });
+  });
+
+  it("waits out the last day rather than rounding it away", () => {
+    expect(computeWorktreeReclaim({ ...base, doneEntryAt: 100 * DAY - 14 * DAY + 1 })).toEqual({
+      reclaim: false,
+      reason: null,
     });
   });
 });

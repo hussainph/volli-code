@@ -20,6 +20,7 @@ import type {
   WorktreeBranchesResult,
   WorktreeCommitResult,
   WorktreeOrphanDeleteResult,
+  WorktreeRecreateResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
 } from "../ipc/contract";
@@ -95,6 +96,7 @@ import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
 import { worktreesHome } from "./worktree-runtime";
+import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
@@ -144,11 +146,17 @@ afterEach(() => {
 });
 
 function createProject(): string {
+  return createProjectWithPath().id;
+}
+
+/** A project plus the directory it tracks — both needed to name the container it owns. */
+function createProjectWithPath(): { id: string; path: string } {
+  const path = freshProjectDir();
   const result = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
-    path: freshProjectDir(),
+    path,
     name: "Proj",
   });
-  return result.project.id;
+  return { id: result.project.id, path };
 }
 
 function createTicket(projectId: string): Ticket {
@@ -1526,10 +1534,110 @@ describe("volli:worktree-branches", () => {
   });
 });
 
+// VC-113: the way back from a worktree something outside the app deleted. The
+// branch survives every route that takes the directory (a second install's
+// sweep, `git worktree remove`, a manual rm -rf), so the checkout can always be
+// put back on it — before this channel the only unwritten route was to start a
+// whole Session, and the rail could offer nothing but a Retry that always
+// failed.
+describe("volli:worktree-recreate", () => {
+  function worktreeTicket(projectId: string): Ticket {
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "doing",
+      title: "A ticket",
+    });
+    if (!result.ok) throw new Error(result.error);
+    return result.ticket;
+  }
+
+  it("re-materializes on the existing branch and broadcasts the new identity", async () => {
+    const projectId = createProject();
+    const ticket = worktreeTicket(projectId);
+    vi.mocked(ensure).mockResolvedValue({
+      ok: true as const,
+      value: {
+        identity: {
+          worktreePath: "/wt/VC-1-a-ticket",
+          branch: "volli/VC-1-a-ticket",
+          baseBranch: "main",
+        },
+        created: true,
+      },
+    });
+
+    const result = await invoke<Promise<WorktreeRecreateResult>>("volli:worktree-recreate", {
+      ticketId: ticket.id,
+    });
+
+    expect(result).toEqual({ ok: true, worktreePath: "/wt/VC-1-a-ticket" });
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:data-changed",
+      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    });
+  });
+
+  it("surfaces the git reason when the checkout can't be put back", async () => {
+    const projectId = createProject();
+    const ticket = worktreeTicket(projectId);
+    vi.mocked(ensure).mockResolvedValue({
+      ok: false as const,
+      error: "Branch volli/VC-1 is already checked out at /elsewhere",
+    });
+
+    const result = await invoke<Promise<WorktreeRecreateResult>>("volli:worktree-recreate", {
+      ticketId: ticket.id,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Branch volli/VC-1 is already checked out at /elsewhere",
+    });
+  });
+
+  it("refuses a ticket that runs in the main checkout rather than inventing a worktree for it", async () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "doing",
+      title: "Main checkout ticket",
+      usesWorktree: false,
+    });
+    if (!result.ok) throw new Error(result.error);
+
+    const recreated = await invoke<Promise<WorktreeRecreateResult>>("volli:worktree-recreate", {
+      ticketId: result.ticket.id,
+    });
+
+    expect(recreated).toEqual({ ok: false, error: "This ticket runs in the main checkout." });
+    expect(vi.mocked(ensure)).not.toHaveBeenCalled();
+  });
+
+  it("answers Unknown ticket rather than reaching for git", async () => {
+    const result = await invoke<Promise<WorktreeRecreateResult>>("volli:worktree-recreate", {
+      ticketId: "nope",
+    });
+
+    expect(result).toEqual({ ok: false, error: "Unknown ticket" });
+    expect(vi.mocked(ensure)).not.toHaveBeenCalled();
+  });
+});
+
 describe("volli:worktree-orphans", () => {
   const report = {
     pruned: ["project-1"],
-    removedClean: ["/wt/orphan"],
+    removedClean: [
+      { path: "/wt/orphan", projectId: "project-1", branch: "volli/VC-1-x", lastTouchedAt: 1 },
+    ],
+    keptRecent: [
+      {
+        path: "/wt/fresh",
+        projectId: "project-1",
+        branch: "volli/VC-2-y",
+        lastTouchedAt: 2,
+        removableAt: 3,
+      },
+    ],
     dirty: [{ path: "/wt/dirty", projectId: "project-1", reason: "uncommitted work" }],
   };
 
@@ -1564,6 +1672,12 @@ describe("volli:worktree-orphans", () => {
 
 describe("volli:worktree-orphan-delete", () => {
   let home: string;
+  let project: { id: string; path: string };
+
+  /** A leaf inside the container the test's project owns — the only place this channel may delete. */
+  function ownedPath(leaf: string): string {
+    return join(worktreesHome(), projectContainerName(project.path, project.id), leaf);
+  }
 
   beforeEach(() => {
     // A throwaway worktree home so the sanctioned rm -rf never touches the real
@@ -1571,6 +1685,7 @@ describe("volli:worktree-orphan-delete", () => {
     // is enough; handlers registered in the outer beforeEach see it too.
     home = mkdtempSync(join(tmpdir(), "volli-orphan-home-"));
     process.env["VOLLI_WORKTREE_HOME_DIR"] = home;
+    project = createProjectWithPath();
   });
 
   afterEach(() => {
@@ -1583,15 +1698,56 @@ describe("volli:worktree-orphan-delete", () => {
       "volli:worktree-orphan-delete",
       { path: join(tmpdir(), "somewhere-else") },
     );
-    expect(result).toEqual({ ok: false, error: "Path is outside the worktree home" });
+    expect(result).toEqual({
+      ok: false,
+      error: "That path is outside this project's worktree folder.",
+    });
+  });
+
+  // VC-113: another install of Volli owns a DIFFERENT container under the same
+  // shared root. Its worktrees are not this app's to delete, however dirty the
+  // Settings list thinks they are.
+  it("rejects a path in ANOTHER INSTALL's container under the same worktree home", async () => {
+    const theirs = join(
+      worktreesHome(),
+      projectContainerName(project.path, "f8e04558-dev"),
+      "VC-9-theirs",
+    );
+    mkdirSync(theirs, { recursive: true });
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: theirs },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "That path is outside this project's worktree folder.",
+    });
+    expect(existsSync(theirs)).toBe(true);
+  });
+
+  it("rejects the container itself, which would take every ticket's checkout at once", async () => {
+    const container = join(worktreesHome(), projectContainerName(project.path, project.id));
+    mkdirSync(container, { recursive: true });
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: container },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "That path is outside this project's worktree folder.",
+    });
+    expect(existsSync(container)).toBe(true);
   });
 
   it("refuses to delete a worktree the DB still tracks (linked to a ticket)", async () => {
-    const target = join(worktreesHome(), "VC-1-tracked");
+    const target = ownedPath("VC-1-tracked");
     mkdirSync(target, { recursive: true });
     // A ticket still points at this path — listWorktreePaths must veto the delete.
-    const projectId = createProject();
-    const ticket = createTicket(projectId);
+    const ticket = createTicket(project.id);
     invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath: target });
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -1607,7 +1763,7 @@ describe("volli:worktree-orphan-delete", () => {
   });
 
   it("refuses when something is still working at or under the target", async () => {
-    const target = join(worktreesHome(), "VC-2-live");
+    const target = ownedPath("VC-2-live");
     mkdirSync(target, { recursive: true });
 
     handlers.clear();
@@ -1631,7 +1787,7 @@ describe("volli:worktree-orphan-delete", () => {
   });
 
   it("deletes an untracked, session-free orphan and broadcasts data-changed", async () => {
-    const target = join(worktreesHome(), "VC-3-orphan");
+    const target = ownedPath("VC-3-orphan");
     mkdirSync(target, { recursive: true });
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -1652,7 +1808,7 @@ describe("volli:worktree-orphan-delete", () => {
   // bound to what became an orphan. Without this it kept dispatching into a path
   // the rm had already taken away.
   it("ends the bindings rooted in the orphan before the rm, and asks the busy read about it", async () => {
-    const target = join(worktreesHome(), "VC-4-bound");
+    const target = ownedPath("VC-4-bound");
     mkdirSync(target, { recursive: true });
     // Both seams see the canonicalized target — the same path the containment
     // guard and the rm run on, `/private` aliasing already resolved.
@@ -1692,7 +1848,7 @@ describe("volli:worktree-orphan-delete", () => {
   it("still deletes the orphan when a binding refuses to close", async () => {
     // The always-confirmed path: the Settings row printed the dirtiness reason
     // and the user said yes, and this is the only way to clear a dirty orphan.
-    const target = join(worktreesHome(), "VC-5-stubborn");
+    const target = ownedPath("VC-5-stubborn");
     mkdirSync(target, { recursive: true });
 
     handlers.clear();

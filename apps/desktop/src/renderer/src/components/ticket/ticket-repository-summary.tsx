@@ -64,7 +64,13 @@ import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
-import { changeSetToDiffStat, errorMessage, type DiffStat, type Ticket } from "@volli/shared";
+import {
+  changeSetToDiffStat,
+  errorMessage,
+  WORKTREE_MISSING_ON_DISK,
+  type DiffStat,
+  type Ticket,
+} from "@volli/shared";
 import type { WorktreeCommitInput } from "../../../../ipc/contract";
 
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
@@ -85,7 +91,11 @@ import {
   UNKEEP_LABEL,
   type RetentionNotice,
 } from "@renderer/components/ticket/worktree-retention-model";
-import { DiffTotals, RailFaultBanner } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  DiffTotals,
+  RailFaultBanner,
+  RAIL_PANEL_INSET,
+} from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
 import {
@@ -455,6 +465,68 @@ function WorktreeFailedNotice({ projectId, ticketId }: { projectId: string; tick
       actions={
         <Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>
           Retry
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * The recovery for a checkout that is no longer on disk (VC-113).
+ *
+ * This is the one fault in the card that a Retry cannot mend: the read is not
+ * flaky, the directory is gone — swept by another install, removed in a
+ * terminal, tidied away by hand — and re-reading it will fail forever. What the
+ * ticket still has is its BRANCH, with every commit on it, so the honest
+ * offer is to put the checkout back rather than to ask again.
+ *
+ * The copy follows from that. "Worktree folder is missing" names what actually
+ * happened, and the detail answers the only question the reader has — the branch
+ * and its commits are still in git. The old pairing ("Worktree unreadable" over
+ * a Retry that could not succeed) is what made a swept worktree read as lost
+ * work. What the button does is left to the button.
+ */
+function WorktreeMissingNotice({
+  ticketId,
+  onRecreated,
+}: {
+  ticketId: string;
+  onRecreated(): void;
+}) {
+  const [recreating, setRecreating] = React.useState(false);
+
+  async function recreate() {
+    setRecreating(true);
+    try {
+      const result = await window.api.worktree.recreate(ticketId);
+      if (!result.ok) {
+        toastError(`Couldn't recreate worktree: ${result.error}`);
+        return;
+      }
+      onRecreated();
+    } catch (error) {
+      toastError(`Couldn't recreate worktree: ${errorMessage(error)}`);
+    } finally {
+      setRecreating(false);
+    }
+  }
+
+  return (
+    <Notice
+      announce
+      tone="neutral"
+      layout="stack"
+      icon={FolderOpenIcon}
+      title="Worktree folder is missing"
+      // The one thing worth saying next to the button: the work is not gone.
+      // What the button then does is on the button (voice.md: no "click Save to
+      // save"), so this states the fact and stops.
+      detail="The branch and its commits are still in git."
+      data-testid="ticket-repository-worktree-missing"
+      className={RAIL_PANEL_INSET}
+      actions={
+        <Button variant="outline" size="xs" disabled={recreating} onClick={() => void recreate()}>
+          {recreating ? "Recreating…" : "Recreate worktree"}
         </Button>
       }
     />
@@ -913,9 +985,15 @@ export function TicketRepositorySummary({
   const fileCount = diff?.files.length ?? 0;
 
   // The status read is the cause and the watch dying is its consequence, so the
-  // direct read's message wins when both are set — they are almost always the
-  // same string anyway.
+  // direct read's message wins when both are set. A vanished directory IS the
+  // same string on both surfaces now: the watch manager maps its missing-dir
+  // ENOENT to the shared sentence (VC-113), so the Recreate offer fires whether
+  // the read or the watcher noticed first.
   const fault = loadError ?? watchError;
+  // The one fault with a real way out rather than a Retry (VC-113). Matched on
+  // the shared sentence main answers every worktree read with, so the two sides
+  // cannot drift into disagreeing about what "gone" reads like.
+  const worktreeMissing = fault === WORKTREE_MISSING_ON_DISK;
   // No worktree means no read to wait for: `refreshStatusAndDiff` returns early
   // and `diff` stays null for good, so "No changes" would be a permanent lie.
   // What CAN be said honestly is the ticket's worktree scoping (VC-16): before
@@ -1109,7 +1187,12 @@ export function TicketRepositorySummary({
 
       {hasWorktree ? (
         <div className="flex flex-col gap-2 border-t border-sidebar-border/70 px-4 py-2">
-          {fault !== null ? (
+          {fault !== null && worktreeMissing ? (
+            // A gone directory is not a failed read, so it does not get the
+            // fault banner's Retry — it gets the one action that can actually
+            // end the state (VC-113).
+            <WorktreeMissingNotice ticketId={ticket.id} onRecreated={() => void refresh()} />
+          ) : fault !== null ? (
             // The whole block, not a line above it: with no readable worktree
             // there is no honest publish state to offer, and the retention
             // prompt below is a different subject that was only ever stacked

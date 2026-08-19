@@ -1421,7 +1421,9 @@ app.whenReady().then(async () => {
   });
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
-  // removes clean orphaned worktree dirs (branches retained); dirty orphans are
+  // removes clean orphaned worktree dirs that THIS database owns and that
+  // nothing has touched for the retention window (branches retained — VC-113
+  // scoped both the ownership and the timing); dirty orphans are
   // left for Settings → Worktrees. DESTRUCTIVE, so it runs exactly ONCE per
   // launch — cached in orphan-sweep.ts and read back (never re-swept) by the
   // volli:worktree-orphans handler. Deferred to did-finish-load so it never
@@ -1432,7 +1434,7 @@ app.whenReady().then(async () => {
       startOrphanSweep(worktreeDeps(db))
         .then((report) => {
           console.log(
-            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} dirty=${report.dirty.length}`,
+            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
           );
         })
         .catch((error) => {
@@ -1445,7 +1447,10 @@ app.whenReady().then(async () => {
     // after first paint so it never competes with boot; a background read
     // failure is silent (a read is not a mutation). Main-process focus detection
     // is the established pattern (park/quit gates live here, not the renderer).
-    const retention = getRetentionWatcher(db);
+    // The reclaim seams (VC-113) are handed over here because this is the only
+    // scope that can answer them — the same two the destructive IPC guards use,
+    // so an automatic removal refuses everything a manual one would.
+    const retention = getRetentionWatcher(db, { busyWorktreeSites, releaseAgentSites });
     mainWindow.webContents.once("did-finish-load", () => retention.start());
     app.on("browser-window-focus", () => retention.triggerNow());
   }

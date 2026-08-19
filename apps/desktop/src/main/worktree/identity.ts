@@ -12,9 +12,11 @@
  * first 8 chars of the project UUID (disambiguating same-named repos), and
  * `slug` the same `slugify` the branch name uses.
  */
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import { slugify, ticketBranchName } from "@volli/shared";
+
+import { projectContainerName } from "./containers";
 
 export interface WorktreeIdentityInput {
   /** `~` (or its test override). */
@@ -38,22 +40,10 @@ export interface ResolvedWorktreeIdentity {
   branch: string;
 }
 
-/** Strips a single trailing slash so `basename` never returns `""`. */
-function stripTrailingSlash(p: string): string {
-  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
-}
-
 /** The leaf dir name for a ticket: `<DISPLAY-ID>-<slug>`, or just `<DISPLAY-ID>` when the slug is empty. */
 function worktreeLeaf(displayId: string, title: string): string {
   const slug = slugify(title);
   return slug ? `${displayId}-${slug}` : displayId;
-}
-
-/** The per-project container dir name: `<project-dirname>-<short-id>`. */
-function projectContainer(projectPath: string, projectId: string): string {
-  const dirname = basename(stripTrailingSlash(projectPath));
-  const shortId = projectId.slice(0, 8);
-  return `${dirname}-${shortId}`;
 }
 
 /**
@@ -69,7 +59,7 @@ export function resolveWorktreeIdentity(input: WorktreeIdentityInput): ResolvedW
       input.home,
       ".volli",
       "worktrees",
-      projectContainer(input.projectPath, input.projectId),
+      projectContainerName(input.projectPath, input.projectId),
       worktreeLeaf(input.displayId, input.title),
     );
   return { path, branch };

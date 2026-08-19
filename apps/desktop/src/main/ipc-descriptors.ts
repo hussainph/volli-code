@@ -499,6 +499,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid worktree removal",
   },
+  "volli:worktree-recreate": {
+    guard: (args): args is IpcArgs<"volli:worktree-recreate"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
   "volli:worktree-branches": {
     guard: (args): args is IpcArgs<"volli:worktree-branches"> =>
       args.length === 1 && isProjectIdInput(args[0]),

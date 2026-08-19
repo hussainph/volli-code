@@ -156,6 +156,7 @@ import type {
   WorktreeOrphansResult,
   WorktreePhaseEvent,
   WorktreePushPrResult,
+  WorktreeRecreateResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
   WorktreeWatchErrorEvent,
@@ -692,6 +693,13 @@ const api = {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
     remove: (ticketId: string, force: boolean): Promise<WorktreeRemoveResult> =>
       invoke("volli:worktree-remove", { ticketId, force }),
+    /**
+     * Puts a ticket's worktree back on its existing branch after the directory
+     * went missing (VC-113). Idempotent — a checkout that is already there is
+     * left exactly as it is.
+     */
+    recreate: (ticketId: string): Promise<WorktreeRecreateResult> =>
+      invoke("volli:worktree-recreate", { ticketId }),
     /**
      * A project's branch refs for the base-branch pickers: local heads, the
      * checkout's own branch, remote-tracking refs, and when those last moved

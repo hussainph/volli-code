@@ -1,5 +1,7 @@
 /**
- * `remove` (worktree-support §2/§9) — the manual escape hatch. It NEVER
+ * `remove` (worktree-support §2/§9) — the manual escape hatch, and the only
+ * route that can clear EVERY shape of stamped checkout: registered, already
+ * gone from disk, or (VC-113) still on disk but forgotten by git. It NEVER
  * force-removes a dirty worktree unless the caller has explicitly confirmed
  * (`force: true` from the "Remove worktree…" dialog that states the dirtiness);
  * and it RE-VERIFIES cleanliness immediately before a non-forced delete, so a
@@ -18,16 +20,23 @@
  * anything that started a turn since the gate ran is stopped here rather than
  * having its directory pulled out from under it.
  */
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 
-import { WORKTREE_DIRTY_REFUSAL_PREFIX, type TicketEventActor } from "@volli/shared";
+import {
+  WORKTREE_DIRTY_REFUSAL_PREFIX,
+  WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX,
+  type TicketEventActor,
+} from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import type { AgentSiteReleaseReport } from "./agent-sites";
+import { isOwnedWorktreePath, ownedContainers } from "./containers";
 import { isWorktreeDirty } from "./dirty";
-import { GitError } from "./git";
+import { GitError, parseWorktreeList } from "./git";
+import { homeDir } from "./home";
+import { canonicalize } from "./paths";
 import { clearPhase } from "./phase";
 import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
@@ -105,6 +114,30 @@ export async function remove(
     }
   }
 
+  // A directory git has FORGOTTEN (VC-113): the admin entry under
+  // `.git/worktrees/` is gone while the checkout is still on disk, which is
+  // what a half-finished removal or a second install's `git worktree remove`
+  // leaves behind. `git worktree remove` refuses such a path in BOTH modes
+  // ("fatal: '…' is not a working tree"), `ensure` refuses to recreate over it,
+  // and Settings skips it for being DB-known — so the ticket had no route out of
+  // the state at all, in or out of the app, short of a terminal.
+  //
+  // Deciding this is a READ, so it happens here: after the dirty gate, before
+  // anything is released or deleted.
+  const registered = isRegisteredWorktree(deps, project.path, worktreePath);
+  // The plain delete is the one destructive act in this module git itself does
+  // not perform, so it is never reached without an explicit confirmation, not
+  // even when the dirty predicate happened to read the folder as clean. It
+  // refuses under its OWN prefix rather than the dirty one: this is not a
+  // worktree with uncommitted work in it, it is a folder nothing can read, and
+  // the dialog escalates on either.
+  if (!registered && !opts.force) {
+    return err(
+      `${WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX} (git no longer tracks the folder). ` +
+        `Confirm removal to delete it.`,
+    );
+  }
+
   // Last thing before the checkout stops existing, and after the dirty gate on
   // purpose: a non-forced remove that is about to refuse must not have closed
   // the user's chat on the way to refusing. The order does put the executor's
@@ -112,6 +145,33 @@ export async function remove(
   // out lands unseen — the same pre-existing window as any write between that
   // read and the delete, and narrower than leaving the executor running.
   await opts.releaseAgentSites?.(worktreePath);
+
+  if (!registered) {
+    // Fenced twice: confirmed above, and contained here. The path must sit
+    // inside a container this database owns — the same ownership question the
+    // sweep and the orphan-delete channel ask (containers.ts), because an
+    // rm -rf is exactly where guessing is unaffordable.
+    if (!isOwnedWorktreePath(ownedContainers(deps.db, homeDir(deps)), worktreePath)) {
+      return err(
+        `Git no longer tracks ${worktreePath}, and it sits outside this project's worktree folder. ` +
+          `Delete it yourself, then try again.`,
+      );
+    }
+    try {
+      rmSync(worktreePath, { recursive: true, force: true });
+    } catch (caught) {
+      return err(
+        `Couldn't delete the folder: ${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    }
+    try {
+      deps.git(["worktree", "prune"], project.path);
+    } catch {
+      // Metadata cleanup is best-effort; the identity clear below still runs.
+    }
+    clearIdentity(deps, ticketId);
+    return ok(undefined);
+  }
 
   try {
     const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];
@@ -129,6 +189,27 @@ export async function remove(
   // Clear the checkout pointer (emits `worktree_changed`) after the git work succeeds.
   clearIdentity(deps, ticketId);
   return ok(undefined);
+}
+
+/**
+ * Whether git still registers `worktreePath` as a worktree of the project. An
+ * unreadable listing answers TRUE — the plain-delete fallback above is the
+ * destructive branch, so ambiguity has to route back to git's own refusal
+ * rather than to an rm -rf.
+ */
+function isRegisteredWorktree(
+  deps: WorktreeDeps,
+  projectPath: string,
+  worktreePath: string,
+): boolean {
+  let listing: string;
+  try {
+    listing = deps.git(["worktree", "list", "--porcelain"], projectPath);
+  } catch {
+    return true;
+  }
+  const target = canonicalize(worktreePath);
+  return parseWorktreeList(listing).some((entry) => canonicalize(entry.path) === target);
 }
 
 /**

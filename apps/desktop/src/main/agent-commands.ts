@@ -2300,7 +2300,7 @@ export function createAgentCommandService(
           case "missing-on-disk":
             return failure(
               "INVALID_REQUEST",
-              `Ticket ${read.displayId}'s worktree directory is missing on disk (expected at ${read.worktreePath}).`,
+              `Ticket ${read.displayId}'s worktree folder is missing (expected at ${read.worktreePath}).`,
             );
           case "ok":
             return {
@@ -2337,7 +2337,7 @@ export function createAgentCommandService(
           case "missing-on-disk":
             return failure(
               "INVALID_REQUEST",
-              `Ticket ${read.displayId}'s worktree directory is missing on disk (expected at ${read.worktreePath}).`,
+              `Ticket ${read.displayId}'s worktree folder is missing (expected at ${read.worktreePath}).`,
             );
           case "diff-error":
             return failure("INVALID_REQUEST", read.error);

@@ -26,7 +26,13 @@ import { getProjectById } from "../db/projects-repo";
 import { prepared } from "../db/prepared";
 import { listRetentionCandidates, updateTicketFields, type TicketRow } from "../db/tickets-repo";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
-import { computeArchiveReadiness, doneEntryTimestamp, retentionTtlMs } from "./retention";
+import {
+  computeArchiveReadiness,
+  doneEntryTimestamp,
+  reclaimIfStale,
+  retentionTtlMs,
+  type ReclaimDeps,
+} from "./retention";
 
 export type { TicketRetentionState } from "../../ipc/contract";
 
@@ -118,6 +124,13 @@ export interface RetentionPollDeps {
   notify: (title: string, body: string) => void;
   /** Broadcast seam (wired to `broadcastDataChanged`) — called once when any observation changed. */
   onChange?: () => void;
+  /**
+   * The duration-gated worktree reclaim (VC-113). Absent — in tests, and in any
+   * degraded boot that could not build the worktree seams — means the poll stays
+   * the pure read it has always been: nothing is deleted, the prompts still
+   * appear, and the only thing lost is the automatic disk reclaim.
+   */
+  reclaim?: ReclaimDeps;
 }
 
 /** The poll cycle's outcome — the driver reads it to update backoff and broadcast. */
@@ -190,6 +203,11 @@ export async function pollRetention(
       if (cwd === null) continue;
 
       let prUrl = ticket.pr_url;
+      // A PR the discovery saw but could not durably stamp (VC-113): the
+      // reclaim below must read this ticket as having an UNKNOWN PR this cycle,
+      // because "no PR" is exactly the verdict a failed write would fake — and
+      // acting on it is a deletion, not a stale read.
+      let prUnresolved = false;
 
       // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
       if (prUrl === null && ticket.branch) {
@@ -213,13 +231,21 @@ export async function pollRetention(
           if (stampDiscoveredPr(deps, ticket, discovered.value.url)) {
             prUrl = discovered.value.url;
             result.changed = true;
+          } else {
+            prUnresolved = true;
           }
         }
       }
 
-      // No PR to watch — clear any stale observation so the state answer is honest.
+      // No PR to watch — clear any stale observation so the state answer is
+      // honest. The reclaim still runs: a Done ticket that never had a PR is
+      // finished by dwell alone, and skipping it here is how the tidiest
+      // tickets would have been the ones that kept their checkouts forever.
+      // It does NOT run when a PR was seen this cycle but not stamped: an open
+      // PR is half the reclaim question, and we have no answer for it yet.
       if (prUrl === null) {
         if (store.observations.delete(ticket.id)) result.changed = true;
+        if (!prUnresolved && (await maybeReclaim(deps, ticket, null))) result.changed = true;
         continue;
       }
 
@@ -260,6 +286,11 @@ export async function pollRetention(
         }
         store.notifiedMerged.add(ticket.id);
       }
+
+      // (4) RECLAIM — the duration gate (VC-113). Runs LAST, after the PR state
+      // this cycle observed is known, because "is a PR still open on it?" is
+      // half the question of whether a Done ticket is finished.
+      if (await maybeReclaim(deps, ticket, observation.prState)) result.changed = true;
     } catch (error) {
       console.error(`[retention] poll failed for ${ticket.id}:`, error);
     }
@@ -267,6 +298,33 @@ export async function pollRetention(
 
   if (result.changed) deps.onChange?.();
   return result;
+}
+
+/**
+ * The duration-gated reclaim for one ticket (VC-113), and the notification that
+ * accounts for it. Every refusal is SILENT — a background pass that toasts on
+ * every cycle is a background pass nobody keeps enabled — but an actual deletion
+ * never is: a directory that vanishes without a word is the failure this whole
+ * ticket is about. The notification says what was kept, because that is the part
+ * that makes it survivable.
+ *
+ * Returns whether anything changed, so the caller broadcasts.
+ */
+async function maybeReclaim(
+  deps: RetentionPollDeps,
+  ticket: TicketRow,
+  prState: "open" | "merged" | "closed" | null,
+): Promise<boolean> {
+  if (!deps.reclaim) return false;
+  const outcome = await reclaimIfStale(deps.reclaim, ticket.id, prState);
+  if (outcome.kind !== "reclaimed") return false;
+  deps.notify(
+    "Worktree removed",
+    outcome.branch === null
+      ? `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done.`
+      : `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} is kept, so you can recreate it.`,
+  );
+  return true;
 }
 
 /**

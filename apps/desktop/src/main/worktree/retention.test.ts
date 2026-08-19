@@ -12,8 +12,10 @@ import {
   DEFAULT_RETENTION_TTL_DAYS,
   doneEntryTimestamp,
   getRetentionTtlDays,
+  reclaimIfStale,
   setRetentionTtlDays,
 } from "./retention";
+import { listTicketEvents } from "../db/events-repo";
 import { scriptedGit } from "./scripted-git";
 
 // `computeArchiveReadiness` (+ its ArchiveReadiness*/ types) moved to
@@ -174,5 +176,210 @@ describe("archiveAndClean", () => {
     const result = await archiveAndClean({ db: ctx.db, git, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
+  });
+});
+
+// VC-113. The complaint was never "Volli reclaims disk", it was WHEN: a branch
+// reads clean the instant it is pushed, so the old sweep could take a checkout
+// away at the exact moment its review started. Dwell replaces tidiness as the
+// signal, and the reclaim takes the DIRECTORY only — ticket, branch, commits
+// and PR url all survive, so every one of these is undoable by recreating.
+describe("reclaimIfStale", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = 1_000_000_000_000;
+
+  /** A Done ticket with a worktree, entered Done `daysAgo` days ago. */
+  function seedDone(
+    worktreePath: string,
+    daysAgo: number,
+    opts: { keep?: boolean; noDoneEntry?: boolean } = {},
+  ) {
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", status: "done" }));
+    updateTicketFields(
+      ctx.db,
+      "t1",
+      { worktreePath, branch: "volli/VC-1-x", baseBranch: "main" },
+      1,
+    );
+    if (opts.keep === true) {
+      ctx.db.prepare("UPDATE tickets SET retention_keep = 1 WHERE id = 't1'").run();
+    }
+    if (opts.noDoneEntry !== true) {
+      recordTicketEvent(
+        ctx.db,
+        "t1",
+        { kind: "status_changed", from: "needs_review", to: "done" },
+        NOW - daysAgo * DAY,
+      );
+    }
+  }
+
+  function deps(git: ReturnType<typeof scriptedGit>["git"], busy: string[] = []) {
+    return {
+      worktree: { db: ctx.db, git, blobsRoot: "unused" },
+      now: () => NOW,
+      busyWorktreeSites: async () => busy.map((directory) => ({ directory })),
+    };
+  }
+
+  function reclaimEvents() {
+    return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_reclaimed");
+  }
+
+  it("reclaims the directory after the TTL, keeping the ticket, branch, and PR url", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 20);
+    updateTicketFields(ctx.db, "t1", { prUrl: "https://gh/pr/1" }, 2);
+    const { git, calls } = statusGit(wt, gitDir, false);
+
+    const outcome = await reclaimIfStale(deps(git), "t1", "merged");
+
+    expect(outcome).toEqual({ kind: "reclaimed", branch: "volli/VC-1-x", daysInDone: 20 });
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(true);
+    const row = getTicketRow(ctx.db, "t1")!;
+    expect(row.worktree_path).toBeNull(); // the folder is what went
+    expect(row.archived_at).toBeNull(); // the ticket stays on the board
+    expect(row.branch).toBe("volli/VC-1-x"); // and stays recreatable
+    expect(row.pr_url).toBe("https://gh/pr/1");
+  });
+
+  it("records ONE event that says why, and what it kept", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 15);
+    const { git } = statusGit(wt, gitDir, false);
+
+    await reclaimIfStale(deps(git), "t1", null);
+
+    expect(reclaimEvents()).toEqual([
+      expect.objectContaining({
+        actor: "automation",
+        payload: { kind: "worktree_reclaimed", branch: "volli/VC-1-x", daysInDone: 15 },
+      }),
+    ]);
+  });
+
+  // The heart of VC-113: merging is an EVENT, not a dwell. An agent that merges
+  // its own PR must not take the checkout with it — that is the "insta delete"
+  // that made the Open-PR button feel dangerous.
+  it("does NOT reclaim a freshly merged PR — only the prompt reacts to a merge", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 0);
+    const { git, calls } = statusGit(wt, gitDir, false);
+
+    const outcome = await reclaimIfStale(deps(git), "t1", "merged");
+
+    expect(outcome).toEqual({ kind: "skipped", reason: "not stale enough" });
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
+
+  it("does NOT reclaim while the PR is still open, however long it has sat", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 90);
+    updateTicketFields(ctx.db, "t1", { prUrl: "https://gh/pr/1" }, 2);
+    const { git } = statusGit(wt, gitDir, false);
+
+    expect(await reclaimIfStale(deps(git), "t1", "open")).toEqual({
+      kind: "skipped",
+      reason: "not stale enough",
+    });
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
+
+  it("does NOT reclaim before the TTL has run out", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 13); // TTL is 14
+    const { git } = statusGit(wt, gitDir, false);
+
+    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+      kind: "skipped",
+      reason: "not stale enough",
+    });
+  });
+
+  it("never reclaims a Keep-pinned worktree", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 200, { keep: true });
+    const { git } = statusGit(wt, gitDir, false);
+
+    expect(await reclaimIfStale(deps(git), "t1", "merged")).toEqual({
+      kind: "skipped",
+      reason: "kept",
+    });
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
+
+  it("refuses a Done ticket it cannot date — the dwell is the evidence, and there is none", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 200, { noDoneEntry: true }); // Done, old, clean — but no dated entry
+    const { git, calls } = statusGit(wt, gitDir, false);
+
+    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+      kind: "skipped",
+      reason: "cannot date the Done entry",
+    });
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
+
+  it("refuses a dirty worktree — the same predicate the manual remove runs", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 60);
+    const { git, calls } = statusGit(wt, gitDir, true);
+
+    const outcome = await reclaimIfStale(deps(git), "t1", null);
+
+    expect(outcome.kind).toBe("skipped");
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+    expect(reclaimEvents()).toEqual([]);
+  });
+
+  it("refuses while work is in flight in the directory", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 60);
+    const { git, calls } = statusGit(wt, gitDir, false);
+
+    const outcome = await reclaimIfStale(deps(git, [wt]), "t1", null);
+
+    expect(outcome).toEqual({ kind: "skipped", reason: "work in flight" });
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
+  });
+
+  it("leaves a ticket that is not in Done alone", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 60);
+    ctx.db.prepare("UPDATE tickets SET status = 'doing' WHERE id = 't1'").run();
+    const { git } = statusGit(wt, gitDir, false);
+
+    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+      kind: "skipped",
+      reason: "not stale enough",
+    });
+  });
+
+  it("leaves the stamp alone when the directory is already gone", async () => {
+    const wt = join(tmpdir(), "volli-never-existed-vc113");
+    seedDone(wt, 60);
+    const { git, calls } = scriptedGit(() => "");
+
+    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+      kind: "skipped",
+      reason: "worktree already missing",
+    });
+    // The pointer is the only thing left to recreate from, so nothing clears it.
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+    expect(calls).toEqual([]);
   });
 });

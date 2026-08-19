@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -31,9 +33,24 @@ let ctx: TestDb;
 beforeEach(() => {
   ctx = openTestDb();
 });
+let tempDirs: string[] = [];
+
 afterEach(() => {
   ctx.cleanup();
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  tempDirs = [];
 });
+
+/** A git that reports the worktree clean, so `remove` proceeds to delete it. */
+function cleanGit(wt: string) {
+  return (args: readonly string[]): string => {
+    if (args[0] === "worktree" && args[1] === "list") {
+      return `worktree ${wt}\nHEAD abc\nbranch refs/heads/volli/VC-1-x\n`;
+    }
+    if (args[0] === "rev-parse" && args[1] === "--git-dir") return wt;
+    return "";
+  };
+}
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -259,6 +276,135 @@ describe("pollRetention — F3: per-ticket isolation on the merge one-shot", () 
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.title).toBe("Pull request merged");
     expect(result.changed).toBe(true);
+  });
+});
+
+// VC-113: the poll is where the duration gate actually fires. The composition
+// itself (every refusal, the event it records) is covered in retention.test.ts;
+// what matters here is that the cycle reaches it for BOTH shapes of candidate —
+// a ticket with a PR and one that never had one — and accounts for what it did.
+describe("pollRetention — worktree reclaim (VC-113)", () => {
+  it("reaches a ticket WITH a PR, using the state this cycle observed", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-pr-"));
+    tempDirs.push(wt);
+    seedTicket({
+      status: "done",
+      prUrl: "https://x/pull/1",
+      branch: "volli/VC-1-x",
+      worktreePath: wt,
+      doneAt: 0,
+    });
+    const { deps } = makeDeps(
+      () => prView({ state: "MERGED", mergedAt: "2026-01-01T00:00:00Z" }),
+      100 * DAY,
+    );
+
+    await pollRetention(
+      {
+        ...deps,
+        reclaim: {
+          worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+          now: () => 100 * DAY,
+        },
+      },
+      createRetentionStore(),
+    );
+
+    // Merged AND long past the dwell: the merge is what the prompt reacts to,
+    // the dwell is what earns the deletion.
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBeNull();
+  });
+
+  it("announces a reclaim once, naming the branch it kept", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-wt-"));
+    tempDirs.push(wt);
+    seedTicket({
+      status: "done",
+      prUrl: null,
+      branch: "volli/VC-1-x",
+      worktreePath: wt,
+      doneAt: 0,
+    });
+    const { deps, notifications, changes } = makeDeps(() => ({ stdout: "" }), 100 * DAY);
+
+    await pollRetention(
+      {
+        ...deps,
+        reclaim: {
+          worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+          now: () => 100 * DAY,
+        },
+      },
+      createRetentionStore(),
+    );
+
+    expect(notifications).toEqual([
+      {
+        title: "Worktree removed",
+        body: expect.stringContaining("Branch volli/VC-1-x is kept, so you can recreate it"),
+      },
+    ]);
+    // The board has to re-hydrate: a card's worktree just stopped existing.
+    expect(changes.n).toBe(1);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBeNull();
+  });
+
+  it("does nothing at all when the reclaim seams are absent", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-off-"));
+    tempDirs.push(wt);
+    seedTicket({
+      status: "done",
+      prUrl: null,
+      branch: "volli/VC-1-x",
+      worktreePath: wt,
+      doneAt: 0,
+    });
+    const { deps, notifications } = makeDeps(() => ({ stdout: "" }), 100 * DAY);
+
+    await pollRetention(deps, createRetentionStore());
+
+    expect(notifications).toEqual([]);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
+
+  it("does not reclaim when a PR was SEEN this cycle but its stamp failed — no PR verdict, no deletion", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-unstamped-"));
+    tempDirs.push(wt);
+    seedTicket({
+      status: "done",
+      prUrl: null,
+      branch: "volli/VC-1-x",
+      worktreePath: wt,
+      doneAt: 0,
+    });
+    const { deps } = makeDeps((_file, args) => {
+      if (args[1] === "list") {
+        return {
+          stdout: JSON.stringify([{ url: "https://x/pull/9", state: "OPEN", updatedAt: "z" }]),
+        };
+      }
+      return { stdout: "" };
+    }, 100 * DAY);
+    const brokenDeps: RetentionPollDeps = {
+      ...deps,
+      db: dbWithBrokenTransaction(ctx.db),
+      reclaim: {
+        worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+        now: () => 100 * DAY,
+      },
+    };
+
+    const result = await pollRetention(brokenDeps, createRetentionStore());
+
+    // The ticket is ancient and clean, but the cycle saw an OPEN PR it could
+    // not persist — reclaiming on a "no PR" verdict a failed write faked would
+    // be exactly the too-aggressive deletion this ticket is about.
+    expect(result.changed).toBe(false);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
   });
 });
 
