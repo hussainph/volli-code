@@ -47,6 +47,13 @@
  * like the sidebar width: it's a global chrome preference, not per-workspace,
  * so every ticket you open honors the same choice.
  *
+ * `homeRailMode` — which page HOME's rail shows (Now / Sessions), and
+ * `homeEmptyVisual` — which drawing a Project Session's empty chat opens on
+ * (Streak / Board / Venue, VC-55). Both persist app-wide for the same reason
+ * `railMode` does, and both are their own key rather than a widening of the
+ * ticket rail's: the two rails offer different pages, and a ticket's empty chat
+ * has one visual to choose from, so there is nothing there to remember.
+ *
  * `railMode` — which page the ticket rail shows (Now / Diffs / Files).
  * Persisted app-wide like `railCollapsed`. Every value a shipped build could
  * have written stays readable: `resolvePersistedRailMode` maps the retired
@@ -77,6 +84,16 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
+import {
+  DEFAULT_EMPTY_VISUAL,
+  sanitizeEmptyVisual,
+  type EmptyVisual,
+} from "@renderer/components/chat/empty-visual";
+import {
+  DEFAULT_HOME_RAIL_MODE,
+  sanitizeHomeRailMode,
+  type HomeRailMode,
+} from "@renderer/components/home/home-rail-model";
 import {
   DEFAULT_TICKET_RAIL_MODE,
   type TicketRailMode,
@@ -228,6 +245,10 @@ interface UiState {
   railCollapsed: boolean;
   /** Active ticket-rail page. Persisted app-wide (see module doc). */
   railMode: TicketRailMode;
+  /** Active Home-rail page. Persisted app-wide (see module doc). */
+  homeRailMode: HomeRailMode;
+  /** Which drawing a Project Session's empty chat opens on. Persisted app-wide. */
+  homeEmptyVisual: EmptyVisual;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
   /** Session-only terminal focus target; never persisted. */
@@ -254,6 +275,8 @@ interface UiState {
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
   setRailMode(mode: TicketRailMode): void;
+  setHomeRailMode(mode: HomeRailMode): void;
+  setHomeEmptyVisual(visual: EmptyVisual): void;
   setDiffPresentation(presentation: DiffPresentation): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
@@ -286,6 +309,8 @@ type PersistedUiState = Pick<
   | "sidebarPinned"
   | "railCollapsed"
   | "railMode"
+  | "homeRailMode"
+  | "homeEmptyVisual"
   | "diffPresentation"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
@@ -316,6 +341,8 @@ export function createUiStore(storage?: StateStorage) {
         sidebarPinned: true,
         railCollapsed: false,
         railMode: DEFAULT_TICKET_RAIL_MODE,
+        homeRailMode: DEFAULT_HOME_RAIL_MODE,
+        homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         terminalFocusTarget: null,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
@@ -337,6 +364,8 @@ export function createUiStore(storage?: StateStorage) {
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         setRailMode: (mode) => set({ railMode: mode }),
+        setHomeRailMode: (mode) => set({ homeRailMode: mode }),
+        setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
@@ -364,6 +393,8 @@ export function createUiStore(storage?: StateStorage) {
           sidebarPinned: state.sidebarPinned,
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
+          homeRailMode: state.homeRailMode,
+          homeEmptyVisual: state.homeEmptyVisual,
           diffPresentation: state.diffPresentation,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
@@ -395,6 +426,10 @@ export function createUiStore(storage?: StateStorage) {
               railMode: stored.railMode,
               detailsExpanded: stored.detailsExpanded,
             }),
+            // Same discipline for Home's two: a page or a visual this build no
+            // longer offers lands on the one it opens with.
+            homeRailMode: sanitizeHomeRailMode(stored.homeRailMode),
+            homeEmptyVisual: sanitizeEmptyVisual(stored.homeEmptyVisual),
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),

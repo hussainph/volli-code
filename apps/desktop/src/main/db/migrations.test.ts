@@ -6,6 +6,13 @@ import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
 
+/**
+ * The version a fully-migrated database lands on, derived rather than typed
+ * out: every migration added past this point would otherwise mean editing the
+ * same literal in seventeen assertions that all mean "and it is up to date".
+ */
+const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version;
+
 let dir: string;
 
 afterEach(() => {
@@ -193,7 +200,7 @@ describe("migrate — fresh install", () => {
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });
 
@@ -387,7 +394,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as {
       name: string;
     };
@@ -441,7 +448,7 @@ describe("migrate — 002 to 004 upgrade path", () => {
     const latestVersion = db.pragma("user_version", { simple: true }) as number;
     migrate(db, dbPath); // second call: nothing pending
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     // No backup should exist for the already-latest version — the second
     // migrate() call had nothing to apply.
     expect(existsSync(`${dbPath}.backup-v${latestVersion}`)).toBe(false);
@@ -456,7 +463,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     const projects = db
       .prepare("SELECT id, next_ticket_number FROM projects ORDER BY id")
       .all() as { id: string; next_ticket_number: number }[];
@@ -509,7 +516,7 @@ describe("migrate — 005 to 006 upgrade path (pre-ledger terminal rows)", () =>
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.prepare("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
     expect(existsSync(`${dbPath}.backup-v5`)).toBe(true);
     db.close();
@@ -523,7 +530,7 @@ describe("migrate — 006 to 007 upgrade path (execution preferences)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.prepare("SELECT preferred_harness_id FROM tickets WHERE id = 't1'").get()).toEqual({
       preferred_harness_id: "claude-code",
     });
@@ -542,7 +549,7 @@ describe("migrate — 007 to 008 upgrade path (worktree setup command)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.prepare("SELECT name, setup_command FROM projects WHERE id = 'p1'").get()).toEqual({
       name: "Project",
       setup_command: null,
@@ -559,7 +566,7 @@ describe("migrate — 008 to 009 upgrade path (durable draft-PR url)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.prepare("SELECT title, pr_url FROM tickets WHERE id = 't1'").get()).toEqual({
       title: "Ticket",
       pr_url: null,
@@ -576,7 +583,7 @@ describe("migrate — 010 to 020 upgrade path (attachment storage)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(tableExists(db, "blobs")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT title FROM tickets WHERE id = 't1'").get()).toEqual({
@@ -607,7 +614,7 @@ describe("migrate — 011 to 012 upgrade path (legacy terminal rows)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.prepare("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
     expect(existsSync(`${dbPath}.backup-v11`)).toBe(true);
     db.close();
@@ -630,7 +637,7 @@ describe("migrate — 012 to 013 upgrade path (per-surface theme override)", () 
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     // Decision #69: the override is PER SURFACE, and NULL = inherit — so an
     // upgraded project keeps the global theme on every surface.
     expect(
@@ -682,7 +689,7 @@ describe("migrate — 013 to 014 upgrade path (per-project canvas + appearance)"
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     // NULL = inherit, exactly as 013 meant it: an upgraded project keeps the
     // global canvas and the global appearance.
     expect(
@@ -753,7 +760,7 @@ describe("migrate — 014 to 015 upgrade path (registered harnesses)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(tableExists(db, "registered_harnesses")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS n FROM registered_harnesses").get()).toEqual({ n: 0 });
     expect(existsSync(`${dbPath}.backup-v14`)).toBe(true);
@@ -815,7 +822,7 @@ describe("migrate — 015 to 018 upgrade path (terminal reset)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.prepare("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT name FROM projects WHERE id = 'p1'").get()).toEqual({
       name: "Project",
@@ -855,7 +862,7 @@ describe("migrate — 016 to 017 upgrade path (harness channel)", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(tableExists(db, "harness_channel")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS n FROM harness_channel").get()).toEqual({ n: 0 });
     expect(
@@ -987,7 +994,7 @@ describe("migrate — 017 to 018 Session ledger reset", () => {
     migrate(db, dbPath);
 
     expect(existsSync(`${dbPath}.backup-v17`)).toBe(true);
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(db.prepare("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
     expect(
@@ -1020,7 +1027,7 @@ describe("migrate — 018 to 019 upgrade path (per-project runtime preferences)"
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(20);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     // NULL = inherit, as 013 and 014 mean it: an upgraded project keeps
     // whatever `app_state` holds globally for every adapter.
     expect(db.prepare("SELECT runtime_preferences FROM projects WHERE id = 'p1'").get()).toEqual({
@@ -1061,6 +1068,70 @@ describe("migrate — 018 to 019 upgrade path (per-project runtime preferences)"
       expect.arrayContaining(["runtime_preferences", "theme_canvas"]),
     );
     expect(tableExists(db, "app_state")).toBe(true);
+    db.close();
+  });
+});
+
+describe("migrate — 019 to 020 upgrade path (web access)", () => {
+  it("adds both tables to an existing database, empty, and touches nothing else", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((m) => m.version <= 19)) {
+      db.exec(migration.sql);
+    }
+    db.pragma("user_version = 19");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    // Off is the resting state, and it is the ABSENCE of a row rather than a
+    // seeded one: an install that never opened the page has configured nothing.
+    expect(db.prepare("SELECT COUNT(*) AS n FROM web_access_settings").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM secrets").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT name FROM projects WHERE id = 'p1'").get()).toEqual({
+      name: "Project",
+    });
+    expect(existsSync(`${dbPath}.backup-v19`)).toBe(true);
+    db.close();
+  });
+
+  it("holds one settings row and only the providers this version knows", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    db.prepare(
+      "INSERT INTO web_access_settings (id, provider, searxng_url, updated_at) VALUES (1, 'brave', NULL, 0)",
+    ).run();
+    // A profile-wide setting: a table that could hold two of them is a table
+    // somebody has to write a tie-breaker for.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO web_access_settings (id, provider, searxng_url, updated_at) VALUES (2, 'off', NULL, 0)",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db.prepare("UPDATE web_access_settings SET provider = 'yandex' WHERE id = 1").run(),
+    ).toThrow();
+    db.close();
+  });
+
+  it("keeps secrets out of the store that ships to the renderer", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    // `app_state` is handed to the renderer wholesale on bootstrap and is
+    // writable by it; `secrets` is neither, which is the whole reason it exists.
+    expect(tableExists(db, "secrets")).toBe(true);
+    expect(columnNames(db, "secrets")).toEqual(["name", "ciphertext", "updated_at"]);
     db.close();
   });
 });

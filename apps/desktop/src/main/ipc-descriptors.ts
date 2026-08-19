@@ -31,6 +31,7 @@ import type {
   IpcArgs,
   ModelAccessIpcChannel,
   ThemeIpcChannel,
+  WebAccessIpcChannel,
   UpdateIpcChannel,
   VolliInvokeContract,
 } from "../ipc/contract";
@@ -434,6 +435,26 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:session-list-for-ticket"> =>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
+  },
+  "volli:session-starts": {
+    guard: (args): args is IpcArgs<"volli:session-starts"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["sinceMs"] === "number" &&
+      Number.isFinite(args[0]["sinceMs"]),
+    invalidError: "Invalid session window",
+  },
+  "volli:venue-snapshot": {
+    guard: (args): args is IpcArgs<"volli:venue-snapshot"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
+      // `ticketId: null` is the Project-Session arm and must pass; `undefined`
+      // must not — a caller that forgot the key is asking a different question
+      // from one that said "no ticket".
+      return input["ticketId"] === null || typeof input["ticketId"] === "string";
+    },
+    invalidError: "Invalid venue",
   },
   "volli:session-rename": {
     guard: (args): args is IpcArgs<"volli:session-rename"> => {
@@ -953,6 +974,55 @@ export const MODEL_ACCESS_IPC: {
 export const MODEL_ACCESS_CHANNELS = Object.keys(
   MODEL_ACCESS_IPC,
 ) as readonly ModelAccessIpcChannel[];
+
+// ---- web access descriptor table ------------------------------------------
+// The second surface an argument can be a credential on, written to the same
+// letter as the sign-in table above: `invalidError` never interpolates an
+// argument and never counts characters, because a message shaped by the value it
+// rejected is a message that describes a secret. The key is unconstrained apart
+// from being a string — Brave decides what its token looks like, and a length or
+// charset rule invented here would reject a legitimate one.
+//
+// The endpoint is NOT validated here. A guard's job is the argument's shape, and
+// where a search request may go is a policy (`admitSearchEndpoint`) whose
+// refusals are sentences a person needs to read — "Invalid request" would tell
+// them nothing about which of their URL's several problems to fix.
+
+function isWebAccessProvider(value: unknown): boolean {
+  return value === "off" || value === "brave" || value === "searxng" || value === "exa";
+}
+
+/** The providers that carry a key, which are the only ones a key channel names. */
+function isKeyedWebAccessProvider(value: unknown): boolean {
+  return value === "brave" || value === "exa";
+}
+
+export const WEB_ACCESS_IPC: { readonly [C in WebAccessIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:web-access-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:web-access-set-provider": {
+    guard: (args): args is IpcArgs<"volli:web-access-set-provider"> =>
+      args.length === 2 &&
+      isWebAccessProvider(args[0]) &&
+      (args[1] === null || typeof args[1] === "string"),
+    invalidError: "Invalid web access provider",
+  },
+  "volli:web-access-set-key": {
+    guard: (args): args is IpcArgs<"volli:web-access-set-key"> =>
+      args.length === 2 && isKeyedWebAccessProvider(args[0]) && typeof args[1] === "string",
+    invalidError: "Invalid API key",
+  },
+  "volli:web-access-clear-key": {
+    guard: (args): args is IpcArgs<"volli:web-access-clear-key"> =>
+      args.length === 1 && isKeyedWebAccessProvider(args[0]),
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the Web Access surface owns, derived — never hand-synced. */
+export const WEB_ACCESS_CHANNELS = Object.keys(WEB_ACCESS_IPC) as readonly WebAccessIpcChannel[];
 
 // ---- self-update descriptor table (VC-59) ---------------------------------
 // Every update request is argument-less — the state is main's to own and the

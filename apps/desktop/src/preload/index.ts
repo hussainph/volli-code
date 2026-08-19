@@ -112,6 +112,7 @@ import type {
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
+  SessionStartsResult,
   TerminalOverlayWriteResult,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -135,9 +136,13 @@ import type {
   UpdateStateResult,
   UpdateUiState,
   VolliInvokeContract,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessResult,
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
+  VenueSnapshotResult,
   WorktreeBaseReadResult,
   WorktreeBranchesResult,
   WorktreeChangeSetResult,
@@ -406,6 +411,13 @@ const api = {
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
     /**
+     * When Sessions were started, across every project, from `sinceMs` onward
+     * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count
+     * per day needs no titles and no histories.
+     */
+    starts: (sinceMs: number): Promise<SessionStartsResult> =>
+      invoke("volli:session-starts", { sinceMs }),
+    /**
      * Subscribes to backward-move interrupt announcements (issue #78, CONCEPT
      * #20): fired only when a ticket move out of the active columns actually
      * Esc'd live agent sessions — the renderer toasts it, never silently.
@@ -548,6 +560,34 @@ const api = {
       return () => ipcRenderer.removeListener(channel, listener);
     },
   },
+  /**
+   * Bring-your-own web search. Its own door beside `modelAccess`, for the same
+   * reason that one has one: `setKey` carries an API key, and the instrumented
+   * Session RPC wire is not where a secret belongs.
+   *
+   * One direction only. A key goes in; every call answers with the same
+   * settings view, in which a key is three words about its state and never a
+   * value. There is no call here that reads one back.
+   */
+  webAccess: {
+    /** The current setting — provider, instance URL, and whether a key is held. */
+    get: (): Promise<WebAccessResult> => invoke("volli:web-access-get"),
+    /** Chooses the provider; the SearXNG URL is judged by policy before it is stored. */
+    setProvider: (
+      provider: WebAccessProvider,
+      searxngUrl: string | null,
+    ): Promise<WebAccessResult> => invoke("volli:web-access-set-provider", provider, searxngUrl),
+    /**
+     * Stores one provider's key. The one outbound secret in the app after
+     * sign-in, and one-way: main encrypts it with the OS keychain and it is
+     * never read back, echoed, or put in an error string.
+     */
+    setKey: (provider: KeyedWebAccessProvider, key: string): Promise<WebAccessResult> =>
+      invoke("volli:web-access-set-key", provider, key),
+    /** Forgets one provider's key. The provider choice, and the other key, are left alone. */
+    clearKey: (provider: KeyedWebAccessProvider): Promise<WebAccessResult> =>
+      invoke("volli:web-access-clear-key", provider),
+  },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
       invoke("volli:label-set-color", input),
@@ -638,6 +678,16 @@ const api = {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
+  },
+  /**
+   * The venue a Session runs in, measured (VC-55) — its own door rather than a
+   * `worktree` verb, because the question is not about a worktree: a Project
+   * Session's venue is the project's main checkout, and a ticket's may be too.
+   */
+  venue: {
+    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Project Session. */
+    snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
+      invoke("volli:venue-snapshot", { projectId, ticketId }),
   },
   worktree: {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */

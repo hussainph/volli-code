@@ -13,6 +13,8 @@ import {
   THEME_IPC,
   UPDATE_CHANNELS,
   UPDATE_IPC,
+  WEB_ACCESS_CHANNELS,
+  WEB_ACCESS_IPC,
 } from "./ipc-descriptors";
 
 describe("UPDATE_IPC descriptor table", () => {
@@ -897,6 +899,59 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:session-starts", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-starts"];
+
+    it("accepts a finite epoch-ms window", () => {
+      expect(guard([{ sinceMs: 0 }])).toBe(true);
+      expect(guard([{ sinceMs: 1_767_225_600_000 }])).toBe(true);
+    });
+
+    it("rejects a window that is not a finite number", () => {
+      expect(guard([{ sinceMs: "yesterday" }])).toBe(false);
+      expect(guard([{ sinceMs: Number.NaN }])).toBe(false);
+      expect(guard([{ sinceMs: Number.POSITIVE_INFINITY }])).toBe(false);
+      expect(guard([{}])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session window");
+    });
+  });
+
+  describe("volli:venue-snapshot", () => {
+    const { guard, invalidError } = DATA_IPC["volli:venue-snapshot"];
+
+    it("accepts both scopes a Session can have", () => {
+      expect(guard([{ projectId: "p1", ticketId: null }])).toBe(true);
+      expect(guard([{ projectId: "p1", ticketId: "t1" }])).toBe(true);
+    });
+
+    it("rejects an omitted ticket scope — absent is not the same claim as null", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(false);
+      expect(guard([{ projectId: "p1", ticketId: 7 }])).toBe(false);
+    });
+
+    it("rejects a missing or non-string project", () => {
+      expect(guard([{ ticketId: null }])).toBe(false);
+      expect(guard([{ projectId: 1, ticketId: null }])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid venue");
+    });
+  });
+
   describe("volli:session-rename", () => {
     const { guard, invalidError } = DATA_IPC["volli:session-rename"];
 
@@ -1380,8 +1435,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 51 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(51);
+    it("covers all 53 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(53);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
@@ -1395,6 +1450,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-base-read");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-watch");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
+      expect(DATA_CHANNELS).toContain("volli:session-starts");
+      expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
     });
   });
 });
@@ -1959,6 +2016,104 @@ describe("MODEL_ACCESS_IPC descriptor table", () => {
   describe("MODEL_ACCESS_CHANNELS derivation", () => {
     it("derives the channel list from the table rather than repeating it", () => {
       expect(MODEL_ACCESS_CHANNELS).toEqual(Object.keys(MODEL_ACCESS_IPC));
+    });
+  });
+});
+
+describe("WEB_ACCESS_IPC descriptor table", () => {
+  describe("volli:web-access-get", () => {
+    const { guard, invalidError } = WEB_ACCESS_IPC["volli:web-access-get"];
+
+    it("takes no arguments at all", () => {
+      expect(guard([])).toBe(true);
+      expect(guard(["junk"])).toBe(false);
+    });
+
+    it("names the request", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:web-access-set-provider", () => {
+    const { guard, invalidError } = WEB_ACCESS_IPC["volli:web-access-set-provider"];
+
+    it("accepts each provider this version knows, with or without an endpoint", () => {
+      expect(guard(["off", null])).toBe(true);
+      expect(guard(["brave", null])).toBe(true);
+      expect(guard(["searxng", "http://localhost:8888"])).toBe(true);
+    });
+
+    it("refuses a provider Volli has no vocabulary for", () => {
+      expect(guard(["yandex", null])).toBe(false);
+      expect(guard(["", null])).toBe(false);
+      expect(guard([null, null])).toBe(false);
+    });
+
+    it("refuses an endpoint that is not a string or absent", () => {
+      expect(guard(["searxng", 8888])).toBe(false);
+      expect(guard(["searxng", { url: "http://localhost" }])).toBe(false);
+      expect(guard(["searxng"])).toBe(false);
+      expect(guard(["searxng", null, "extra"])).toBe(false);
+    });
+
+    it("accepts an endpoint this guard cannot judge, because the policy judges it", () => {
+      // Shape here, admission in `WebAccessSettings.setProvider`: a person who
+      // typed a LAN address needs the endpoint policy's sentence, not
+      // "Invalid".
+      expect(guard(["searxng", "http://169.254.169.254/"])).toBe(true);
+      expect(invalidError).toBe("Invalid web access provider");
+    });
+  });
+
+  describe("volli:web-access-set-key", () => {
+    const { guard, invalidError } = WEB_ACCESS_IPC["volli:web-access-set-key"];
+
+    it("accepts any string, because each provider decides what its token looks like", () => {
+      expect(guard(["brave", "BSA-anything-at-all"])).toBe(true);
+      expect(guard(["exa", ""])).toBe(true);
+    });
+
+    it("refuses anything that is not one keyed provider and one string", () => {
+      expect(guard(["brave", 42])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard(["brave"])).toBe(false);
+      expect(guard(["key", "key"])).toBe(false);
+      // SearXNG has an address, not a key, and `off` has neither.
+      expect(guard(["searxng", "anything"])).toBe(false);
+      expect(guard(["off", "anything"])).toBe(false);
+    });
+
+    it("says nothing about the value it rejected", () => {
+      // The second surface an argument can be a credential on. A message shaped
+      // by what it rejected would be a message describing a secret.
+      expect(invalidError).toBe("Invalid API key");
+    });
+  });
+
+  describe("volli:web-access-clear-key", () => {
+    const { guard } = WEB_ACCESS_IPC["volli:web-access-clear-key"];
+
+    it("names exactly one keyed provider", () => {
+      expect(guard(["brave"])).toBe(true);
+      expect(guard(["exa"])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard(["searxng"])).toBe(false);
+      expect(guard(["web-access.brave.api-key"])).toBe(false);
+    });
+  });
+
+  describe("WEB_ACCESS_CHANNELS derivation", () => {
+    it("derives the channel list from the table rather than repeating it", () => {
+      expect(WEB_ACCESS_CHANNELS).toEqual(Object.keys(WEB_ACCESS_IPC));
+    });
+
+    it("covers the whole Web Access surface", () => {
+      expect(WEB_ACCESS_CHANNELS).toEqual([
+        "volli:web-access-get",
+        "volli:web-access-set-provider",
+        "volli:web-access-set-key",
+        "volli:web-access-clear-key",
+      ]);
     });
   });
 });

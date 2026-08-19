@@ -48,6 +48,13 @@ export type {
   WorktreeBaseFileRead,
 } from "./read";
 export { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+
+// The venue read (VC-55): the checkout a Session runs in, measured — the file
+// partition the empty chat draws and the loose count the Home rail shows.
+// `readVenue` resolves the directory by the Session runtime's own rule, so the
+// two can never disagree about which tree a Session is standing in.
+export { readVenue, venueSnapshot } from "./venue";
+export type { VenueReadDeps, VenueSnapshotInput, VenueTarget } from "./venue";
 export type { ChangeSetInput, ChangeSetBaseFileInput, ChangeSetBaseFile } from "./change-set";
 export {
   WorktreeChangeWatchManager,

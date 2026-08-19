@@ -2,6 +2,7 @@ import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockw
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
@@ -19,6 +20,7 @@ import { AppearanceSettings } from "@renderer/components/pages/appearance-settin
 import { CliSettings } from "@renderer/components/pages/cli-settings";
 import { HarnessSettings } from "@renderer/components/pages/harness-settings";
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
+import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
 import {
   SettingsRow,
   SettingsSection,
@@ -73,6 +75,15 @@ export function SettingsPage({
       label: "Model Access",
       icon: CpuIcon,
       content: <ModelAccessSettings autoSignInProviderId={initialSignInProviderId} />,
+    },
+    {
+      // Web Access is Model Access's sibling, not a Harness setting: it is one
+      // outside service a person brings their own account to, and it sits next
+      // to the other one.
+      key: "web",
+      label: "Web",
+      icon: GlobeIcon,
+      content: <WebAccessSettings />,
     },
     {
       key: "harness",

@@ -374,6 +374,76 @@ export interface RuntimeAskUserRequest {
   allowOther?: boolean;
 }
 
+/**
+ * One bounded web document, as the boundary that read it describes it.
+ *
+ * Declared here rather than beside the sockets because {@link SessionRuntimeSpec}
+ * is where the port is offered, and this package may not import the one that
+ * owns DNS and TLS. `@volli/agent-runtime` names the same type
+ * `SafeWebFetchResult`; there is one declaration so the two cannot drift.
+ *
+ * Everything here is a fact the fetcher established, and none of it is the
+ * page's to state: {@link origin} and {@link finalUrl} are read off the request
+ * Volli made, not off the bytes that came back, which is what makes them usable
+ * as provenance in front of text that may be trying to claim otherwise.
+ */
+export interface RuntimeWebDocument {
+  /** The URL that was asked for, canonical as admission normalized it. */
+  requestedUrl: string;
+  /** The URL the bytes came from. Equal to {@link requestedUrl} while no redirect is followed. */
+  finalUrl: string;
+  /** Scheme, host and port of the final URL. */
+  origin: string;
+  /**
+   * The kind of text in {@link text}: `markdown` when the page was served as
+   * Markdown or its article was extracted from HTML and converted, `text` for
+   * the other media types Volli reads. Raw markup is never handed back — it is
+   * spent inside the boundary, and only what a reader can use leaves it.
+   */
+  contentType: "text" | "markdown";
+  /** The document's text, already inside the boundary's own character bound. */
+  text: string;
+  /** Whether the boundary cut the text short of the document's end. */
+  truncated: boolean;
+}
+
+/**
+ * One reference a search returned: somewhere to read, not something read.
+ *
+ * Every field is third-party text. Unlike {@link RuntimeWebDocument}, where the
+ * provenance around the content is Volli's, *all three* of these come from the
+ * provider and through it from whoever wrote the page — the URL included. A URL
+ * here carries no authority and is not a trust label: reading one is a fresh
+ * decision, judged from scratch by the same policy every other URL faces.
+ *
+ * Bounded before it gets here. The boundary that produced it has already cut
+ * each field to one line inside its own character bounds, because these are
+ * one-line fields by contract and a newline in them is a third party writing
+ * the shape of Volli's own list.
+ */
+export interface RuntimeWebSearchReference {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/**
+ * What one search returns.
+ *
+ * {@link provider} and {@link query} are Volli's own facts — the id of the
+ * provider a person configured, and the query Volli sent — so they can be
+ * stated as provenance in front of references that may claim otherwise.
+ */
+export interface RuntimeWebSearchResults {
+  /** The configured provider's id, as Volli names it. Never the provider's own words. */
+  provider: string;
+  /** The query Volli sent, which is the model's own text. */
+  query: string;
+  references: readonly RuntimeWebSearchReference[];
+  /** Whether the provider offered more references than the boundary passed on. */
+  truncated: boolean;
+}
+
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
@@ -474,6 +544,51 @@ export interface SessionRuntimeSpec {
     request: RuntimeAskUserRequest,
     signal: AbortSignal,
   ) => Promise<SessionInteractionResolution>;
+  /**
+   * Read one public web document, through a boundary this Session does not own.
+   *
+   * Optional on the same terms as {@link askUser}, and for the same reason: its
+   * absence is what decides whether the model is offered a web tool at all. A
+   * Session given no boundary has no way to reach the network through the
+   * runtime, rather than a tool that fails on use.
+   *
+   * One URL in and one bounded document out is the whole of the contract. There
+   * is deliberately no header, host, port, method or redirect policy a caller
+   * could state: every one of those is a decision the boundary makes for itself,
+   * and a port that accepted them would be a port through which the model could
+   * negotiate its own safety.
+   *
+   * `signal` withdraws the read, and a host must honour it — the runtime stops
+   * waiting either way. A rejection means the read did not happen: a refusal
+   * carries a rule the runtime turns into text the model can act on, and
+   * anything else is a host that could not answer and fails the call.
+   */
+  webFetch?: (input: { url: string; signal: AbortSignal }) => Promise<RuntimeWebDocument>;
+  /**
+   * Ask the configured search provider for references, through a boundary this
+   * Session does not own.
+   *
+   * Optional on the same terms as {@link webFetch}: a Session given no provider
+   * is offered no search tool, rather than one that fails on use. The two are
+   * independent — a Session can be given either, both or neither, because
+   * searching and reading are different capabilities with different costs. A
+   * search discloses the query to a third party; a fetch does not.
+   *
+   * One query in and bounded references out is the whole of the contract. The
+   * endpoint, the credential and every bound are the boundary's, and there is
+   * deliberately no URL, count, provider, locale or freshness a caller could
+   * state: a port that carried them would be a port the model could aim.
+   *
+   * What comes back is references and never page contents. Nothing behind this
+   * port may read a result page — that is what makes a search cheap to allow
+   * and a fetch a separate decision.
+   *
+   * `signal` withdraws the search, and a host must honour it. A rejection means
+   * the search did not happen: a refusal carries a rule the runtime turns into
+   * text the model can act on, and anything else is a host that could not
+   * answer and fails the call.
+   */
+  webSearch?: (input: { query: string; signal: AbortSignal }) => Promise<RuntimeWebSearchResults>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }

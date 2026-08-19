@@ -61,6 +61,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
+  VenueSnapshot,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -208,6 +209,22 @@ export interface BlobLinkDraftsInput {
 export interface SessionRenameInput {
   sessionId: string;
   title: string;
+}
+
+/** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
+export interface SessionStartsInput {
+  sinceMs: number;
+}
+
+/**
+ * Whose venue to measure. The pair is the Session's own scope, not a path — a
+ * renderer never names a directory main will run git in; main resolves it from
+ * its own rows, by the rule the Session runtime binds a directory with.
+ */
+export interface VenueSnapshotInput {
+  projectId: string;
+  /** `null` for a Project Session, which runs in the project's main checkout. */
+  ticketId: string | null;
 }
 
 export interface LabelSetColorInput {
@@ -395,6 +412,19 @@ export interface VolliDataIpcContract {
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  /**
+   * When Sessions were started, across EVERY project, from `sinceMs` onward
+   * (VC-55). Stamps only: the Home empty chat draws a count per day, and
+   * `session-list` would fold every Session's whole history to answer it.
+   */
+  "volli:session-starts": { args: [input: SessionStartsInput]; result: SessionStartsResult };
+  /**
+   * The venue a Session of this scope runs in, measured (VC-55): the checkout,
+   * its branch, the four-state file partition, and the lines moved against the
+   * base. `ticketId: null` is a Project Session, which stands in the project's
+   * main checkout.
+   */
+  "volli:venue-snapshot": { args: [input: VenueSnapshotInput]; result: VenueSnapshotResult };
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
@@ -909,6 +939,98 @@ export type ModelAccessIpcChannel = keyof VolliModelAccessIpcContract;
 /** The attempt id every later message about one sign-in is correlated by. */
 export type ModelAccessSignInBeginResult = Result<{ attemptId: string }>;
 
+/** Which search provider this profile brings, if any. `off` is the default. */
+export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
+
+/**
+ * The providers that authenticate with a key a person pastes.
+ *
+ * Named apart from {@link WebAccessProvider} because carrying a credential is
+ * what decides most of this surface: a keyed provider has a secret row, a key
+ * state to report, and a "replace stored key" affordance, while SearXNG has an
+ * address and `off` has neither.
+ */
+export type KeyedWebAccessProvider = "brave" | "exa";
+
+/**
+ * What the renderer may know about a stored API key: that there is one, that
+ * there is one this machine can no longer decrypt, or that there is none.
+ *
+ * A state rather than the value, and there is no fourth member that carries one.
+ * "Unreadable" is here because a profile copied to another machine, or a
+ * keychain that stopped answering, is a real situation — and reporting it as
+ * "absent" would tell a person to paste a key they already pasted.
+ */
+export type WebAccessKeyState = "absent" | "present" | "unreadable";
+
+/** The whole of what Settings is told about Web Access. */
+export interface WebAccessSettingsView {
+  provider: WebAccessProvider;
+  /** The normalized instance URL a person configured, or null. Never a secret. */
+  searxngUrl: string | null;
+  /**
+   * What is stored for each keyed provider, and never what it is.
+   *
+   * One entry per provider rather than one for the selected one, because the
+   * rows are independent: configuring Exa does not discard a Brave key, and a
+   * person switching back should not be asked to paste one they already gave.
+   */
+  keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
+  /** Whether this machine's OS keychain can encrypt at all right now. */
+  encryptionAvailable: boolean;
+}
+
+export type WebAccessResult = Result<{ settings: WebAccessSettingsView }>;
+
+/**
+ * Bring-your-own web search, configured in Settings.
+ *
+ * Its own surface rather than a Session RPC namespace, for the reason
+ * {@link VolliModelAccessIpcContract} gives: one argument here is an API key,
+ * every RPC procedure is wrapped by a diagnostic recorder with a live
+ * subscription tap on it, and a secret and a log tap do not belong on one wire.
+ * Nothing on these four channels is recorded.
+ *
+ * The traffic is one-way for the secret. A key crosses inbound, once, and every
+ * answer on every channel is a {@link WebAccessSettingsView} — a shape with no
+ * field a key could occupy. There is deliberately no "read the key back"
+ * channel, not even a masked one: a renderer that can display the last four
+ * characters is a renderer that was sent them.
+ */
+export interface VolliWebAccessIpcContract {
+  /** The current setting. Safe to call on every Settings open. */
+  "volli:web-access-get": { args: []; result: WebAccessResult };
+  /**
+   * Chooses the provider, and for SearXNG the instance to call.
+   *
+   * The URL is judged by `admitSearchEndpoint` before it is stored, so a LAN
+   * address is an error in Settings rather than a refusal in the middle of
+   * somebody's turn six hours later.
+   */
+  "volli:web-access-set-provider": {
+    args: [provider: WebAccessProvider, searxngUrl: string | null];
+    result: WebAccessResult;
+  };
+  /**
+   * Stores the Brave API key. The one inbound secret on this surface.
+   *
+   * It crosses once, is encrypted with the OS keychain, and is never echoed,
+   * returned, logged, or included in an error string. A machine that cannot
+   * encrypt refuses rather than storing it in the clear.
+   */
+  "volli:web-access-set-key": {
+    args: [provider: KeyedWebAccessProvider, key: string];
+    result: WebAccessResult;
+  };
+  /** Forgets one provider's stored key. The provider choice, and the other key, are left alone. */
+  "volli:web-access-clear-key": {
+    args: [provider: KeyedWebAccessProvider];
+    result: WebAccessResult;
+  };
+}
+
+export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
+
 /**
  * Type-only entries for every remaining invoke channel — these live outside
  * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
@@ -1072,6 +1194,7 @@ export interface VolliInvokeContract
     VolliCliIpcContract,
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
+    VolliWebAccessIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
     VolliUpdateIpcContract {}
@@ -1486,6 +1609,12 @@ export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
+
+/** Session creation stamps in the requested window, ascending — every project's. */
+export type SessionStartsResult = Result<{ startedAt: number[] }>;
+
+/** One venue reading (`venue-snapshot`); the error arm carries git's own message. */
+export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
 
 // ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 

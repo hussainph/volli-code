@@ -339,6 +339,7 @@ export const Board = React.memo(function Board({
           ticketCount={visible.length}
           tickets={storeTickets}
           filter={filter}
+          activityByTicket={sessionActivity}
         />
         {/* One DndContext drives BOTH views — same handlers, same preview/commit
             machinery, same ticket id space. The view branch lives inside it so the

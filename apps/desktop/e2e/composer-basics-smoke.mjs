@@ -389,7 +389,9 @@ async function main() {
 
     // === 8. "c" hotkey opens a dialog (passes against today's dialog too) =====
     await attempt(8, 'Plain "c" hotkey opens a dialog', async () => {
-      await page.getByRole("heading", { name: "Board", exact: true }).click();
+      // The permanent Board tab, which is where that word lives now (VC-55) —
+      // any non-text-entry target will do; this one is always on screen.
+      await page.getByRole("tab", { name: "Board", exact: true }).click();
       await page.keyboard.press("c");
       await sleep(300);
       const open = await page.getByRole("dialog").count();

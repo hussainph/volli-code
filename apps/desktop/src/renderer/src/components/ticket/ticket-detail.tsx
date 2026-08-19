@@ -1094,6 +1094,7 @@ export function TicketDetail({
                   key={activeChatSessionId}
                   sessionId={activeChatSessionId}
                   projectId={ticket.projectId}
+                  ticketId={ticket.id}
                   onOpenFile={openFile}
                 />
               ) : null}
