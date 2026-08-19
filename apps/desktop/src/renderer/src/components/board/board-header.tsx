@@ -13,8 +13,9 @@ import {
 } from "@volli/shared";
 
 import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
-import { boardSummary, type BoardSummaryInput } from "@renderer/components/board/board-summary";
+import { boardSummary } from "@renderer/components/board/board-summary";
 import { FilterBar } from "@renderer/components/board/filter-bar";
+import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -43,12 +44,6 @@ interface BoardHeaderProps {
   /** Unfiltered — passed through to the filter bar for facet options. */
   tickets: readonly Ticket[];
   filter: TicketFilter;
-  /**
-   * Which tickets have an agent on them, for the WHOLE board — the derivation
-   * the cards' own rings already read (`use-board-session-activity.ts`), handed
-   * down rather than subscribed again here.
-   */
-  activityByTicket: BoardSummaryInput["activityByTicket"];
 }
 
 /**
@@ -151,13 +146,7 @@ function ViewToggle({ projectId }: { projectId: string }) {
  * what actually opens this row — see `board-summary.ts` for what it says and
  * why the live half ignores the filter.
  */
-export function BoardHeader({
-  projectId,
-  ticketCount,
-  tickets,
-  filter,
-  activityByTicket,
-}: BoardHeaderProps) {
+export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHeaderProps) {
   // The Archive dialog's one entry point is the button below, so its open
   // state lives here (not in the ui store — no hotkey or second surface needs
   // it, unlike the New-ticket dialog's app-wide "c" shortcut).
@@ -203,11 +192,7 @@ export function BoardHeader({
         </>
       }
     >
-      <BoardSummary
-        visible={ticketCount}
-        total={tickets.length}
-        activityByTicket={activityByTicket}
-      />
+      <BoardSummary visible={ticketCount} total={tickets.length} />
       <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
     </PageHeader>
   );
@@ -222,15 +207,11 @@ export function BoardHeader({
  * nothing running says nothing about it, which is what makes the dots mean
  * something when they do appear.
  */
-function BoardSummary({
-  visible,
-  total,
-  activityByTicket,
-}: {
-  visible: number;
-  total: number;
-  activityByTicket: BoardSummaryInput["activityByTicket"];
-}) {
+function BoardSummary({ visible, total }: { visible: number; total: number }) {
+  // Read here rather than taken as a prop from `BoardHeader`, so an agent's
+  // output re-renders this one span instead of the whole header row — and, far
+  // more importantly, never the board. See session-activity-context.tsx.
+  const activityByTicket = useBoardSessionActivityMap();
   const summary = boardSummary({ visible, total, activityByTicket });
   const live = summary.working + summary.waiting > 0;
   if (summary.count === null && !live) return null;
