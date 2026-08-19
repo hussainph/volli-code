@@ -98,7 +98,7 @@ function ContextMenuSubContent({
         MENU_SURFACE,
         MENU_SURFACE_PAD,
         MENU_SURFACE_MOTION,
-        "origin-(--radix-context-menu-content-transform-origin) overflow-hidden",
+        "max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
         className,
       )}
       {...props}
