@@ -20,7 +20,9 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import * as extract from "./extract";
 
 import {
   createSafeWebFetch,
@@ -550,6 +552,52 @@ describe("safe web fetch", () => {
       fetcher.fetch({ url: "https://docs.example.com/late", signal: cancelled.signal }),
     ).rejects.toMatchObject({ rule: "fetch.cancelled" });
     expect(resolutions).toBe(0);
+  });
+
+  it("refuses in its own words when a page cannot be read into text at all", async () => {
+    // Extraction is bounded, but it is a parser and two converters over hostile
+    // markup. If one of them ever throws, the fetch owes the caller a named
+    // refusal — not an exception crossing a boundary that runs in Electron's
+    // main process, where an unhandled throw is the app rather than one read.
+    vi.spyOn(extract, "extractReadableMarkdown").mockImplementationOnce(() => {
+      throw new RangeError("Maximum call stack size exceeded");
+    });
+    const { fetcher } = await fetcherFor((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><html><body><p>a page</p></body></html>");
+    });
+
+    await expect(
+      fetcher.fetch({
+        url: "http://docs.example.com/awkward",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ rule: "fetch.unreadable" });
+  });
+
+  it("does not open a socket for a fetch withdrawn while its host was resolving", async () => {
+    const withdrawn = new AbortController();
+    let connections = 0;
+    const fetcher = createSafeWebFetch({
+      resolve: async () => {
+        // The window between "not cancelled yet" and "listening for the
+        // cancellation": a DNS answer takes real time, and a turn interrupted
+        // inside it must not still read a page into a transcript nobody is
+        // waiting for. An abort listener registered after the signal has fired
+        // never runs, so this is the only thing that can catch it.
+        withdrawn.abort();
+        return [{ address: PUBLIC_V4, family: 4 }];
+      },
+      open: () => {
+        connections += 1;
+        throw new Error("nothing should have opened");
+      },
+    });
+
+    await expect(
+      fetcher.fetch({ url: "https://docs.example.com/late", signal: withdrawn.signal }),
+    ).rejects.toMatchObject({ rule: "fetch.cancelled" });
+    expect(connections).toBe(0);
   });
 
   it("drops a request the caller cancels while it is in flight", async () => {

@@ -52,6 +52,8 @@ export const WEB_FETCH_RULE_IDS = [
   "fetch.encoding",
   /** The response body ran past the byte bound before it ended. */
   "fetch.too-large",
+  /** The document arrived intact but could not be read into text. */
+  "fetch.unreadable",
   /** The host held the request past one of its deadlines. */
   "fetch.timeout",
   /** The caller withdrew the request. */
@@ -370,7 +372,20 @@ function document(
   // had to be taken out of markup to exist.
   let returned: Exclude<ServedKind, "html">;
   if (kind === "html") {
-    const extracted = extractReadableMarkdown(decoded, target.url);
+    // Extraction is bounded, but it is a parser and two converters over hostile
+    // markup, and a bound is a claim about the shapes we thought of. A page that
+    // finds a way to make one of them throw gets a named refusal rather than an
+    // exception crossing the boundary — this runs in Electron's main process,
+    // where an unhandled throw is the whole app rather than one fetch.
+    let extracted;
+    try {
+      extracted = extractReadableMarkdown(decoded, target.url);
+    } catch {
+      throw new WebFetchRefusal(
+        "fetch.unreadable",
+        `${target.hostname} served a document Volli could not read.`,
+      );
+    }
     text = extracted.text;
     truncated = extracted.truncated || extracted.text.length > limits.textChars;
     returned = "markdown";
@@ -420,6 +435,18 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         );
       }
       const addresses = pinAddresses(target.hostname, answers);
+      // Asked twice, because resolution takes real time and the listener that
+      // watches for a withdrawal is only installed once the request exists. A
+      // turn interrupted inside that window would otherwise still open a socket
+      // and still hand back a page — and an `abort` listener added to a signal
+      // that has already fired is never called, so without this check the
+      // withdrawal is not merely late, it is lost.
+      if (input.signal.aborted) {
+        throw new WebFetchRefusal(
+          "fetch.cancelled",
+          `The request to ${target.hostname} was cancelled before it was sent.`,
+        );
+      }
       // Parsing the href admission produced, not the caller's string: this is
       // the URL the policy accepted, already canonical, and re-reading it is
       // how the path reaches the socket without a second interpretation of the
