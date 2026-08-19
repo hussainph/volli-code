@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -7,6 +7,7 @@ import { listTicketEvents } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { archiveTicket, getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
+import { projectContainerName } from "./containers";
 import { getPhase, resetPhasesForTest, setPhase } from "./phase";
 import { remove } from "./remove";
 import { scriptedGit } from "./scripted-git";
@@ -255,5 +256,106 @@ describe("remove", () => {
     expect(result.ok).toBe(true);
     expect(calls.some((c) => c.args[1] === "remove")).toBe(true);
     expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBeNull();
+  });
+});
+
+// VC-113: the state a half-finished removal leaves behind — the checkout is
+// still on disk, but git has forgotten it. `git worktree remove` refuses such a
+// path in BOTH modes, so before this fallback the ticket could not be cleared
+// from anywhere in the app: not from the rail, not from Settings (which skips
+// DB-known paths), not by recreating (reconcile refuses to write over it).
+describe("remove — a directory git has forgotten", () => {
+  /** A stranded checkout inside the container the project owns, with files in it. */
+  function seedStranded(home: string): string {
+    const container = join(home, ".volli", "worktrees", projectContainerName("/repo", "proj-1"));
+    const wt = join(container, "VC-1-stranded");
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(join(wt, "note.txt"), "work");
+    seed(wt);
+    return wt;
+  }
+
+  /** Git that registers only the main checkout — the stranded path is unknown to it. */
+  function forgottenGit(unregistered: string) {
+    return scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree /repo\nHEAD abc\nbranch refs/heads/main\n`;
+      }
+      if (args[0] === "worktree" && args[1] === "remove") {
+        throw new Error(`fatal: '${unregistered}' is not a working tree`);
+      }
+      return "";
+    });
+  }
+
+  it("deletes the folder itself once the user confirms, and clears the stamp", async () => {
+    const home = tempDir("home");
+    const wt = seedStranded(home);
+    const { git, calls } = forgottenGit(wt);
+
+    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(wt)).toBe(false);
+    // Never through `git worktree remove` — it cannot touch a path git forgot.
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
+    expect(calls.some((c) => c.args[1] === "prune")).toBe(true);
+    const row = getTicketRow(ctx.db, "ticket-1")!;
+    expect(row.worktree_path).toBeNull();
+    // Identity survives, so the ticket can recreate its checkout immediately.
+    expect(row.branch).toBe("volli/VC-1-x");
+  });
+
+  it("still asks first: an unconfirmed remove refuses with the escalation prefix", async () => {
+    const home = tempDir("home");
+    const wt = seedStranded(home);
+    const { git } = forgottenGit(wt);
+
+    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // The dirty predicate errs dirty on the unreadable git, which is what raises
+    // the confirm dialog rather than deleting behind the user's back.
+    expect(result.error).toContain("Worktree has uncommitted work");
+    expect(existsSync(wt)).toBe(true);
+  });
+
+  it("refuses to rm -rf a stamped path outside this workspace's own containers", async () => {
+    const home = tempDir("home");
+    const outside = tempDir("elsewhere");
+    writeFileSync(join(outside, "precious.txt"), "not ours");
+    seed(outside);
+    const { git } = forgottenGit(outside);
+
+    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(outside, "precious.txt"))).toBe(true);
+    expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBe(outside);
+  });
+
+  it("routes back to git's own refusal when the listing cannot be read at all", async () => {
+    const home = tempDir("home");
+    const wt = seedStranded(home);
+    const { git } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") throw new Error("not a git repository");
+      if (args[0] === "worktree" && args[1] === "remove") throw new Error("fatal: nope");
+      return "";
+    });
+
+    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
+
+    // Ambiguity must never reach the rm -rf branch.
+    expect(result.ok).toBe(false);
+    expect(existsSync(wt)).toBe(true);
   });
 });

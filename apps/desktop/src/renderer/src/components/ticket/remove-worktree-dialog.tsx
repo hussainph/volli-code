@@ -21,10 +21,11 @@ import { toastError } from "@renderer/lib/toast";
  *
  * 1. A plain confirm ("the branch is kept") calls `api.worktree.remove(id, false)`.
  *    A clean worktree removes right there — no further prompt.
- * 2. If main refuses because the worktree is dirty, its error names WHY; that
- *    reason replaces the confirm body and the action becomes an explicit
- *    "Discard Uncommitted Work" that re-calls `remove(id, true)`. Only THAT
- *    click ever forces.
+ * 2. If main refuses because it cannot delete the folder unasked — uncommitted
+ *    work, or (VC-113) a folder git has forgotten and therefore cannot vouch
+ *    for — its error names WHY; that reason replaces the confirm body and the
+ *    action becomes an explicit "Delete the Folder" that re-calls
+ *    `remove(id, true)`. Only THAT click ever forces.
  *
  * Open state lives in the opener (the context menu item), not a global store —
  * this component just mirrors it via `open`/`onOpenChange`.
@@ -101,8 +102,16 @@ export function RemoveWorktreeDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent size="sm">
         <AlertDialogHeader>
+          {/*
+           * The escalation step's title asks the question rather than stating
+           * the reason, because the reason is the body and it is not always
+           * "uncommitted work": a folder git has forgotten (VC-113) refuses
+           * through the same escalation contract, and its contents cannot be
+           * checked at all. Naming a cause the app cannot vouch for is how a
+           * confirm dialog teaches people to stop reading it.
+           */}
           <AlertDialogTitle>
-            {step === "confirm" ? "Remove worktree?" : "Worktree has uncommitted work"}
+            {step === "confirm" ? "Remove worktree?" : "Remove it anyway?"}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {step === "confirm" ? "The branch is kept. Only the folder is removed." : dirtyReason}
@@ -129,7 +138,7 @@ export function RemoveWorktreeDialog({
                 void removeForced();
               }}
             >
-              Discard Uncommitted Work
+              Delete the Folder
             </AlertDialogAction>
           )}
         </AlertDialogFooter>

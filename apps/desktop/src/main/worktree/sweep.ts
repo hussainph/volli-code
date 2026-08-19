@@ -183,13 +183,13 @@ export async function sweepOrphans(deps: WorktreeDeps): Promise<SweepReport> {
       report.dirty.push({
         path: leafPath,
         projectId: container.projectId,
-        // A path a ticket still points at is the VC-113 dead end: git has
-        // forgotten it, so `git worktree remove` refuses in both modes and no
-        // in-app route can clear it. Say which one this is, because the two
-        // want different actions (recreate the ticket's worktree vs delete a
-        // leftover), and the Settings row reads the reason aloud.
+        // Two different things, and they want two different actions, so the
+        // Settings row reads the difference aloud: a path a ticket still points
+        // at is cleared from that ticket (its "Remove worktree…" now handles a
+        // directory git has forgotten — VC-113), while an unclaimed leftover is
+        // this list's own to delete.
         reason: knownPaths.has(canonicalize(leafPath))
-          ? "A ticket still points here, but git no longer tracks it. Delete the folder to let the ticket recreate its worktree."
+          ? "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it."
           : "Not registered with git, so it isn't safe to remove automatically.",
       });
     }
