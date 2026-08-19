@@ -137,6 +137,9 @@ importers:
       electron-updater:
         specifier: ^6.8.9
         version: 6.8.9
+      jsdom:
+        specifier: ^30.0.1
+        version: 30.0.1(@noble/hashes@2.3.0)
       marked:
         specifier: ^18.0.9
         version: 18.0.9
