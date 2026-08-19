@@ -167,6 +167,8 @@ export async function archiveAndClean(
 /** System-driven, no session: the reclaim is attributed to automation. */
 const AUTOMATION_ACTOR: TicketEventActor = { kind: "automation" };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** The seams {@link reclaimIfStale} needs beyond the worktree bundle. */
 export interface ReclaimDeps {
   worktree: WorktreeDeps;
@@ -218,16 +220,20 @@ export async function reclaimIfStale(
   // Already gone from disk: leave the stamp alone. Clearing it here would race
   // the recreate path and cost the ticket the only pointer it has left.
   if (!existsSync(ticket.worktree_path)) return SKIP("worktree already missing");
-  if (ticket.retention_keep !== 0) return SKIP("kept");
+  const keep = ticket.retention_keep !== 0;
+  if (keep) return SKIP("kept");
 
   const doneEntryAt = doneEntryTimestamp(db, ticketId);
+  // Same refusal the verdict would make, answered here instead: without a dated
+  // Done entry the dwell cannot be measured, so nothing can earn a reclaim.
+  if (doneEntryAt === null) return SKIP("cannot date the Done entry");
   const ttlMs = retentionTtlMs(db);
   const now = deps.now();
   // The pure verdict (@volli/shared): dwell alone, never a merge — see
   // `computeWorktreeReclaim` for why those are different questions.
   const verdict = computeWorktreeReclaim({
     status: ticket.status as TicketStatus,
-    keep: false, // the Keep pin is checked above, before any of this costs a read
+    keep, // re-checked by the verdict; passing it keeps the policy in one place
     prUrl: ticket.pr_url,
     prState,
     doneEntryAt,
@@ -245,8 +251,7 @@ export async function reclaimIfStale(
   });
   if (!removed.ok) return SKIP(removed.error);
 
-  const daysInDone =
-    doneEntryAt === null ? 0 : Math.floor((now - doneEntryAt) / (24 * 60 * 60 * 1000));
+  const daysInDone = Math.floor((now - doneEntryAt) / DAY_MS);
   recordTicketEvent(
     db,
     ticketId,

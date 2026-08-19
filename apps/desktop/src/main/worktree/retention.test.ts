@@ -189,7 +189,11 @@ describe("reclaimIfStale", () => {
   const NOW = 1_000_000_000_000;
 
   /** A Done ticket with a worktree, entered Done `daysAgo` days ago. */
-  function seedDone(worktreePath: string, daysAgo: number, opts: { keep?: boolean } = {}) {
+  function seedDone(
+    worktreePath: string,
+    daysAgo: number,
+    opts: { keep?: boolean; noDoneEntry?: boolean } = {},
+  ) {
     insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
     insertTicket(ctx.db, testTicket("p1", { id: "t1", status: "done" }));
     updateTicketFields(
@@ -201,12 +205,14 @@ describe("reclaimIfStale", () => {
     if (opts.keep === true) {
       ctx.db.prepare("UPDATE tickets SET retention_keep = 1 WHERE id = 't1'").run();
     }
-    recordTicketEvent(
-      ctx.db,
-      "t1",
-      { kind: "status_changed", from: "needs_review", to: "done" },
-      NOW - daysAgo * DAY,
-    );
+    if (opts.noDoneEntry !== true) {
+      recordTicketEvent(
+        ctx.db,
+        "t1",
+        { kind: "status_changed", from: "needs_review", to: "done" },
+        NOW - daysAgo * DAY,
+      );
+    }
   }
 
   function deps(git: ReturnType<typeof scriptedGit>["git"], busy: string[] = []) {
@@ -307,6 +313,20 @@ describe("reclaimIfStale", () => {
       kind: "skipped",
       reason: "kept",
     });
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+  });
+
+  it("refuses a Done ticket it cannot date — the dwell is the evidence, and there is none", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 200, { noDoneEntry: true }); // Done, old, clean — but no dated entry
+    const { git, calls } = statusGit(wt, gitDir, false);
+
+    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+      kind: "skipped",
+      reason: "cannot date the Done entry",
+    });
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
     expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
   });
 
