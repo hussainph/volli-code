@@ -103,6 +103,10 @@ export default defineConfig(({ mode }) => ({
         "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
         "src/components/board/board-session-activity.ts",
+        // What the board's header says now that it no longer says its own name
+        // (VC-55): the count that qualifies itself under a filter, and the live
+        // pair that deliberately does not.
+        "src/components/board/board-summary.ts",
         "src/components/chat/chat-plane-model.ts",
         // Which drawing an empty chat may offer, per scope (VC-55). A pure
         // `.ts` beside the views precisely so the gate can reach it: the menu
