@@ -2,6 +2,7 @@ import { assertSessionEvent } from "@volli/shared";
 import type {
   CommandReceipt,
   ListLatestTicketSignalsQuery,
+  ListSessionStartsQuery,
   ListSessionsQuery,
   LatestSessionSignal,
   ListSessionEventsQuery,
@@ -65,6 +66,10 @@ class InMemorySessionLedger implements SessionLedger {
       countSessions: (query) => {
         assertOpen();
         return this.#countSessions(query);
+      },
+      listSessionStarts: (query) => {
+        assertOpen();
+        return this.#listSessionStarts(query);
       },
       listLatestTicketSignals: (query) => {
         assertOpen();
@@ -146,6 +151,13 @@ class InMemorySessionLedger implements SessionLedger {
           return session.ticketId === null;
       }
     }).length;
+  }
+
+  #listSessionStarts(query: ListSessionStartsQuery): readonly number[] {
+    return [...this.#sessions.values()]
+      .map((session) => session.createdAt)
+      .filter((createdAt) => createdAt >= query.sinceMs)
+      .toSorted((left, right) => left - right);
   }
 
   #listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {

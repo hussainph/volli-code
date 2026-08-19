@@ -329,7 +329,7 @@ describe("terminal focus", () => {
 });
 
 describe("persistence", () => {
-  it("persists sidebarWidth + railWidth + uiScale + workspaceRailHidden + railCollapsed + railMode + diffPresentation — settingsOpen resets each launch", () => {
+  it("persists every chrome preference — settingsOpen resets each launch", () => {
     const storage = createMemoryStorage();
     const store = createUiStore(storage);
     store.getState().setSettingsOpen(true);
@@ -340,6 +340,8 @@ describe("persistence", () => {
     store.getState().setSidebarPinned(false);
     store.getState().toggleRailCollapsed();
     store.getState().setRailMode("files");
+    store.getState().setHomeRailMode("sessions");
+    store.getState().setHomeEmptyVisual("board");
     store.getState().setDiffPresentation("side-by-side");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
@@ -353,6 +355,8 @@ describe("persistence", () => {
       sidebarPinned: false,
       railCollapsed: true,
       railMode: "files",
+      homeRailMode: "sessions",
+      homeEmptyVisual: "board",
       diffPresentation: "side-by-side",
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
@@ -360,6 +364,32 @@ describe("persistence", () => {
     // it chose for (VC-15/VC-56); nothing reads a last-harness preference now,
     // so nothing writes one either.
     expect(persisted.state).not.toHaveProperty("lastHarnessId");
+  });
+
+  it("rehydrates Home's rail page and empty-chat visual; unknown values fall back", async () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().setHomeRailMode("sessions");
+    store.getState().setHomeEmptyVisual("venue");
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().homeRailMode).toBe("sessions");
+    expect(reloaded.getState().homeEmptyVisual).toBe("venue");
+
+    // A page or a visual a past build wrote and this one no longer draws lands
+    // on the one each surface opens with.
+    const stale = createMemoryStorage();
+    stale.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { homeRailMode: "mentioned", homeEmptyVisual: "greeter" },
+        version: 1,
+      }),
+    );
+    const recovered = createUiStore(stale);
+    await recovered.persist.rehydrate();
+    expect(recovered.getState().homeRailMode).toBe("now");
+    expect(recovered.getState().homeEmptyVisual).toBe("streak");
   });
 
   it("rehydrates diffPresentation from storage; missing/unknown values default to inline", async () => {

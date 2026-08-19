@@ -178,6 +178,7 @@ export function watchSessionActivity(
     getBaseSession: (query) => engine.getBaseSession(query),
     listSessions: (query) => engine.listSessions(query),
     countSessions: (query) => engine.countSessions(query),
+    listSessionStarts: (query) => engine.listSessionStarts(query),
     listLatestTicketSignals: (query) => engine.listLatestTicketSignals(query),
     listEvents: (query) => engine.listEvents(query),
   };

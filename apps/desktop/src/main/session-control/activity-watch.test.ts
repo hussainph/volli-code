@@ -70,6 +70,7 @@ function stubEngine(current: () => SessionProjection | null) {
     getBaseSession: unused("getBaseSession"),
     listSessions: unused("listSessions"),
     countSessions: unused("countSessions"),
+    listSessionStarts: unused("listSessionStarts"),
     listLatestTicketSignals: unused("listLatestTicketSignals"),
     listEvents: unused("listEvents"),
   } as unknown as SessionEngine;
@@ -265,6 +266,7 @@ describe("watchSessionActivity", () => {
       getBaseSession: vi.fn(async () => null),
       listSessions: vi.fn(async () => []),
       countSessions: vi.fn(async () => 0),
+      listSessionStarts: vi.fn(async () => []),
       listLatestTicketSignals: vi.fn(async () => []),
       listEvents: vi.fn(async () => []),
     };
@@ -275,6 +277,7 @@ describe("watchSessionActivity", () => {
     await watch.engine.getBaseSession({ sessionId: "session-1" });
     await watch.engine.listSessions({ projectId: "project-1", scope: "all" });
     await watch.engine.countSessions({ projectId: "project-1", scope: "all" });
+    await watch.engine.listSessionStarts({ sinceMs: 0 });
     await watch.engine.listLatestTicketSignals({ projectId: "project-1" });
     await watch.engine.listEvents({ sessionId: "session-1" });
 

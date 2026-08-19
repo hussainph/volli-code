@@ -20,7 +20,6 @@ import type { BlobLinkView } from "@volli/shared";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
@@ -109,6 +108,7 @@ import {
   InteractionReceiptLine,
 } from "@renderer/components/chat/interaction-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -191,12 +191,21 @@ export interface ChatPlaneProps {
   sessionId: string;
   /** Project scope for Model Access and file navigation. */
   projectId: string;
+  /**
+   * The ticket that owns this Session, or `null` for one of the project's own.
+   *
+   * The Session's SCOPE, handed down rather than looked up: both hosts already
+   * know it (Home's is ticketless by construction, a ticket workspace's is the
+   * ticket it is drawing), and the empty state needs it to know which venue the
+   * Session stands in and which drawings that scope can offer.
+   */
+  ticketId: string | null;
   onOpenFile(path: string): void;
   /** The UI lab's own store, which owns its own transport. Omitted in the app. */
   store?: ChatSessionsStore;
 }
 
-export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlaneProps) {
+export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const sessionsStore = store ?? useChatSessionsStore;
   const {
@@ -809,12 +818,12 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               rather than inside the fade. */}
           <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
             {messages.length === 0 ? (
-              // A mark, and nothing else. What blocks typing sits on the
-              // composer, where the typing is.
+              // Where this Session runs, drawn (VC-55). It replaces the bare
+              // mark that stood here — see `empty/chat-empty-state.tsx` for why
+              // that reversal is deliberate. What blocks TYPING still sits on
+              // the composer, where the typing is.
               <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-raised">
-                  <CodeIcon className="size-5 text-muted-foreground" />
-                </div>
+                <ChatEmptyState projectId={projectId} ticketId={ticketId} />
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>

@@ -849,6 +849,21 @@ export type ListSessionsQuery =
   | { projectId: string; scope: "ticket"; ticketId: string }
   | { projectId: string; scope: "project" };
 
+/**
+ * Every Session's creation stamp from `sinceMs` onward, across EVERY project.
+ *
+ * The one query here that is not project-scoped, and deliberately so: it backs
+ * a chart of the user's own practice (`session-streak.ts`), which is a fact
+ * about them rather than about any one project. Stamps only — a count per day
+ * needs no titles, no histories and no projections, and asking `listSessions`
+ * for the same window would fold every Session's whole event log to throw all
+ * of it away.
+ */
+export interface ListSessionStartsQuery {
+  /** Inclusive lower bound, epoch milliseconds. */
+  sinceMs: number;
+}
+
 /** One project-wide, bounded sidebar read over explicit Session outcome facts. */
 export interface ListLatestTicketSignalsQuery {
   projectId: string;
@@ -1221,6 +1236,11 @@ export interface SessionLedgerTransaction {
   listSessions(query: ListSessionsQuery): readonly Session[];
   /** Counts base Sessions without reading their event histories or building projections. */
   countSessions(query: ListSessionsQuery): number;
+  /**
+   * Creation stamps of every Session started at or after `sinceMs`, ascending,
+   * across every project — see {@link ListSessionStartsQuery}.
+   */
+  listSessionStarts(query: ListSessionStartsQuery): readonly number[];
   /** Latest explicit outcome per ticket, selected by occurred time then Session id. */
   listLatestTicketSignals(
     query: ListLatestTicketSignalsQuery,

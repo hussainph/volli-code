@@ -1,0 +1,441 @@
+/**
+ * Home's right rail — the ticket workspace's Calm Stack one scope up (VC-55).
+ *
+ * WHY IT EXISTS. The empty chat answers "where does this Session run" only
+ * while it is empty, which is exactly as long as it takes to type one message.
+ * Everything after that is a transcript, and nothing on the surface said which
+ * directory the agent was writing to. This is the mid-session answer, and it is
+ * the same ⌥⌘B panel the ticket workspace has — parity rather than a new idea,
+ * because Home and a ticket workspace are the same object at two scopes.
+ *
+ * TWO PAGES, and each is scoped by what only Home can answer:
+ *
+ *  • **Now** — the venue this Session stands in, and what the Session is.
+ *  • **Sessions** — the project's OWN Sessions, and only those. A ticket's
+ *    Sessions already live in that ticket's rail, so listing them here would
+ *    make Home a second index of the same rows. What has no other home is the
+ *    Project Session you closed, which reopens from here.
+ *
+ * WHAT IS DELIBERATELY NOT HERE. The "Mentioned" block the design calls for —
+ * the tickets a transcript wrote `@vc-nn` at — needs the backlink mechanism
+ * that is VC-104's, and is absent rather than empty until it lands: a section
+ * that can never fill in this build is furniture, and inventing a different
+ * relevance rule to fill it would be worse than not having it.
+ *
+ * Nothing in here collapses the rail — a panel cannot reopen itself, so that
+ * control lives outside it, in the tab strip's corner, exactly as the ticket
+ * rail's does.
+ */
+import * as React from "react";
+import { useShallow } from "zustand/react/shallow";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { venueLooseCount } from "@volli/shared";
+
+import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import {
+  HOME_RAIL_MODES,
+  HOME_RAIL_MODE_LABELS,
+  homeSessionRows,
+  type HomeRailMode,
+  type HomeSessionRow,
+} from "@renderer/components/home/home-rail-model";
+import { compactAge } from "@renderer/lib/relative-time";
+import { cn } from "@renderer/lib/utils";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { useSessionsStore } from "@renderer/stores/sessions";
+import { useUiStore } from "@renderer/stores/ui";
+import { useVenueStore, venueKey, type VenueEntry } from "@renderer/stores/venue";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
+
+/** Every rail block is the same shape at the same inset — one seam, spelled once. */
+const SECTION = cn("flex flex-col gap-2 pt-4", RAIL_PANEL_INSET);
+
+export function HomeRail({
+  projectId,
+  activeTabId,
+}: {
+  projectId: string;
+  /**
+   * Which Home tab is in front, resolved once by `home-surface.tsx`. Read here
+   * only to say which Session the Now page is about — never re-derived: two
+   * answers to that question is the disagreement VC-54 removed.
+   */
+  activeTabId: string;
+}) {
+  const mode = useUiStore((state) => state.homeRailMode);
+  const setMode = useUiStore((state) => state.setHomeRailMode);
+
+  return (
+    <div
+      className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      data-testid="home-rail"
+      data-narrow="false"
+    >
+      <HomeRailTabs mode={mode} onSelectMode={setMode} />
+      <section
+        id={`home-rail-page-${mode}`}
+        role="tabpanel"
+        aria-labelledby={`home-rail-tab-${mode}`}
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-8"
+      >
+        {mode === "now" ? <NowPage projectId={projectId} activeTabId={activeTabId} /> : null}
+        {mode === "sessions" ? <SessionsPage projectId={projectId} /> : null}
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The rail's header: the ticket rail's centred pill, with this surface's two
+ * pages. Both wear their labels — the ticket's pill hides two of three behind
+ * icons because three pages cannot fit 160px with their names on, and two can.
+ *
+ * Translucent and blurred rather than opaque: at `top-0` of a column whose
+ * pages scroll beneath it, the bar is a floating material rather than a strip
+ * the layout gives away.
+ */
+function HomeRailTabs({
+  mode,
+  onSelectMode,
+}: {
+  mode: HomeRailMode;
+  onSelectMode(next: HomeRailMode): void;
+}) {
+  const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const count = HOME_RAIL_MODES.length;
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? count - 1
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + count) % count;
+    const nextMode = HOME_RAIL_MODES[next];
+    if (nextMode === undefined) return;
+    onSelectMode(nextMode);
+    refs.current[next]?.focus();
+  }
+
+  return (
+    <div
+      className={cn(
+        "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
+        RAIL_PANEL_INSET,
+      )}
+    >
+      <div
+        role="tablist"
+        aria-label="Home rail pages"
+        className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
+      >
+        {HOME_RAIL_MODES.map((key, index) => {
+          const active = mode === key;
+          return (
+            <button
+              key={key}
+              ref={(node) => {
+                refs.current[index] = node;
+              }}
+              type="button"
+              role="tab"
+              id={`home-rail-tab-${key}`}
+              aria-controls={`home-rail-page-${key}`}
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              data-testid={`home-rail-tab-${key}`}
+              onClick={() => onSelectMode(key)}
+              onKeyDown={(event) => onKeyDown(event, index)}
+              className={cn(
+                "h-8 flex-1 rounded-full text-ui transition-colors outline-none",
+                "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
+                active
+                  ? "bg-accent text-foreground shadow-raised"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )}
+            >
+              {HOME_RAIL_MODE_LABELS[key]}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Now: where this Session runs, and what it is. */
+function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: string }) {
+  const venue = useVenueStore((state) => state.byScope[venueKey(projectId, null)]);
+  const ensureVenue = useVenueStore((state) => state.ensure);
+  React.useEffect(() => {
+    void ensureVenue(projectId, null);
+  }, [projectId, ensureVenue]);
+
+  return (
+    <>
+      <div className={SECTION}>
+        <SectionHeading as="h3">Venue</SectionHeading>
+        <VenueCard venue={venue} />
+      </div>
+      <div className={SECTION}>
+        <SectionHeading as="h3">Session</SectionHeading>
+        <SessionFacts activeTabId={activeTabId} />
+      </div>
+    </>
+  );
+}
+
+/**
+ * The venue card: the path, the branch, and how much is loose in it.
+ *
+ * A failure is NAMED here rather than swallowed, which is the half of the
+ * contract the empty chat cannot keep — a drawing can be absent, but a card
+ * that is about the venue and says nothing about it is a card that has gone
+ * quiet on the one thing it exists for.
+ */
+function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
+  if (venue === undefined || venue.status === "loading") {
+    return <div className="h-16 rounded-row border border-border bg-card" aria-hidden />;
+  }
+  if (venue.status === "error") {
+    return (
+      <p className="rounded-row border border-border bg-card p-4 text-ui text-muted-foreground">
+        {venue.error}
+      </p>
+    );
+  }
+  const loose = venueLooseCount(venue.venue.files);
+  return (
+    <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <p className="truncate text-left font-mono text-ui text-foreground">{venue.venue.path}</p>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="font-mono">
+          {venueKindLabel(venue.venue)} · {venue.venue.path}
+        </TooltipContent>
+      </Tooltip>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
+          <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+          <span className="truncate">{venue.venue.branch ?? "detached"}</span>
+        </span>
+        {/* Silent at zero: a clean tree has nothing to report, and "0 loose"
+            is a number where there is no news. */}
+        {loose === 0 ? null : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex shrink-0 items-center gap-1 text-ui text-attention tabular-nums">
+                <StatusDot state="waiting" />
+                {loose}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              {loose} uncommitted {loose === 1 ? "file" : "files"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the Session in front is: its model and effort for a chat, its harness
+ * for a terminal, and what it is doing either way.
+ *
+ * The Board tab has no Session, and says so in one line rather than drawing an
+ * empty table of dashes.
+ */
+function SessionFacts({ activeTabId }: { activeTabId: string }) {
+  const sessionId = React.useMemo(() => parseHomeChatTab(activeTabId), [activeTabId]);
+  const projection = useChatSessionsStore((state) =>
+    sessionId === null ? null : (state.sessions[sessionId]?.projection ?? null),
+  );
+  const lifecycle = useChatSessionsStore((state) =>
+    sessionId === null ? null : (state.sessions[sessionId]?.lifecycle ?? null),
+  );
+
+  if (sessionId === null) {
+    return <p className={EMPTY_INLINE}>No session in front</p>;
+  }
+  const selection = projection?.modelSelection ?? null;
+  const waiting = (projection?.interactions.active.length ?? 0) > 0;
+  // `ChatSessionLifecycle` is a subset of the dot's vocabulary by construction
+  // (starting/ready/working/error), and `waiting` outranks all of it: an agent
+  // that has stopped to ask something is still inside an open turn, so the live
+  // dot would otherwise say "leave this alone" about a Session asking for you.
+  const activity: StatusDotState = waiting ? "waiting" : (lifecycle ?? "idle");
+
+  return (
+    <dl className="flex flex-col gap-2">
+      <Fact label="Model">{selection?.modelId ?? "—"}</Fact>
+      <Fact label="Effort">{selection?.reasoningLevel ?? "—"}</Fact>
+      <Fact label="Activity">
+        <span className="flex items-center gap-1">
+          <StatusDot state={activity} />
+          {ACTIVITY_LABEL[activity]}
+        </span>
+      </Fact>
+    </dl>
+  );
+}
+
+/** One key/value line in the Session block. */
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <dt className="shrink-0 text-ui text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-ui text-foreground">{children}</dd>
+    </div>
+  );
+}
+
+/** The dot's own vocabulary, in words. */
+const ACTIVITY_LABEL: Record<StatusDotState, string> = {
+  working: "Working",
+  setup: "Setting up",
+  ready: "Ready",
+  starting: "Starting",
+  waiting: "Waiting for you",
+  error: "Failed",
+  idle: "Idle",
+  parked: "Parked",
+  exited: "Ended",
+};
+
+/** The chat Session a Home tab id names, or `null` for the Board and terminals. */
+function parseHomeChatTab(activeTabId: string): string | null {
+  const prefix = chatTabId("");
+  return activeTabId.startsWith(prefix) && activeTabId.length > prefix.length
+    ? activeTabId.slice(prefix.length)
+    : null;
+}
+
+/**
+ * Sessions: the project's own, and only those.
+ *
+ * Rendered off the durable per-project listing VC-54 shipped
+ * (`stores/project-sessions.ts`) rather than re-indexed here — the sidebar's
+ * bands and ⌘K read the same rows, and a second index of them would be a second
+ * answer to "what has this project been doing".
+ */
+function SessionsPage({ projectId }: { projectId: string }) {
+  const ensure = useProjectSessionsStore((state) => state.ensure);
+  React.useEffect(() => {
+    void ensure(projectId);
+  }, [projectId, ensure]);
+
+  const chats = useProjectSessionsStore(
+    useShallow((state) =>
+      (state.byProject[projectId]?.chat ?? []).filter((row) => row.ticketId === null),
+    ),
+  );
+  const terminals = useProjectSessionsStore(
+    useShallow((state) =>
+      (state.byProject[projectId]?.terminal ?? []).filter((row) => row.ticketId === null),
+    ),
+  );
+  const openChatIds = useChatSessionsStore(
+    useShallow((state) => state.openTabs[projectId] ?? EMPTY_IDS),
+  );
+  const openTerminalIds = useSessionsStore(
+    useShallow((state) => (state.byOwner[projectId]?.tabs ?? []).map((tab) => tab.sessionId)),
+  );
+
+  const rows = React.useMemo(
+    () => homeSessionRows(chats, terminals, openChatIds, openTerminalIds),
+    [chats, terminals, openChatIds, openTerminalIds],
+  );
+
+  return (
+    <div className={SECTION}>
+      <SectionHeading as="h3">Project sessions</SectionHeading>
+      {rows.length === 0 ? (
+        <p className={EMPTY_INLINE}>No sessions yet</p>
+      ) : (
+        <div className="flex flex-col">
+          {rows.map((row) => (
+            <ListRow
+              key={row.id}
+              leading={<RowMark row={row} />}
+              primary={row.title}
+              trailing={
+                <span className="shrink-0 text-label text-muted-foreground">
+                  {row.open ? "Open" : compactAge(row.at)}
+                </span>
+              }
+              className={row.open ? undefined : "text-muted-foreground"}
+              onActivate={() => openSession(projectId, row)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const EMPTY_IDS: readonly string[] = [];
+
+/**
+ * Put a Session back in front.
+ *
+ * Both kinds route through `openHome`, the same seam the sidebar's bands and
+ * ⌘K use — a chat is adopted and given a tab first, because the strip cannot
+ * bring forward a tab that does not exist yet. Reopening a CLOSED Session is
+ * the case this page exists for: a Project Session outlives its tab, and until
+ * now the only way back to one was the sidebar.
+ */
+function openSession(projectId: string, row: HomeSessionRow): void {
+  const workspace = useWorkspaceStore.getState();
+  if (row.kind === "chat") {
+    const chat = useChatSessionsStore.getState();
+    chat.adoptChatSession(row.id);
+    chat.openChatTab(projectId, row.id);
+    workspace.openHome(projectId, chatTabId(row.id));
+    return;
+  }
+  if (!row.open) {
+    // A terminal that has no tab has no PTY either — its pane died with the app
+    // or with its close. There is nothing to bring forward, so Home itself is
+    // where it would have been.
+    workspace.openHome(projectId);
+    return;
+  }
+  useSessionsStore.getState().setActiveSession(projectId, row.id);
+  workspace.openHome(projectId, row.id);
+}
+
+/**
+ * A row's leading marks: liveness, then which surface it runs on.
+ *
+ * Both, because neither answers the other's question and this page mixes the
+ * two kinds in one list. `bold` at 12px for the same reason the sidebar's band
+ * gives: at this size regular draws lighter than the title the glyph leads, and
+ * a mark that opens a row cannot be the faintest thing in it.
+ */
+function RowMark({ row }: { row: HomeSessionRow }) {
+  const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <StatusDot state={row.state} />
+      <Glyph
+        weight="bold"
+        aria-label={row.kind === "chat" ? "Chat" : "Terminal"}
+        className="size-3 text-muted-foreground"
+      />
+    </span>
+  );
+}

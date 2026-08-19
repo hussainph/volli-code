@@ -53,6 +53,8 @@ import type {
   SessionRenameInput,
   SessionRenameResult,
   SessionsResult,
+  SessionStartsInput,
+  SessionStartsResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -82,6 +84,8 @@ import type {
   WorktreeRemoveInput,
   WorktreeRemoveResult,
   WorktreeStatusResult,
+  VenueSnapshotInput,
+  VenueSnapshotResult,
 } from "../ipc/contract";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
@@ -134,6 +138,7 @@ import {
   publishTicketBranch,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
+  readVenue,
   readWorktreeDiff,
   readWorktreeStatus,
   remove as removeWorktree,
@@ -744,6 +749,23 @@ export function registerDataIpcHandlers(
         ticketId: input.ticketId,
       });
       return { ok: true, sessions: sessionListingRows(sessions) };
+    },
+
+    "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
+      // Straight through to the ledger's own unscoped read: the window is the
+      // caller's (it draws a fixed number of days), and every project counts,
+      // because the chart is about the person rather than the project.
+      const startedAt = await sessionEngine.listSessionStarts({ sinceMs: input.sinceMs });
+      return { ok: true, startedAt: [...startedAt] };
+    },
+
+    "volli:venue-snapshot": async (input: VenueSnapshotInput): Promise<VenueSnapshotResult> => {
+      // `readVenue` owns which directory this is — the same rule the Session
+      // runtime binds one by — so a renderer never names a path for main to run
+      // git in, and the drawing can never be of a tree the agent is not in.
+      const read = await readVenue(worktreeDeps(db), input);
+      if (!read.ok) return { ok: false, error: read.error };
+      return { ok: true, venue: read.value };
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {
