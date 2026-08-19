@@ -24,6 +24,11 @@
  *   Board      | set          | TicketDetail, full-bleed, NO Home strip
  *   a Session  | either       | Home strip + that Session's plane
  *
+ * A Home SESSION additionally gets the right rail (VC-55) — the ticket
+ * workspace's panel at this scope, on the same ⌥⌘B and the same persisted
+ * collapse. The board has none: a rail about where this Session runs, over a
+ * board, would be about nothing.
+ *
  * A ticket workspace TAKES HOME OVER rather than nesting under its strip. The
  * alternative puts two tab strips on one screen, which is the very confusion
  * this ticket exists to end. What is deliberately given up is the nav item as a

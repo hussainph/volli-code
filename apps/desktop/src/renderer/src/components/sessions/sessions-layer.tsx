@@ -67,9 +67,10 @@ interface SessionsLayerProps {
  * and the ⌘T binding are all mounted here and nowhere else.
  *
  * Two regions: the Project Session planes (split trees plus whichever chat is
- * in front, hidden with `visible`), and the resident
- * {@link TicketTerminalOverlay} (positioned over the ticket detail's plane when
- * a ticket session tab is active). Both read the one unified store.
+ * in front, hidden with `visible`) beside Home's own rail when the composition
+ * one level up hands one down, and the resident {@link TicketTerminalOverlay}
+ * (positioned over the ticket detail's plane when a ticket session tab is
+ * active). Both read the one unified store.
  *
  * THE TAB STRIP used to live inside this file's `hidden` wrapper. It moved to
  * `home-surface.tsx` in VC-54 for one reason: Home's strip has to stay on

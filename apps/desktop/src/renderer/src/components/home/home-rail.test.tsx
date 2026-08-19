@@ -46,6 +46,15 @@ describe("HomeRail", () => {
     expect(draw(HOME_BOARD_TAB_ID)).toContain("No session in front");
   });
 
+  it("asks a terminal tab what it actually has, not what a chat has", () => {
+    // A PTY has no model and no effort; printing two dashes for them would be
+    // calling an absence a reading.
+    const markup = draw("terminal-session-1");
+
+    expect(markup).not.toContain("Effort");
+    expect(markup).not.toContain("Model");
+  });
+
   it("ships no Mentioned block until there is a mechanism behind it", () => {
     // VC-104 owns `@vc-nn` backlinks; a section that can never fill in this
     // build is furniture.

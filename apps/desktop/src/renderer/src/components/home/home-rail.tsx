@@ -31,9 +31,11 @@ import { useShallow } from "zustand/react/shallow";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { venueLooseCount } from "@volli/shared";
+import { effectiveHarnessId, harnessLabel, venueLooseCount } from "@volli/shared";
 
 import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
+import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
+import { terminalTabDot, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -256,14 +258,18 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
 }
 
 /**
- * What the Session in front is: its model and effort for a chat, its harness
- * for a terminal, and what it is doing either way.
+ * What the Session in front is.
  *
- * The Board tab has no Session, and says so in one line rather than drawing an
- * empty table of dashes.
+ * THREE CASES, and each is a different kind of thing rather than a missing
+ * field of one kind. The Board tab is not a Session at all and says so in a
+ * line. A chat is a model and an effort. A TERMINAL is neither — it is a PTY,
+ * and asking it for a model would print two dashes and call that a reading, so
+ * it answers with what it actually has: what is running in it, and whether that
+ * is still alive.
  */
 function SessionFacts({ activeTabId }: { activeTabId: string }) {
   const sessionId = React.useMemo(() => parseHomeChatTab(activeTabId), [activeTabId]);
+  const terminal = isHomeBoardTab(activeTabId) || sessionId !== null ? null : activeTabId;
   const projection = useChatSessionsStore((state) =>
     sessionId === null ? null : (state.sessions[sessionId]?.projection ?? null),
   );
@@ -271,6 +277,7 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
     sessionId === null ? null : (state.sessions[sessionId]?.lifecycle ?? null),
   );
 
+  if (terminal !== null) return <TerminalFacts sessionId={terminal} />;
   if (sessionId === null) {
     return <p className={EMPTY_INLINE}>No session in front</p>;
   }
@@ -286,6 +293,47 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
     <dl className="flex flex-col gap-2">
       <Fact label="Model">{selection?.modelId ?? "—"}</Fact>
       <Fact label="Effort">{selection?.reasoningLevel ?? "—"}</Fact>
+      <Fact label="Activity">
+        <span className="flex items-center gap-1">
+          <StatusDot state={activity} />
+          {ACTIVITY_LABEL[activity]}
+        </span>
+      </Fact>
+    </dl>
+  );
+}
+
+/**
+ * A terminal tab's facts: what is running in it, and its liveness.
+ *
+ * The dot is `terminal-tab-state.ts`'s — the same derivation the strip's own
+ * tab draws from, so the rail and the tab can never disagree about whether a
+ * PTY is still there. `null` from it means PARKED, which is the one state that
+ * tab expresses by drawing no dot at all and this surface has room to name.
+ */
+function TerminalFacts({ sessionId }: { sessionId: string }) {
+  const tab = useSessionsStore((state) =>
+    Object.values(state.byOwner)
+      .flatMap((container) => container.tabs)
+      .find((candidate) => candidate.sessionId === sessionId),
+  );
+  const parkState = useSessionsStore((state) => state.parkState);
+  const record = useProjectSessionsStore((state) =>
+    Object.values(state.byProject)
+      .flatMap((rows) => rows.terminal)
+      .find((row) => row.id === sessionId),
+  );
+
+  if (tab === undefined) return <p className={EMPTY_INLINE}>No session in front</p>;
+  const state = terminalTabState(tab, parkState);
+  const dot = terminalTabDot(state);
+  const activity: StatusDotState = dot ?? "parked";
+
+  return (
+    <dl className="flex flex-col gap-2">
+      <Fact label="Running">
+        {record === undefined ? "Terminal" : harnessLabel(effectiveHarnessId(record))}
+      </Fact>
       <Fact label="Activity">
         <span className="flex items-center gap-1">
           <StatusDot state={activity} />
