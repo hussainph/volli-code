@@ -1,6 +1,10 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { errorMessage, WORKTREE_DIRTY_REFUSAL_PREFIX } from "@volli/shared";
+import {
+  errorMessage,
+  WORKTREE_DIRTY_REFUSAL_PREFIX,
+  WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX,
+} from "@volli/shared";
 
 import {
   AlertDialog,
@@ -30,6 +34,12 @@ import { toastError } from "@renderer/lib/toast";
  * Open state lives in the opener (the context menu item), not a global store —
  * this component just mirrors it via `open`/`onOpenChange`.
  */
+/** The refusals the force step may answer; every other error is a dead stop. */
+const CONFIRMABLE_REFUSALS = [
+  WORKTREE_DIRTY_REFUSAL_PREFIX,
+  WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX,
+] as const;
+
 export function RemoveWorktreeDialog({
   ticketId,
   open,
@@ -62,11 +72,12 @@ export function RemoveWorktreeDialog({
         onOpenChange(false);
         return;
       }
-      // ONLY main's dirty refusal (the stable shared prefix) may escalate to
-      // the force step — any other failure (git broke, path oddity) gets a
-      // toast, never a "discard work" offer whose force flag could destroy
-      // exactly what the failure left unprotected.
-      if (!result.error.startsWith(WORKTREE_DIRTY_REFUSAL_PREFIX)) {
+      // ONLY main's two confirmable refusals (the stable shared prefixes) may
+      // escalate to the force step: uncommitted work, or a folder git no longer
+      // tracks. Any other failure (git broke, path oddity) gets a toast, never a
+      // destructive offer whose force flag could destroy exactly what the
+      // failure left unprotected.
+      if (!CONFIRMABLE_REFUSALS.some((prefix) => result.error.startsWith(prefix))) {
         toastError(`Couldn't remove worktree: ${result.error}`);
         onOpenChange(false);
         return;
@@ -111,7 +122,7 @@ export function RemoveWorktreeDialog({
            * confirm dialog teaches people to stop reading it.
            */}
           <AlertDialogTitle>
-            {step === "confirm" ? "Remove worktree?" : "Remove it anyway?"}
+            {step === "confirm" ? "Remove worktree?" : "Remove this worktree anyway?"}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {step === "confirm" ? "The branch is kept. Only the folder is removed." : dirtyReason}
@@ -138,7 +149,7 @@ export function RemoveWorktreeDialog({
                 void removeForced();
               }}
             >
-              Delete the Folder
+              Delete Folder
             </AlertDialogAction>
           )}
         </AlertDialogFooter>

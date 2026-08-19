@@ -310,10 +310,10 @@ async function maybeReclaim(
   const outcome = await reclaimIfStale(deps.reclaim, ticket.id, prState);
   if (outcome.kind !== "reclaimed") return false;
   deps.notify(
-    "Worktree folder cleaned up",
+    "Worktree removed",
     outcome.branch === null
-      ? `${ticket.title}: the folder was removed after ${outcome.daysInDone} days in Done.`
-      : `${ticket.title}: folder removed after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} kept — recreate it any time.`,
+      ? `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done.`
+      : `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} is kept, so you can recreate it.`,
   );
   return true;
 }

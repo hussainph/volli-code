@@ -22,7 +22,11 @@
  */
 import { existsSync, rmSync } from "node:fs";
 
-import { WORKTREE_DIRTY_REFUSAL_PREFIX, type TicketEventActor } from "@volli/shared";
+import {
+  WORKTREE_DIRTY_REFUSAL_PREFIX,
+  WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX,
+  type TicketEventActor,
+} from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
@@ -122,12 +126,14 @@ export async function remove(
   // anything is released or deleted.
   const registered = isRegisteredWorktree(deps, project.path, worktreePath);
   // The plain delete is the one destructive act in this module git itself does
-  // not perform, so it is never reached without an explicit confirmation — not
-  // even when the dirty predicate happened to read the folder as clean. The
-  // shared prefix is what lets the dialog offer that confirmation at all.
+  // not perform, so it is never reached without an explicit confirmation, not
+  // even when the dirty predicate happened to read the folder as clean. It
+  // refuses under its OWN prefix rather than the dirty one: this is not a
+  // worktree with uncommitted work in it, it is a folder nothing can read, and
+  // the dialog escalates on either.
   if (!registered && !opts.force) {
     return err(
-      `${WORKTREE_DIRTY_REFUSAL_PREFIX} (git no longer tracks this folder, so its contents can't be checked). ` +
+      `${WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX} (git no longer tracks the folder). ` +
         `Confirm removal to delete it.`,
     );
   }
@@ -147,15 +153,15 @@ export async function remove(
     // rm -rf is exactly where guessing is unaffordable.
     if (!isOwnedWorktreePath(ownedContainers(deps.db, homeDir(deps)), worktreePath)) {
       return err(
-        `Git no longer tracks ${worktreePath}, and it is outside this workspace's worktree folder. ` +
-          `Remove the folder yourself, then retry.`,
+        `Git no longer tracks ${worktreePath}, and it sits outside this project's worktree folder. ` +
+          `Delete it yourself, then try again.`,
       );
     }
     try {
       rmSync(worktreePath, { recursive: true, force: true });
     } catch (caught) {
       return err(
-        `Couldn't remove the worktree folder: ${caught instanceof Error ? caught.message : String(caught)}`,
+        `Couldn't delete the folder: ${caught instanceof Error ? caught.message : String(caught)}`,
       );
     }
     try {

@@ -884,7 +884,7 @@ export function registerDataIpcHandlers(
       // sanctioned rm -rf in the app.
       const target = canonicalizeWorktreePath(path);
       if (!isOwnedWorktreePath(ownedContainers(db, worktreeHomeDir()), target)) {
-        return { ok: false, error: "Path is not inside this workspace's worktree folder" };
+        return { ok: false, error: "That path is outside this project's worktree folder." };
       }
       // Re-verify RIGHT before the irreversible delete — the Settings report is
       // a snapshot that can have gone stale since it was shown.

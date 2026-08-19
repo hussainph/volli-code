@@ -480,10 +480,11 @@ function WorktreeFailedNotice({ projectId, ticketId }: { projectId: string; tick
  * ticket still has is its BRANCH, with every commit on it, so the honest
  * offer is to put the checkout back rather than to ask again.
  *
- * It says so in those terms: "Worktree folder is missing" names the thing that
- * happened to the folder, and the detail says the branch is safe, because the
- * old wording ("Worktree unreadable") over a failing Retry is what made a swept
- * worktree read as lost work.
+ * The copy follows from that. "Worktree folder is missing" names what actually
+ * happened, and the detail answers the only question the reader has — the branch
+ * and its commits are still in git. The old pairing ("Worktree unreadable" over
+ * a Retry that could not succeed) is what made a swept worktree read as lost
+ * work. What the button does is left to the button.
  */
 function WorktreeMissingNotice({
   ticketId,
@@ -499,12 +500,12 @@ function WorktreeMissingNotice({
     try {
       const result = await window.api.worktree.recreate(ticketId);
       if (!result.ok) {
-        toastError(`Couldn't recreate the worktree: ${result.error}`);
+        toastError(`Couldn't recreate worktree: ${result.error}`);
         return;
       }
       onRecreated();
     } catch (error) {
-      toastError(`Couldn't recreate the worktree: ${errorMessage(error)}`);
+      toastError(`Couldn't recreate worktree: ${errorMessage(error)}`);
     } finally {
       setRecreating(false);
     }
@@ -517,7 +518,10 @@ function WorktreeMissingNotice({
       layout="stack"
       icon={FolderOpenIcon}
       title="Worktree folder is missing"
-      detail="The branch and its commits are safe. Recreating checks it out again."
+      // The one thing worth saying next to the button: the work is not gone.
+      // What the button then does is on the button (voice.md: no "click Save to
+      // save"), so this states the fact and stops.
+      detail="The branch and its commits are still in git."
       data-testid="ticket-repository-worktree-missing"
       className={RAIL_PANEL_INSET}
       actions={

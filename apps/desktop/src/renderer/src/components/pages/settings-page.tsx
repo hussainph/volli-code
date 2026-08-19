@@ -185,11 +185,12 @@ function DoneTtlField() {
 
   return (
     <SettingsRow
-      label="Clean up Done worktrees after"
+      label="Remove Done worktrees after"
       htmlFor="done-ttl-days"
-      // Says what is taken AND what survives, because the fear this setting has
-      // to answer (VC-113) is "will I lose my work?" — and the answer is no.
-      description="The folder goes; the branch, commits, and ticket stay. Never while a PR is open."
+      // Names what is taken and what survives, because the question this setting
+      // has to answer (VC-113) is "will I lose my work?". Same verb as the
+      // "Remove worktree" menu item: one name per act.
+      description="Volli removes the folder and keeps the branch, its commits, and the ticket. It never touches a ticket with an open PR."
     >
       <Input
         id="done-ttl-days"
@@ -418,7 +419,7 @@ function DirtyWorktreesList() {
       {removed.length > 0 ? (
         <div className="mt-3 flex flex-col gap-1">
           <p className="text-ui text-muted-foreground">
-            Removed this launch — the branches are still in git.
+            Removed when Volli started. The branches are still in git.
           </p>
           {removed.map((entry) => (
             <div
@@ -431,7 +432,7 @@ function DirtyWorktreesList() {
               <p className="mt-1 text-ui text-muted-foreground">
                 {entry.branch === null
                   ? "No branch was checked out here."
-                  : `Branch ${entry.branch} kept.`}
+                  : `Branch ${entry.branch}`}
               </p>
             </div>
           ))}
@@ -441,7 +442,7 @@ function DirtyWorktreesList() {
       {kept.length > 0 ? (
         <div className="mt-3 flex flex-col gap-1">
           <p className="text-ui text-muted-foreground">
-            Kept for now — clean, but touched too recently to clear.
+            Kept for now. These have no uncommitted work, but something changed in them recently.
           </p>
           {kept.map((entry) => (
             <div
@@ -453,8 +454,8 @@ function DirtyWorktreesList() {
               </p>
               <p className="mt-1 text-ui text-muted-foreground">
                 {entry.removableAt === null
-                  ? "Kept until it can be dated."
-                  : `Removable after ${new Date(entry.removableAt).toLocaleDateString()}.`}
+                  ? "Kept because Volli can't tell when this was last used."
+                  : `Volli can remove this after ${new Date(entry.removableAt).toLocaleDateString()}.`}
               </p>
             </div>
           ))}

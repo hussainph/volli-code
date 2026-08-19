@@ -1700,7 +1700,7 @@ describe("volli:worktree-orphan-delete", () => {
     );
     expect(result).toEqual({
       ok: false,
-      error: "Path is not inside this workspace's worktree folder",
+      error: "That path is outside this project's worktree folder.",
     });
   });
 
@@ -1722,7 +1722,7 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Path is not inside this workspace's worktree folder",
+      error: "That path is outside this project's worktree folder.",
     });
     expect(existsSync(theirs)).toBe(true);
   });
@@ -1738,7 +1738,7 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Path is not inside this workspace's worktree folder",
+      error: "That path is outside this project's worktree folder.",
     });
     expect(existsSync(container)).toBe(true);
   });

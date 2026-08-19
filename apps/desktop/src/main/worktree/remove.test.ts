@@ -319,9 +319,10 @@ describe("remove — a directory git has forgotten", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    // The dirty predicate errs dirty on the unreadable git, which is what raises
-    // the confirm dialog rather than deleting behind the user's back.
-    expect(result.error).toContain("Worktree has uncommitted work");
+    // Its OWN refusal, not the dirty one: the folder cannot be read at all, so
+    // claiming uncommitted work would name a cause Volli can't establish. Both
+    // prefixes raise the same confirm step in the dialog.
+    expect(result.error).toContain("Volli can't check what's inside this worktree");
     expect(existsSync(wt)).toBe(true);
   });
 

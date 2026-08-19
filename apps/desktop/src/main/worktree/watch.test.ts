@@ -342,8 +342,8 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
 
     expect(notifications).toEqual([
       {
-        title: "Worktree folder cleaned up",
-        body: expect.stringContaining("Branch volli/VC-1-x kept"),
+        title: "Worktree removed",
+        body: expect.stringContaining("Branch volli/VC-1-x is kept, so you can recreate it"),
       },
     ]);
     // The board has to re-hydrate: a card's worktree just stopped existing.

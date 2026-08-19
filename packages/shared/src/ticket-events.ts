@@ -176,6 +176,15 @@ export type WorktreeFailureStage =
 export const WORKTREE_DIRTY_REFUSAL_PREFIX = "Worktree has uncommitted work";
 
 /**
+ * The stable prefix a removal's UNVERIFIABLE refusal starts with (VC-113): git
+ * no longer tracks the folder, so its contents can't be read at all. It escalates
+ * to the same confirm step {@link WORKTREE_DIRTY_REFUSAL_PREFIX} does, and it is
+ * a separate sentence because that one states a fact Volli cannot establish here
+ * — a dialog that names the wrong cause is how people learn to stop reading them.
+ */
+export const WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX = "Volli can't check what's inside this worktree";
+
+/**
  * The stable sentence every worktree read answers with when the ticket still
  * points at a checkout that is no longer on disk (main's `worktree/read.ts`
  * `missing-on-disk` arm). The rail matches on it to offer RECREATE instead of
@@ -184,7 +193,7 @@ export const WORKTREE_DIRTY_REFUSAL_PREFIX = "Worktree has uncommitted work";
  * work (VC-113). The branch and its commits survive in git, so the recovery is
  * real — `ensure` puts the checkout back where it was, on the branch it was on.
  */
-export const WORKTREE_MISSING_ON_DISK = "This ticket's worktree directory is missing on disk.";
+export const WORKTREE_MISSING_ON_DISK = "This ticket's worktree folder is missing.";
 
 /**
  * Upper bound on a stored `worktree_failed` `stderr` excerpt. Git can emit a

@@ -3311,7 +3311,7 @@ describe("agent command service", () => {
     });
     expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     if (!res.ok) {
-      expect(res.error.message).toContain("missing on disk");
+      expect(res.error.message).toContain("worktree folder is missing");
       expect(res.error.message).toContain(missingPath);
     }
   });
