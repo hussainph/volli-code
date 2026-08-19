@@ -45,6 +45,7 @@ import {
   HOME_RAIL_MODES,
   HOME_RAIL_MODE_LABELS,
   homeSessionRows,
+  venuePathTail,
   type HomeRailMode,
   type HomeSessionRow,
 } from "@renderer/components/home/home-rail-model";
@@ -221,7 +222,9 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
     <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
       <Tooltip>
         <TooltipTrigger asChild>
-          <p className="truncate text-left font-mono text-ui text-foreground">{venue.venue.path}</p>
+          <p className="truncate text-left font-mono text-ui text-foreground">
+            {venuePathTail(venue.venue.path)}
+          </p>
         </TooltipTrigger>
         <TooltipContent side="left" className="font-mono">
           {venueKindLabel(venue.venue)} · {venue.venue.path}

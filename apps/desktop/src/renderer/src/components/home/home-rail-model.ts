@@ -101,3 +101,26 @@ function chatState(row: ChatSessionRecord): StatusDotState {
   if (row.activity === "working") return "working";
   return row.live ? "ready" : "idle";
 }
+
+/**
+ * How many trailing segments of a venue path the rail's card shows.
+ *
+ * Two, because that is what tells the two venues apart: a main checkout ends
+ * `…/code/volli-code` and a worktree ends `…/volli-code-f3732f45/VC-81-auto-title`,
+ * and the segment above the last is what says which kind of place this is.
+ */
+const VENUE_PATH_SEGMENTS = 2;
+
+/**
+ * A venue path shortened from the FRONT.
+ *
+ * `truncate` cuts the end, which on a path is precisely the part worth reading:
+ * `/Users/phalasiya/Desktop/cod…` names the person and hides the project. Every
+ * path this card shows starts with the same home prefix and differs at its
+ * tail, so the tail is what it shows — with the whole path one hover away.
+ */
+export function venuePathTail(path: string, segments: number = VENUE_PATH_SEGMENTS): string {
+  const parts = path.split("/").filter((part) => part.length > 0);
+  if (parts.length <= segments) return path;
+  return `…/${parts.slice(-segments).join("/")}`;
+}

@@ -44,7 +44,7 @@ export function BoardVisual({ projectId }: { projectId: string }) {
   return (
     <div className="flex flex-col items-center gap-4" data-empty-visual="board">
       <div
-        className="flex h-24 w-80 items-end gap-2"
+        className="flex h-28 w-80 items-end gap-2"
         role="img"
         aria-label={`${total} tickets across the board`}
       >
@@ -53,6 +53,11 @@ export function BoardVisual({ projectId }: { projectId: string }) {
           return (
             <Tooltip key={status}>
               <TooltipTrigger asChild>
+                {/* The LABEL is inside the target, not in a row of its own
+                    beneath it. At a fifth of 320px "Needs Review" cannot fit
+                    and truncates, and a truncated word the pointer cannot ask
+                    about is a word that is simply gone — hovering anywhere in
+                    the column now names it. */}
                 <div className="flex min-w-0 flex-1 cursor-default flex-col items-center gap-1">
                   <span className="text-ui text-muted-foreground tabular-nums">{count}</span>
                   <span
@@ -67,6 +72,9 @@ export function BoardVisual({ projectId }: { projectId: string }) {
                           }
                     }
                   />
+                  <span className="w-full truncate text-center text-label uppercase text-muted-foreground">
+                    {TICKET_STATUS_LABELS[status]}
+                  </span>
                 </div>
               </TooltipTrigger>
               <TooltipContent side="top" sideOffset={6}>
@@ -75,16 +83,6 @@ export function BoardVisual({ projectId }: { projectId: string }) {
             </Tooltip>
           );
         })}
-      </div>
-      <div className="flex w-80 gap-2">
-        {TICKET_STATUSES.map((status) => (
-          <span
-            key={status}
-            className="min-w-0 flex-1 truncate text-center text-label uppercase text-muted-foreground"
-          >
-            {TICKET_STATUS_LABELS[status]}
-          </span>
-        ))}
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import {
   HOME_RAIL_MODE_LABELS,
   homeSessionRows,
   sanitizeHomeRailMode,
+  venuePathTail,
 } from "./home-rail-model";
 
 describe("Home rail pages", () => {
@@ -120,5 +121,28 @@ describe("homeSessionRows", () => {
 
   it("draws nothing for a project that has run nothing", () => {
     expect(homeSessionRows([], [], [], [])).toEqual([]);
+  });
+});
+
+describe("venuePathTail", () => {
+  it("keeps the tail, which is the part that identifies the venue", () => {
+    expect(venuePathTail("/Users/p/Desktop/code/volli-code")).toBe("…/code/volli-code");
+    expect(venuePathTail("/Users/p/.volli/worktrees/volli-code-abc/VC-81-auto-title")).toBe(
+      "…/volli-code-abc/VC-81-auto-title",
+    );
+  });
+
+  it("leaves a path that is already short enough alone", () => {
+    expect(venuePathTail("/repo")).toBe("/repo");
+    expect(venuePathTail("/code/repo")).toBe("/code/repo");
+    expect(venuePathTail("")).toBe("");
+  });
+
+  it("survives a trailing slash", () => {
+    expect(venuePathTail("/Users/p/code/volli-code/")).toBe("…/code/volli-code");
+  });
+
+  it("honours a caller's own depth", () => {
+    expect(venuePathTail("/a/b/c/d", 1)).toBe("…/d");
   });
 });
