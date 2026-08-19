@@ -448,23 +448,29 @@ async function main() {
       "First-boot import: project in rail, board EMPTY (demo gone), volli:* localStorage cleared",
       async () => {
         const projectName = await page.getByText("Volli Code", { exact: true }).count();
+        // A zero-ticket board renders BoardEmpty ALONE (VC-56/VC-54): no
+        // columns, no collapsed rail, so no status labels and no "Empty"
+        // caption. BoardEmpty itself branches on Model Access readiness —
+        // accept either the ticket CTA or the first-run provider prompt.
         const statusLabels = ["Backlog", "Todo", "Doing", "Needs Review", "Done"];
         const labelsPresent = {};
         for (const label of statusLabels) {
           labelsPresent[label] = await page.getByText(label, { exact: true }).count();
         }
         const cardCount = await page.locator("article").count();
-        const emptyCaption = await page.getByText("Empty", { exact: true }).count();
+        const bareState = await page
+          .getByText(/Write the first ticket|model provider to start|default model to start/)
+          .count();
         const volliKeys = await volliLocalStorageKeys(page);
         const ok =
           projectName >= 1 &&
-          statusLabels.every((label) => labelsPresent[label] >= 1) &&
+          statusLabels.every((label) => labelsPresent[label] === 0) &&
           cardCount === 0 &&
-          emptyCaption >= 1 &&
+          bareState >= 1 &&
           volliKeys.length === 0;
         return {
           ok,
-          detail: `project=${projectName} cards=${cardCount} empty=${emptyCaption} volliKeys=${JSON.stringify(volliKeys)} labels=${JSON.stringify(labelsPresent)}`,
+          detail: `project=${projectName} cards=${cardCount} bareState=${bareState} volliKeys=${JSON.stringify(volliKeys)} labels=${JSON.stringify(labelsPresent)}`,
         };
       },
     );
@@ -798,8 +804,10 @@ async function main() {
       const destructive = await page.getByRole("menuitem", { name: "Delete", exact: true }).count();
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
+      // Root items for a fresh no-worktree ticket: Move to, Priority, Labels
+      // (VC-27), Archive. Resume/Remove-worktree only appear with a session.
       const ok =
-        rootCount === 3 &&
+        rootCount === 4 &&
         rootRowsWithIcons === rootCount &&
         moveCount === 4 &&
         moveRowsWithIcons === moveCount &&
@@ -1156,10 +1164,10 @@ async function main() {
       return { ok, detail: `open=${openCount} closedAfterEscape=${closedCount}` };
     });
 
-    // === 21. Workspace switcher visibility returns all 60px to the canvas ===
+    // === 21. Project switcher visibility returns all 60px to the canvas ===
     await attempt(
       21,
-      "Workspace switcher toggle returns its full 60px to the canvas and persists across reload",
+      "Project switcher toggle returns its full 60px to the canvas and persists across reload",
       async () => {
         const workspaceRail = page.locator("[data-workspace-rail]");
         const mainCanvas = page.locator('[data-slot="sidebar-inset"]');
@@ -1167,7 +1175,9 @@ async function main() {
         const canvasBefore = await mainCanvas.boundingBox();
         if (!railBefore || !canvasBefore) throw new Error("workspace rail or main canvas missing");
 
-        await page.getByRole("button", { name: "Hide workspace switcher" }).click();
+        // VC-57 renamed the user-facing word to "project" (CONTEXT.md keeps
+        // "workspace" internal-only; the data-workspace-rail hook is unchanged).
+        await page.getByRole("button", { name: "Hide project switcher" }).click();
         await sleep(400);
         const railHidden = await workspaceRail.boundingBox();
         const canvasExpanded = await mainCanvas.boundingBox();
@@ -1180,7 +1190,7 @@ async function main() {
         await sleep(1500);
         await goToBoard(page);
         const hiddenPersisted = await page.locator("[data-workspace-rail]").boundingBox();
-        const showToggle = page.getByRole("button", { name: "Show workspace switcher" });
+        const showToggle = page.getByRole("button", { name: "Show project switcher" });
         const persisted = hiddenPersisted !== null && hiddenPersisted.width < 1;
 
         await showToggle.click();
