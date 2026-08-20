@@ -393,8 +393,17 @@ path.
   and by replaying this host's real login-shell output through the new parser
   (20 of 21 entries kept). Adoption itself runs at app boot, so confirmation
   that a session actually resolves `gh` waits on the next restart.
-- **Pre-existing suite noise.** 88 test files fail to collect in a fresh
-  worktree on an import-alias error (`@renderer/...`). Confirmed identical at
-  base `ca9fcccd`, so unrelated to this work — but it means a fresh worktree
-  cannot currently run the full suite green, which is A5's problem in another
-  costume.
+- **The suite is green.** `pnpm test` (which is `vp run -r test`) passes across
+  every package — 286 files and 5678 tests in `@volli/desktop` alone, zero
+  failures.
+
+  An earlier draft of this document reported 88 collection failures on an
+  `@renderer/...` import alias. That was an artifact of running bare `vp test`
+  from the repo root, which uses only the root config; the alias is defined in
+  `apps/desktop/vite.config.ts` and only applies when the runner is invoked per
+  package. The repository's own scripts always do (`test`, `test:coverage`, and
+  CI's `vp run -r test:coverage`). Recorded here because the failure mode is
+  worth knowing: from the root, a wrong invocation produces a large,
+  authoritative-looking wall of failures in files the change never touched —
+  which is the same class of mistake as trusting a PATH probe that measured the
+  wrong environment.
