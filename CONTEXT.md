@@ -175,6 +175,14 @@ registry; no surface owns verbs of its own.
 _Avoid_: command list, tool list (when meaning the declaration rather than one
 surface's projection)
 
+**Verb Tier**:
+The governance class a verb's access modes imply, never a stored field. Read
+tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
+session actor, judged by per-actor policy. Control tier: named tool only,
+Role-bundled, absent from the agent socket. No verb needs a higher tier than
+the ambient authority its effect already lies within.
+_Avoid_: dangerous tier, middle tier
+
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
 Session: message content, an interaction, activity, Thread lineage, attachment
