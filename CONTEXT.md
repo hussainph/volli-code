@@ -183,6 +183,29 @@ Role-bundled, absent from the agent socket. No verb needs a higher tier than
 the ambient authority its effect already lies within.
 _Avoid_: dangerous tier, middle tier
 
+**Cache Prefix**:
+The byte-identical leading portion of a model request that a provider reuses
+between requests. One changed byte invalidates everything after it; where the
+provider orders the tool array before the system prompt, a tool change
+invalidates the prompt too. Within a Session, the tool bundle and system prompt
+therefore never change after start — a state change is modeled as a tool call or
+a message, never as a re-composed prompt.
+_Avoid_: cache hit (one outcome of a stable prefix), prompt cache (the provider feature)
+
+**Context Assembly**:
+The composition of one model request: system prompt, tool array, and message
+history, ordered stable-first. Assembly is cache-stable when every byte that
+varies per session or per turn — workspace path, date, ticket state — is
+delivered as late as possible, in message content rather than prompt bytes.
+Volli's assembly is deterministic: same spec, same string.
+_Avoid_: prompt building, context window (the model's capacity, not the request)
+
+**Turn Reminder**:
+Volatile fact delivered as content in a message at the turn that needs it,
+instead of bytes in the system prompt: the date, the working directory, live
+ticket state. The Runtime Brief is the first and largest one.
+_Avoid_: system reminder (a provider's wrapper, not Volli's), dynamic prompt section
+
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
 Session: message content, an interaction, activity, Thread lineage, attachment
