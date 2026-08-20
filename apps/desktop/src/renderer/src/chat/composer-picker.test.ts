@@ -292,7 +292,7 @@ describe("rankVerbCompletions", () => {
   });
 
   it("ranks a name that merely contains the query below a prefix match", () => {
-    const other = { name: "compact" as const, description: "" };
+    const other = { ...COMPACT_VERB, description: "" };
     const rows = rankVerbCompletions({
       query: "pact",
       verbs: [other, { ...other, name: "compact" as const }],
@@ -354,8 +354,16 @@ describe("composerPickerRows", () => {
       files: FILES,
     });
 
+    // Every verb the registry holds, alphabetically among themselves —
+    // `rankVerbCompletions` sorts ties by name — then the templates, then the
+    // skills: three groups, the card's own order.
     expect(rows.map((row) => row.value)).toEqual([
       "verb:compact",
+      "verb:copy",
+      "verb:login",
+      "verb:model",
+      "verb:reload",
+      "verb:settings",
       "preview",
       "review",
       "ship",

@@ -17,7 +17,7 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { findComposerVerb, REASONING_LEVELS } from "@volli/shared";
+import { findComposerVerb, REASONING_LEVELS, type ComposerVerb } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { composerAnswer, type InteractionSubmission } from "@renderer/chat/interaction";
@@ -177,14 +177,47 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 }
 
 /**
+ * The plain text of the Session's most recent reply, or null.
+ *
+ * What `/copy` copies. Walks back from the end of the transcript over the
+ * assistant messages of the latest turn and returns the first one that said
+ * anything — the final answer, wherever in the turn it landed — and stops at
+ * the first user message, because a turn that has produced no words yet has
+ * no "last reply", and silently handing back the PREVIOUS turn's words would
+ * be a copy that looked right and pasted wrong.
+ *
+ * Reasoning and tool parts are not prose and do not travel: the clipboard
+ * gets what a reader would call the reply, not the transcript's internals.
+ * A message whose text parts are all whitespace has not said anything, the
+ * same rule the transcript's own prose rendering follows.
+ */
+export function lastAssistantText(messages: readonly UIMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role !== "assistant") {
+      // The turn ended without a word: an older reply is not "the last reply".
+      if (message.role === "user") return null;
+      continue;
+    }
+    const text = message.parts
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n\n")
+      .trim();
+    if (text.length > 0) return text;
+  }
+  return null;
+}
+
+/**
  * What one press of the composer turns out to have been.
  *
  * Three things, and a message is still what every press is unless something
  * more specific claims it. An **answer** is what a press becomes while a
  * question is standing open above the box that can take its words
  * ({@link composerAnswer}, which owns the rule and the reasons). A **verb** is
- * what a draft that is nothing but `/compact` becomes: an operation the client
- * runs, with no message sent at all (`composer-verb.ts`).
+ * what a draft that is nothing but a `/name` from the verb registry becomes:
+ * an operation the client runs, with no message sent at all
+ * (`composer-verb.ts`).
  *
  * It is a decision rather than a mode, and that distinction is the whole
  * design: the composer is not put into an answering state that a reader has to
@@ -205,8 +238,11 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
  */
 export type ComposerPress =
   | { kind: "answer"; interactionId: string; submission: InteractionSubmission }
-  | { kind: "compact"; instructions: string | null }
+  | { kind: "verb"; verb: ComposerVerb; instructions: string | null }
   | { kind: "message" };
+
+/** The verb arm of a press, named for the handler that performs it. */
+export type ComposerVerbPress = Extract<ComposerPress, { kind: "verb" }>;
 
 export function composerPress(
   pending: RendererSessionInteraction | null,
@@ -218,12 +254,11 @@ export function composerPress(
   }
   const invocation = findComposerVerb(text);
   if (invocation === null) return { kind: "message" };
-  // Switched rather than assumed: `ComposerVerbName` is closed, so a second
-  // verb stops this compiling instead of being quietly compacted.
-  switch (invocation.verb.name) {
-    case "compact":
-      return { kind: "compact", instructions: invocation.instructions };
-  }
+  // The verb travels with the press rather than being flattened into one arm
+  // per name: every verb is the same kind of press, and the switch that
+  // performs it lives where the acts do (the plane), where `ComposerVerbName`
+  // stays closed and a new verb still stops the compiling.
+  return { kind: "verb", verb: invocation.verb, instructions: invocation.instructions };
 }
 
 export type HeldDispatchOutcome = "delivered" | "recorded" | "refused" | "held";
