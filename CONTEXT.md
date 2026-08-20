@@ -139,6 +139,42 @@ exists. What a search returns is third-party text, references rather than
 contents, and reading one of them is a new decision judged from scratch.
 _Avoid_: web search setting, browsing, internet permission
 
+**Agent CLI**:
+The bash-composable `volli` verb surface a Session's shell (or a person's
+terminal) reaches through the local agent socket. It is the discovery surface
+and the low-risk coordination surface: reads, plus writes that are visible,
+attributable, and reversible. It attributes its caller and cannot authenticate
+one — any process running as the user can reach it — so a verb whose misuse
+cannot be tolerated from an arbitrary such process does not belong here.
+_Avoid_: agent surface (alone), planning CLI
+
+**Agent Tool Surface**:
+The named, schema'd tools a Session's Role bundle offers inside the Agent
+Runtime. A tool call is bound to the Session that made it and never crosses the
+agent socket, so availability itself is enforcement: what a Role was not handed
+cannot be called.
+_Avoid_: Pi tools (as product vocabulary)
+
+**Client Surface**:
+A host API a Volli client — the desktop renderer, a future mobile or cloud
+client — speaks for the humans driving the product. Clients talk to hosts,
+never to databases, and no client is an agent.
+_Avoid_: renderer API, app surface
+
+**External Agent Surface**:
+A future boundary (for example an MCP server) exposing Volli operations to
+agents Volli does not host. A foreign agent has no Session Role and no
+Volli-attached identity, so this surface carries its own admission policy and
+never re-exposes a Role bundle as-is.
+_Avoid_: MCP surface (as a synonym for the Agent Tool Surface)
+
+**Verb Registry**:
+The single enumerable declaration of every agent-facing verb: its name, what it
+does, and which surfaces project it. Each surface exposes a projection of the
+registry; no surface owns verbs of its own.
+_Avoid_: command list, tool list (when meaning the declaration rather than one
+surface's projection)
+
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
 Session: message content, an interaction, activity, Thread lineage, attachment
