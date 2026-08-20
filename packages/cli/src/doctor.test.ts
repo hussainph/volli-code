@@ -72,6 +72,20 @@ describe("observeEnvironment", () => {
     expect(observed["volliPath"]).toBe("/ud/bin/volli");
   });
 
+  // VC-94: a machine with no harness installed still needs its contract tools
+  // audited, so the observation measures them with or without a bin dir — and
+  // a missing one is a measured null, not a key that never appeared.
+  it("resolves every contract tool, found or missing", async () => {
+    const observed = await observeEnvironment(
+      environment({ PATH: "/ud/bin" }, ["/ud/bin/volli", "/ud/bin/git"]),
+    );
+    const resolved = observed["resolved"] as Record<string, string | null>;
+    expect(resolved["git"]).toBe("/ud/bin/git");
+    expect(resolved["gh"]).toBeNull();
+    expect(resolved["node"]).toBeNull();
+    expect(resolved["pnpm"]).toBeNull();
+  });
+
   it("reports ZDOTDIR as null when unset rather than omitting it", async () => {
     expect((await observeEnvironment(environment({ PATH: "" })))["zdotDir"]).toBeNull();
   });

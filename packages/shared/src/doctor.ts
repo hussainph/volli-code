@@ -14,7 +14,14 @@
  * answered by observation rather than by reading our own settings back, it is —
  * the caller reports what it actually sees from inside the environment under
  * test, and the derivation below has no way to substitute an assumption for it.
+ *
+ * The contract tool checks (git, gh, node, pnpm) follow the same rule: the
+ * question is not "is the tool installed" — it cannot be answered from here —
+ * but "can a session run it", which is the outcome every agent's first
+ * commands depend on (VC-94).
  */
+import { SESSION_ENV_TOOLS } from "./session-env";
+import type { SessionEnvTool } from "./session-env";
 import type { WrapperRefusal } from "./harness/wrapper";
 
 /** How much a finding matters. `warn` is a degraded but working install. */
@@ -163,6 +170,54 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
       "fail",
       `resolves to ${actual}, not ${wrapperPath} — this harness reports no events`,
       "Run `volli doctor --fix`, then open a new terminal.",
+    );
+  });
+}
+
+/**
+ * The remedy per contract tool, naming the real cause instead of a generic
+ * install hint. The measured failure this command exists to catch is not
+ * "the tool is not installed" but "the session PATH is not the login PATH" —
+ * so every remedy names both causes and the discriminator that tells them
+ * apart: `volli identify`, which prints the adopted PATH and its provenance.
+ */
+const TOOL_REMEDIES: Record<SessionEnvTool, string> = {
+  git: "macOS ships git with the Xcode Command Line Tools — run `xcode-select --install`. If git is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
+  gh: "Install the GitHub CLI (`brew install gh`). If gh is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
+  node: "Install Node (`brew install node`). If node is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
+  pnpm: "Enable it with `corepack enable pnpm` (or `brew install pnpm`). If pnpm is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
+};
+
+/**
+ * Whether a session can run each contract tool. These are the outcomes every
+ * agent's first commands depend on, and the exact shape of VC-94's failure:
+ * `git` answered from `/usr/bin` while `gh` was missing, so the session
+ * looked operational — it could commit — yet could not open or merge a PR,
+ * and nothing said why. The same {@link Observed} discipline as every other
+ * check applies: `null` is a measured absence and a failure, `undefined` is
+ * a caller that never looked, and a warn must say which of the two it is.
+ */
+function toolChecks(observation: DoctorObservation): DoctorCheck[] {
+  return SESSION_ENV_TOOLS.map((tool) => {
+    const id = `tool-${tool}`;
+    const title = `\`${tool}\` is available to sessions`;
+    const actual = observation.resolved[tool];
+    if (typeof actual === "string") return ok(id, title, actual);
+    if (actual === null) {
+      return bad(
+        id,
+        title,
+        "fail",
+        `\`${tool}\` resolves to nothing on this PATH`,
+        TOOL_REMEDIES[tool],
+      );
+    }
+    return bad(
+      id,
+      title,
+      "warn",
+      `no resolution was reported for \`${tool}\``,
+      "Run `volli doctor` from a Volli terminal, where the full tool set is visible.",
     );
   });
 }
@@ -333,6 +388,7 @@ function skillCheck(facts: DoctorFacts): DoctorCheck[] {
 export function runDoctorChecks(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck[] {
   const checks: DoctorCheck[] = [
     pathPositionCheck(observation, facts),
+    ...toolChecks(observation),
     shellInitCheck(observation, facts),
     volliCheck(observation, facts),
     sessionCheck(observation, facts),

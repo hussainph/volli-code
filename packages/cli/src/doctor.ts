@@ -19,6 +19,7 @@ import {
   harnessAdapters,
   isBareHarnessCommand,
   resolveOnPath,
+  SESSION_ENV_TOOLS,
   VOLLI_BIN_DIR_ENV,
 } from "@volli/shared";
 import type { DoctorCheck } from "@volli/shared";
@@ -150,6 +151,13 @@ export async function observeEnvironment(
   const resolved: Record<string, string | null> = {};
   for (const command of await commandsToResolve(binDir, environment)) {
     resolved[command] = await resolveOnPath(pathEntries, command, environment);
+  }
+  // The session contract tools are measured on every run, with or without
+  // harnesses: a machine with no agent installed still needs `git` audited.
+  // They share the `resolved` map with harness commands — a harness that would
+  // take a system tool's name is refused, so the keys never collide.
+  for (const tool of SESSION_ENV_TOOLS) {
+    resolved[tool] = await resolveOnPath(pathEntries, tool, environment);
   }
   return {
     pathEntries,
