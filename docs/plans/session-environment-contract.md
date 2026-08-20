@@ -15,10 +15,12 @@ discovers it without probing failures.
 > `gh`/`node`/`npm`/`pnpm`/`vp` resolve again from the next app boot. 332 tests
 > across the touched suites pass.
 >
-> **Thirteen improvements remain open** — marked ○ below. A2/A3 (probe
-> unification and the `.zshrc` gap) are the ones that still let two sessions
-> differ; A5 and the two non-`PATH` bundle items want coordinating with VC-38,
-> VC-109 and VC-70.
+> **A2 landed 2026-08-21** (`0497a859`): one probe, one parser, the
+> interactive/non-interactive split now an argument. A3 (the `.zshrc` gap) is
+> what still lets two sessions differ.
+>
+> **Twelve improvements remain open** — marked ○ below. A5 and the two
+> non-`PATH` bundle items want coordinating with VC-38, VC-109 and VC-70.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
 was observed on the reporting host during the investigation session itself —
@@ -113,6 +115,10 @@ detection     (login-path.ts)       accepts : true
 no `isAbsolute` rule, so it accepts the same string the boot path threw away.
 That module is what feeds harness detection, the Settings → CLI pane
 (`cli-status.ts`) and `volli doctor`.
+
+*(A2 deleted `login-path.ts`. Both probes now come out of
+`login-shell-path.ts` through one parser, so this particular disagreement can
+no longer be expressed.)*
 
 So on this host, right now:
 
@@ -218,12 +224,12 @@ entries because of 1 bad one. A `PATH` is a list of independent directories;
 there is no reason a bad member should invalidate its neighbours. *Filter the
 bad entries and keep the rest.*
 
-**2. Two probes, two parsers, no reconciliation.** `login-path.ts` and
-`login-shell-path.ts` are near-duplicates (same marker, same detached-spawn
-timeout hazard handling, same parse intent) that disagree on both flags and
-acceptance rules. Neither is authoritative. *One module, one answer, with the
-interactive/non-interactive distinction as an explicit parameter rather than a
-fork.*
+**2. Two probes, two parsers, no reconciliation.** *(Fixed by A2.)*
+`login-path.ts` and `login-shell-path.ts` were near-duplicates (same marker,
+same detached-spawn timeout hazard handling, same parse intent) that disagreed
+on both flags and acceptance rules. Neither was authoritative. *One module, one
+answer, with the interactive/non-interactive distinction as an explicit
+parameter rather than a fork.*
 
 **3. Degradation is unlogged and unstored.** `{ kind: "kept" }` is the correct
 outcome for a healthy `pnpm dev` boot *and* the symptom of total adoption
@@ -266,11 +272,18 @@ Empty entries are dropped too — to a shell they mean the current directory, an
 a `PATH` that runs commands from the cwd is never safe to adopt. Regression test
 carries this host's measured string verbatim.
 
-**○ A2 · Unify the two probes into one module.** (P1.) Collapse `login-path.ts`
-and `login-shell-path.ts` into a single resolver with an `interactive: boolean`
-parameter and one shared parser. Both call sites keep their current flag choice;
-what they stop having is independent notions of what a valid `PATH` is. This is
-the change that prevents defect #2 from recurring in a new form.
+**✅ A2 · Unify the two probes into one module.** (`0497a859`.) One resolver in
+`login-shell-path.ts`, `probeLoginShellPath(probe, deps)`, where the differences
+are a `LoginShellProbe` argument: `DETECTION_PROBE` (`-l -i`, 3000ms, 1MB,
+believes a shell that exits nonzero) and `ADOPTION_PROBE` (`-l`, 4000ms, 64KB,
+refuses one). Both call sites kept their flag choice; what they stopped having
+is independent notions of what a valid `PATH` is. The boot-side merge moved to
+`login-path-adoption.ts`, which is indifferent to how the answer was obtained.
+
+One deliberate behaviour change: detection now applies A1's entry filter too, so
+it no longer reports `~/.dotnet/tools` as part of this host's `PATH`. The
+control-character rule that only detection had survives as part of the same
+per-entry filter instead of voiding the whole list.
 
 **○ A3 · Close the `.zshrc` gap without risking the boot.** (P1.) *Deliberately
 excluded from the P0 pass: it changes probe semantics and wants its own
@@ -280,6 +293,13 @@ interactive probe once, off the critical path, after the first window loads, and
 adopt any additional entries it finds. Sessions started in the first ~2s get
 today's answer; every session after gets the complete one. Record which of the
 two answered.
+
+A2 left the seam: the post-window interactive probe is `loginShellPath()`, which
+detection has already paid for and cached, and `login-path-adoption.ts` takes
+any answer through the same merge — so closing the gap needs no second shell and
+no second notion of the truth. What it does need is a decision about the
+provenance the second pass reports, and about `DETECTION_PROBE`'s more forgiving
+exit stance being trusted with a `PATH` mutation.
 
 **○ A4 · Make PTY and structured sessions provably equal.** (P2.) An e2e that
 starts one of each and asserts `command -v` agrees for a fixed tool list.
