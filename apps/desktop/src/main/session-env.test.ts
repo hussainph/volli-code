@@ -7,6 +7,7 @@ describe("buildSessionEnvReport", () => {
     const report = await buildSessionEnvReport({
       path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
       provenance: "adopted",
+      interactiveProvenance: "already-complete",
       cwd: "/work/volli",
       isExecutable: (path) =>
         Promise.resolve(
@@ -20,6 +21,7 @@ describe("buildSessionEnvReport", () => {
     expect(report).toEqual({
       path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
       provenance: "adopted",
+      interactiveProvenance: "already-complete",
       // git is absent from the scripted filesystem: reported as measured-null,
       // not dropped from the census.
       tools: {
@@ -36,6 +38,7 @@ describe("buildSessionEnvReport", () => {
     const report = await buildSessionEnvReport({
       path: "/usr/bin:/bin",
       provenance: "probe-failed",
+      interactiveProvenance: "pending",
       cwd: "/work/volli",
       isExecutable: async () => false,
       pathExists: () => false,
@@ -44,11 +47,42 @@ describe("buildSessionEnvReport", () => {
     expect(report.dependencies).toBeNull();
   });
 
+  // The two passes are independent facts, and their cross-product is real: a
+  // boot probe that failed and an interactive pass that then succeeded is an
+  // ordinary recovered host. A single provenance word could not say it.
+  it("reports the two adoption passes separately rather than collapsing them", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/profile/bin:/Users/x/.bun/bin:/usr/bin",
+      provenance: "probe-failed",
+      interactiveProvenance: "adopted",
+      cwd: "/work/volli",
+      isExecutable: async () => false,
+      pathExists: () => false,
+    });
+    expect(report.provenance).toBe("probe-failed");
+    expect(report.interactiveProvenance).toBe("adopted");
+  });
+
+  // `pending` is the one answer only the second pass can give, and the whole
+  // reason identify reads it rather than awaiting it.
+  it("reports a second pass that has not landed as pending, not as a failure", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/profile/bin:/usr/bin",
+      provenance: "adopted",
+      interactiveProvenance: "pending",
+      cwd: "/work/volli",
+      isExecutable: async () => false,
+      pathExists: () => false,
+    });
+    expect(report.interactiveProvenance).toBe("pending");
+  });
+
   it("drops empty PATH entries before resolving, like every other PATH consumer", async () => {
     const seen: string[] = [];
     await buildSessionEnvReport({
       path: ":/opt/homebrew/bin:",
       provenance: "already-complete",
+      interactiveProvenance: "already-complete",
       cwd: "/",
       isExecutable: (path) => {
         seen.push(path);

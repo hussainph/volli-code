@@ -425,6 +425,11 @@ function renderStableLines(command: string, data: unknown): string | null {
         value === null || value === undefined ? "-" : terminalSafeInline(value);
       lines.push(`env.path  ${envValue(env["path"])}`);
       lines.push(`env.provenance  ${envValue(env["provenance"])}`);
+      // The second pass's answer, directly under the first (VC-94's A3): the
+      // two are separate facts about one PATH, so they read as one statement
+      // rather than a fact and an unrelated aside. `pending` here means the
+      // interactive shell has not been folded in yet.
+      lines.push(`env.interactiveProvenance  ${envValue(env["interactiveProvenance"])}`);
       const tools = isRecord(env["tools"]) ? env["tools"] : {};
       for (const tool of SESSION_ENV_TOOLS) {
         lines.push(`env.tools.${tool}  ${envValue(tools[tool])}`);

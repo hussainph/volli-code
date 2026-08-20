@@ -3409,6 +3409,7 @@ describe("identify env block (VC-94)", () => {
   const report = {
     path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
     provenance: "adopted" as const,
+    interactiveProvenance: "already-complete" as const,
     tools: {
       git: "/usr/bin/git",
       gh: "/opt/homebrew/bin/gh",

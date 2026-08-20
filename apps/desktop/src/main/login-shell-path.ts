@@ -80,6 +80,14 @@ export interface LoginShellProbe {
    * The marker vouches for the value either way; what differs is the cost of
    * being wrong. See both probes below — this is the field where their stances
    * are opposite, and deliberately so.
+   *
+   * What makes the marker's guarantee stronger than it looks: our command runs
+   * with `-c`, AFTER the shell has read its rc files. A shell killed mid-
+   * profile therefore never printed a marker at all and parses to `null`. The
+   * "killed, but it had printed something plausible first" case the strict
+   * stance fears cannot present as a short-but-valid PATH; it presents as no
+   * answer. That is why {@link DETECTION_PROBE} can be forgiving without being
+   * reckless — and why VC-94's A3 can adopt from it. See there.
    */
   requireCleanExit: boolean;
 }
@@ -104,6 +112,30 @@ export type ShellRunLimits = Pick<LoginShellProbe, "timeoutMs" | "maxOutputBytes
  * is what the marker vouches for, and a login shell exiting nonzero is
  * ordinary — a `.zlogout` ending in a failing command does not make the PATH
  * that shell exported a lie. Only an unusable answer becomes `null`.
+ *
+ * VC-94's A3 puts this forgiving answer through a PATH MUTATION — the second,
+ * post-window adoption pass in `login-path-adoption.ts` — which is the one
+ * thing {@link ADOPTION_PROBE}'s opposite stance exists to refuse. Three
+ * reasons that is sound here and not there, in decreasing order of weight:
+ *
+ * 1. **The second pass only ADDS.** Boot adoption REPLACES: if its answer is
+ *    short, the app runs short, which is why it may not gamble. The second
+ *    pass merges onto an already-adopted PATH and removes nothing, so
+ *    believing a degraded answer costs strictly less than not asking at all.
+ * 2. **A dirty exit cannot mean a truncated PATH.** See
+ *    {@link LoginShellProbe.requireCleanExit}: the marked value is printed
+ *    after the rc files, so a shell killed in them yields `null` rather than
+ *    a plausible-looking subset.
+ * 3. **PTY equivalence is the point.** A session PTY runs `$SHELL -l` on a tty
+ *    and takes whatever PATH the rc files leave behind, whatever status the
+ *    shell later exits with. Refusing an answer here for a nonzero exit would
+ *    make structured sessions disagree with PTY sessions in exactly the way
+ *    A3 exists to stop.
+ *
+ * What the second pass requires INSTEAD of a clean exit is stated where it
+ * runs: that boot adoption has already been applied (one writer at a time),
+ * that the answer parsed at all, and that the merge is the same additive,
+ * `binDir`-first union boot uses.
  */
 export const DETECTION_PROBE: LoginShellProbe = {
   interactive: true,
@@ -116,9 +148,13 @@ export const DETECTION_PROBE: LoginShellProbe = {
  * What main may install as `process.env.PATH` at boot. Deliberately NOT
  * interactive: this runs before any window exists, and an rc file that stops to
  * ask something would block with nothing on screen to answer it. A boot that
- * can hang is a worse trade than a PATH that is merely incomplete — but the
- * `.zshrc` directories that trade costs are a recorded gap (VC-94's A3), not an
- * oversight, and the answer is not to be presented as the whole environment.
+ * can hang is a worse trade than a PATH that is merely incomplete, and it stays
+ * this way. The `.zshrc` directories that trade costs are recovered by the
+ * SECOND pass (VC-94's A3, `login-path-adoption.ts`), which asks the
+ * interactive question once the first window exists and there is somewhere for
+ * a prompt to hang harmlessly. Until that pass lands, the answer here is not
+ * the whole environment and `volli identify` says so — `env.interactiveProvenance`
+ * reads `pending`.
  *
  * Four seconds because this one is on the boot path and gets no retry — main
  * asks exactly once per launch. 64KB because nothing downstream needs a
@@ -332,10 +368,10 @@ let cached: Promise<string | null> | undefined;
  * back.
  *
  * In-flight attempts are still shared, so the boot fan-out spawns one shell and
- * not five. That sharing is the seam VC-94's A3 wants: the post-window
- * interactive probe it needs is this one, already paid for by detection, and
- * feeding its answer back through `login-path-adoption.ts` closes the `.zshrc`
- * gap without a second shell or a second notion of the truth.
+ * not five. That sharing is what VC-94's A3 rides: the post-window interactive
+ * pass asks THIS function, so closing the `.zshrc` gap costs no second shell
+ * and introduces no second notion of the truth — on a boot that has already
+ * detected harnesses, the pass is a cache read.
  */
 export function loginShellPath(deps: LoginShellProbeDeps = processDeps()): Promise<string | null> {
   if (cached !== undefined) return cached;

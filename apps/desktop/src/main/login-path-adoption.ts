@@ -1,7 +1,7 @@
 /**
- * What boot does with the login shell's PATH once `login-shell-path.ts` has
- * asked for it: merge it onto `process.env.PATH`, once, and say which of the
- * three things that happened happened.
+ * What main does with a login shell's PATH once `login-shell-path.ts` has asked
+ * for it: merge it onto `process.env.PATH` and say which of the three things
+ * that happened happened.
  *
  * A macOS app opened from Finder or the Dock inherits launchd's bare
  * environment — `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else — and main
@@ -17,14 +17,35 @@
  *
  * Which shell question boot asks, and why it is the non-interactive one, lives
  * with the probe: `ADOPTION_PROBE` in `login-shell-path.ts`. Adoption itself is
- * indifferent to how the answer was obtained, which is what lets VC-94's A3 run
- * the interactive probe after the first window and put its richer answer
- * through this same merge.
+ * indifferent to how the answer was obtained, and that is what lets this module
+ * run TWO passes over the same merge (VC-94's A3):
+ *
+ * 1. **Boot**, non-interactive, on the critical path. zsh reads `.zshrc` only
+ *    when interactive, so this pass cannot see anything a user's `.zshrc`
+ *    exports. That is a deliberate trade and it stays: an rc file is free to
+ *    prompt, and a boot that hangs with no window to answer in is worse than a
+ *    PATH that is merely short.
+ * 2. **After the first window**, interactive, off the critical path. Measured
+ *    on the reporting host, the gap between the two is seven directories —
+ *    `~/.bun/bin`, `~/.opencode/bin`, `~/.fly/bin`,
+ *    `~/.antigravity/antigravity/bin`, `~/flutter/bin`,
+ *    `/opt/homebrew/opt/ruby/bin` and
+ *    `/opt/homebrew/lib/ruby/gems/4.0.0/bin`. nvm, bun, rbenv, pyenv and mise
+ *    all conventionally initialise in `.zshrc`, so for a large fraction of
+ *    users the boot pass succeeds and still leaves a structured session unable
+ *    to reach the toolchain their own terminal reaches. A1 fixed adoption
+ *    failing outright; this is the partial-failure case behind it.
+ *
+ * The second pass ADDS; it never replaces. Both passes go through the same
+ * union merge, so no directory a session could reach before a pass is
+ * unreachable after it, and Volli's own bin dir is put back in front every
+ * time.
  *
  * Failure is `null`, never a thrown error: a profile that times out once costs
  * one attempt, and this module then preserves every current PATH entry while
  * still moving Volli's own bin to the front.
  */
+import type { SessionEnvInteractiveProvenance } from "@volli/shared";
 
 /**
  * launchd's bare four-directory PATH — what a Finder/Dock launch hands a
@@ -89,6 +110,23 @@ export function decideLoginPathAdoption(
   return { kind: "adopted", path, entryCount: entriesOf(path).length };
 }
 
+/**
+ * What the second, interactive pass did. The same three words as
+ * {@link LoginPathOutcome}, answering a different question: not "was a login
+ * PATH merged in" — boot already merged one — but "did asking an INTERACTIVE
+ * shell change the PATH this app hands out".
+ *
+ * `already-complete` is therefore the honest answer for a host whose `.zshrc`
+ * exports no PATH, which is the case the boot pass was always right about.
+ * `adopted` carries the directories it gained, because the whole argument for
+ * a second shell is that on some hosts that list is not empty, and a count
+ * nobody can read back is not evidence.
+ */
+export type InteractivePathOutcome =
+  | { kind: "adopted"; path: string; added: readonly string[] }
+  | { kind: "already-complete" }
+  | { kind: "probe-failed" };
+
 /** The one line main logs after resolving the outcome. */
 export function loginPathLogLine(outcome: LoginPathOutcome): string {
   switch (outcome.kind) {
@@ -101,17 +139,61 @@ export function loginPathLogLine(outcome: LoginPathOutcome): string {
   }
 }
 
+/**
+ * The second pass's line, which NAMES the directories rather than counting
+ * them. When a session cannot find `node`, this line is the difference between
+ * "the user's nvm directory was never adopted" and "nvm is not how they
+ * installed it" — and the incident VC-94 was raised over cost hours to reach
+ * exactly that sentence. It is also the only place the `.zshrc` delta is
+ * measured on a host other than the reporting one.
+ */
+export function interactivePathLogLine(outcome: InteractivePathOutcome): string {
+  switch (outcome.kind) {
+    case "adopted":
+      return outcome.added.length === 0
+        ? "[volli] PATH reordered by interactive login shell"
+        : `[volli] PATH extended by interactive login shell (+${outcome.added.length}: ${outcome.added.join(" ")})`;
+    case "already-complete":
+      return "[volli] PATH kept (interactive login shell adds nothing)";
+    case "probe-failed":
+      return "[volli] PATH kept (interactive login shell probe failed)";
+  }
+}
+
 export interface LoginPathBootstrapDeps {
   binDir: string;
   readCurrentPath(): string | undefined;
   writePath(path: string): void;
   resolveLoginPath(): Promise<string | null>;
+  /**
+   * The interactive login shell's PATH, for the second pass — in production
+   * `loginShellPath()`, the `DETECTION_PROBE` answer detection has already
+   * paid for and cached. Called LAZILY, only once the second pass runs, so
+   * constructing a bootstrap never costs a shell startup and an app that
+   * never opens a window never asks.
+   */
+  resolveInteractiveLoginPath(): Promise<string | null>;
   log(line: string): void;
 }
 
 export interface LoginPathBootstrap {
   /** Applies the already-started probe exactly once. Every caller gets this same promise. */
   apply(): Promise<LoginPathOutcome>;
+  /**
+   * The second pass, run once, after the first window has loaded. Sequenced
+   * behind {@link apply} rather than racing it: `process.env.PATH` then has one
+   * writer at a time, and the boot merge can never be the loser of a late
+   * resolve. Every caller shares the one attempt, like {@link apply}.
+   */
+  applyInteractive(): Promise<InteractivePathOutcome>;
+  /**
+   * What the second pass has reported SO FAR — synchronous on purpose.
+   * `volli identify` must never await this: the pass is deliberately off the
+   * critical path, and an identify that blocked on a wedged `.zshrc` would
+   * spend the interactive probe's whole timeout answering a question about the
+   * environment. `pending` IS the answer until it is not.
+   */
+  interactiveProvenance(): SessionEnvInteractiveProvenance;
 }
 
 /**
@@ -129,19 +211,83 @@ export function createLoginPathBootstrap(deps: LoginPathBootstrapDeps): LoginPat
     probeAttempt = Promise.resolve(null);
   }
 
+  /**
+   * One answer merged onto the live PATH and installed, for either pass. Shared
+   * so the two invariants are stated once and cannot drift: nothing is ever
+   * REMOVED — the merge is a union, so a directory a session could reach before
+   * a pass stays reachable after it — and `binDir` goes back in front
+   * afterwards, which is what makes the wrappers resolve at all.
+   */
+  const install = (
+    loginPath: string | null,
+  ): { outcome: LoginPathOutcome; before: string; after: string } => {
+    const before = deps.readCurrentPath() ?? "";
+    const outcome = decideLoginPathAdoption(before, loginPath);
+    const merged = outcome.kind === "adopted" ? outcome.path : before;
+    const after = [...new Set([deps.binDir, ...entriesOf(merged)])].join(":");
+    deps.writePath(after);
+    return { outcome, before, after };
+  };
+
   let applyAttempt: Promise<LoginPathOutcome> | undefined;
+  const apply = (): Promise<LoginPathOutcome> => {
+    applyAttempt ??= probeAttempt.then((loginPath) => {
+      const { outcome } = install(loginPath);
+      deps.log(loginPathLogLine(outcome));
+      return outcome;
+    });
+    return applyAttempt;
+  };
+
+  let interactiveAttempt: Promise<InteractivePathOutcome> | undefined;
+  let interactiveKind: SessionEnvInteractiveProvenance = "pending";
   return {
-    apply: () => {
-      applyAttempt ??= probeAttempt.then((loginPath) => {
-        const currentPath = deps.readCurrentPath();
-        const outcome = decideLoginPathAdoption(currentPath, loginPath);
-        const mergedPath = outcome.kind === "adopted" ? outcome.path : (currentPath ?? "");
-        const path = [...new Set([deps.binDir, ...entriesOf(mergedPath)])].join(":");
-        deps.writePath(path);
-        deps.log(loginPathLogLine(outcome));
-        return outcome;
-      });
-      return applyAttempt;
+    apply,
+    applyInteractive: () => {
+      interactiveAttempt ??= apply()
+        // A rejected interactive probe is the same fact as one that answered
+        // nothing: we could not ask, so there is nothing to merge.
+        .then(() => deps.resolveInteractiveLoginPath().catch(() => null))
+        .then((interactivePath) => {
+          const { before, after } = install(interactivePath);
+          const outcome = decideInteractiveAdoption(interactivePath, before, after);
+          interactiveKind = outcome.kind;
+          deps.log(interactivePathLogLine(outcome));
+          return outcome;
+        });
+      return interactiveAttempt;
     },
+    interactiveProvenance: () => interactiveKind,
+  };
+}
+
+/**
+ * What the second pass amounts to, judged on the PATH that was actually
+ * INSTALLED rather than on the merge in isolation.
+ *
+ * The distinction only bites here. At boot `binDir` is typically not on the
+ * PATH yet, so {@link decideLoginPathAdoption}'s verdict and the installed
+ * result agree. By the second pass `binDir` is always already leading, and the
+ * union orders login entries first — so the merged string can never equal the
+ * current one, and reusing that verdict would report `adopted` for a pass that
+ * changed nothing at all. Comparing what was written is the only reading that
+ * stays true for both.
+ */
+function decideInteractiveAdoption(
+  interactivePath: string | null,
+  before: string,
+  after: string,
+): InteractivePathOutcome {
+  if (interactivePath === null || interactivePath.length === 0) return { kind: "probe-failed" };
+  if (after === before) return { kind: "already-complete" };
+  const had = new Set(entriesOf(before));
+  return {
+    kind: "adopted",
+    path: after,
+    // Empty for a pass that only REORDERED — an rc that prepends a directory
+    // already further down the PATH. That is a real change (it decides which
+    // copy of a tool wins) and still adds nothing, so the two are reported
+    // apart rather than counted together.
+    added: entriesOf(after).filter((entry) => !had.has(entry)),
   };
 }

@@ -16,10 +16,13 @@ discovers it without probing failures.
 > across the touched suites pass.
 >
 > **A2 landed 2026-08-21** (`0497a859`): one probe, one parser, the
-> interactive/non-interactive split now an argument. A3 (the `.zshrc` gap) is
-> what still lets two sessions differ.
+> interactive/non-interactive split now an argument.
 >
-> **Twelve improvements remain open** — marked ○ below. A5 and the two
+> **A3 landed 2026-08-21**: a second adoption pass, interactive, run once after
+> the first window. The `.zshrc` gap — the last thing that let a structured
+> session and a PTY session disagree — is closed.
+>
+> **Eleven improvements remain open** — marked ○ below. A5 and the two
 > non-`PATH` bundle items want coordinating with VC-38, VC-109 and VC-70.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
@@ -160,6 +163,12 @@ interactive rc prompt. That trade is defensible; what is not defensible is that
 the resulting `PATH` is then presented as the environment, with no record that
 it is a known-incomplete one.
 
+*(A3 closed this. The boot probe is still non-interactive — that trade was
+right and stands — but a second pass asks the interactive question once the
+first window exists, merges what it finds, and `volli identify` now reports the
+two passes as two fields rather than presenting the first as the whole
+environment.)*
+
 ### A fourth divergence: the worktree itself
 
 `PATH` is not the only thing that differs between sessions. Measured across the
@@ -201,7 +210,7 @@ wrong.
 | --- | --- | --- |
 | `binDir` first | ✅ holds for both session kinds | ✅ |
 | Login-shell `PATH` adopted | ❌ silently skipped when any entry is malformed | ✅ A1 |
-| Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents | ❌ A3 open |
+| Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents | ✅ A3 (unproven end to end — A4) |
 | Degradation is recorded and surfaced | ❌ logged as `[volli] PATH kept`, indistinguishable from healthy | ◑ provenance reported by B1/B2; ❌ B4 open |
 | Session can discover it without probing | ❌ `volli identify` carries no env fields | ✅ B1 + C3 |
 | Workspace dependencies installed, or session told | ❌ `node_modules` present in some worktrees, absent in others | ◑ reported by B1; ❌ A5 policy open |
@@ -285,21 +294,64 @@ it no longer reports `~/.dotnet/tools` as part of this host's `PATH`. The
 control-character rule that only detection had survives as part of the same
 per-entry filter instead of voiding the whole list.
 
-**○ A3 · Close the `.zshrc` gap without risking the boot.** (P1.) *Deliberately
-excluded from the P0 pass: it changes probe semantics and wants its own
-verification.* Keep the
-non-interactive probe on the boot path — that trade is right — but run the
-interactive probe once, off the critical path, after the first window loads, and
-adopt any additional entries it finds. Sessions started in the first ~2s get
-today's answer; every session after gets the complete one. Record which of the
-two answered.
+**✅ A3 · Close the `.zshrc` gap without risking the boot.** The boot probe
+stays exactly where it is and stays non-interactive; `createLoginPathBootstrap`
+gained a second pass, `applyInteractive()`, fired from the same
+`did-finish-load` callback the first pass already used. It asks
+`loginShellPath()` — the `DETECTION_PROBE` answer detection has already paid for
+and cached — so on a normal boot it is a cache read, not a second shell, and it
+puts that answer through the same additive union merge. Nothing waits on it: if
+the interactive probe hangs its full 3s, the app is exactly as usable as it was
+before this existed.
 
-A2 left the seam: the post-window interactive probe is `loginShellPath()`, which
-detection has already paid for and cached, and `login-path-adoption.ts` takes
-any answer through the same merge — so closing the gap needs no second shell and
-no second notion of the truth. What it does need is a decision about the
-provenance the second pass reports, and about `DETECTION_PROBE`'s more forgiving
-exit stance being trusted with a `PATH` mutation.
+The two decisions A2 left, made:
+
+**Provenance — two fields, not four more values.** `env.provenance` still means
+what C3 taught it to mean and still carries exactly `adopted` /
+`already-complete` / `probe-failed`, describing the boot pass. The second pass
+reports on its own field, `env.interactiveProvenance`, in the same three words
+plus `pending`. Two fields because the passes are independent and their answers
+form a cross-product — a boot `probe-failed` followed by an interactive
+`adopted` is an ordinary recovered host, and a single string could only name
+that pair by inventing a compound vocabulary for every combination. `pending` is
+the fourth answer only a second pass can give, and it is what makes a session
+that asked before the pass distinguishable from one that asked after; identify
+reads it synchronously and never awaits it, so a wedged `.zshrc` cannot cost an
+agent its identity output. `AGENTS.md` and `CLAUDE.md` were updated in the same
+commit.
+
+One subtlety worth recording: the second pass decides its own outcome by
+comparing the `PATH` strings it wrote, not by reusing
+`decideLoginPathAdoption`'s verdict. By the second pass `binDir` is always
+already leading and the union orders login entries first, so that verdict can
+never return `already-complete` — it would have reported `adopted` on every
+host, including the ones where the pass changed nothing.
+
+**Exit stance — the forgiving one is accepted, on stated grounds.** The second
+pass adopts from `DETECTION_PROBE`, which believes a shell that exits nonzero,
+and that is the stance `ADOPTION_PROBE` refuses. Three reasons it is sound here
+and not there, in decreasing order of weight. (1) *The second pass only adds.*
+Boot adoption replaces — if its answer is short, the app runs short, which is
+why it may not gamble. The second pass merges onto an already-adopted `PATH`
+and removes nothing, so believing a degraded answer costs strictly less than
+not asking. (2) *A dirty exit cannot mean a truncated `PATH`.* The marked value
+is printed by `-c`, after the rc files, so a shell killed inside them prints no
+marker and parses to `null` — the "killed, but it had printed something
+plausible" case the strict stance fears presents as no answer, not as a
+plausible subset. (3) *PTY equivalence is the goal.* A session PTY runs
+`$SHELL -l` on a tty and takes whatever `PATH` the rc files leave, whatever the
+shell later exits with; refusing an answer for a nonzero exit would make
+structured sessions disagree with PTY sessions in exactly the way A3 exists to
+stop. What the pass requires *instead* of a clean exit: that boot adoption has
+already applied (sequenced, so `process.env.PATH` has one writer at a time and
+a late boot resolve can never clobber the second pass), that the answer parsed
+at all, and that the merge is the same additive `binDir`-first union.
+
+What is deliberately *not* attempted: mutating a live session's environment.
+A structured session's `exec` reads `process.env` per command
+(`SanitizedEnvExecutionEnv`), so it picks the new directories up on its next
+command; a PTY session's own shell read the same rc files itself at spawn, so it
+never needed the pass. Nothing chases a session that already started.
 
 **○ A4 · Make PTY and structured sessions provably equal.** (P2.) An e2e that
 starts one of each and asserts `command -v` agrees for a fixed tool list.
@@ -317,8 +369,9 @@ cheapest first step is the declaration — B1's `env` block reporting
 
 ### B — Observability
 
-**✅ B1 · Add an `env` block to `volli identify`.** (`bdd52746`.) Prints
-`env.path`, `env.provenance`, `env.tools.<tool>` per contract tool, and
+**✅ B1 · Add an `env` block to `volli identify`.** (`bdd52746`; A3 added
+`env.interactiveProvenance`.) Prints `env.path`, `env.provenance`,
+`env.interactiveProvenance`, `env.tools.<tool>` per contract tool, and
 `env.dependencies`, in both text and `--json`. `-` means measured and not found;
 an absent block means the answering process had no env facts at all — the same
 measured-versus-unmeasured discipline `doctor`'s `Observed<T>` already keeps.
@@ -412,9 +465,18 @@ path.
 - **The fix is not yet observed in a live session.** A1 is verified by unit test
   and by replaying this host's real login-shell output through the new parser
   (20 of 21 entries kept). Adoption itself runs at app boot, so confirmation
-  that a session actually resolves `gh` waits on the next restart.
+  that a session actually resolves `gh` waits on the next restart. The same
+  applies to A3: its merge, sequencing, additivity and `binDir`-first invariant
+  are covered by unit tests carrying this host's measured seven-directory
+  delta verbatim, but that the second pass really recovers those seven in a
+  live session is a claim the next restart settles, and `[volli] PATH extended
+  by interactive login shell (+N: …)` is the line that will say so.
+- **A3's `already-complete` path is untested against a real host.** Every
+  measurement here comes from a host whose `.zshrc` does add directories. A
+  host where it adds none should log `PATH kept (interactive login shell adds
+  nothing)`; that branch is unit-tested and not yet observed.
 - **The suite is green.** `pnpm test` (which is `vp run -r test`) passes across
-  every package — 286 files and 5678 tests in `@volli/desktop` alone, zero
+  every package — 286 files and 5691 tests in `@volli/desktop` alone, zero
   failures.
 
   An earlier draft of this document reported 88 collection failures on an

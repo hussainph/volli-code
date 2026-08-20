@@ -845,6 +845,7 @@ const IDENTIFY_SPEC: CommandSpec = {
   example: "volli identify",
   notes: [
     "The env block reports the session PATH, how it was adopted, where each contract tool (git, gh, node, pnpm) resolves, and whether workspace dependencies are installed — read it before running tools to probe for them.",
+    "env.provenance is the boot adoption; env.interactiveProvenance is the later pass that picks up what your shell's interactive startup files export (nvm, bun, rbenv, pyenv, mise). `pending` there means that pass has not landed yet.",
   ],
   options: {
     "--project": {

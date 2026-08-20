@@ -2,6 +2,28 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 
+/** One identify answer that differs only in what the second adoption pass reported. */
+const identifyWithInteractivePass = (interactiveProvenance: string): string =>
+  renderCliSuccess(
+    "identify",
+    {
+      project: null,
+      ticket: null,
+      session: null,
+      worktreePath: "/repo/volli",
+      socket: null,
+      appVersion: null,
+      env: {
+        path: "/profile/bin:/usr/bin",
+        provenance: "adopted",
+        interactiveProvenance,
+        tools: { git: null, gh: null, node: null, pnpm: null },
+        dependencies: null,
+      },
+    },
+    { json: false },
+  );
+
 describe("renderCliSuccess", () => {
   it("renders ticket lists as stable, untruncated non-TTY columns", () => {
     expect(
@@ -499,6 +521,7 @@ describe("renderCliSuccess", () => {
           env: {
             path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
             provenance: "adopted",
+            interactiveProvenance: "adopted",
             tools: {
               git: "/usr/bin/git",
               gh: "/opt/homebrew/bin/gh",
@@ -519,6 +542,7 @@ describe("renderCliSuccess", () => {
         "appVersion  -\n" +
         "env.path  /profile/bin:/opt/homebrew/bin:/usr/bin\n" +
         "env.provenance  adopted\n" +
+        "env.interactiveProvenance  adopted\n" +
         "env.tools.git  /usr/bin/git\n" +
         "env.tools.gh  /opt/homebrew/bin/gh\n" +
         "env.tools.node  -\n" +
@@ -544,6 +568,7 @@ describe("renderCliSuccess", () => {
           env: {
             path: "/usr/bin",
             provenance: "probe-failed",
+            interactiveProvenance: "pending",
             tools: "unreadable",
             dependencies: null,
           },
@@ -551,6 +576,18 @@ describe("renderCliSuccess", () => {
         { json: false },
       ),
     ).toContain("env.tools.git  -\nenv.tools.gh  -");
+  });
+
+  // The second adoption pass (VC-94's A3): a session that asked before it
+  // landed and one that asked after have genuinely different PATHs, so the
+  // block must not describe them with the same words.
+  it("renders the interactive pass beside the boot one, pending included", () => {
+    expect(identifyWithInteractivePass("pending")).toContain(
+      "env.provenance  adopted\nenv.interactiveProvenance  pending\n",
+    );
+    expect(identifyWithInteractivePass("adopted")).toContain(
+      "env.provenance  adopted\nenv.interactiveProvenance  adopted\n",
+    );
   });
 
   it("renders a degraded identify's null provenance as a dash, not a claim", () => {
@@ -567,6 +604,7 @@ describe("renderCliSuccess", () => {
           env: {
             path: "/usr/bin",
             provenance: null,
+            interactiveProvenance: null,
             tools: { git: null, gh: null, node: null, pnpm: null },
             dependencies: null,
           },
@@ -583,6 +621,7 @@ describe("renderCliSuccess", () => {
         "appVersion  -\n" +
         "env.path  /usr/bin\n" +
         "env.provenance  -\n" +
+        "env.interactiveProvenance  -\n" +
         "env.tools.git  -\n" +
         "env.tools.gh  -\n" +
         "env.tools.node  -\n" +

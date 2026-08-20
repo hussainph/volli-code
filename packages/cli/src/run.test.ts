@@ -145,7 +145,7 @@ describe("runCli", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toEqual([]);
     expect(stdout).toEqual([
-      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"env":{"path":"/opt/homebrew/bin:/usr/bin","provenance":null,"tools":{"git":"/usr/bin/git","gh":"/opt/homebrew/bin/gh","node":null,"pnpm":null},"dependencies":"absent"},"degraded":true}\n',
+      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"env":{"path":"/opt/homebrew/bin:/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":"/usr/bin/git","gh":"/opt/homebrew/bin/gh","node":null,"pnpm":null},"dependencies":"absent"},"degraded":true}\n',
     ]);
   });
 
@@ -338,8 +338,11 @@ describe("runCli", () => {
     });
 
     expect(exitCode).toBe(0);
+    // Both provenance fields null, and neither of them `pending`: a CLI with no
+    // app to ask never ran a pass, which is not the same fact as a pass that
+    // has yet to land.
     expect(output[0]).toContain(
-      '"env":{"path":"/usr/bin","provenance":null,"tools":{"git":null,"gh":null,"node":null,"pnpm":null}',
+      '"env":{"path":"/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":null,"gh":null,"node":null,"pnpm":null}',
     );
   });
 

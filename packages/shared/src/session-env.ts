@@ -36,6 +36,26 @@ export type SessionEnvTool = (typeof SESSION_ENV_TOOLS)[number];
  */
 export type SessionEnvProvenance = "adopted" | "already-complete" | "probe-failed";
 
+/**
+ * The same three words, asked of the SECOND adoption pass (VC-94's A3) — the
+ * interactive login shell run once after the first window loads — plus the
+ * fourth answer only a second pass can give.
+ *
+ * Two fields rather than four more values on {@link SessionEnvProvenance},
+ * because the two passes are independent questions and their answers form a
+ * cross-product: a boot `probe-failed` followed by an interactive `adopted` is
+ * an ordinary, recoverable host, and a single string could only name it by
+ * inventing a compound vocabulary for every pair. Keeping the boot field's
+ * three values meaning exactly what `AGENTS.md` has said they mean since C3 is
+ * the other half of the reason.
+ *
+ * `pending` is the honest answer for a session that asks before the second pass
+ * has landed: the PATH may still be missing whatever the user's `.zshrc`
+ * exports. It is never a failure, and must not be read as one — the pass runs
+ * after the first window precisely so nothing waits on it.
+ */
+export type SessionEnvInteractiveProvenance = SessionEnvProvenance | "pending";
+
 /** Whether the workspace a session stands in has its dependencies installed. */
 export type WorkspaceDependenciesStatus = "installed" | "absent" | null;
 
@@ -54,6 +74,13 @@ export interface SessionEnvReport {
    * different fact from `probe-failed` and must not pose as one.
    */
   provenance: SessionEnvProvenance | null;
+  /**
+   * What the post-window interactive pass did to that PATH — the directories
+   * a user's `.zshrc` exports and a non-interactive boot probe cannot see.
+   * `null` for the same reason {@link SessionEnvReport.provenance} is: the
+   * answering process never ran either pass.
+   */
+  interactiveProvenance: SessionEnvInteractiveProvenance | null;
   /** Where each contract tool resolves on `path`, or `null` when it does not. */
   tools: Readonly<Record<SessionEnvTool, string | null>>;
   dependencies: WorkspaceDependenciesStatus;

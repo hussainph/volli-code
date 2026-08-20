@@ -644,6 +644,11 @@ app.whenReady().then(async () => {
       process.env.PATH = path;
     },
     resolveLoginPath: () => loginShellPathAttempt,
+    // The second pass's shell (VC-94's A3), and deliberately the SAME one
+    // detection asks: `loginShellPath()` caches the interactive answer for the
+    // launch, so by the time the first window has loaded this is normally a
+    // cache read rather than a spawn. Called only when `applyInteractive` runs.
+    resolveInteractiveLoginPath: () => loginShellPath(),
     log: (line) => console.info(line),
   });
   // The Pi-backed Agent Runtime is the structured product's one target
@@ -1419,6 +1424,15 @@ app.whenReady().then(async () => {
     void loginPathBootstrap.apply().catch((error) => {
       console.error("[volli] failed to apply login PATH:", errorMessage(error));
     });
+    // The second, INTERACTIVE pass (VC-94's A3), which is what recovers the
+    // directories a user's `.zshrc` exports — nvm, bun, rbenv, pyenv, mise.
+    // Here rather than on the boot path because an rc file may prompt, and a
+    // prompt before the first window is a hang nobody can answer; here rather
+    // than awaited because nothing may wait on it. If it wedges for its whole
+    // timeout, the app is exactly as usable as it was before this existed.
+    void loginPathBootstrap.applyInteractive().catch((error) => {
+      console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
+    });
   });
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
@@ -1882,6 +1896,12 @@ app.whenReady().then(async () => {
             buildSessionEnvReport({
               path: process.env.PATH ?? "",
               provenance: (await loginPathBootstrap.apply()).kind,
+              // Read, never awaited: the interactive pass is off the critical
+              // path on purpose, and an identify that waited on it would spend
+              // a wedged `.zshrc`'s whole timeout. `pending` is the truthful
+              // answer for an agent that asked before the pass landed — its
+              // PATH may still be missing what that shell would have added.
+              interactiveProvenance: loginPathBootstrap.interactiveProvenance(),
               cwd,
             }),
           // What `volli doctor` cannot see from inside the shell it runs in.

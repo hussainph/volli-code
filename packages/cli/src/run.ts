@@ -37,9 +37,11 @@ function clientError(error: unknown): AgentError {
  * The degraded `identify` that answers without main. The CLI process lives in
  * the session environment, so the env block it reports is measured, not
  * synthesized — the same tool resolutions the doctor observation carries,
- * extracted here so the census is one list in one place. Provenance stays
- * `null`: only main knows the boot adoption outcome, and a CLI claiming one
- * would be the plausible wrong answer this whole feature exists to remove.
+ * extracted here so the census is one list in one place. BOTH provenance
+ * fields stay `null`: only main knows what its two adoption passes did, and a
+ * CLI claiming either would be the plausible wrong answer this whole feature
+ * exists to remove. `null` is not `pending` — one says nobody could ask, the
+ * other says the app asked and has not finished.
  */
 async function writeDegradedIdentify(
   json: boolean,
@@ -71,6 +73,7 @@ async function writeDegradedIdentify(
         env: {
           path: dependencies.env["PATH"] ?? "",
           provenance: null,
+          interactiveProvenance: null,
           tools,
           dependencies: workspaceDependenciesStatus(
             dependencies.cwd,
