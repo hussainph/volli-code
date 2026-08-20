@@ -298,16 +298,24 @@ function PathColumn({
 
 /** Never truncate a path here: this is diagnostic evidence, not a compact label. */
 function PathEntries({ entries }: { entries: readonly string[] }) {
+  // A PATH can carry a duplicate directory even though Sessions deduplicate
+  // theirs. Its occurrence number keeps React's key stable without hiding the
+  // duplicate from the raw diagnostic evidence.
+  const occurrences = new Map<string, number>();
   return (
     <ol className="flex flex-col gap-1">
-      {entries.map((entry, index) => (
-        <li key={`${index}:${entry}`} className="flex min-w-0 gap-2">
-          <span aria-hidden className="shrink-0 font-mono text-ui text-muted-foreground">
-            {index + 1}
-          </span>
-          <code className="min-w-0 break-all font-mono text-ui text-foreground">{entry}</code>
-        </li>
-      ))}
+      {entries.map((entry, index) => {
+        const occurrence = occurrences.get(entry) ?? 0;
+        occurrences.set(entry, occurrence + 1);
+        return (
+          <li key={`${entry}:${occurrence}`} className="flex min-w-0 gap-2">
+            <span aria-hidden className="shrink-0 font-mono text-ui text-muted-foreground">
+              {index + 1}
+            </span>
+            <code className="min-w-0 break-all font-mono text-ui text-foreground">{entry}</code>
+          </li>
+        );
+      })}
     </ol>
   );
 }

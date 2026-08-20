@@ -41,7 +41,7 @@ export async function systemPathIssues(
   }
 
   const issues: CliSystemPathIssue[] = [];
-  for (const name of [...names].sort()) {
+  for (const name of [...names].toSorted()) {
     let contents: string;
     try {
       contents = await deps.readFile(join(deps.pathsDirectory, name));
