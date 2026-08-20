@@ -71,16 +71,45 @@ describe("parseLoginShellPathOutput", () => {
     expect(parseLoginShellPathOutput("/opt/homebrew/bin:/usr/bin")).toBeNull();
   });
 
-  it("reports null when the marked PATH has an empty entry", () => {
-    expect(parseLoginShellPathOutput("__VOLLI_PATH__/opt/homebrew/bin::/usr/bin")).toBeNull();
+  it("drops an empty entry instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__/opt/homebrew/bin::/usr/bin")).toBe(
+      "/opt/homebrew/bin:/usr/bin",
+    );
   });
 
-  it("reports null when the marked PATH has a relative entry", () => {
-    expect(parseLoginShellPathOutput("__VOLLI_PATH__bin:/usr/bin")).toBeNull();
+  it("drops a relative entry instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__bin:/usr/bin")).toBe("/usr/bin");
   });
 
-  it("reports null when the marked PATH has a non-absolute entry", () => {
-    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:/usr/bin")).toBeNull();
+  it("drops a non-absolute entry instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:/usr/bin")).toBe("/usr/bin");
+  });
+
+  it("reports null when no entry survives", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:relative::")).toBeNull();
+  });
+
+  // VC-94's live bug, reproduced from this host: `path_helper` appends the
+  // literal text of `/etc/paths.d/dotnet-cli-tools` — an unexpanded
+  // `~/.dotnet/tools` — to every login shell's PATH. The measured output of
+  // `zsh -l -c 'printenv PATH'` on the reporting host is below, verbatim;
+  // the all-or-nothing rule this test guards against turned all 20 good
+  // entries into nothing because of that one.
+  it("keeps the rest of this host's measured login PATH when the dotnet tilde entry is present", () => {
+    const measured =
+      "/Users/phalasiya/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:" +
+      "/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:" +
+      "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:" +
+      "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:" +
+      "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:" +
+      "/pkg/env/global/bin:/Library/Apple/usr/bin:" +
+      "/Applications/Wireshark.app/Contents/MacOS:/usr/local/share/dotnet:~/.dotnet/tools:" +
+      "/Applications/quarto/bin:/Users/phalasiya/.vite-plus/bin:/Users/phalasiya/.cargo/bin:" +
+      "/Users/phalasiya/Library/Application Support/Volli Code/bin";
+
+    expect(parseLoginShellPathOutput(`__VOLLI_PATH__${measured}`)).toBe(
+      measured.replace("~/.dotnet/tools:", ""),
+    );
   });
 });
 

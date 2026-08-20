@@ -115,8 +115,17 @@ function processDeps(): LoginShellPathDeps {
  *
  * The final usable marker wins. `xtrace` can echo a command carrying the
  * marker before the command runs, and a profile can print chatter without a
- * trailing newline. Only a colon-separated sequence of non-empty absolute
- * directories is a safe PATH to adopt.
+ * trailing newline.
+ *
+ * A PATH is a list of independent directories, so one malformed member is
+ * dropped rather than allowed to invalidate its neighbours. The measured
+ * case (VC-94): `/etc/paths.d/dotnet-cli-tools` contributes the literal text
+ * `~/.dotnet/tools` — an unexpanded tilde, written by Microsoft's .NET CLI
+ * installer — and the old all-or-nothing rule discarded 20 good entries with
+ * it, leaving structured sessions on launchd's bare four. Empty entries are
+ * dropped for the same reason: to a shell they mean the current directory,
+ * and a PATH that runs arbitrary commands from the cwd is never safe to
+ * adopt. `null` now means only that NO entry survived.
  */
 export function parseLoginShellPathOutput(stdout: string): string | null {
   let markerIndex = stdout.lastIndexOf(PATH_MARKER);
@@ -124,12 +133,8 @@ export function parseLoginShellPathOutput(stdout: string): string | null {
     const valueStart = markerIndex + PATH_MARKER.length;
     const lineEnd = stdout.indexOf("\n", valueStart);
     const value = stdout.slice(valueStart, lineEnd === -1 ? undefined : lineEnd).trim();
-    if (
-      value.length > 0 &&
-      value.split(":").every((entry) => entry.length > 0 && isAbsolute(entry))
-    ) {
-      return value;
-    }
+    const entries = value.split(":").filter((entry) => entry.length > 0 && isAbsolute(entry));
+    if (entries.length > 0) return entries.join(":");
     markerIndex = markerIndex === 0 ? -1 : stdout.lastIndexOf(PATH_MARKER, markerIndex - 1);
   }
   return null;
