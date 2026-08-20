@@ -15,7 +15,7 @@
 import { lstat, readlink } from "node:fs/promises";
 import { basename } from "node:path";
 
-import type { CliSessionPathStatus, CliToolStatus } from "../ipc/contract";
+import type { CliSessionPathStatus, CliSystemPathIssue, CliToolStatus } from "../ipc/contract";
 import { LEGACY_GLOBAL_CLI_LINK, loginPathHasUserBin, userCliLinkPath } from "./agent-tools";
 
 export interface CliStatusDeps {
@@ -30,6 +30,8 @@ export interface CliStatusDeps {
   loginShellPath(): Promise<string | null>;
   /** The actual Session environment, optionally scoped to a project workspace. */
   sessionEnvironment(cwd: string | null): Promise<CliSessionPathStatus>;
+  /** Known malformed `/etc/paths.d` entries, read-only and never repaired here. */
+  systemPathIssues(): Promise<CliSystemPathIssue[]>;
   /** Wrapper command names the last harness-runtime regeneration produced. */
   wrapperCommands(): readonly string[];
   /** The user's login shell binary (`resolveShell`). */
@@ -67,9 +69,10 @@ export async function readCliStatus(
   const link = await linkState(userCliLinkPath(deps.home), isOurs);
   const legacyPath = deps.legacyLinkPath ?? LEGACY_GLOBAL_CLI_LINK;
   const legacy = await linkState(legacyPath, isOurs);
-  const [loginPath, session] = await Promise.all([
+  const [loginPath, session, systemPathIssues] = await Promise.all([
     deps.loginShellPath(),
     deps.sessionEnvironment(cwd),
+    deps.systemPathIssues(),
   ]);
   const shellName = basename(deps.shellFile);
   return {
@@ -83,7 +86,7 @@ export async function readCliStatus(
             ? "reachable"
             : "missing",
     },
-    environment: { loginPath, session },
+    environment: { loginPath, session, systemPathIssues },
     socket: { path: deps.socketPath, live: deps.socketLive() },
     wrappers: { commands: [...deps.wrapperCommands()] },
     shell: {

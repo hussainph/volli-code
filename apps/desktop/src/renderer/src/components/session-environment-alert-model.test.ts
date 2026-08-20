@@ -27,6 +27,7 @@ function status(
         dependencies: null,
         ...overrides,
       },
+      systemPathIssues: [],
     },
   };
 }

@@ -79,6 +79,9 @@ export function SessionPathComparison({
             detail="The login shell did not answer. The Session PATH below is still the value commands receive."
           />
         ) : null}
+        {environment.systemPathIssues.map((issue) => (
+          <SystemPathIssueNotice key={`${issue.file}:${issue.entry}`} issue={issue} />
+        ))}
 
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <PathFact
@@ -173,6 +176,32 @@ function comparisonStateLabel(comparison: SessionPathComparison): string {
     case "unknown":
       return "Login shell unavailable";
   }
+}
+
+function SystemPathIssueNotice({
+  issue,
+}: {
+  issue: CliToolStatus["environment"]["systemPathIssues"][number];
+}) {
+  return (
+    <Notice
+      className="mt-2 border-attention/30 bg-attention/10 text-attention"
+      announce
+      tone="neutral"
+      icon={WarningIcon}
+      title="A system PATH entry is malformed"
+      detail={
+        <>
+          <code className="break-all font-mono text-current">{issue.file}</code> contains{" "}
+          <code className="break-all font-mono text-current">{issue.entry}</code>. Microsoft&apos;s
+          .NET CLI installer commonly writes it without expanding{" "}
+          <code className="font-mono text-current">~</code>. macOS adds it to every login PATH.
+          Volli filters it so Sessions stay usable, but other tools can still reject that PATH.
+          Volli will not modify this root-owned file.
+        </>
+      }
+    />
+  );
 }
 
 function PendingComparisonNotice() {

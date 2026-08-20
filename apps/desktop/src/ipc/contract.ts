@@ -663,10 +663,19 @@ export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
  * the pane this feeds exists because the install is silent, and a silent
  * install with no truthful surface is indistinguishable from a broken one.
  *
- * Session PATH stays separate from the interactive login-shell PATH below:
- * the two paths must be comparable in Settings because one is what a person's
- * shell says and the other is what Session commands actually inherit.
+ * `CliSessionPathStatus` keeps Session PATH separate from the interactive
+ * login-shell PATH: the two paths must be comparable in Settings because one
+ * is what a person's shell says and the other is what Session commands inherit.
  */
+/** One known malformed entry in macOS's system login-PATH configuration. */
+export interface CliSystemPathIssue {
+  kind: "dotnet-cli-tools-literal-tilde";
+  /** The root-owned `/etc/paths.d/*` file containing the entry. */
+  file: string;
+  /** The literal value `path_helper` appends to every login PATH. */
+  entry: string;
+}
+
 export interface CliSessionPathStatus {
   /** The exact colon-delimited PATH a Session command inherits. */
   path: string;
@@ -694,7 +703,12 @@ export interface CliToolStatus {
    * shell's current answer and the PATH Session commands will actually get.
    * `loginPath: null` means that shell could not be asked, never an empty PATH.
    */
-  environment: { loginPath: string | null; session: CliSessionPathStatus };
+  environment: {
+    loginPath: string | null;
+    session: CliSessionPathStatus;
+    /** A read-only diagnosis of known malformed system PATH entries. */
+    systemPathIssues: CliSystemPathIssue[];
+  };
   /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
   /** Harness wrapper command names the last runtime regeneration produced. */

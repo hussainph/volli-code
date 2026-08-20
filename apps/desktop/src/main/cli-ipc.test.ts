@@ -36,6 +36,7 @@ const STATUS: CliToolStatus = {
       },
       dependencies: null,
     },
+    systemPathIssues: [],
   },
   socket: { path: "/profiles/volli.sock", live: true },
   wrappers: { commands: ["claude"] },

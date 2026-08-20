@@ -149,6 +149,7 @@ import {
 import { createLoginPathBootstrap } from "./login-path-adoption";
 import { ADOPTION_PROBE, loginShellPath, probeLoginShellPath } from "./login-shell-path";
 import { buildSessionEnvReport } from "./session-env";
+import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
 import {
   cleanupLegacyGlobalCliLink,
   detectHarnesses,
@@ -1809,6 +1810,7 @@ app.whenReady().then(async () => {
           socketLive: () => agentSocket.live(),
           loginShellPath: () => loginShellPath(),
           sessionEnvironment: readSessionEnvironment,
+          systemPathIssues: () => readSystemPathIssues(),
           wrapperCommands: () =>
             [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
               (wrapperPath) => basename(wrapperPath),

@@ -22,6 +22,7 @@ function environment(
       dependencies: null,
     },
     ...overrides,
+    systemPathIssues: overrides.systemPathIssues ?? [],
   };
 }
 
@@ -61,6 +62,30 @@ describe("SessionPathComparison", () => {
     expect(html).toContain("Matches login shell");
     expect(html).toContain("Show all paths");
     expect(html).not.toContain("bg-destructive/10");
+  });
+
+  it("names the root-owned .NET installer defect and its remaining cost without offering a repair", () => {
+    const html = renderToStaticMarkup(
+      <SessionPathComparison
+        environment={environment({
+          systemPathIssues: [
+            {
+              kind: "dotnet-cli-tools-literal-tilde",
+              file: "/etc/paths.d/dotnet-cli-tools",
+              entry: "~/.dotnet/tools",
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(html).toContain("A system PATH entry is malformed");
+    expect(html).toContain("/etc/paths.d/dotnet-cli-tools");
+    expect(html).toContain("~/.dotnet/tools");
+    expect(html).toContain(".NET CLI installer");
+    expect(html).toContain("other tools can still reject that PATH");
+    expect(html).toContain("Volli will not modify this root-owned file.");
+    expect(html).not.toContain("Fix");
   });
 
   it("does not call an unavailable login PATH a match and keeps the Session value readable", () => {

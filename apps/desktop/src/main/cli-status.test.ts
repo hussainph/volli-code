@@ -34,6 +34,7 @@ function deps(home: string, overrides: Partial<CliStatusDeps> = {}): CliStatusDe
       },
       dependencies: null,
     }),
+    systemPathIssues: async () => [],
     wrapperCommands: () => ["claude", "codex"],
     shellFile: "/bin/zsh",
     shellChainActive: () => true,
@@ -73,12 +74,26 @@ describe("readCliStatus", () => {
         },
         dependencies: null,
       },
+      systemPathIssues: [],
     });
     expect(status.socket).toEqual({ path: join(root, "volli.sock"), live: true });
     expect(status.wrappers.commands).toEqual(["claude", "codex"]);
     expect(status.shell).toEqual({ name: "zsh", supported: true, chainActive: true });
     expect(status.legacy).toEqual({ path: join(root, "legacy-volli"), state: "absent" });
     expect(status.installSuppressed).toBe(false);
+  });
+
+  it("carries an immutable system PATH diagnosis alongside the Session facts", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-cli-status-"));
+    const issue = {
+      kind: "dotnet-cli-tools-literal-tilde" as const,
+      file: "/etc/paths.d/dotnet-cli-tools",
+      entry: "~/.dotnet/tools",
+    };
+
+    const status = await readCliStatus(deps(root, { systemPathIssues: async () => [issue] }));
+
+    expect(status.environment.systemPathIssues).toEqual([issue]);
   });
 
   it("passes the selected project's root into the existing Session environment report", async () => {
