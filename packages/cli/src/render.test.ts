@@ -527,6 +527,32 @@ describe("renderCliSuccess", () => {
     );
   });
 
+  // The env renderer must survive an env block whose tools are not the
+  // expected record: a malformed reply degrades to dashes per tool, never to
+  // a crash that costs the agent the whole identity output.
+  it("renders the tool census as dashes when the tools record is missing", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          env: {
+            path: "/usr/bin",
+            provenance: "probe-failed",
+            tools: "unreadable",
+            dependencies: null,
+          },
+        },
+        { json: false },
+      ),
+    ).toContain("env.tools.git  -\nenv.tools.gh  -");
+  });
+
   it("renders a degraded identify's null provenance as a dash, not a claim", () => {
     expect(
       renderCliSuccess(
