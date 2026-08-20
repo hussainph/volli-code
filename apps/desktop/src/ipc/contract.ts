@@ -47,6 +47,8 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
+  SessionEnvInteractiveProvenance,
+  SessionEnvProvenance,
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
@@ -658,7 +660,20 @@ export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
  * by `src/main/cli-status.ts`. Every field is detection, not configuration:
  * the pane this feeds exists because the install is silent, and a silent
  * install with no truthful surface is indistinguishable from a broken one.
+ *
+ * Session PATH stays separate from the interactive login-shell PATH below:
+ * the two paths must be comparable in Settings because one is what a person's
+ * shell says and the other is what Session commands actually inherit.
  */
+export interface CliSessionPathStatus {
+  /** The exact colon-delimited PATH a Session command inherits. */
+  path: string;
+  /** What the non-interactive boot adoption could establish. */
+  provenance: SessionEnvProvenance;
+  /** What the later interactive pass could establish, if it has landed. */
+  interactiveProvenance: SessionEnvInteractiveProvenance;
+}
+
 export interface CliToolStatus {
   /** `~/.local/bin/volli`: `ours` links this app's shim; `foreign`/`not-symlink` were left alone. */
   link: {
@@ -668,6 +683,12 @@ export interface CliToolStatus {
   };
   /** Whether the login shell reaches `~/.local/bin`; `unknown` means the shell could not be asked. */
   path: { binDir: string; state: "reachable" | "missing" | "unknown" };
+  /**
+   * Both PATH facts the app can otherwise accidentally conflate: the login
+   * shell's current answer and the PATH Session commands will actually get.
+   * `loginPath: null` means that shell could not be asked, never an empty PATH.
+   */
+  environment: { loginPath: string | null; session: CliSessionPathStatus };
   /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
   /** Harness wrapper command names the last runtime regeneration produced. */

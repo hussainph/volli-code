@@ -15,7 +15,7 @@
 import { lstat, readlink } from "node:fs/promises";
 import { basename } from "node:path";
 
-import type { CliToolStatus } from "../ipc/contract";
+import type { CliSessionPathStatus, CliToolStatus } from "../ipc/contract";
 import { LEGACY_GLOBAL_CLI_LINK, loginPathHasUserBin, userCliLinkPath } from "./agent-tools";
 
 export interface CliStatusDeps {
@@ -28,6 +28,8 @@ export interface CliStatusDeps {
   /** Measured at call time (`agentSocket.live()`) — never a boot latch. */
   socketLive(): boolean;
   loginShellPath(): Promise<string | null>;
+  /** The actual PATH Session commands inherit, after main's adoption passes. */
+  sessionPath(): Promise<CliSessionPathStatus>;
   /** Wrapper command names the last harness-runtime regeneration produced. */
   wrapperCommands(): readonly string[];
   /** The user's login shell binary (`resolveShell`). */
@@ -62,7 +64,7 @@ export async function readCliStatus(deps: CliStatusDeps): Promise<CliToolStatus>
   const link = await linkState(userCliLinkPath(deps.home), isOurs);
   const legacyPath = deps.legacyLinkPath ?? LEGACY_GLOBAL_CLI_LINK;
   const legacy = await linkState(legacyPath, isOurs);
-  const loginPath = await deps.loginShellPath();
+  const [loginPath, session] = await Promise.all([deps.loginShellPath(), deps.sessionPath()]);
   const shellName = basename(deps.shellFile);
   return {
     link: { path: userCliLinkPath(deps.home), ...link },
@@ -75,6 +77,7 @@ export async function readCliStatus(deps: CliStatusDeps): Promise<CliToolStatus>
             ? "reachable"
             : "missing",
     },
+    environment: { loginPath, session },
     socket: { path: deps.socketPath, live: deps.socketLive() },
     wrappers: { commands: [...deps.wrapperCommands()] },
     shell: {

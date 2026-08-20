@@ -22,6 +22,14 @@ import type { CliIpcDeps } from "./cli-ipc";
 const STATUS: CliToolStatus = {
   link: { path: "/home/me/.local/bin/volli", state: "ours", target: "/shim/volli" },
   path: { binDir: "/home/me/.local/bin", state: "reachable" },
+  environment: {
+    loginPath: "/usr/bin:/home/me/.local/bin",
+    session: {
+      path: "/volli/bin:/usr/bin:/home/me/.local/bin",
+      provenance: "adopted",
+      interactiveProvenance: "already-complete",
+    },
+  },
   socket: { path: "/profiles/volli.sock", live: true },
   wrappers: { commands: ["claude"] },
   shell: { name: "zsh", supported: true, chainActive: true },

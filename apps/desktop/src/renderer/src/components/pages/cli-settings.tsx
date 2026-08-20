@@ -23,12 +23,14 @@ import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage } from "@volli/shared";
 import type { DoctorCheck } from "@volli/shared";
+import type { CliToolStatus } from "../../../../ipc/contract";
 
 import {
   cliStatusRows,
   type CliRowTone,
   type CliStatusRow,
 } from "@renderer/components/pages/cli-status-model";
+import { SessionPathComparison } from "@renderer/components/pages/session-path-comparison";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -45,7 +47,7 @@ const TONE_DOT: Record<CliRowTone, StatusDotState> = {
 
 type StatusState =
   | { status: "loading" }
-  | { status: "loaded"; rows: CliStatusRow[] }
+  | { status: "loaded"; rows: CliStatusRow[]; environment: CliToolStatus["environment"] }
   | { status: "error"; message: string };
 
 type DoctorState =
@@ -71,7 +73,11 @@ export function CliSettings() {
         setState({ status: "error", message: result.error });
         return;
       }
-      setState({ status: "loaded", rows: cliStatusRows(result.status) });
+      setState({
+        status: "loaded",
+        rows: cliStatusRows(result.status),
+        environment: result.status.environment,
+      });
     } catch (error) {
       if (statusFetch.isCurrent(token)) {
         setState({ status: "error", message: errorMessage(error) });
@@ -137,24 +143,27 @@ export function CliSettings() {
             }
           />
         ) : (
-          state.rows.map((row) => (
-            <SettingsRow key={row.key} label={row.label} align="start">
-              <div className="flex max-w-96 flex-col items-end gap-1">
-                <span className="flex items-center gap-2 text-ui text-foreground">
-                  <StatusDot state={TONE_DOT[row.tone]} />
-                  {row.value}
-                </span>
-                {row.detail ? (
-                  <span
-                    className="break-all text-right font-mono text-ui text-muted-foreground"
-                    title={row.detail}
-                  >
-                    {row.detail}
+          <>
+            {state.rows.map((row) => (
+              <SettingsRow key={row.key} label={row.label} align="start">
+                <div className="flex max-w-96 flex-col items-end gap-1">
+                  <span className="flex items-center gap-2 text-ui text-foreground">
+                    <StatusDot state={TONE_DOT[row.tone]} />
+                    {row.value}
                   </span>
-                ) : null}
-              </div>
-            </SettingsRow>
-          ))
+                  {row.detail ? (
+                    <span
+                      className="break-all text-right font-mono text-ui text-muted-foreground"
+                      title={row.detail}
+                    >
+                      {row.detail}
+                    </span>
+                  ) : null}
+                </div>
+              </SettingsRow>
+            ))}
+            <SessionPathComparison environment={state.environment} />
+          </>
         )}
       </SettingsSection>
 

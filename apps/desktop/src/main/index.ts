@@ -1778,6 +1778,16 @@ app.whenReady().then(async () => {
         socketPath: runtimePaths.socketPath,
         socketLive: () => agentSocket.live(),
         loginShellPath: () => loginShellPath(),
+        sessionPath: async () => {
+          const outcome = await loginPathBootstrap.apply();
+          return {
+            // Read after apply: `apply` is the one writer that puts binDir
+            // first even when the login shell could not be reached.
+            path: process.env.PATH ?? "",
+            provenance: outcome.kind,
+            interactiveProvenance: loginPathBootstrap.interactiveProvenance(),
+          };
+        },
         wrapperCommands: () =>
           [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
             (wrapperPath) => basename(wrapperPath),

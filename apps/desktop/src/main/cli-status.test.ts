@@ -22,6 +22,11 @@ function deps(home: string, overrides: Partial<CliStatusDeps> = {}): CliStatusDe
     socketPath: join(home, "volli.sock"),
     socketLive: () => true,
     loginShellPath: async () => `/usr/bin:${join(home, ".local", "bin")}`,
+    sessionPath: async () => ({
+      path: `/volli/bin:/usr/bin:${join(home, ".local", "bin")}`,
+      provenance: "adopted",
+      interactiveProvenance: "already-complete",
+    }),
     wrapperCommands: () => ["claude", "codex"],
     shellFile: "/bin/zsh",
     shellChainActive: () => true,
@@ -47,6 +52,14 @@ describe("readCliStatus", () => {
       target: d.shimPath(),
     });
     expect(status.path).toEqual({ binDir: join(root, ".local", "bin"), state: "reachable" });
+    expect(status.environment).toEqual({
+      loginPath: `/usr/bin:${join(root, ".local", "bin")}`,
+      session: {
+        path: `/volli/bin:/usr/bin:${join(root, ".local", "bin")}`,
+        provenance: "adopted",
+        interactiveProvenance: "already-complete",
+      },
+    });
     expect(status.socket).toEqual({ path: join(root, "volli.sock"), live: true });
     expect(status.wrappers.commands).toEqual(["claude", "codex"]);
     expect(status.shell).toEqual({ name: "zsh", supported: true, chainActive: true });
@@ -99,6 +112,9 @@ describe("readCliStatus", () => {
     const status = await readCliStatus(deps(root, { loginShellPath: async () => null }));
 
     expect(status.path.state).toBe("unknown");
+    // The Session value remains a separate measured fact: a failed comparison
+    // must not erase the PATH commands will actually inherit.
+    expect(status.environment.session.path).toContain("/volli/bin");
   });
 
   it("reports a missing PATH entry, an unsupported shell, and the removal tombstone", async () => {
