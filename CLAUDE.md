@@ -52,6 +52,10 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - `vp install` / `pnpm install` for deps; `pnpm run ensure:electron` (`apps/desktop`) prefetches Electron's lazily-fetched binary.
 - CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally. Anything touching the Pi runtime also runs `pnpm smoke:pi` locally (builds, then the three Pi smokes; needs a display and a real `~/.pi/agent/auth.json`).
 
+## Session environment
+
+Every Volli session — ticket or project, PTY or structured — starts with the same `PATH`: Volli's bin dir first, then the login shell's exported `PATH` merged with what the app already had. Do not discover tools by running them and reading command-not-found failures: run `volli identify` first. Its `env` block reports the resolved `PATH`, how it was adopted (`adopted` / `already-complete` / `probe-failed`), where each contract tool (`git`, `gh`, `node`, `pnpm`) resolves or that it does not, and whether the workspace's dependencies are installed — run `pnpm install` if they are absent. `volli doctor` audits the same facts and names remedies. A tool that is installed but missing from `volli identify` is a `PATH` adoption failure, not a missing install: report it rather than working around it with absolute paths.
+
 ## Retained foundations
 
 - **Data**: local SQLite (better-sqlite3, WAL, main-process-owned); transcripts as indexed files on disk. Local-first, single-player.

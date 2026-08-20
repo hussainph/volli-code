@@ -62,6 +62,10 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 
 The global `vp` toolchain CLI is used by this repository. Node and pnpm versions are pinned in the root `package.json`.
 
+## Session environment
+
+Every Volli session — ticket or project, PTY or structured — starts with the same `PATH`: Volli's bin dir first, then the login shell's exported `PATH` merged with what the app already had. Do not discover tools by running them and reading command-not-found failures: run `volli identify` first. Its `env` block reports the resolved `PATH`, how it was adopted (`adopted` / `already-complete` / `probe-failed`), where each contract tool (`git`, `gh`, `node`, `pnpm`) resolves or that it does not, and whether the workspace's dependencies are installed — run `pnpm install` if they are absent. `volli doctor` audits the same facts and names remedies. A tool that is installed but missing from `volli identify` is a `PATH` adoption failure, not a missing install: report it rather than working around it with absolute paths.
+
 ## Retained foundations
 
 - **Data:** local SQLite via better-sqlite3, WAL mode, owned by the main process. Store transcripts as indexed files on disk. The product is local-first and single-player.
