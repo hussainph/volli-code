@@ -148,6 +148,7 @@ import {
 } from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
+import { buildSessionEnvReport } from "./session-env";
 import {
   cleanupLegacyGlobalCliLink,
   detectHarnesses,
@@ -1871,6 +1872,18 @@ app.whenReady().then(async () => {
           // that IT is what is now running in that terminal. Fired only on a
           // change, so this is never chatter.
           onSessionHarness: (notice) => broadcastSessionHarness(notice),
+          // The `env` block `volli identify` prints (VC-94): the PATH main
+          // actually adopted at boot, its provenance, the contract tools
+          // resolved against it, and the workspace dependency state. Built
+          // from the one memoized boot outcome — identify awaiting it also
+          // means the report never describes a PATH from before adoption
+          // finished — and read at CALL time, never captured.
+          sessionEnv: async (cwd) =>
+            buildSessionEnvReport({
+              path: process.env.PATH ?? "",
+              provenance: (await loginPathBootstrap.apply()).kind,
+              cwd,
+            }),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.

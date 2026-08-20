@@ -1,4 +1,4 @@
-import { TICKET_STATUS_LABELS } from "@volli/shared";
+import { SESSION_ENV_TOOLS, TICKET_STATUS_LABELS } from "@volli/shared";
 import type { AgentError, AgentErrorCode, DoctorCheck, TicketStatus } from "@volli/shared";
 
 import { renderDoctorReport } from "./doctor";
@@ -415,6 +415,22 @@ function renderStableLines(command: string, data: unknown): string | null {
         const value = data[key];
         return `${key}  ${value === null || value === undefined ? "-" : terminalSafeInline(value)}`;
       });
+    // The env block (VC-94): the environment the session will run in, keyed
+    // like every other line so an agent reads it in the same pass it reads
+    // its identity. `-` means measured and not found; a missing block means
+    // the answering process had no env facts at all.
+    if (isRecord(data["env"])) {
+      const env = data["env"];
+      const envValue = (value: unknown): string =>
+        value === null || value === undefined ? "-" : terminalSafeInline(value);
+      lines.push(`env.path  ${envValue(env["path"])}`);
+      lines.push(`env.provenance  ${envValue(env["provenance"])}`);
+      const tools = isRecord(env["tools"]) ? env["tools"] : {};
+      for (const tool of SESSION_ENV_TOOLS) {
+        lines.push(`env.tools.${tool}  ${envValue(tools[tool])}`);
+      }
+      lines.push(`env.dependencies  ${envValue(env["dependencies"])}`);
+    }
     if (data["degraded"] === true) lines.push("degraded  true");
     return lines.join("\n");
   }

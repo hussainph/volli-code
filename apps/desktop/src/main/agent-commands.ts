@@ -54,6 +54,7 @@ import type {
   SessionActivityState,
   SessionProjection,
   SessionRecord,
+  SessionEnvReport,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
@@ -224,6 +225,15 @@ export interface AgentCommandServiceOptions {
    * A seam only so tests need not wait out the real bound.
    */
   modelAccessTimeoutMs?: number;
+  /**
+   * The `env` block `volli identify` reports (VC-94): the session's resolved
+   * PATH, its provenance, the contract tools resolved against it, and
+   * whether the workspace's dependencies are installed. Injected because
+   * main is the only process that knows HOW the PATH came to be — it ran the
+   * boot probe and owns the adoption outcome — and absent (tests) means
+   * identify answers without an env block rather than inventing one.
+   */
+  sessionEnv?: (cwd: string) => Promise<SessionEnvReport>;
   /**
    * The product Session start route (VC-13) — the same facade the renderer's
    * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
@@ -1268,6 +1278,10 @@ export function createAgentCommandService(
         }
       }
       if (request.cmd === "identify") {
+        // Measured at the moment the agent asks, like the worktree-
+        // misalignment warning below: main adopted the PATH once at boot, and
+        // this reports that outcome — never re-probes, never guesses.
+        const env = options.sessionEnv ? await options.sessionEnv(request.ctx.cwd) : undefined;
         if (envSessionId) {
           if (!envSession) {
             return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
@@ -1301,6 +1315,7 @@ export function createAgentCommandService(
               ...(warning === null ? {} : { warning }),
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
+              ...(env === undefined ? {} : { env }),
             },
           };
         }
@@ -1329,6 +1344,7 @@ export function createAgentCommandService(
             worktreePath: request.ctx.cwd,
             socket: request.ctx.env.socket ?? null,
             appVersion: options.appVersion,
+            ...(env === undefined ? {} : { env }),
           },
         };
       }

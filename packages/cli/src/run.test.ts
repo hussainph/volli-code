@@ -119,12 +119,23 @@ describe("runCli", () => {
         VOLLI_SOCKET: "/profiles/volli.sock",
         VOLLI_SESSION: "session-7",
         VOLLI_TICKET: "VC-12",
+        PATH: "/opt/homebrew/bin:/usr/bin",
       },
       cwd: "/work/volli",
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
       readText: async () => "",
-      observe: async () => ({}),
+      // The degraded env block reuses the doctor observation's resolutions:
+      // measured here, in the environment under test, never reconstructed.
+      observe: async () => ({
+        resolved: {
+          git: "/usr/bin/git",
+          gh: "/opt/homebrew/bin/gh",
+          node: null,
+          pnpm: null,
+        },
+      }),
+      pathExists: (path) => path === "/work/volli/package.json",
       request: async () => {
         throw new AgentClientError("APP_UNREACHABLE", "not running");
       },
@@ -134,7 +145,7 @@ describe("runCli", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toEqual([]);
     expect(stdout).toEqual([
-      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"degraded":true}\n',
+      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"env":{"path":"/opt/homebrew/bin:/usr/bin","provenance":null,"tools":{"git":"/usr/bin/git","gh":"/opt/homebrew/bin/gh","node":null,"pnpm":null},"dependencies":"absent"},"degraded":true}\n',
     ]);
   });
 
@@ -309,6 +320,27 @@ describe("runCli", () => {
     expect(await runCli(["board"], dependencies)).toBe(3);
     expect(output[0]).toContain("worktreePath  /work");
     expect(errors[0]).toContain("error[APP_UNREACHABLE]");
+  });
+
+  // The one command that must answer without the app may not fail because the
+  // observation did: a degraded env block of unknowns is still an answer.
+  it("answers a degraded identify even when the observation rejects", async () => {
+    const output: string[] = [];
+    const exitCode = await runCli(["identify", "--json"], {
+      env: { PATH: "/usr/bin" },
+      cwd: "/work",
+      stdout: (text) => output.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => Promise.reject(new Error("environment gone")),
+      request: async () => ({ v: 1, ok: true, data: {} }),
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(output[0]).toContain(
+      '"env":{"path":"/usr/bin","provenance":null,"tools":{"git":null,"gh":null,"node":null,"pnpm":null}',
+    );
   });
 
   it("maps server failures and thrown client failures without writing stdout", async () => {

@@ -482,6 +482,90 @@ describe("renderCliSuccess", () => {
     );
   });
 
+  // VC-94's acceptance: an agent discovers its environment from this block,
+  // not from the first command that fails. A missing tool renders as `-` —
+  // measured and not found — rather than the line disappearing.
+  it("renders identify's env block with the tool census, found or missing", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          env: {
+            path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
+            provenance: "adopted",
+            tools: {
+              git: "/usr/bin/git",
+              gh: "/opt/homebrew/bin/gh",
+              node: null,
+              pnpm: null,
+            },
+            dependencies: "absent",
+          },
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  -\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "worktreePath  /repo/volli\n" +
+        "socket  -\n" +
+        "appVersion  -\n" +
+        "env.path  /profile/bin:/opt/homebrew/bin:/usr/bin\n" +
+        "env.provenance  adopted\n" +
+        "env.tools.git  /usr/bin/git\n" +
+        "env.tools.gh  /opt/homebrew/bin/gh\n" +
+        "env.tools.node  -\n" +
+        "env.tools.pnpm  -\n" +
+        "env.dependencies  absent\n",
+    );
+  });
+
+  it("renders a degraded identify's null provenance as a dash, not a claim", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          env: {
+            path: "/usr/bin",
+            provenance: null,
+            tools: { git: null, gh: null, node: null, pnpm: null },
+            dependencies: null,
+          },
+          degraded: true,
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  -\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "worktreePath  /repo/volli\n" +
+        "socket  -\n" +
+        "appVersion  -\n" +
+        "env.path  /usr/bin\n" +
+        "env.provenance  -\n" +
+        "env.tools.git  -\n" +
+        "env.tools.gh  -\n" +
+        "env.tools.node  -\n" +
+        "env.tools.pnpm  -\n" +
+        "env.dependencies  -\n" +
+        "degraded  true\n",
+    );
+  });
+
   it("prints the worktree-misalignment warning right after the path it contradicts", () => {
     expect(
       renderCliSuccess(

@@ -195,29 +195,42 @@ export function currentPathIsIncomplete(
 
 export type LoginPathOutcome =
   | { kind: "adopted"; path: string; entryCount: number }
-  | { kind: "kept" };
+  | { kind: "already-complete" }
+  | { kind: "probe-failed" };
 
 /**
  * The merge rule: login directories take precedence, and every current
  * directory remains reachable. The union deduplicates in login-then-current
  * order, which avoids replacing a dev boot's private bin directory with the
  * subset a non-interactive shell happens to export.
+ *
+ * The outcome is three-way rather than adopted/kept because the two `kept`
+ * shapes are opposite facts: `already-complete` is the healthy answer for a
+ * `pnpm dev` boot that already holds everything, while `probe-failed` is the
+ * silent degradation VC-94 exists to make loud — the login shell was never
+ * heard from, and the session runs on whatever the host process had. One
+ * word for both is how the failure hid in `[volli] PATH kept` for months.
  */
 export function decideLoginPathAdoption(
   currentPath: string | undefined,
   loginPath: string | null,
 ): LoginPathOutcome {
-  if (loginPath === null || loginPath.length === 0) return { kind: "kept" };
+  if (loginPath === null || loginPath.length === 0) return { kind: "probe-failed" };
   const path = [...new Set([...entriesOf(loginPath), ...entriesOf(currentPath ?? "")])].join(":");
-  if (path === (currentPath ?? "")) return { kind: "kept" };
+  if (path === (currentPath ?? "")) return { kind: "already-complete" };
   return { kind: "adopted", path, entryCount: entriesOf(path).length };
 }
 
 /** The one line main logs after resolving the outcome. */
 export function loginPathLogLine(outcome: LoginPathOutcome): string {
-  return outcome.kind === "adopted"
-    ? `[volli] PATH adopted from login shell (${outcome.entryCount} entries)`
-    : "[volli] PATH kept";
+  switch (outcome.kind) {
+    case "adopted":
+      return `[volli] PATH adopted from login shell (${outcome.entryCount} entries)`;
+    case "already-complete":
+      return "[volli] PATH kept (already complete)";
+    case "probe-failed":
+      return "[volli] PATH kept (login shell probe failed)";
+  }
 }
 
 export interface LoginPathBootstrapDeps {

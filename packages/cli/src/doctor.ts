@@ -13,9 +13,14 @@
  */
 import { constants } from "node:fs";
 import { access, readdir, realpath } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
-import { harnessAdapters, isBareHarnessCommand, VOLLI_BIN_DIR_ENV } from "@volli/shared";
+import {
+  harnessAdapters,
+  isBareHarnessCommand,
+  resolveOnPath,
+  VOLLI_BIN_DIR_ENV,
+} from "@volli/shared";
 import type { DoctorCheck } from "@volli/shared";
 
 export interface DoctorEnvironment {
@@ -63,22 +68,15 @@ export function processEnvironment(): DoctorEnvironment {
 }
 
 /**
- * The first executable named `command` on `pathEntries` — what this shell would
- * pick, resolved without invoking one. Volli's own bin dir is NOT skipped here,
- * unlike everywhere else: finding our wrapper first is the answer we are
- * looking for, not an obstacle to seeing past.
+ * The first executable named `command` on `pathEntries` — what this shell
+ * would pick, resolved without invoking one. Defined once in `@volli/shared`
+ * (`resolveOnPath`) so doctor's resolution and `volli identify`'s env block
+ * share one notion of "found"; re-exported under its doctor name for the
+ * callers and tests that already use it. Volli's own bin dir is deliberately
+ * NOT skipped here, unlike everywhere else: finding our wrapper first is the
+ * answer we are looking for, not an obstacle to seeing past.
  */
-export async function resolveHere(
-  pathEntries: readonly string[],
-  command: string,
-  environment: DoctorEnvironment,
-): Promise<string | null> {
-  for (const directory of pathEntries) {
-    const candidate = join(directory, command);
-    if (await environment.isExecutable(candidate)) return candidate;
-  }
-  return null;
-}
+export { resolveOnPath as resolveHere };
 
 /**
  * Volli's own bin dir, as a process living outside main can find it. The shell
@@ -147,11 +145,11 @@ export async function observeEnvironment(
   environment: DoctorEnvironment = processEnvironment(),
 ): Promise<Record<string, unknown>> {
   const pathEntries = (environment.env["PATH"] ?? "").split(":").filter(Boolean);
-  const volliPath = await resolveHere(pathEntries, "volli", environment);
+  const volliPath = await resolveOnPath(pathEntries, "volli", environment);
   const binDir = await volliBinDir(volliPath, environment);
   const resolved: Record<string, string | null> = {};
   for (const command of await commandsToResolve(binDir, environment)) {
-    resolved[command] = await resolveHere(pathEntries, command, environment);
+    resolved[command] = await resolveOnPath(pathEntries, command, environment);
   }
   return {
     pathEntries,

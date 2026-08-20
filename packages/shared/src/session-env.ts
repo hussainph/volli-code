@@ -1,0 +1,140 @@
+/**
+ * The session environment contract (VC-94): what every Volli session gets on
+ * `PATH`, identically, and how an agent discovers it without probing failures.
+ *
+ * This module holds the contract's vocabulary, in one place so the surfaces
+ * that speak it cannot drift: `volli identify` reports it, `volli doctor`
+ * audits it, and an agent reads either one instead of running a command and
+ * learning from the failure. The shared piece is the census of tools a
+ * session is expected to be able to run and the one resolution rule for what
+ * "found" means — the rest of the contract (the adopted PATH, its
+ * provenance, the dependency state) is reported by whoever measured it.
+ *
+ * Pure by design: no filesystem, no Node APIs. Callers inject the two
+ * questions that touch disk (`isExecutable`, `pathExists`) so the rules stay
+ * unit-testable and the seams stay visible.
+ */
+
+/**
+ * The tools every session is expected to be able to run. Deliberately short,
+ * and deliberately not a census of the whole PATH: these are the outcomes an
+ * agent's first commands depend on — `git` to commit, `gh` to open, inspect
+ * and merge PRs, `node` and `pnpm` for the pre-commit hook and every Node
+ * project. VC-94's failure presented as exactly this shape: `git` answered
+ * from `/usr/bin` while `gh` was missing, so the session looked operational
+ * and could not do the one thing it was asked to do.
+ */
+export const SESSION_ENV_TOOLS = ["git", "gh", "node", "pnpm"] as const;
+
+export type SessionEnvTool = (typeof SESSION_ENV_TOOLS)[number];
+
+/**
+ * How a session's resolved PATH came to be what it is — the boot adoption
+ * outcome's three ways (`login-shell-path.ts`). `probe-failed` is the
+ * degradation the contract exists to make loud: the PATH is the host
+ * process's, the login shell was never heard from.
+ */
+export type SessionEnvProvenance = "adopted" | "already-complete" | "probe-failed";
+
+/** Whether the workspace a session stands in has its dependencies installed. */
+export type WorkspaceDependenciesStatus = "installed" | "absent" | null;
+
+/**
+ * The `env` block `volli identify` prints. `tools` keys are the whole
+ * {@link SESSION_ENV_TOOLS} census — a missing tool is the entry being
+ * `null`, never the entry being absent from the record, so a consumer can
+ * tell "measured, not found" apart from "never asked".
+ */
+export interface SessionEnvReport {
+  /** The session's resolved PATH, exactly as commands will see it. */
+  path: string;
+  /**
+   * How the PATH came to be what it is. `null` when the answering process
+   * could not know — a degraded `identify` with no app to ask — which is a
+   * different fact from `probe-failed` and must not pose as one.
+   */
+  provenance: SessionEnvProvenance | null;
+  /** Where each contract tool resolves on `path`, or `null` when it does not. */
+  tools: Readonly<Record<SessionEnvTool, string | null>>;
+  dependencies: WorkspaceDependenciesStatus;
+}
+
+/** The one disk question a PATH walk needs answered. */
+export interface PathResolver {
+  /** Whether a path is executable — the same question a shell asks of PATH. */
+  isExecutable(path: string): Promise<boolean>;
+}
+
+function joinPath(directory: string, name: string): string {
+  return directory.endsWith("/") ? `${directory}${name}` : `${directory}/${name}`;
+}
+
+/** The directory above `path`, or `path` itself when there is none to walk into. */
+function parentDirectory(path: string): string {
+  const withoutSlash = path.endsWith("/") ? path.slice(0, -1) : path;
+  const cut = withoutSlash.lastIndexOf("/");
+  if (cut === -1) return path;
+  return cut === 0 ? "/" : withoutSlash.slice(0, cut);
+}
+
+/**
+ * The first executable named `command` on `pathEntries` — what a shell would
+ * pick, resolved without invoking one. Shared by `volli identify`'s env block
+ * and `volli doctor`'s observations so the two surfaces cannot disagree about
+ * what "found" means. Volli's own bin dir is deliberately NOT skipped: the
+ * contract says it comes first, and a resolution that skipped it would answer
+ * a different question than the shell does.
+ */
+export async function resolveOnPath(
+  pathEntries: readonly string[],
+  command: string,
+  resolver: PathResolver,
+): Promise<string | null> {
+  for (const directory of pathEntries) {
+    const candidate = joinPath(directory, command);
+    if (await resolver.isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** The found-or-missing verdict for every contract tool, keyed by tool name. */
+export async function resolveSessionEnvTools(
+  pathEntries: readonly string[],
+  resolver: PathResolver,
+): Promise<Record<SessionEnvTool, string | null>> {
+  const tools = {} as Record<SessionEnvTool, string | null>;
+  for (const tool of SESSION_ENV_TOOLS) {
+    tools[tool] = await resolveOnPath(pathEntries, tool, resolver);
+  }
+  return tools;
+}
+
+/**
+ * Whether the workspace a session stands in has its dependencies installed.
+ *
+ * Walks from the session cwd to the filesystem root, because a session can
+ * start in a package subdirectory of a pnpm workspace: only the workspace
+ * root carries `node_modules`, and only the root's answer is the truth.
+ * `installed` when any manifest-bearing ancestor has its `node_modules`;
+ * `absent` when one has a manifest but none has its dependencies (the
+ * worktree-provisioning coin flip the contract declares); `null` when no
+ * ancestor is a package workspace at all — the honest third answer for a
+ * directory `pnpm install` has nothing to say about.
+ */
+export function workspaceDependenciesStatus(
+  cwd: string,
+  pathExists: (path: string) => boolean,
+): WorkspaceDependenciesStatus {
+  let directory = cwd;
+  let sawManifest = false;
+  for (;;) {
+    if (pathExists(joinPath(directory, "package.json"))) {
+      sawManifest = true;
+      if (pathExists(joinPath(directory, "node_modules"))) return "installed";
+    }
+    const parent = parentDirectory(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return sawManifest ? "absent" : null;
+}

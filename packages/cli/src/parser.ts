@@ -841,8 +841,11 @@ const TICKET_BRIEF_SPEC: CommandSpec = {
 };
 
 const IDENTIFY_SPEC: CommandSpec = {
-  summary: "Resolve and print the active project, ticket, and session.",
+  summary: "Resolve and print the active project, ticket, session, and session environment.",
   example: "volli identify",
+  notes: [
+    "The env block reports the session PATH, how it was adopted, where each contract tool (git, gh, node, pnpm) resolves, and whether workspace dependencies are installed — read it before running tools to probe for them.",
+  ],
   options: {
     "--project": {
       kind: "value",

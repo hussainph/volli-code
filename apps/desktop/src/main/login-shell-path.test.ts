@@ -210,12 +210,12 @@ describe("currentPathIsIncomplete", () => {
 });
 
 describe("decideLoginPathAdoption", () => {
-  it("keeps the current PATH when the login shell could not answer", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, null)).toEqual({ kind: "kept" });
+  it("reports the probe failure when the login shell could not answer", () => {
+    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, null)).toEqual({ kind: "probe-failed" });
   });
 
-  it("keeps the current PATH when the login shell answered with nothing", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, "")).toEqual({ kind: "kept" });
+  it("reports the probe failure when the login shell answered with nothing", () => {
+    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, "")).toEqual({ kind: "probe-failed" });
   });
 
   it("unions a login PATH ahead of what launchd handed the app", () => {
@@ -226,8 +226,13 @@ describe("decideLoginPathAdoption", () => {
     });
   });
 
-  it("keeps the current PATH when the login shell reports the identical PATH", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, BARE_LAUNCHD_PATH)).toEqual({ kind: "kept" });
+  // "Kept because nothing changed" and "kept because the probe failed" used
+  // to be one outcome and one log line, which is how adoption failure hid in
+  // plain sight as health.
+  it("distinguishes an already-complete PATH from a failed probe", () => {
+    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, BARE_LAUNCHD_PATH)).toEqual({
+      kind: "already-complete",
+    });
   });
 
   it("puts a login shell's directories ahead of a dev boot without dropping its private bin", () => {
@@ -268,8 +273,16 @@ describe("loginPathLogLine", () => {
     ).toBe("[volli] PATH adopted from login shell (2 entries)");
   });
 
-  it("says kept when nothing changed", () => {
-    expect(loginPathLogLine({ kind: "kept" })).toBe("[volli] PATH kept");
+  it("says the healthy kept reason when the PATH was already complete", () => {
+    expect(loginPathLogLine({ kind: "already-complete" })).toBe(
+      "[volli] PATH kept (already complete)",
+    );
+  });
+
+  it("names the probe failure instead of reading like health", () => {
+    expect(loginPathLogLine({ kind: "probe-failed" })).toBe(
+      "[volli] PATH kept (login shell probe failed)",
+    );
   });
 });
 
@@ -318,10 +331,28 @@ describe("createLoginPathBootstrap", () => {
       log: (line) => logs.push(line),
     });
 
-    await expect(bootstrap.apply()).resolves.toEqual({ kind: "kept" });
+    await expect(bootstrap.apply()).resolves.toEqual({ kind: "probe-failed" });
     await bootstrap.apply();
 
     expect(mutations).toEqual(["/profile/bin:/usr/bin:/bin"]);
-    expect(logs).toEqual(["[volli] PATH kept"]);
+    expect(logs).toEqual(["[volli] PATH kept (login shell probe failed)"]);
+  });
+
+  it("reports an already-complete PATH without pretending the probe failed", async () => {
+    const mutations: string[] = [];
+    const logs: string[] = [];
+    const bootstrap = createLoginPathBootstrap({
+      binDir: "/profile/bin",
+      // The login shell's own PATH, already leading: merging changes nothing,
+      // which is the healthy dev-boot answer — not a probe failure.
+      readCurrentPath: () => "/opt/homebrew/bin:/profile/bin",
+      writePath: (path) => mutations.push(path),
+      resolveLoginPath: async () => "/opt/homebrew/bin",
+      log: (line) => logs.push(line),
+    });
+
+    await expect(bootstrap.apply()).resolves.toEqual({ kind: "already-complete" });
+    expect(mutations).toEqual(["/profile/bin:/opt/homebrew/bin"]);
+    expect(logs).toEqual(["[volli] PATH kept (already complete)"]);
   });
 });

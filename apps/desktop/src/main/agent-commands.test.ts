@@ -3405,6 +3405,80 @@ describe("agent command service", () => {
   });
 });
 
+describe("identify env block (VC-94)", () => {
+  const report = {
+    path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
+    provenance: "adopted" as const,
+    tools: {
+      git: "/usr/bin/git",
+      gh: "/opt/homebrew/bin/gh",
+      node: "/opt/homebrew/bin/node",
+      pnpm: "/opt/homebrew/bin/pnpm",
+    },
+    dependencies: "installed" as const,
+  };
+
+  it("carries the env block on every identify answer, session and ticketless alike", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const askedCwds: string[] = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      sessionEnv: async (cwd) => {
+        askedCwds.push(cwd);
+        return report;
+      },
+    });
+
+    const inSession = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { socket: "/tmp/volli.sock" } },
+    });
+    expect(inSession).toMatchObject({ ok: true, data: { env: report, ticket: null } });
+
+    // The env seam is asked about the CALLER's cwd — the agent drives its own
+    // directory through bash, so where it stands is only knowable at ask time.
+    expect(askedCwds).toEqual(["/repo/volli"]);
+  });
+
+  it("omits the env block rather than inventing one when main has no env facts", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3", now: () => 100 });
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+    if (!response.ok) throw new Error("expected ok");
+    expect(response.data).not.toHaveProperty("env");
+  });
+});
+
 describe("doctor", () => {
   const observation = {
     pathEntries: ["/ud/bin", "/usr/bin"],
