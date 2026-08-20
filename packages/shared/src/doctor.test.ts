@@ -131,7 +131,19 @@ describe("runDoctorChecks — contract tools", () => {
     expect(check.status).toBe("fail");
     expect(check.detail).toContain("resolves to nothing");
     expect(check.remedy).toContain("brew install gh");
+    expect(check.remedy).toContain("volli doctor --fix");
     expect(check.remedy).toContain("volli identify");
+  });
+
+  it("points every missing contract tool at the same PATH repair", () => {
+    const base = observation();
+    for (const tool of ["git", "gh", "node", "pnpm"] as const) {
+      const check = find(
+        runDoctorChecks(observation({ resolved: { ...base.resolved, [tool]: null } }), facts()),
+        `tool-${tool}`,
+      );
+      expect(check.remedy).toContain("volli doctor --fix");
+    }
   });
 
   // VC-94's exact shape: git answers from the bare launchd PATH's /usr/bin

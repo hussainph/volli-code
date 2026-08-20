@@ -182,10 +182,10 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
  * apart: `volli identify`, which prints the adopted PATH and its provenance.
  */
 const TOOL_REMEDIES: Record<SessionEnvTool, string> = {
-  git: "macOS ships git with the Xcode Command Line Tools — run `xcode-select --install`. If git is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
-  gh: "Install the GitHub CLI (`brew install gh`). If gh is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
-  node: "Install Node (`brew install node`). If node is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
-  pnpm: "Enable it with `corepack enable pnpm` (or `brew install pnpm`). If pnpm is installed but missing here, the session PATH is not your login PATH: `volli identify` prints what was adopted.",
+  git: "macOS ships git with the Xcode Command Line Tools — run `xcode-select --install`. If git is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
+  gh: "Install the GitHub CLI (`brew install gh`). If gh is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
+  node: "Install Node (`brew install node`). If node is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
+  pnpm: "Enable it with `corepack enable pnpm` (or `brew install pnpm`). If pnpm is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
 };
 
 /**

@@ -30,7 +30,7 @@ discovers it without probing failures.
 > runs the same report when a project is selected, and `937faa20` explains the
 > known .NET `/etc/paths.d` defect without changing it.
 >
-> **Five improvements remain open** — marked ○ below. A5 and the two non-`PATH`
+> **Four improvements remain open** — marked ○ below. A5 and the two non-`PATH`
 > bundle items want coordinating with VC-38, VC-109 and VC-70.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
@@ -434,9 +434,10 @@ Its `Session PATH repair` report keeps the contract's `adopted` /
 `already-complete` / `probe-failed` vocabulary, names every directory it added,
 and states that only Sessions started afterwards receive the repaired PATH.
 
-**○ D2 · Make repair reachable from where the failure appears.** (P2.) An agent
-that hits command-not-found should be able to run one documented command and
-recover, rather than escalating to the user.
+**✅ D2 · Make repair reachable from where the failure appears.** Contract-tool
+remedies, the persistent Session-PATH notice, and the agent-facing contract now
+name `volli doctor --fix` as the first recovery step. They retain the reporting
+rule and state that it repairs only Sessions started after the command.
 
 **○ D3 · Per-session degradation record.** (P2.) Persist the env provenance on the
 session record so a post-mortem can answer "did this session have `gh`?" without

@@ -42,7 +42,7 @@ describe("sessionEnvironmentAlert", () => {
     expect(sessionEnvironmentAlert(status("probe-failed", "adopted"))).toEqual({
       title: "Sessions couldn't read your login PATH",
       detail:
-        "Sessions are using the app's inherited PATH. Commands available in your terminal may not run here.",
+        "Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. Run `volli doctor --fix` to re-run PATH adoption for new Sessions; this running Session keeps its startup environment.",
     });
   });
 
@@ -50,7 +50,7 @@ describe("sessionEnvironmentAlert", () => {
     expect(sessionEnvironmentAlert(status("probe-failed", "probe-failed"))).toEqual({
       title: "Sessions couldn't read your login PATH",
       detail:
-        "Both login-shell passes failed. Sessions are using the app's inherited PATH, so commands available in your terminal may not run here.",
+        "Both login-shell passes failed. Sessions are using the app's inherited PATH, so commands available in your terminal may not run here. Run `volli doctor --fix` to re-run PATH adoption for new Sessions; this running Session keeps its startup environment.",
     });
   });
 
@@ -58,7 +58,7 @@ describe("sessionEnvironmentAlert", () => {
     expect(sessionEnvironmentAlert(status("adopted", "probe-failed"))).toEqual({
       title: "Sessions couldn't read your interactive login PATH",
       detail:
-        "Tools configured by your interactive shell, such as nvm or mise, may not be available in Sessions.",
+        "Tools configured by your interactive shell, such as nvm or mise, may not be available in Sessions. Run `volli doctor --fix` to re-run PATH adoption for new Sessions; this running Session keeps its startup environment.",
     });
   });
 
@@ -71,7 +71,7 @@ describe("sessionEnvironmentAlert", () => {
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toEqual({
       title: "Sessions aren't ready for Acme",
       detail:
-        "Missing from the Session PATH: gh, node. If they are installed, this is a PATH adoption failure. Dependencies are not installed. Run pnpm install before starting a Session.",
+        "Missing from the Session PATH: gh, node. If they are installed, run `volli doctor --fix` to re-run PATH adoption for new Sessions before reporting a PATH adoption failure. Dependencies are not installed. Run pnpm install before starting a Session.",
     });
   });
 

@@ -12,6 +12,9 @@ export interface ProjectEnvironmentScope {
   name: string;
 }
 
+const PATH_REPAIR_DETAIL =
+  " Run `volli doctor --fix` to re-run PATH adoption for new Sessions; this running Session keeps its startup environment.";
+
 /**
  * A PATH probe failure is an app-level fault, not a Settings-only detail.
  *
@@ -29,21 +32,24 @@ function probeFailure(
     return {
       title: "Sessions couldn't read your login PATH",
       detail:
-        "Both login-shell passes failed. Sessions are using the app's inherited PATH, so commands available in your terminal may not run here.",
+        "Both login-shell passes failed. Sessions are using the app's inherited PATH, so commands available in your terminal may not run here." +
+        PATH_REPAIR_DETAIL,
     };
   }
   if (provenance === "probe-failed") {
     return {
       title: "Sessions couldn't read your login PATH",
       detail:
-        "Sessions are using the app's inherited PATH. Commands available in your terminal may not run here.",
+        "Sessions are using the app's inherited PATH. Commands available in your terminal may not run here." +
+        PATH_REPAIR_DETAIL,
     };
   }
   if (interactiveProvenance === "probe-failed") {
     return {
       title: "Sessions couldn't read your interactive login PATH",
       detail:
-        "Tools configured by your interactive shell, such as nvm or mise, may not be available in Sessions.",
+        "Tools configured by your interactive shell, such as nvm or mise, may not be available in Sessions." +
+        PATH_REPAIR_DETAIL,
     };
   }
   return null;
@@ -68,7 +74,7 @@ export function projectEnvironmentReadiness(
   const details: string[] = [];
   if (missingTools.length > 0) {
     details.push(
-      `Missing from the Session PATH: ${missingTools.join(", ")}. If they are installed, this is a PATH adoption failure.`,
+      `Missing from the Session PATH: ${missingTools.join(", ")}. If they are installed, run \`volli doctor --fix\` to re-run PATH adoption for new Sessions before reporting a PATH adoption failure.`,
     );
   }
   if (dependencies === "absent") {
