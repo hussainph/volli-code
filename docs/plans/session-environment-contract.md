@@ -25,9 +25,9 @@ discovers it without probing failures.
 > **A4 landed:** a live Session smoke now observes that agreement through both
 > executors, including the `.zshrc` case.
 >
-> **B3–C2 landed:** `03630412` makes Settings compare the Session and login
-> `PATH`, `f7ea5c94` makes probe failures persistent app feedback, `24947fbc`
-> runs the same report when a project is selected, and `4cb24360` explains the
+> **B3–C2 landed:** `474f77de` makes Settings compare the Session and login
+> `PATH`, `1be80aad` makes probe failures persistent app feedback, `f55777fa`
+> runs the same report when a project is selected, and `937faa20` explains the
 > known .NET `/etc/paths.d` defect without changing it.
 >
 > **Six improvements remain open** — marked ○ below. A5 and the two non-`PATH`
@@ -394,26 +394,26 @@ tool, with remedies that name the real cause — a `PATH` adoption failure rathe
 than a generic "install it".
 
 **✅ B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
-(`03630412`.) The pane now folds the two long values into a side-by-side
+(`474f77de`.) The pane now folds the two long values into a side-by-side
 comparison: every missing directory is visible in full, shared-order drift is
 loud, and the complete lists remain available without truncation. The pending
 interactive pass is named as a transition rather than a false failure.
 
-**✅ B4 · Surface probe failure as a user-visible event.** (`f7ea5c94`.) A
+**✅ B4 · Surface probe failure as a user-visible event.** (`1be80aad`.) A
 persistent, non-modal app notice appears for either failed PATH probe and routes
 to Settings → CLI. It is deliberately not a toast (which can expire before the
 first affected Session) or a modal (which would block a recoverable app).
 
 ### C — Install / onboard
 
-**✅ C1 · Fold an environment check into project onboarding.** (`24947fbc`.)
+**✅ C1 · Fold an environment check into project onboarding.** (`f55777fa`.)
 Selecting a project — including immediately after it is added — asks the existing
 Session environment report with that project root and names missing contract
 tools or dependencies in the same persistent notice. This deliberately leaves
 Configure's Git/repair pane to VC-109; the report and pure readiness fold are the
 handoff seam, not a competing configuration surface.
 
-**✅ C2 · Detect the specific upstream breakage and explain it.** (`4cb24360`.)
+**✅ C2 · Detect the specific upstream breakage and explain it.** (`937faa20`.)
 Settings scans `/etc/paths.d` read-only for the literal `~/.dotnet/tools` value
 Microsoft's .NET CLI installer commonly writes, names the exact file, and
 explains that macOS appends it to every login PATH. Volli filters it so Sessions
