@@ -54,6 +54,7 @@ import type {
   BootstrapResult,
   CliDoctorInput,
   CliDoctorResult,
+  CliStatusInput,
   CliStatusResult,
   CommentCreateInput,
   BlobAttachInput,
@@ -623,7 +624,8 @@ const api = {
    * socket, wrappers, shell chain — measured fresh per call, never cached.
    */
   cli: {
-    status: (): Promise<CliStatusResult> => invoke("volli:cli-status"),
+    status: (input?: CliStatusInput): Promise<CliStatusResult> =>
+      input === undefined ? invoke("volli:cli-status") : invoke("volli:cli-status", input),
     /** A real `volli doctor` run through the user's login shell; `fix` repairs first. */
     doctor: (input: CliDoctorInput): Promise<CliDoctorResult> => invoke("volli:cli-doctor", input),
   },

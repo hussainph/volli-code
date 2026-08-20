@@ -22,10 +22,17 @@ function deps(home: string, overrides: Partial<CliStatusDeps> = {}): CliStatusDe
     socketPath: join(home, "volli.sock"),
     socketLive: () => true,
     loginShellPath: async () => `/usr/bin:${join(home, ".local", "bin")}`,
-    sessionPath: async () => ({
+    sessionEnvironment: async () => ({
       path: `/volli/bin:/usr/bin:${join(home, ".local", "bin")}`,
       provenance: "adopted",
       interactiveProvenance: "already-complete",
+      tools: {
+        git: "/usr/bin/git",
+        gh: "/opt/homebrew/bin/gh",
+        node: "/opt/homebrew/bin/node",
+        pnpm: "/opt/homebrew/bin/pnpm",
+      },
+      dependencies: null,
     }),
     wrapperCommands: () => ["claude", "codex"],
     shellFile: "/bin/zsh",
@@ -58,6 +65,13 @@ describe("readCliStatus", () => {
         path: `/volli/bin:/usr/bin:${join(root, ".local", "bin")}`,
         provenance: "adopted",
         interactiveProvenance: "already-complete",
+        tools: {
+          git: "/usr/bin/git",
+          gh: "/opt/homebrew/bin/gh",
+          node: "/opt/homebrew/bin/node",
+          pnpm: "/opt/homebrew/bin/pnpm",
+        },
+        dependencies: null,
       },
     });
     expect(status.socket).toEqual({ path: join(root, "volli.sock"), live: true });
@@ -65,6 +79,29 @@ describe("readCliStatus", () => {
     expect(status.shell).toEqual({ name: "zsh", supported: true, chainActive: true });
     expect(status.legacy).toEqual({ path: join(root, "legacy-volli"), state: "absent" });
     expect(status.installSuppressed).toBe(false);
+  });
+
+  it("passes the selected project's root into the existing Session environment report", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-cli-status-"));
+    const seen: Array<string | null> = [];
+
+    await readCliStatus(
+      deps(root, {
+        sessionEnvironment: async (cwd) => {
+          seen.push(cwd);
+          return {
+            path: "/volli/bin:/usr/bin",
+            provenance: "adopted",
+            interactiveProvenance: "already-complete",
+            tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
+            dependencies: "absent",
+          };
+        },
+      }),
+      "/work/acme",
+    );
+
+    expect(seen).toEqual(["/work/acme"]);
   });
 
   it("reports a surviving legacy /usr/local/bin link, ours and foreign alike", async () => {

@@ -651,6 +651,35 @@ app.whenReady().then(async () => {
     resolveInteractiveLoginPath: () => loginShellPath(),
     log: (line) => console.info(line),
   });
+  /**
+   * The same Session-environment measurement for agents, Settings, and project
+   * onboarding. `null` means the caller has no project root — it must not turn
+   * main's own cwd into a pretend workspace dependency answer.
+   */
+  const readSessionEnvironment = async (cwd: string | null) => {
+    const outcome = await loginPathBootstrap.apply();
+    const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
+    const report = await buildSessionEnvReport({
+      // Read after apply: the bootstrap is the one writer that puts binDir
+      // first even when the login shell could not be reached.
+      path: process.env.PATH ?? "",
+      provenance: outcome.kind,
+      interactiveProvenance,
+      // The report's dependency walk is meaningful only for a selected
+      // project. `/` is a neutral walk for host-wide callers; its dependency
+      // answer is discarded below rather than posed as a project fact.
+      cwd: cwd ?? "/",
+    });
+    // `SessionEnvReport` also serves a standalone CLI fallback, where those
+    // fields can be unknown. Main just ran both passes, so Settings can retain
+    // their concrete facts instead of widening them to that fallback shape.
+    return {
+      ...report,
+      provenance: outcome.kind,
+      interactiveProvenance,
+      dependencies: cwd === null ? null : report.dependencies,
+    };
+  };
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.
@@ -1770,34 +1799,28 @@ app.whenReady().then(async () => {
   // Every dep reads at CALL time — `shimPath` and the wrapper set are
   // reassigned once generation runs.
   registerCliIpcHandlers({
-    status: () =>
-      readCliStatus({
-        home: agentToolsHome,
-        shimPath: () => shimPath,
-        managedTargets: managedSiblingShims,
-        socketPath: runtimePaths.socketPath,
-        socketLive: () => agentSocket.live(),
-        loginShellPath: () => loginShellPath(),
-        sessionPath: async () => {
-          const outcome = await loginPathBootstrap.apply();
-          return {
-            // Read after apply: `apply` is the one writer that puts binDir
-            // first even when the login shell could not be reached.
-            path: process.env.PATH ?? "",
-            provenance: outcome.kind,
-            interactiveProvenance: loginPathBootstrap.interactiveProvenance(),
-          };
+    status: (input) =>
+      readCliStatus(
+        {
+          home: agentToolsHome,
+          shimPath: () => shimPath,
+          managedTargets: managedSiblingShims,
+          socketPath: runtimePaths.socketPath,
+          socketLive: () => agentSocket.live(),
+          loginShellPath: () => loginShellPath(),
+          sessionEnvironment: readSessionEnvironment,
+          wrapperCommands: () =>
+            [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
+              (wrapperPath) => basename(wrapperPath),
+            ),
+          shellFile: resolveShell(process.env).file,
+          shellChainActive: () =>
+            agentRuntime.shellEnv?.["ZDOTDIR"] !== undefined &&
+            existsSync(join(runtimePaths.zdotDir, ".zlogin")),
+          installSuppressed: agentToolsRemoved,
         },
-        wrapperCommands: () =>
-          [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
-            (wrapperPath) => basename(wrapperPath),
-          ),
-        shellFile: resolveShell(process.env).file,
-        shellChainActive: () =>
-          agentRuntime.shellEnv?.["ZDOTDIR"] !== undefined &&
-          existsSync(join(runtimePaths.zdotDir, ".zlogin")),
-        installSuppressed: agentToolsRemoved,
-      }),
+        input?.cwd ?? null,
+      ),
     doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
     repair: async () => {
       // Fix is as explicit a request for working tools as File → Install, so it
@@ -1902,18 +1925,7 @@ app.whenReady().then(async () => {
           // from the one memoized boot outcome — identify awaiting it also
           // means the report never describes a PATH from before adoption
           // finished — and read at CALL time, never captured.
-          sessionEnv: async (cwd) =>
-            buildSessionEnvReport({
-              path: process.env.PATH ?? "",
-              provenance: (await loginPathBootstrap.apply()).kind,
-              // Read, never awaited: the interactive pass is off the critical
-              // path on purpose, and an identify that waited on it would spend
-              // a wedged `.zshrc`'s whole timeout. `pending` is the truthful
-              // answer for an agent that asked before the pass landed — its
-              // PATH may still be missing what that shell would have added.
-              interactiveProvenance: loginPathBootstrap.interactiveProvenance(),
-              cwd,
-            }),
+          sessionEnv: (cwd) => readSessionEnvironment(cwd),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.

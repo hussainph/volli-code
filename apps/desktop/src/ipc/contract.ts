@@ -49,6 +49,7 @@ import type {
   SESSION_RPC_IPC_CHANNEL,
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
+  SessionEnvTool,
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
@@ -64,6 +65,7 @@ import type {
   TicketStatus,
   TicketStatusEntry,
   VenueSnapshot,
+  WorkspaceDependenciesStatus,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -672,6 +674,10 @@ export interface CliSessionPathStatus {
   provenance: SessionEnvProvenance;
   /** What the later interactive pass could establish, if it has landed. */
   interactiveProvenance: SessionEnvInteractiveProvenance;
+  /** Where each tool a Session contract requires resolves, or `null` when it does not. */
+  tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /** Project-scoped dependency state; `null` when no project workspace was supplied. */
+  dependencies: WorkspaceDependenciesStatus;
 }
 
 export interface CliToolStatus {
@@ -703,6 +709,11 @@ export interface CliToolStatus {
 
 export type CliStatusResult = { ok: true; status: CliToolStatus } | { ok: false; error: string };
 
+/** A project root for the existing Session environment report, when one is in scope. */
+export interface CliStatusInput {
+  cwd?: string;
+}
+
 /** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
 export interface CliDoctorInput {
   fix: boolean;
@@ -718,7 +729,7 @@ export type CliDoctorResult =
 
 /** The Settings → CLI surface (`src/main/cli-ipc.ts`). */
 export interface VolliCliIpcContract {
-  "volli:cli-status": { args: []; result: CliStatusResult };
+  "volli:cli-status": { args: [input?: CliStatusInput]; result: CliStatusResult };
   "volli:cli-doctor": { args: [input: CliDoctorInput]; result: CliDoctorResult };
 }
 

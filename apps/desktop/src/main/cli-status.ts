@@ -28,8 +28,8 @@ export interface CliStatusDeps {
   /** Measured at call time (`agentSocket.live()`) — never a boot latch. */
   socketLive(): boolean;
   loginShellPath(): Promise<string | null>;
-  /** The actual PATH Session commands inherit, after main's adoption passes. */
-  sessionPath(): Promise<CliSessionPathStatus>;
+  /** The actual Session environment, optionally scoped to a project workspace. */
+  sessionEnvironment(cwd: string | null): Promise<CliSessionPathStatus>;
   /** Wrapper command names the last harness-runtime regeneration produced. */
   wrapperCommands(): readonly string[];
   /** The user's login shell binary (`resolveShell`). */
@@ -57,14 +57,20 @@ async function linkState(
   }
 }
 
-export async function readCliStatus(deps: CliStatusDeps): Promise<CliToolStatus> {
+export async function readCliStatus(
+  deps: CliStatusDeps,
+  cwd: string | null = null,
+): Promise<CliToolStatus> {
   const shimPath = deps.shimPath();
   const isOurs = (target: string): boolean =>
     target === shimPath || deps.managedTargets.includes(target);
   const link = await linkState(userCliLinkPath(deps.home), isOurs);
   const legacyPath = deps.legacyLinkPath ?? LEGACY_GLOBAL_CLI_LINK;
   const legacy = await linkState(legacyPath, isOurs);
-  const [loginPath, session] = await Promise.all([deps.loginShellPath(), deps.sessionPath()]);
+  const [loginPath, session] = await Promise.all([
+    deps.loginShellPath(),
+    deps.sessionEnvironment(cwd),
+  ]);
   const shellName = basename(deps.shellFile);
   return {
     link: { path: userCliLinkPath(deps.home), ...link },

@@ -13,6 +13,13 @@ function environment(
       path: "/Users/me/Library/Application Support/Volli Code/bin:/usr/bin:/opt/homebrew/bin:/Users/me/.local/bin",
       provenance: "adopted",
       interactiveProvenance: "already-complete",
+      tools: {
+        git: "/usr/bin/git",
+        gh: "/opt/homebrew/bin/gh",
+        node: "/opt/homebrew/bin/node",
+        pnpm: "/opt/homebrew/bin/pnpm",
+      },
+      dependencies: null,
     },
     ...overrides,
   };
@@ -29,6 +36,8 @@ describe("SessionPathComparison", () => {
             path: "/Users/me/Library/Application Support/Volli Code/bin:/usr/bin:/opt/homebrew/bin",
             provenance: "probe-failed",
             interactiveProvenance: "pending",
+            tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
+            dependencies: null,
           },
         })}
       />,
@@ -64,6 +73,8 @@ describe("SessionPathComparison", () => {
             path: sessionPath,
             provenance: "probe-failed",
             interactiveProvenance: "pending",
+            tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
+            dependencies: null,
           },
         })}
       />,

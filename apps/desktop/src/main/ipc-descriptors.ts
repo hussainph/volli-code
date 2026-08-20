@@ -905,12 +905,17 @@ export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescrip
 export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcChannel[];
 
 // ---- CLI install-detection descriptor table --------------------------------
-// The Settings → CLI surface (VC-52): a status read with no arguments, and a
-// doctor run whose one flag says whether main should repair before probing.
+// The Settings → CLI surface (VC-52): a host-wide status read, optionally
+// scoped to a known project's dependency root, and a doctor run whose one flag
+// says whether main should repair before probing.
 
 export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:cli-status": {
-    guard: (args): args is [] => args.length === 0,
+    guard: (args): args is IpcArgs<"volli:cli-status"> =>
+      args.length === 0 ||
+      (args.length === 1 &&
+        isRecord(args[0]) &&
+        (args[0]["cwd"] === undefined || typeof args[0]["cwd"] === "string")),
     invalidError: "Invalid request",
   },
   "volli:cli-doctor": {

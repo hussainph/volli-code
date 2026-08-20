@@ -8,6 +8,7 @@ import {
 } from "@renderer/components/session-environment-alert-model";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
+import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
@@ -20,15 +21,23 @@ import { useUiStore } from "@renderer/stores/ui";
  */
 export function SessionEnvironmentAlert() {
   const [alert, setAlert] = useState<SessionEnvironmentAlertState | null>(null);
+  const project = useSelectedProject();
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
   useEffect(() => {
     let current = true;
+    setAlert(null);
+    // A project becomes selected in the same state change that adds it, so this
+    // is the onboarding check. It deliberately shares this notice rather than
+    // growing a second Configure pane while VC-109 owns that repair surface.
+    const input = project === null ? undefined : { cwd: project.path };
     void window.api.cli
-      .status()
+      .status(input)
       .then((result) => {
-        if (current && result.ok) setAlert(sessionEnvironmentAlert(result.status));
+        if (current && result.ok) {
+          setAlert(sessionEnvironmentAlert(result.status, project && { name: project.name }));
+        }
       })
       .catch(() => {
         // This read cannot establish a PATH failure, so it must not invent one.
@@ -36,7 +45,7 @@ export function SessionEnvironmentAlert() {
     return () => {
       current = false;
     };
-  }, []);
+  }, [project]);
 
   if (terminalFocused || alert === null) return null;
 

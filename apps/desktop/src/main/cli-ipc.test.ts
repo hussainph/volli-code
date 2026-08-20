@@ -28,6 +28,13 @@ const STATUS: CliToolStatus = {
       path: "/volli/bin:/usr/bin:/home/me/.local/bin",
       provenance: "adopted",
       interactiveProvenance: "already-complete",
+      tools: {
+        git: "/usr/bin/git",
+        gh: "/opt/homebrew/bin/gh",
+        node: "/opt/homebrew/bin/node",
+        pnpm: "/opt/homebrew/bin/pnpm",
+      },
+      dependencies: null,
     },
   },
   socket: { path: "/profiles/volli.sock", live: true },
@@ -68,6 +75,17 @@ describe("registerCliIpcHandlers", () => {
     register();
 
     await expect(invoke("volli:cli-status")).resolves.toEqual({ ok: true, status: STATUS });
+  });
+
+  it("passes a project root to the status measurement", async () => {
+    const status = vi.fn<CliIpcDeps["status"]>(async () => STATUS);
+    register({ status });
+
+    await expect(invoke("volli:cli-status", { cwd: "/work/acme" })).resolves.toEqual({
+      ok: true,
+      status: STATUS,
+    });
+    expect(status).toHaveBeenCalledWith({ cwd: "/work/acme" });
   });
 
   it("probes without repairing on a plain doctor run", async () => {

@@ -5,13 +5,13 @@
  * install down with it. The single db-backed fact (the removal tombstone)
  * arrives through a dep that answers `false` when it cannot be read.
  */
-import type { CliDoctorResult, CliToolStatus } from "../ipc/contract";
+import type { CliDoctorResult, CliStatusInput, CliToolStatus } from "../ipc/contract";
 import { CLI_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
 
 export interface CliIpcDeps {
   /** Measures the install fresh — `src/main/cli-status.ts`. */
-  status(): Promise<CliToolStatus>;
+  status(input?: CliStatusInput): Promise<CliToolStatus>;
   /** Runs `volli doctor --json` through the user's login shell — `src/main/cli-doctor.ts`. */
   doctor(): Promise<CliDoctorResult>;
   /**
@@ -27,7 +27,7 @@ export interface CliIpcDeps {
 
 export function registerCliIpcHandlers(deps: CliIpcDeps): void {
   registerGuardedIpcHandlers(CLI_IPC, {
-    "volli:cli-status": async () => ({ ok: true as const, status: await deps.status() }),
+    "volli:cli-status": async (input) => ({ ok: true as const, status: await deps.status(input) }),
     "volli:cli-doctor": async (input) => {
       // Repair BEFORE the probe, so what gets reported is the world the repair
       // left behind — the same two-phase shape the CLI's own `--fix` keeps.

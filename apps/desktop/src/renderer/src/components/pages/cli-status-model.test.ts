@@ -3,17 +3,31 @@ import { describe, expect, it } from "vite-plus/test";
 import type { CliToolStatus } from "../../../../ipc/contract";
 import { cliNeedsAttention, cliStatusRows, sessionPathComparison } from "./cli-status-model";
 
+function session(
+  overrides: Partial<CliToolStatus["environment"]["session"]> = {},
+): CliToolStatus["environment"]["session"] {
+  return {
+    path: "/volli/bin:/usr/bin:/home/me/.local/bin",
+    provenance: "adopted",
+    interactiveProvenance: "already-complete",
+    tools: {
+      git: "/usr/bin/git",
+      gh: "/opt/homebrew/bin/gh",
+      node: "/opt/homebrew/bin/node",
+      pnpm: "/opt/homebrew/bin/pnpm",
+    },
+    dependencies: null,
+    ...overrides,
+  };
+}
+
 function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
   return {
     link: { path: "/home/me/.local/bin/volli", state: "ours", target: "/shim/volli" },
     path: { binDir: "/home/me/.local/bin", state: "reachable" },
     environment: {
       loginPath: "/usr/bin:/home/me/.local/bin",
-      session: {
-        path: "/volli/bin:/usr/bin:/home/me/.local/bin",
-        provenance: "adopted",
-        interactiveProvenance: "already-complete",
-      },
+      session: session(),
     },
     socket: { path: "/profiles/volli.sock", live: true },
     wrappers: { commands: ["claude", "codex"] },
@@ -39,11 +53,7 @@ describe("sessionPathComparison", () => {
       status({
         environment: {
           loginPath,
-          session: {
-            path: `${sessionOnly}:${loginPath}`,
-            provenance: "adopted",
-            interactiveProvenance: "already-complete",
-          },
+          session: session({ path: `${sessionOnly}:${loginPath}` }),
         },
       }),
     );
@@ -63,11 +73,11 @@ describe("sessionPathComparison", () => {
       status({
         environment: {
           loginPath: `/usr/bin:${missing}:/opt/homebrew/bin`,
-          session: {
+          session: session({
             path: "/Users/me/Library/Application Support/Volli Code/bin:/usr/bin:/opt/homebrew/bin",
             provenance: "probe-failed",
             interactiveProvenance: "pending",
-          },
+          }),
         },
       }),
     );
@@ -84,11 +94,10 @@ describe("sessionPathComparison", () => {
       status({
         environment: {
           loginPath: "/usr/bin:/Users/me/.bun/bin:/opt/homebrew/bin",
-          session: {
+          session: session({
             path: "/volli/bin:/usr/bin:/opt/homebrew/bin",
-            provenance: "adopted",
             interactiveProvenance: "pending",
-          },
+          }),
         },
       }),
     );
@@ -104,11 +113,9 @@ describe("sessionPathComparison", () => {
       status({
         environment: {
           loginPath: "/usr/bin:/opt/homebrew/bin:/Users/me/.local/bin",
-          session: {
+          session: session({
             path: "/volli/bin:/opt/homebrew/bin:/usr/bin:/Users/me/.local/bin",
-            provenance: "adopted",
-            interactiveProvenance: "already-complete",
-          },
+          }),
         },
       }),
     );
@@ -125,11 +132,11 @@ describe("sessionPathComparison", () => {
       status({
         environment: {
           loginPath: null,
-          session: {
+          session: session({
             path: "/volli/bin:/usr/bin",
             provenance: "probe-failed",
             interactiveProvenance: "pending",
-          },
+          }),
         },
       }),
     );
