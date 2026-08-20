@@ -3,6 +3,23 @@
 VC-94. What every Volli session gets on `PATH`, identically, and how an agent
 discovers it without probing failures.
 
+> **The contract itself now lives in [`AGENTS.md`](../../AGENTS.md) → "Session
+> environment", which is what agents read.** This document is the investigation
+> record behind it and the roadmap of what has not been built yet.
+>
+> **The four P0s landed 2026-08-20.** `0d8812d2` A1 (filter malformed `PATH`
+> entries), `bdd52746` B1 (`volli identify` env block), `028c3719` B2 (doctor
+> audits contract tools), `0b9210df` C3 (contract stated in `AGENTS.md` and
+> `CLAUDE.md`), `8a76154e` follow-up coverage. Verified: the filter keeps 20 of
+> this host's 21 login-`PATH` entries, dropping only `~/.dotnet/tools`, so
+> `gh`/`node`/`npm`/`pnpm`/`vp` resolve again from the next app boot. 332 tests
+> across the touched suites pass.
+>
+> **Thirteen improvements remain open** — marked ○ below. A2/A3 (probe
+> unification and the `.zshrc` gap) are the ones that still let two sessions
+> differ; A5 and the two non-`PATH` bundle items want coordinating with VC-38,
+> VC-109 and VC-70.
+
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
 was observed on the reporting host during the investigation session itself —
 including the headline defect, which reproduced in the very session that was
@@ -159,7 +176,12 @@ asked at two ends.
 ## The contract
 
 The acceptance criterion for this ticket is a written contract. Here it is —
-stated as what *should* hold, with today's conformance marked.
+stated as what *should* hold, with conformance marked as it stood at
+investigation time and as it stands after the P0s.
+
+The live, agent-facing statement of this contract is in `AGENTS.md`; the version
+below is kept because the conformance column is the record of what was actually
+wrong.
 
 > **Every Volli session, of every kind, on every launch, starts with the same
 > `PATH`: Volli's `binDir` first, followed by the union of the login shell's
@@ -169,14 +191,14 @@ stated as what *should* hold, with today's conformance marked.
 > whether the resolution was complete or degraded — before it runs its first
 > command.
 
-| Clause | Today |
-| --- | --- |
-| `binDir` first | ✅ holds for both session kinds |
-| Login-shell `PATH` adopted | ❌ silently skipped when any entry is malformed |
-| Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents |
-| Degradation is recorded and surfaced | ❌ logged as `[volli] PATH kept`, indistinguishable from healthy |
-| Session can discover it without probing | ❌ `volli identify` carries no env fields |
-| Workspace dependencies installed, or session told | ❌ `node_modules` present in some worktrees, absent in others |
+| Clause | At investigation | After P0s |
+| --- | --- | --- |
+| `binDir` first | ✅ holds for both session kinds | ✅ |
+| Login-shell `PATH` adopted | ❌ silently skipped when any entry is malformed | ✅ A1 |
+| Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents | ❌ A3 open |
+| Degradation is recorded and surfaced | ❌ logged as `[volli] PATH kept`, indistinguishable from healthy | ◑ provenance reported by B1/B2; ❌ B4 open |
+| Session can discover it without probing | ❌ `volli identify` carries no env fields | ✅ B1 + C3 |
+| Workspace dependencies installed, or session told | ❌ `node_modules` present in some worktrees, absent in others | ◑ reported by B1; ❌ A5 policy open |
 
 Two further properties the contract should carry, from the rest of the bundle:
 
@@ -232,37 +254,41 @@ prompts that outlive it.
 
 ## Refined improvements
 
-Grouped by the four goals, ordered by value-per-unit-risk within each. P0 items
-are small and independently landable.
+Grouped by the four goals, ordered by value-per-unit-risk within each.
+**✅ landed 2026-08-20** · **○ open**.
 
 ### A — Consistency across sessions and project folders
 
-**A1 · Filter malformed `PATH` entries instead of rejecting the list.** (P0,
-~5 lines, `login-shell-path.ts`.) Change the `.every(...)` guard to a
-`.filter(...)`, keeping absolute entries and dropping the rest. Return `null`
-only when *nothing* survives. This alone restores `gh`/`node`/`npm` to every
-structured session on this host and any host with a tilde-bearing
-`/etc/paths.d` file. Regression test: the exact string measured above.
+**✅ A1 · Filter malformed `PATH` entries instead of rejecting the list.**
+(`0d8812d2`.) The `.every(...)` guard became a `.filter(...)`, keeping absolute
+entries and dropping the rest, returning `null` only when nothing survives.
+Empty entries are dropped too — to a shell they mean the current directory, and
+a `PATH` that runs commands from the cwd is never safe to adopt. Regression test
+carries this host's measured string verbatim.
 
-**A2 · Unify the two probes into one module.** (P1.) Collapse `login-path.ts`
+**○ A2 · Unify the two probes into one module.** (P1.) Collapse `login-path.ts`
 and `login-shell-path.ts` into a single resolver with an `interactive: boolean`
 parameter and one shared parser. Both call sites keep their current flag choice;
 what they stop having is independent notions of what a valid `PATH` is. This is
 the change that prevents defect #2 from recurring in a new form.
 
-**A3 · Close the `.zshrc` gap without risking the boot.** (P1.) Keep the
+**○ A3 · Close the `.zshrc` gap without risking the boot.** (P1.) *Deliberately
+excluded from the P0 pass: it changes probe semantics and wants its own
+verification.* Keep the
 non-interactive probe on the boot path — that trade is right — but run the
 interactive probe once, off the critical path, after the first window loads, and
 adopt any additional entries it finds. Sessions started in the first ~2s get
 today's answer; every session after gets the complete one. Record which of the
 two answered.
 
-**A4 · Make PTY and structured sessions provably equal.** (P2.) An e2e that
+**○ A4 · Make PTY and structured sessions provably equal.** (P2.) An e2e that
 starts one of each and asserts `command -v` agrees for a fixed tool list.
 `agent-pty-env-smoke.mjs` and `bare-path-env-smoke.mjs` already establish the
 harness for this; what is missing is the *comparison* between kinds.
 
-**A5 · Decide and enforce a worktree provisioning policy.** (P1, with VC-38.)
+**○ A5 · Decide and enforce a worktree provisioning policy.** (P1, with VC-38.)
+B1 now *reports* whether dependencies are installed, which removes the surprise;
+the policy question is still open.
 Either install dependencies when a worktree is created, or link/share them, or
 declare them absent in the contract so the session knows before its first
 commit. Any of the three is better than the current per-worktree coin flip. The
@@ -271,57 +297,59 @@ cheapest first step is the declaration — B1's `env` block reporting
 
 ### B — Observability
 
-**B1 · Add an `env` block to `volli identify`.** (P0.) The contract, printed:
-resolved `PATH`, its provenance (`adopted` / `already-complete` /
-`probe-failed`), and a found/missing verdict per tool with the resolved absolute
-path. This is the ticket's literal acceptance criterion and the highest-leverage
-item in the whole list — it converts a discovery that currently costs a failed
-command and a confused agent into one line of structured output. Include it in
-`--json` so orchestrators can branch on it.
+**✅ B1 · Add an `env` block to `volli identify`.** (`bdd52746`.) Prints
+`env.path`, `env.provenance`, `env.tools.<tool>` per contract tool, and
+`env.dependencies`, in both text and `--json`. `-` means measured and not found;
+an absent block means the answering process had no env facts at all — the same
+measured-versus-unmeasured discipline `doctor`'s `Observed<T>` already keeps.
 
-**B2 · Add tool checks to `doctor`.** (P0.) One check per tool in the contract,
-following the module's existing `Observed<T>` discipline so "not measured" and
-"measured absent" stay distinct. `gh` missing should read as a `fail` with the
-remedy naming the actual cause, not a generic "install gh".
+**✅ B2 · Add tool checks to `doctor`.** (`028c3719`.) One check per contract
+tool, with remedies that name the real cause — a `PATH` adoption failure rather
+than a generic "install it".
 
-**B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
+**○ B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
 (P1.) Two rows, and an explicit warning when they diverge. The divergence is the
 bug; a pane that cannot show it cannot be trusted to report health. This is the
 VC-52 extension the ticket asks for.
 
-**B4 · Surface probe failure as a user-visible event.** (P1.) When adoption
+**○ B4 · Surface probe failure as a user-visible event.** (P1.) B1/B2 make it
+*askable*; it is still not *pushed*. When adoption
 fails, the user should learn it from the app, not from an agent's
 command-not-found three hours later.
 
 ### C — Install / onboard
 
-**C1 · Fold an environment check into project onboarding.** (P1, converges with
-VC-109.) When a repo is added, run the contract check and show what is missing
+**○ C1 · Fold an environment check into project onboarding.** (P1, converges
+with VC-109.) When a repo is added, run the contract check and show what is missing
 *before* the first session runs. VC-109 already proposes a Configure tab for git
 and `gh`; the tool contract belongs in the same pane rather than a second one.
 
-**C2 · Detect the specific upstream breakages and offer the fix.** (P2.) A
+**○ C2 · Detect the specific upstream breakages and offer the fix.** (P2.) A1
+now *survives* the malformed entry; nothing yet *tells* the user their
+`/etc/paths.d` is broken. A
 malformed `/etc/paths.d/*` entry is detectable, common, and repairable with a
 one-line explanation of what wrote it. Detect-and-explain is worth more here
 than auto-repair, since the file is root-owned and outside Volli's authority.
 
-**C3 · State the contract in `AGENTS.md`.** (P0, cheap.) A short section saying
-what a session can assume, and telling agents to read `volli identify` rather
-than probe. Without this, B1 exists but goes unused.
+**✅ C3 · State the contract in `AGENTS.md`.** (`0b9210df`, also `CLAUDE.md`.)
+States what a session can assume, points at `volli identify`, and instructs
+agents to *report* a missing tool as an adoption failure rather than work around
+it with an absolute path — the habit that produced the `/opt/homebrew/bin/gh`
+kickoffs this ticket was raised over.
 
 ### D — Repair
 
-**D1 · Extend `doctor --fix` to re-run adoption.** (P1.) The repair path today
+**○ D1 · Extend `doctor --fix` to re-run adoption.** (P1.) The repair path today
 rebuilds Volli's own shim, wrappers and shell chain. It cannot fix a `PATH`,
 because nothing models the `PATH` as repairable state. Once A1 and B2 land, the
 fix is `resetLoginShellPathCache()` + re-probe + re-adopt, which is already
 idempotent by construction.
 
-**D2 · Make repair reachable from where the failure appears.** (P2.) An agent
+**○ D2 · Make repair reachable from where the failure appears.** (P2.) An agent
 that hits command-not-found should be able to run one documented command and
 recover, rather than escalating to the user.
 
-**D3 · Per-session degradation record.** (P2.) Persist the env provenance on the
+**○ D3 · Per-session degradation record.** (P2.) Persist the env provenance on the
 session record so a post-mortem can answer "did this session have `gh`?" without
 re-deriving it from a host that has since changed. This is what would have
 resolved the fabricated-PR scare in minutes.
@@ -361,6 +389,12 @@ path.
   measured `-l -i` output — sound, but not directly observed end to end. A4
   would close this.
 - **Non-macOS and non-zsh hosts** were not considered at all.
-- **Nothing was changed.** This ticket's acceptance is the written contract, so
-  the investigation stopped at the document. A1 and B1/B2/C3 are the natural
-  first commits and are independently landable.
+- **The fix is not yet observed in a live session.** A1 is verified by unit test
+  and by replaying this host's real login-shell output through the new parser
+  (20 of 21 entries kept). Adoption itself runs at app boot, so confirmation
+  that a session actually resolves `gh` waits on the next restart.
+- **Pre-existing suite noise.** 88 test files fail to collect in a fresh
+  worktree on an import-alias error (`@renderer/...`). Confirmed identical at
+  base `ca9fcccd`, so unrelated to this work — but it means a fresh worktree
+  cannot currently run the full suite green, which is A5's problem in another
+  costume.
