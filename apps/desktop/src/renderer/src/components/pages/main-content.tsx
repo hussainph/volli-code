@@ -5,6 +5,7 @@ import { HomeSurface } from "@renderer/components/home/home-surface";
 import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { FilesPage } from "@renderer/components/pages/files-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
+import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
@@ -37,6 +38,7 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <SessionEnvironmentAlert />
       {/* Home renders its own strip, its board (or the ticket that has taken it
           over) and its Session planes, in that DOM order, so the strip is the
           top edge of whatever is below it. It is a fragment on purpose: it
