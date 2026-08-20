@@ -1,5 +1,12 @@
 import type { TicketStatus } from "./ticket";
 
+// Verb Registry discipline (VC-92): every agent-facing verb is declared here
+// with its dot-name at birth — that dot-name IS its future Verb Registry key.
+// The registry in @volli/shared is the one source of truth (one entry per
+// verb, access modes as data, one handler binding); this list is its CLI
+// projection. A verb may gain a named-tool access mode later, but its name
+// never changes, and nothing ships under an unnamed string that must later be
+// retroactively gated.
 export const AGENT_COMMANDS = [
   "identify",
   "board",
