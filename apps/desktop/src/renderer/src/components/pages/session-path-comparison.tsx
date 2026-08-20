@@ -82,6 +82,12 @@ export function SessionPathComparison({
         {environment.systemPathIssues.map((issue) => (
           <SystemPathIssueNotice key={`${issue.file}:${issue.entry}`} issue={issue} />
         ))}
+        {environment.credentialHelperIssues.map((issue) => (
+          <CredentialHelperIssueNotice
+            key={`${issue.scope}:${issue.location}:${issue.helper}`}
+            issue={issue}
+          />
+        ))}
 
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <PathFact
@@ -202,6 +208,47 @@ function SystemPathIssueNotice({
       }
     />
   );
+}
+
+function CredentialHelperIssueNotice({
+  issue,
+}: {
+  issue: CliToolStatus["environment"]["credentialHelperIssues"][number];
+}) {
+  return (
+    <Notice
+      className="mt-2 border-attention/30 bg-attention/10 text-attention"
+      announce
+      tone="neutral"
+      icon={WarningIcon}
+      title="A Git credential helper can prompt a Session"
+      detail={
+        <>
+          {credentialHelperScope(issue.scope)}{" "}
+          <code className="break-all font-mono text-current">{issue.location}</code> enables
+          Git&apos;s <code className="font-mono text-current">{issue.helper}</code> helper. If it
+          has no matching credential, macOS can show a GUI keychain prompt. A Session cannot answer
+          it, so a fetch, push, or other Git operation can hang. Volli will not rewrite your Git
+          configuration. Detection only; VC-70 and VC-45 own the headless-safe credential guarantee.
+        </>
+      }
+    />
+  );
+}
+
+function credentialHelperScope(
+  scope: CliToolStatus["environment"]["credentialHelperIssues"][number]["scope"],
+): string {
+  switch (scope) {
+    case "system":
+      return "System Git configuration";
+    case "global":
+      return "Global Git configuration";
+    case "repo-local":
+      return "This project's Git configuration";
+    case "command":
+      return "Git command configuration";
+  }
 }
 
 function PendingComparisonNotice() {

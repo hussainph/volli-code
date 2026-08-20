@@ -23,6 +23,7 @@ function environment(
     },
     ...overrides,
     systemPathIssues: overrides.systemPathIssues ?? [],
+    credentialHelperIssues: overrides.credentialHelperIssues ?? [],
   };
 }
 
@@ -85,6 +86,32 @@ describe("SessionPathComparison", () => {
     expect(html).toContain(".NET CLI installer");
     expect(html).toContain("other tools can still reject that PATH");
     expect(html).toContain("Volli will not modify this root-owned file.");
+    expect(html).not.toContain("Fix");
+  });
+
+  it("names the GUI-capable Git helper, its global configuration, and the cost to a Session without offering a repair", () => {
+    const html = renderToStaticMarkup(
+      <SessionPathComparison
+        environment={environment({
+          credentialHelperIssues: [
+            {
+              kind: "osxkeychain-may-prompt-gui",
+              helper: "osxkeychain",
+              scope: "global",
+              location: "/Users/me/.gitconfig",
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(html).toContain("A Git credential helper can prompt a Session");
+    expect(html).toContain("osxkeychain");
+    expect(html).toContain("Global Git configuration");
+    expect(html).toContain("/Users/me/.gitconfig");
+    expect(html).toContain("can hang");
+    expect(html).toContain("Volli will not rewrite your Git configuration.");
+    expect(html).toContain("Detection only");
     expect(html).not.toContain("Fix");
   });
 

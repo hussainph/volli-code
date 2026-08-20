@@ -906,8 +906,8 @@ export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcC
 
 // ---- CLI install-detection descriptor table --------------------------------
 // The Settings → CLI surface (VC-52): a host-wide status read, optionally
-// scoped to a known project's dependency root, and a doctor run whose one flag
-// says whether main should repair before probing.
+// scoped to a known project's dependency and Git credential roots, and a doctor
+// run whose one flag says whether main should repair before probing.
 
 export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:cli-status": {

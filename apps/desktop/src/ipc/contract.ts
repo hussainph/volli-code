@@ -676,6 +676,16 @@ export interface CliSystemPathIssue {
   entry: string;
 }
 
+/** A known Git credential helper that can hang a headless Session on a GUI prompt. */
+export interface CliCredentialHelperIssue {
+  kind: "osxkeychain-may-prompt-gui";
+  helper: "osxkeychain";
+  /** Git's `local` and `worktree` scopes both mean this project's configuration. */
+  scope: "system" | "global" | "repo-local" | "command";
+  /** The config file or command source Git itself reported for the helper. */
+  location: string;
+}
+
 export interface CliSessionPathStatus {
   /** The exact colon-delimited PATH a Session command inherits. */
   path: string;
@@ -708,6 +718,8 @@ export interface CliToolStatus {
     session: CliSessionPathStatus;
     /** A read-only diagnosis of known malformed system PATH entries. */
     systemPathIssues: CliSystemPathIssue[];
+    /** A read-only diagnosis of GUI-capable credential helpers for the scoped project. */
+    credentialHelperIssues: CliCredentialHelperIssue[];
   };
   /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
@@ -723,7 +735,7 @@ export interface CliToolStatus {
 
 export type CliStatusResult = { ok: true; status: CliToolStatus } | { ok: false; error: string };
 
-/** A project root for the existing Session environment report, when one is in scope. */
+/** A project root for the Session environment and Git credential reports, when one is in scope. */
 export interface CliStatusInput {
   cwd?: string;
 }

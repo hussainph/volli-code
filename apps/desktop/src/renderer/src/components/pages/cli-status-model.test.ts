@@ -29,6 +29,7 @@ function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
       loginPath: "/usr/bin:/home/me/.local/bin",
       session: session(),
       systemPathIssues: [],
+      credentialHelperIssues: [],
     },
     socket: { path: "/profiles/volli.sock", live: true },
     wrappers: { commands: ["claude", "codex"] },
@@ -56,6 +57,7 @@ describe("sessionPathComparison", () => {
           loginPath,
           session: session({ path: `${sessionOnly}:${loginPath}` }),
           systemPathIssues: [],
+          credentialHelperIssues: [],
         },
       }),
     );
@@ -81,6 +83,7 @@ describe("sessionPathComparison", () => {
             interactiveProvenance: "pending",
           }),
           systemPathIssues: [],
+          credentialHelperIssues: [],
         },
       }),
     );
@@ -102,6 +105,7 @@ describe("sessionPathComparison", () => {
             interactiveProvenance: "pending",
           }),
           systemPathIssues: [],
+          credentialHelperIssues: [],
         },
       }),
     );
@@ -121,6 +125,7 @@ describe("sessionPathComparison", () => {
             path: "/volli/bin:/opt/homebrew/bin:/usr/bin:/Users/me/.local/bin",
           }),
           systemPathIssues: [],
+          credentialHelperIssues: [],
         },
       }),
     );
@@ -143,6 +148,7 @@ describe("sessionPathComparison", () => {
             interactiveProvenance: "pending",
           }),
           systemPathIssues: [],
+          credentialHelperIssues: [],
         },
       }),
     );

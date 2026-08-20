@@ -154,6 +154,7 @@ import {
   resetLoginShellPathCache,
 } from "./login-shell-path";
 import { buildSessionEnvReport } from "./session-env";
+import { credentialHelperIssues as readCredentialHelperIssues } from "./credential-helper-diagnostics";
 import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
 import {
   cleanupLegacyGlobalCliLink,
@@ -1832,6 +1833,7 @@ app.whenReady().then(async () => {
           loginShellPath: () => loginShellPath(),
           sessionEnvironment: readSessionEnvironment,
           systemPathIssues: () => readSystemPathIssues(),
+          credentialHelperIssues: (cwd) => readCredentialHelperIssues(cwd),
           wrapperCommands: () =>
             [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
               (wrapperPath) => basename(wrapperPath),

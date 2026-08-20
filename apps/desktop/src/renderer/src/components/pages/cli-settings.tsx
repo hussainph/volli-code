@@ -37,6 +37,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Notice } from "@renderer/components/ui/notice";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 
 /** Detection tone → the app's one status-dot vocabulary (see module header). */
 const TONE_DOT: Record<CliRowTone, StatusDotState> = {
@@ -59,6 +60,9 @@ type DoctorState =
 export function CliSettings() {
   const [state, setState] = useState<StatusState>({ status: "loading" });
   const [doctor, setDoctor] = useState<DoctorState>({ status: "idle" });
+  // The host facts are app-wide, but Git's local helper chain belongs to the
+  // project a Session would enter; the one status read carries both truths.
+  const projectCwd = useSelectedProject()?.path;
 
   // Re-entrant read (mount, the refresh button, a post-fix refresh) —
   // token-guarded so the answer that lands is the one asked for last.
@@ -67,7 +71,9 @@ export function CliSettings() {
     const token = statusFetch.claim();
     setState({ status: "loading" });
     try {
-      const result = await window.api.cli.status();
+      const result = await window.api.cli.status(
+        projectCwd === undefined ? undefined : { cwd: projectCwd },
+      );
       if (!statusFetch.isCurrent(token)) return;
       if (!result.ok) {
         setState({ status: "error", message: result.error });
@@ -83,7 +89,7 @@ export function CliSettings() {
         setState({ status: "error", message: errorMessage(error) });
       }
     }
-  }, [statusFetch]);
+  }, [projectCwd, statusFetch]);
 
   useEffect(() => {
     void load();

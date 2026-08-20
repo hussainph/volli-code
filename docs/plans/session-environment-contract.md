@@ -446,9 +446,9 @@ resolved the fabricated-PR scare in minutes.
 
 ## The other two bundle items
 
-Both were confirmed still-live, but neither was investigated to the same depth;
-the environment defect consumed the budget and is the prerequisite for one of
-them.
+Both were confirmed still-live. No-worktree guardrails remain at the original
+exploration depth; credential detection below makes the known `osxkeychain`
+hazard visible, but the product guarantee itself remains open.
 
 **No-worktree guardrails.** The scratch droppings from VC-62 are still in the
 main checkout: `GOAL.md`, `MISSION.md`, `NOTES.md`, and `.playwright-mcp/`
@@ -467,6 +467,24 @@ workaround this document exists to remove, which will break for any user whose
 `gh` is elsewhere. Productizing via VC-70 should make the guarantee
 project-independent and resolve `gh` through the contract rather than a literal
 path.
+
+**Detection landed (VC-94; detection only).** Settings → CLI now asks Git from
+an in-scope project's root for its all-scope, origin-annotated
+`credential.helper` values. This is deliberately `git config --includes --null
+--show-scope --show-origin --get-all credential.helper`, not a read of one
+config file: Git supplies the included sources in its own order, then the
+detector applies an empty helper as the reset Git gives it. A surviving known
+`osxkeychain` helper is reported with Git's system, global, or repo-local scope
+and the exact origin Git named. The notice says that macOS can show a GUI prompt
+and that a Session with no keyboard can hang on a fetch or push. It never invokes
+a credential helper, writes Git configuration, or offers repair; user Git
+configuration remains the user's.
+
+This is **not** the headless-safe credential guarantee. It only diagnoses one
+known GUI-capable helper in the chain it can read; it does not make an
+interactive credential path unreachable. VC-70 (GitHub in Settings) and VC-45
+(Volli holds the credential and Sessions request operations) remain the work
+that must establish that product guarantee.
 
 ## What I did not verify
 
