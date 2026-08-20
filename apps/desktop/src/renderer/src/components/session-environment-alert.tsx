@@ -22,6 +22,8 @@ import { useUiStore } from "@renderer/stores/ui";
 export function SessionEnvironmentAlert() {
   const [alert, setAlert] = useState<SessionEnvironmentAlertState | null>(null);
   const project = useSelectedProject();
+  const projectCwd = project?.path;
+  const projectName = project?.name;
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
@@ -31,12 +33,17 @@ export function SessionEnvironmentAlert() {
     // A project becomes selected in the same state change that adds it, so this
     // is the onboarding check. It deliberately shares this notice rather than
     // growing a second Configure pane while VC-109 owns that repair surface.
-    const input = project === null ? undefined : { cwd: project.path };
+    const input = projectCwd === undefined ? undefined : { cwd: projectCwd };
     void window.api.cli
       .status(input)
       .then((result) => {
         if (current && result.ok) {
-          setAlert(sessionEnvironmentAlert(result.status, project && { name: project.name }));
+          setAlert(
+            sessionEnvironmentAlert(
+              result.status,
+              projectName === undefined ? null : { name: projectName },
+            ),
+          );
         }
       })
       .catch(() => {
@@ -45,7 +52,7 @@ export function SessionEnvironmentAlert() {
     return () => {
       current = false;
     };
-  }, [project]);
+  }, [projectCwd, projectName]);
 
   if (terminalFocused || alert === null) return null;
 

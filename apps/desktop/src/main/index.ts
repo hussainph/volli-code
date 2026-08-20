@@ -666,20 +666,14 @@ app.whenReady().then(async () => {
       path: process.env.PATH ?? "",
       provenance: outcome.kind,
       interactiveProvenance,
-      // The report's dependency walk is meaningful only for a selected
-      // project. `/` is a neutral walk for host-wide callers; its dependency
-      // answer is discarded below rather than posed as a project fact.
-      cwd: cwd ?? "/",
+      // A host-wide read has no project dependency fact to infer from main's
+      // own cwd, so the report leaves that one field unmeasured.
+      cwd: cwd ?? undefined,
     });
     // `SessionEnvReport` also serves a standalone CLI fallback, where those
     // fields can be unknown. Main just ran both passes, so Settings can retain
     // their concrete facts instead of widening them to that fallback shape.
-    return {
-      ...report,
-      provenance: outcome.kind,
-      interactiveProvenance,
-      dependencies: cwd === null ? null : report.dependencies,
-    };
+    return { ...report, provenance: outcome.kind, interactiveProvenance };
   };
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model

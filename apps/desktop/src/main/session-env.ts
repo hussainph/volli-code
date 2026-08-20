@@ -48,8 +48,8 @@ export interface SessionEnvReportDeps {
    * `LoginPathBootstrap.interactiveProvenance`.
    */
   interactiveProvenance: SessionEnvInteractiveProvenance;
-  /** Where the asking session stands, for the workspace dependency walk. */
-  cwd: string;
+  /** The workspace root to inspect, omitted for a host-wide environment read. */
+  cwd?: string;
   /** Test seam over the filesystem; defaults to the real one. */
   isExecutable?(path: string): Promise<boolean>;
   pathExists?(path: string): boolean;
@@ -64,6 +64,9 @@ export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise
     tools: await resolveSessionEnvTools(pathEntries, {
       isExecutable: deps.isExecutable ?? executableAt,
     }),
-    dependencies: workspaceDependenciesStatus(deps.cwd, deps.pathExists ?? existsSync),
+    dependencies:
+      deps.cwd === undefined
+        ? null
+        : workspaceDependenciesStatus(deps.cwd, deps.pathExists ?? existsSync),
   };
 }

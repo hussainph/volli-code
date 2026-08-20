@@ -77,6 +77,20 @@ describe("buildSessionEnvReport", () => {
     expect(report.interactiveProvenance).toBe("pending");
   });
 
+  it("does not infer dependency state when a host-wide read has no workspace", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/usr/bin",
+      provenance: "already-complete",
+      interactiveProvenance: "already-complete",
+      isExecutable: async () => false,
+      pathExists: () => {
+        throw new Error("a host-wide read must not inspect an arbitrary workspace");
+      },
+    });
+
+    expect(report.dependencies).toBeNull();
+  });
+
   it("drops empty PATH entries before resolving, like every other PATH consumer", async () => {
     const seen: string[] = [];
     await buildSessionEnvReport({

@@ -56,7 +56,11 @@ export type SessionEnvProvenance = "adopted" | "already-complete" | "probe-faile
  */
 export type SessionEnvInteractiveProvenance = SessionEnvProvenance | "pending";
 
-/** Whether the workspace a session stands in has its dependencies installed. */
+/**
+ * Whether the workspace a session stands in has its dependencies installed.
+ * `null` means no package workspace was found, or that the caller had no
+ * workspace scope to measure.
+ */
 export type WorkspaceDependenciesStatus = "installed" | "absent" | null;
 
 /**
@@ -83,6 +87,7 @@ export interface SessionEnvReport {
   interactiveProvenance: SessionEnvInteractiveProvenance | null;
   /** Where each contract tool resolves on `path`, or `null` when it does not. */
   tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /** Dependencies in the supplied workspace, or `null` when none was in scope. */
   dependencies: WorkspaceDependenciesStatus;
 }
 
