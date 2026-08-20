@@ -25,8 +25,13 @@ discovers it without probing failures.
 > **A4 landed:** a live Session smoke now observes that agreement through both
 > executors, including the `.zshrc` case.
 >
-> **Ten improvements remain open** — marked ○ below. A5 and the two
-> non-`PATH` bundle items want coordinating with VC-38, VC-109 and VC-70.
+> **B3–C2 landed:** `03630412` makes Settings compare the Session and login
+> `PATH`, `f7ea5c94` makes probe failures persistent app feedback, `24947fbc`
+> runs the same report when a project is selected, and `4cb24360` explains the
+> known .NET `/etc/paths.d` defect without changing it.
+>
+> **Six improvements remain open** — marked ○ below. A5 and the two non-`PATH`
+> bundle items want coordinating with VC-38, VC-109 and VC-70.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
 was observed on the reporting host during the investigation session itself —
@@ -214,9 +219,9 @@ wrong.
 | `binDir` first | ✅ holds for both session kinds | ✅ |
 | Login-shell `PATH` adopted | ❌ silently skipped when any entry is malformed | ✅ A1 |
 | Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents | ✅ A3 + A4 live Session proof |
-| Degradation is recorded and surfaced | ❌ logged as `[volli] PATH kept`, indistinguishable from healthy | ◑ provenance reported by B1/B2; ❌ B4 open |
+| Degradation is recorded and surfaced | ❌ logged as `[volli] PATH kept`, indistinguishable from healthy | ✅ B3 shows the path diff; B4 persists probe failure in the app |
 | Session can discover it without probing | ❌ `volli identify` carries no env fields | ✅ B1 + C3 |
-| Workspace dependencies installed, or session told | ❌ `node_modules` present in some worktrees, absent in others | ◑ reported by B1; ❌ A5 policy open |
+| Workspace dependencies installed, or session told | ❌ `node_modules` present in some worktrees, absent in others | ◑ B1/C1 report it before work starts; ❌ A5 policy open |
 
 Two further properties the contract should carry, from the rest of the bundle:
 
@@ -388,29 +393,31 @@ measured-versus-unmeasured discipline `doctor`'s `Observed<T>` already keeps.
 tool, with remedies that name the real cause — a `PATH` adoption failure rather
 than a generic "install it".
 
-**○ B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
-(P1.) Two rows, and an explicit warning when they diverge. The divergence is the
-bug; a pane that cannot show it cannot be trusted to report health. This is the
-VC-52 extension the ticket asks for.
+**✅ B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
+(`03630412`.) The pane now folds the two long values into a side-by-side
+comparison: every missing directory is visible in full, shared-order drift is
+loud, and the complete lists remain available without truncation. The pending
+interactive pass is named as a transition rather than a false failure.
 
-**○ B4 · Surface probe failure as a user-visible event.** (P1.) B1/B2 make it
-*askable*; it is still not *pushed*. When adoption
-fails, the user should learn it from the app, not from an agent's
-command-not-found three hours later.
+**✅ B4 · Surface probe failure as a user-visible event.** (`f7ea5c94`.) A
+persistent, non-modal app notice appears for either failed PATH probe and routes
+to Settings → CLI. It is deliberately not a toast (which can expire before the
+first affected Session) or a modal (which would block a recoverable app).
 
 ### C — Install / onboard
 
-**○ C1 · Fold an environment check into project onboarding.** (P1, converges
-with VC-109.) When a repo is added, run the contract check and show what is missing
-*before* the first session runs. VC-109 already proposes a Configure tab for git
-and `gh`; the tool contract belongs in the same pane rather than a second one.
+**✅ C1 · Fold an environment check into project onboarding.** (`24947fbc`.)
+Selecting a project — including immediately after it is added — asks the existing
+Session environment report with that project root and names missing contract
+tools or dependencies in the same persistent notice. This deliberately leaves
+Configure's Git/repair pane to VC-109; the report and pure readiness fold are the
+handoff seam, not a competing configuration surface.
 
-**○ C2 · Detect the specific upstream breakages and offer the fix.** (P2.) A1
-now *survives* the malformed entry; nothing yet *tells* the user their
-`/etc/paths.d` is broken. A
-malformed `/etc/paths.d/*` entry is detectable, common, and repairable with a
-one-line explanation of what wrote it. Detect-and-explain is worth more here
-than auto-repair, since the file is root-owned and outside Volli's authority.
+**✅ C2 · Detect the specific upstream breakage and explain it.** (`4cb24360`.)
+Settings scans `/etc/paths.d` read-only for the literal `~/.dotnet/tools` value
+Microsoft's .NET CLI installer commonly writes, names the exact file, and
+explains that macOS appends it to every login PATH. Volli filters it so Sessions
+remain usable, but does not modify the root-owned file or offer an auto-repair.
 
 **✅ C3 · State the contract in `AGENTS.md`.** (`0b9210df`, also `CLAUDE.md`.)
 States what a session can assume, points at `volli identify`, and instructs
