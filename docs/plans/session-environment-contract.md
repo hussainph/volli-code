@@ -22,7 +22,10 @@ discovers it without probing failures.
 > the first window. The `.zshrc` gap — the last thing that let a structured
 > session and a PTY session disagree — is closed.
 >
-> **Eleven improvements remain open** — marked ○ below. A5 and the two
+> **A4 landed:** a live Session smoke now observes that agreement through both
+> executors, including the `.zshrc` case.
+>
+> **Ten improvements remain open** — marked ○ below. A5 and the two
 > non-`PATH` bundle items want coordinating with VC-38, VC-109 and VC-70.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
@@ -210,7 +213,7 @@ wrong.
 | --- | --- | --- |
 | `binDir` first | ✅ holds for both session kinds | ✅ |
 | Login-shell `PATH` adopted | ❌ silently skipped when any entry is malformed | ✅ A1 |
-| Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents | ✅ A3 (unproven end to end — A4) |
+| Same `PATH` for PTY and structured sessions | ❌ differ by `.zshrc` contents | ✅ A3 + A4 live Session proof |
 | Degradation is recorded and surfaced | ❌ logged as `[volli] PATH kept`, indistinguishable from healthy | ◑ provenance reported by B1/B2; ❌ B4 open |
 | Session can discover it without probing | ❌ `volli identify` carries no env fields | ✅ B1 + C3 |
 | Workspace dependencies installed, or session told | ❌ `node_modules` present in some worktrees, absent in others | ◑ reported by B1; ❌ A5 policy open |
@@ -353,10 +356,15 @@ A structured session's `exec` reads `process.env` per command
 command; a PTY session's own shell read the same rc files itself at spawn, so it
 never needed the pass. Nothing chases a session that already started.
 
-**○ A4 · Make PTY and structured sessions provably equal.** (P2.) An e2e that
-starts one of each and asserts `command -v` agrees for a fixed tool list.
-`agent-pty-env-smoke.mjs` and `bare-path-env-smoke.mjs` already establish the
-harness for this; what is missing is the *comparison* between kinds.
+**✅ A4 · Make PTY and structured sessions provably equal.**
+`apps/desktop/e2e/session-env-parity-smoke.mjs` starts one terminal PTY Session
+and one Agent Runtime Session against the same built app, then asserts that
+`command -v` returns the same absolute path for a fixed tool list. Its scratch
+`ZDOTDIR` contributes one fake executable in `.zprofile`, another in `.zshrc`,
+and a literal `~/some/dir` entry; it waits for `identify` to leave
+`env.interactiveProvenance: pending` before comparing. A pass therefore observes
+both A1's per-entry filtering and A3's interactive adoption through real
+executors rather than a replayed parser result.
 
 **○ A5 · Decide and enforce a worktree provisioning policy.** (P1, with VC-38.)
 B1 now *reports* whether dependencies are installed, which removes the surprise;
@@ -456,21 +464,13 @@ path.
 - **Single-host evidence.** Every measurement is from one macOS host with one
   `.zshrc`. The `/etc/paths.d` defect is upstream and will be common, but the
   *proportion* of affected users is unmeasured.
-- **PTY-side completeness is inferred, not observed.** I could not spawn a Volli
-  PTY from inside this session. The claim that PTY sessions see the richer
-  `PATH` follows from `resolveShell` spawning `$SHELL -l` onto a tty plus the
-  measured `-l -i` output — sound, but not directly observed end to end. A4
-  would close this.
+- **The live proof is controlled, not a census of this host's toolchains.** A4
+  observes one PTY and one Agent Runtime Session resolving the controlled
+  `.zprofile` and `.zshrc` executables after a bare-PATH app boot, including a
+  malformed literal-tilde entry. It does not claim that any particular real
+  host tool such as `gh` is installed; `volli identify` remains the contract's
+  per-host tool report.
 - **Non-macOS and non-zsh hosts** were not considered at all.
-- **The fix is not yet observed in a live session.** A1 is verified by unit test
-  and by replaying this host's real login-shell output through the new parser
-  (20 of 21 entries kept). Adoption itself runs at app boot, so confirmation
-  that a session actually resolves `gh` waits on the next restart. The same
-  applies to A3: its merge, sequencing, additivity and `binDir`-first invariant
-  are covered by unit tests carrying this host's measured seven-directory
-  delta verbatim, but that the second pass really recovers those seven in a
-  live session is a claim the next restart settles, and `[volli] PATH extended
-  by interactive login shell (+N: …)` is the line that will say so.
 - **A3's `already-complete` path is untested against a real host.** Every
   measurement here comes from a host whose `.zshrc` does add directories. A
   host where it adds none should log `PATH kept (interactive login shell adds
