@@ -146,8 +146,8 @@ import {
   registerAgentSocketWillQuit,
   startAgentSocket,
 } from "./agent-socket";
-import { loginShellPath } from "./login-path";
-import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
+import { createLoginPathBootstrap } from "./login-path-adoption";
+import { ADOPTION_PROBE, loginShellPath, probeLoginShellPath } from "./login-shell-path";
 import { buildSessionEnvReport } from "./session-env";
 import {
   cleanupLegacyGlobalCliLink,
@@ -506,7 +506,7 @@ app.whenReady().then(async () => {
   // registration below rather than in front of them. Its result is observed
   // only after the first window loads, or by a Pi execution environment that
   // genuinely needs it first.
-  const loginShellPathAttempt = resolveLoginShellPath();
+  const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
   protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {

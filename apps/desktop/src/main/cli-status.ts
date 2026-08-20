@@ -2,7 +2,7 @@
  * What is actually true of the CLI install right now, for the Settings → CLI
  * pane (VC-52). Every field is a MEASUREMENT taken at call time — the link is
  * re-read from disk, the login PATH re-asked (cached per launch by
- * `login-path.ts`, and that cache is dropped the moment `ensureUserBinOnPath`
+ * `login-shell-path.ts`, and that cache is dropped the moment `ensureUserBinOnPath`
  * wires the profile, so the row reflects the wiring on the very launch that
  * performed it), the wrapper set read from what the last regeneration
  * resolved — because the pane exists to replace guessing with detection, and a

@@ -30,7 +30,7 @@ export type SessionEnvTool = (typeof SESSION_ENV_TOOLS)[number];
 
 /**
  * How a session's resolved PATH came to be what it is — the boot adoption
- * outcome's three ways (`login-shell-path.ts`). `probe-failed` is the
+ * outcome's three ways (`login-path-adoption.ts`). `probe-failed` is the
  * degradation the contract exists to make loud: the PATH is the host
  * process's, the login shell was never heard from.
  */

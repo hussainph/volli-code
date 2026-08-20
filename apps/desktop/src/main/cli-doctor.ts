@@ -10,7 +10,7 @@
  * broken link, a missing PATH entry, or a foreign shim all surface here as the
  * findings they are instead of being reconstructed.
  *
- * The spawn hygiene mirrors `login-path.ts` and for the same measured reasons:
+ * The spawn hygiene mirrors `login-shell-path.ts` and for the same measured reasons:
  * stdin is /dev/null (an rc that prompts must not hang the pane), the shell
  * runs detached and the TIMEOUT kills the process group (a profile that leaves
  * a foreground child holding the pipe would otherwise never complete), and the
