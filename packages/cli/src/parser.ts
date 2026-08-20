@@ -893,14 +893,14 @@ const DOCTOR_SPEC: CommandSpec = {
   notes: [
     "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
     "Run it inside a Volli terminal — several checks describe the shell it runs in.",
-    "--fix regenerates the wrappers, harness configs and shell integration. Idempotent; it is the same work a boot does.",
+    "--fix regenerates the wrappers, harness configs and shell integration, then re-runs both Session PATH adoption passes. It names the outcome and added directories for new Sessions; a Session already running keeps its startup environment.",
   ],
   options: {
     "--fix": {
       kind: "flag",
       key: "fix",
       value: true,
-      help: "Regenerate everything regenerable, then re-check.",
+      help: "Regenerate, re-run Session PATH adoption, then re-check.",
     },
   },
 };

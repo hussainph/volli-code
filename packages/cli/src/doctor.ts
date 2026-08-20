@@ -22,7 +22,7 @@ import {
   SESSION_ENV_TOOLS,
   VOLLI_BIN_DIR_ENV,
 } from "@volli/shared";
-import type { DoctorCheck } from "@volli/shared";
+import type { DoctorCheck, SessionEnvRepair } from "@volli/shared";
 
 export interface DoctorEnvironment {
   env: Record<string, string | undefined>;
@@ -176,6 +176,33 @@ export function renderDoctorCheck(check: DoctorCheck): string {
   return lines.join("\n");
 }
 
-export function renderDoctorReport(checks: readonly DoctorCheck[], summary: string): string {
-  return `${checks.map(renderDoctorCheck).join("\n")}\n\n${summary}\n`;
+function repairedDirectories(entries: readonly string[]): string {
+  return entries.length === 0 ? "-" : entries.join(" ");
+}
+
+/**
+ * The repair is main's fact; the checks remain the calling Session's fact.
+ * Putting both in one report makes the boundary explicit instead of calling a
+ * stale running Session healthy after main repaired the environment new
+ * Sessions will inherit.
+ */
+export function renderSessionPathRepair(repair: SessionEnvRepair): string {
+  return [
+    "Session PATH repair",
+    `    env.path  ${repair.path}`,
+    `    env.provenance  ${repair.provenance}`,
+    `    env.added  ${repairedDirectories(repair.added)}`,
+    `    env.interactiveProvenance  ${repair.interactiveProvenance}`,
+    `    env.interactiveAdded  ${repairedDirectories(repair.interactiveAdded)}`,
+    "    Sessions started after this repair use this PATH. This running Session keeps the environment it started with.",
+  ].join("\n");
+}
+
+export function renderDoctorReport(
+  checks: readonly DoctorCheck[],
+  summary: string,
+  repair?: SessionEnvRepair,
+): string {
+  const repaired = repair === undefined ? "" : `${renderSessionPathRepair(repair)}\n\n`;
+  return `${repaired}${checks.map(renderDoctorCheck).join("\n")}\n\n${summary}\n`;
 }

@@ -1,5 +1,11 @@
 import { SESSION_ENV_TOOLS, TICKET_STATUS_LABELS } from "@volli/shared";
-import type { AgentError, AgentErrorCode, DoctorCheck, TicketStatus } from "@volli/shared";
+import type {
+  AgentError,
+  AgentErrorCode,
+  DoctorCheck,
+  SessionEnvRepair,
+  TicketStatus,
+} from "@volli/shared";
 
 import { renderDoctorReport } from "./doctor";
 
@@ -474,10 +480,13 @@ function renderStableLines(command: string, data: unknown): string | null {
  */
 /** `doctor`'s reply is already a report; only its shape needs checking. */
 function doctorReport(data: unknown): string | null {
-  if (typeof data !== "object" || data === null) return null;
-  const { checks, summary } = data as { checks?: unknown; summary?: unknown };
+  if (!isRecord(data)) return null;
+  const { checks, summary } = data;
   if (!Array.isArray(checks) || typeof summary !== "string") return null;
-  return renderDoctorReport(checks as DoctorCheck[], summary);
+  const pathRepair = isRecord(data["pathRepair"])
+    ? (data["pathRepair"] as unknown as SessionEnvRepair)
+    : undefined;
+  return renderDoctorReport(checks as DoctorCheck[], summary, pathRepair);
 }
 
 function renderCliTextSuccess(command: string, data: unknown): string {

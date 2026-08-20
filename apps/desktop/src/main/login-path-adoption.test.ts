@@ -57,6 +57,7 @@ describe("decideLoginPathAdoption", () => {
       kind: "adopted",
       path: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       entryCount: 5,
+      added: ["/opt/homebrew/bin"],
     });
   });
 
@@ -75,6 +76,7 @@ describe("decideLoginPathAdoption", () => {
       kind: "adopted",
       path: "/opt/homebrew/bin:/usr/bin:/repo/node_modules/.bin",
       entryCount: 3,
+      added: [],
     });
   });
 
@@ -88,6 +90,7 @@ describe("decideLoginPathAdoption", () => {
       kind: "adopted",
       path: "/opt/homebrew/bin:/usr/bin:/repo/node_modules/.bin",
       entryCount: 3,
+      added: ["/opt/homebrew/bin"],
     });
   });
 
@@ -96,6 +99,7 @@ describe("decideLoginPathAdoption", () => {
       kind: "adopted",
       path: "/opt/homebrew/bin",
       entryCount: 1,
+      added: ["/opt/homebrew/bin"],
     });
   });
 });
@@ -103,7 +107,12 @@ describe("decideLoginPathAdoption", () => {
 describe("loginPathLogLine", () => {
   it("names the entry count on adoption", () => {
     expect(
-      loginPathLogLine({ kind: "adopted", path: "/opt/homebrew/bin:/usr/bin", entryCount: 2 }),
+      loginPathLogLine({
+        kind: "adopted",
+        path: "/opt/homebrew/bin:/usr/bin",
+        entryCount: 2,
+        added: ["/opt/homebrew/bin", "/usr/bin"],
+      }),
     ).toBe("[volli] PATH adopted from login shell (2 entries)");
   });
 
@@ -429,5 +438,51 @@ describe("createLoginPathBootstrap: the interactive pass", () => {
     });
     await bootstrap.apply();
     expect(probeCount).toBe(0);
+  });
+
+  it("re-probes both shells, keeps every directory, and names what the repair added", async () => {
+    let currentPath = BARE_LAUNCHD_PATH;
+    const bootstrap = createLoginPathBootstrap({
+      binDir: "/profile/bin",
+      readCurrentPath: () => currentPath,
+      writePath: (path) => {
+        currentPath = path;
+      },
+      resolveLoginPath: async () => "/opt/homebrew/bin:/usr/bin",
+      resolveInteractiveLoginPath: async () => "/Users/x/.bun/bin:/opt/homebrew/bin:/usr/bin",
+      log: () => {},
+    });
+    await bootstrap.applyInteractive();
+    const before = new Set(currentPath.split(":"));
+
+    const repaired = await bootstrap.repair(
+      async () => "/new/login/bin:/opt/homebrew/bin:/usr/bin",
+      async () => "/new/interactive/bin:/new/login/bin:/opt/homebrew/bin:/usr/bin",
+    );
+
+    expect(repaired).toEqual({
+      path: "/profile/bin:/new/interactive/bin:/new/login/bin:/opt/homebrew/bin:/usr/bin:/Users/x/.bun/bin:/bin:/usr/sbin:/sbin",
+      provenance: "adopted",
+      added: ["/new/login/bin"],
+      interactiveProvenance: "adopted",
+      interactiveAdded: ["/new/interactive/bin"],
+    });
+    expect(currentPath).toBe(repaired.path);
+    expect(currentPath.split(":")[0]).toBe("/profile/bin");
+    for (const entry of before) expect(currentPath.split(":")).toContain(entry);
+
+    const repeated = await bootstrap.repair(
+      async () => "/new/login/bin:/opt/homebrew/bin:/usr/bin",
+      async () => "/new/interactive/bin:/new/login/bin:/opt/homebrew/bin:/usr/bin",
+    );
+    expect(repeated).toEqual({
+      path: repaired.path,
+      provenance: "adopted",
+      added: [],
+      interactiveProvenance: "adopted",
+      interactiveAdded: [],
+    });
+    await expect(bootstrap.apply()).resolves.toMatchObject({ kind: "adopted", added: [] });
+    expect(bootstrap.interactiveProvenance()).toBe("adopted");
   });
 });

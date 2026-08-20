@@ -967,6 +967,31 @@ describe("renderCliSuccess — doctor", () => {
     expect(text.trimEnd().endsWith("1 failed of 2 checks.")).toBe(true);
   });
 
+  it("renders the path repair before this Session's stale checks", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      {
+        ...data,
+        pathRepair: {
+          path: "/volli/bin:/opt/homebrew/bin:/usr/bin",
+          provenance: "adopted",
+          added: ["/opt/homebrew/bin"],
+          interactiveProvenance: "already-complete",
+          interactiveAdded: [],
+        },
+      },
+      { json: false },
+    );
+
+    expect(text).toContain("Session PATH repair");
+    expect(text).toContain("env.added  /opt/homebrew/bin");
+    expect(text).toContain("env.interactiveProvenance  already-complete");
+    expect(text).toContain("This running Session keeps the environment it started with.");
+    expect(text.indexOf("Session PATH repair")).toBeLessThan(
+      text.indexOf("✗ Volli's bin is first on PATH"),
+    );
+  });
+
   it("passes the structured report straight through with --json", () => {
     expect(JSON.parse(renderCliSuccess("doctor", data, { json: true }))).toEqual(data);
   });

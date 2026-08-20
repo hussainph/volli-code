@@ -54,6 +54,7 @@ import type {
   SessionActivityState,
   SessionProjection,
   SessionRecord,
+  SessionEnvRepair,
   SessionEnvReport,
   TicketEventActor,
   TicketBodyMutation,
@@ -298,11 +299,11 @@ export interface AgentCommandServiceOptions {
    */
   doctorFacts?: () => Promise<DoctorFacts>;
   /**
-   * Regenerates everything regenerable: wrappers, harness configs, the shell
-   * integration. Idempotent by construction — it is the same work boot does —
-   * so `--fix` is never destructive and never needs confirming.
+   * Rebuilds the generated runtime and re-runs Session PATH adoption. Its
+   * report gives `doctor --fix` evidence for the PATH new Sessions will get;
+   * the calling Session's own observation remains intentionally unchanged.
    */
-  doctorRepair?: () => Promise<void>;
+  doctorRepair?: () => Promise<SessionEnvRepair>;
   /**
    * The skills index a fresh Session with no explicit skills would carry — the
    * SAME port `session start` composes through (`SessionSkillPorts.index` with
@@ -2159,9 +2160,10 @@ export function createAgentCommandService(
         if (observation === null) {
           return failure("INVALID_REQUEST", "doctor requires the caller's observed environment.");
         }
+        let pathRepair: SessionEnvRepair | undefined;
         if (request.args["fix"] === true && options.doctorRepair) {
           try {
-            await options.doctorRepair();
+            pathRepair = await options.doctorRepair();
           } catch (error) {
             return failure("MUTATION_FAILED", `Repair failed: ${errorMessage(error)}`);
           }
@@ -2170,7 +2172,11 @@ export function createAgentCommandService(
         return {
           v: 1,
           ok: true,
-          data: { checks, summary: doctorSummary(checks) },
+          data: {
+            checks,
+            summary: doctorSummary(checks),
+            ...(pathRepair === undefined ? {} : { pathRepair }),
+          },
         };
       }
       if (request.cmd === "ticket.list") {

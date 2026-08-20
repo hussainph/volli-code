@@ -29,8 +29,9 @@ export const SESSION_ENV_TOOLS = ["git", "gh", "node", "pnpm"] as const;
 export type SessionEnvTool = (typeof SESSION_ENV_TOOLS)[number];
 
 /**
- * How a session's resolved PATH came to be what it is — the boot adoption
- * outcome's three ways (`login-path-adoption.ts`). `probe-failed` is the
+ * How a session's resolved PATH came to be what it is — initially the boot
+ * adoption outcome, and the latest fresh outcome after `doctor --fix`
+ * re-runs that pass (`login-path-adoption.ts`). `probe-failed` is the
  * degradation the contract exists to make loud: the PATH is the host
  * process's, the login shell was never heard from.
  */
@@ -64,6 +65,27 @@ export type SessionEnvInteractiveProvenance = SessionEnvProvenance | "pending";
 export type WorkspaceDependenciesStatus = "installed" | "absent" | null;
 
 /**
+ * What an explicit Session PATH repair established. Unlike an
+ * {@link SessionEnvReport}, both passes have completed here: `doctor --fix`
+ * awaits the fresh non-interactive and interactive answers before it reports.
+ *
+ * `added` and `interactiveAdded` are evidence, not another outcome vocabulary:
+ * the two provenance fields retain the contract's existing three words.
+ */
+export interface SessionEnvRepair {
+  /** The exact PATH new Sessions will receive after both repair passes. */
+  path: string;
+  /** The fresh non-interactive adoption outcome. */
+  provenance: SessionEnvProvenance;
+  /** Directories the non-interactive pass made reachable, in PATH order. */
+  added: readonly string[];
+  /** The fresh interactive adoption outcome; a repair never leaves this pending. */
+  interactiveProvenance: SessionEnvProvenance;
+  /** Directories the interactive pass made reachable, in PATH order. */
+  interactiveAdded: readonly string[];
+}
+
+/**
  * The `env` block `volli identify` prints. `tools` keys are the whole
  * {@link SESSION_ENV_TOOLS} census — a missing tool is the entry being
  * `null`, never the entry being absent from the record, so a consumer can
@@ -73,9 +95,10 @@ export interface SessionEnvReport {
   /** The session's resolved PATH, exactly as commands will see it. */
   path: string;
   /**
-   * How the PATH came to be what it is. `null` when the answering process
-   * could not know — a degraded `identify` with no app to ask — which is a
-   * different fact from `probe-failed` and must not pose as one.
+   * How the latest non-interactive adoption pass established this PATH. `null`
+   * when the answering process could not know — a degraded `identify` with no
+   * app to ask — which is a different fact from `probe-failed` and must not
+   * pose as one.
    */
   provenance: SessionEnvProvenance | null;
   /**

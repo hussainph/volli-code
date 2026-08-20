@@ -33,7 +33,7 @@ import {
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
-import type { PromptResource, SessionEvent, SessionInput } from "@volli/shared";
+import type { PromptResource, SessionEnvRepair, SessionEvent, SessionInput } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
@@ -147,7 +147,12 @@ import {
   startAgentSocket,
 } from "./agent-socket";
 import { createLoginPathBootstrap } from "./login-path-adoption";
-import { ADOPTION_PROBE, loginShellPath, probeLoginShellPath } from "./login-shell-path";
+import {
+  ADOPTION_PROBE,
+  loginShellPath,
+  probeLoginShellPath,
+  resetLoginShellPathCache,
+} from "./login-shell-path";
 import { buildSessionEnvReport } from "./session-env";
 import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
 import {
@@ -1676,6 +1681,28 @@ app.whenReady().then(async () => {
     }
   };
 
+  /**
+   * Doctor's explicit repair is the one place a stale PATH answer may be
+   * discarded on purpose. The installer can write `~/.zprofile`; resetting
+   * only after it finishes makes the two fresh probes describe that new shell,
+   * rather than preserving the answer that justified the write.
+   */
+  const repairSessionEnvironment = async (): Promise<SessionEnvRepair> => {
+    if (dbHandle.ok && agentToolsRemoved()) {
+      // A repair is an explicit request for working tools. Lift suppression
+      // before touching the filesystem, or fail instead of leaving an install
+      // present on disk yet silently skipped on every later boot.
+      setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
+    }
+    await regenerateHarnessRuntime();
+    await installAgentToolsQuietly();
+    resetLoginShellPathCache();
+    return loginPathBootstrap.repair(
+      () => probeLoginShellPath(ADOPTION_PROBE),
+      () => loginShellPath(),
+    );
+  };
+
   // Menu action: the same quiet installer, but loud about failure (a click
   // deserves an answer) — and it clears the removal tombstone, which is the
   // one thing that distinguishes "install again" from every boot's refresh.
@@ -1819,16 +1846,7 @@ app.whenReady().then(async () => {
       ),
     doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
     repair: async () => {
-      // Fix is as explicit a request for working tools as File → Install, so it
-      // clears the removal tombstone the same way — otherwise a repaired
-      // install would sit in a half-state: present on disk, still suppressed
-      // at every boot. Cleared FIRST: if the write fails, the repair fails
-      // loudly rather than reinstalling behind a tombstone it could not lift.
-      if (dbHandle.ok && agentToolsRemoved()) {
-        setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
-      }
-      await regenerateHarnessRuntime();
-      await installAgentToolsQuietly();
+      await repairSessionEnvironment();
     },
   });
 
@@ -1916,11 +1934,11 @@ app.whenReady().then(async () => {
           // change, so this is never chatter.
           onSessionHarness: (notice) => broadcastSessionHarness(notice),
           // The `env` block `volli identify` prints (VC-94): the PATH main
-          // actually adopted at boot, its provenance, the contract tools
-          // resolved against it, and the workspace dependency state. Built
-          // from the one memoized boot outcome — identify awaiting it also
-          // means the report never describes a PATH from before adoption
-          // finished — and read at CALL time, never captured.
+          // adopted, its latest non-interactive provenance, the contract tools
+          // resolved against it, and the workspace dependency state. It awaits
+          // the one current pass — boot normally, a fresh pass after repair —
+          // so the report never describes a PATH from before adoption finished
+          // and is read at CALL time, never captured.
           sessionEnv: (cwd) => readSessionEnvironment(cwd),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
@@ -1959,7 +1977,7 @@ app.whenReady().then(async () => {
             // user's dotfiles as a side effect of being asked a question.
             skillConflicts: [],
           }),
-          doctorRepair: regenerateHarnessRuntime,
+          doctorRepair: repairSessionEnvironment,
         }).execute
       : async () =>
           ({

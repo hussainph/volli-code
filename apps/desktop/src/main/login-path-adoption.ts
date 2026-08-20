@@ -45,7 +45,7 @@
  * one attempt, and this module then preserves every current PATH entry while
  * still moving Volli's own bin to the front.
  */
-import type { SessionEnvInteractiveProvenance } from "@volli/shared";
+import type { SessionEnvInteractiveProvenance, SessionEnvRepair } from "@volli/shared";
 
 /**
  * launchd's bare four-directory PATH — what a Finder/Dock launch hands a
@@ -83,7 +83,7 @@ export function currentPathIsIncomplete(
 }
 
 export type LoginPathOutcome =
-  | { kind: "adopted"; path: string; entryCount: number }
+  | { kind: "adopted"; path: string; entryCount: number; added: readonly string[] }
   | { kind: "already-complete" }
   | { kind: "probe-failed" };
 
@@ -105,9 +105,17 @@ export function decideLoginPathAdoption(
   loginPath: string | null,
 ): LoginPathOutcome {
   if (loginPath === null || loginPath.length === 0) return { kind: "probe-failed" };
-  const path = [...new Set([...entriesOf(loginPath), ...entriesOf(currentPath ?? "")])].join(":");
+  const currentEntries = entriesOf(currentPath ?? "");
+  const current = new Set(currentEntries);
+  const loginEntries = [...new Set(entriesOf(loginPath))];
+  const path = [...new Set([...loginEntries, ...currentEntries])].join(":");
   if (path === (currentPath ?? "")) return { kind: "already-complete" };
-  return { kind: "adopted", path, entryCount: entriesOf(path).length };
+  return {
+    kind: "adopted",
+    path,
+    entryCount: entriesOf(path).length,
+    added: loginEntries.filter((entry) => !current.has(entry)),
+  };
 }
 
 /**
@@ -177,15 +185,25 @@ export interface LoginPathBootstrapDeps {
 }
 
 export interface LoginPathBootstrap {
-  /** Applies the already-started probe exactly once. Every caller gets this same promise. */
+  /** Applies the already-started initial probe exactly once. Every caller gets this same promise. */
   apply(): Promise<LoginPathOutcome>;
   /**
-   * The second pass, run once, after the first window has loaded. Sequenced
-   * behind {@link apply} rather than racing it: `process.env.PATH` then has one
+   * The initial second pass, run once after the first window has loaded.
+   * Sequenced behind {@link apply} rather than racing it: `process.env.PATH` then has one
    * writer at a time, and the boot merge can never be the loser of a late
    * resolve. Every caller shares the one attempt, like {@link apply}.
    */
   applyInteractive(): Promise<InteractivePathOutcome>;
+  /**
+   * Re-runs both passes against fresh answers. The caller owns any resolver
+   * cache and must clear it before supplying the interactive resolver, so a
+   * repair never adopts a profile state it measured before changing it.
+   * Concurrent callers share one repair; a later explicit repair probes again.
+   */
+  repair(
+    resolveLoginPath: () => Promise<string | null>,
+    resolveInteractiveLoginPath: () => Promise<string | null>,
+  ): Promise<SessionEnvRepair>;
   /**
    * What the second pass has reported SO FAR — synchronous on purpose.
    * `volli identify` must never await this: the pass is deliberately off the
@@ -230,7 +248,7 @@ export function createLoginPathBootstrap(deps: LoginPathBootstrapDeps): LoginPat
   };
 
   let applyAttempt: Promise<LoginPathOutcome> | undefined;
-  const apply = (): Promise<LoginPathOutcome> => {
+  const applyInitial = (): Promise<LoginPathOutcome> => {
     applyAttempt ??= probeAttempt.then((loginPath) => {
       const { outcome } = install(loginPath);
       deps.log(loginPathLogLine(outcome));
@@ -241,22 +259,91 @@ export function createLoginPathBootstrap(deps: LoginPathBootstrapDeps): LoginPat
 
   let interactiveAttempt: Promise<InteractivePathOutcome> | undefined;
   let interactiveKind: SessionEnvInteractiveProvenance = "pending";
+  const applyInteractiveInitial = (): Promise<InteractivePathOutcome> => {
+    interactiveAttempt ??= applyInitial()
+      // A rejected interactive probe is the same fact as one that answered
+      // nothing: we could not ask, so there is nothing to merge.
+      .then(() => deps.resolveInteractiveLoginPath().catch(() => null))
+      .then((interactivePath) => {
+        const { before, after } = install(interactivePath);
+        const outcome = decideInteractiveAdoption(interactivePath, before, after);
+        interactiveKind = outcome.kind;
+        deps.log(interactivePathLogLine(outcome));
+        return outcome;
+      });
+    return interactiveAttempt;
+  };
+
+  let repairAttempt: Promise<SessionEnvRepair> | undefined;
+  const repair = (
+    resolveLoginPath: () => Promise<string | null>,
+    resolveInteractiveLoginPath: () => Promise<string | null>,
+  ): Promise<SessionEnvRepair> => {
+    if (repairAttempt !== undefined) return repairAttempt;
+
+    const attempt = (async (): Promise<SessionEnvRepair> => {
+      // An interactive pass already in flight owns the one PATH writer until
+      // it resolves. A repair that raced it could overwrite a newer answer
+      // with an older one, precisely the drift this bootstrap prevents.
+      await applyInitial();
+      if (interactiveAttempt !== undefined) await interactiveAttempt;
+
+      const loginPath = await Promise.resolve()
+        .then(resolveLoginPath)
+        .catch(() => null);
+      const bootInstall = install(loginPath);
+      const bootOutcome = bootInstall.outcome;
+      deps.log(loginPathLogLine(bootOutcome));
+
+      const interactivePath = await Promise.resolve()
+        .then(resolveInteractiveLoginPath)
+        .catch(() => null);
+      const interactiveInstall = install(interactivePath);
+      const interactiveOutcome = decideInteractiveAdoption(
+        interactivePath,
+        interactiveInstall.before,
+        interactiveInstall.after,
+      );
+      interactiveKind = interactiveOutcome.kind;
+      deps.log(interactivePathLogLine(interactiveOutcome));
+
+      // Later readers must describe this fresh, repaired PATH, not retain the
+      // boot pass's old result after the repair has changed process.env.
+      applyAttempt = Promise.resolve(bootOutcome);
+      interactiveAttempt = Promise.resolve(interactiveOutcome);
+      return {
+        path: interactiveInstall.after,
+        provenance: bootOutcome.kind,
+        added: bootOutcome.kind === "adopted" ? bootOutcome.added : [],
+        interactiveProvenance: interactiveOutcome.kind,
+        interactiveAdded: interactiveOutcome.kind === "adopted" ? interactiveOutcome.added : [],
+      };
+    })();
+    repairAttempt = attempt;
+    const clearAttempt = (): void => {
+      if (repairAttempt === attempt) repairAttempt = undefined;
+    };
+    void attempt.then(clearAttempt, clearAttempt);
+    return attempt;
+  };
+
+  const apply = (): Promise<LoginPathOutcome> => {
+    const activeRepair = repairAttempt;
+    return activeRepair === undefined
+      ? applyInitial()
+      : activeRepair.then(() => applyAttempt as Promise<LoginPathOutcome>);
+  };
+  const applyInteractive = (): Promise<InteractivePathOutcome> => {
+    const activeRepair = repairAttempt;
+    return activeRepair === undefined
+      ? applyInteractiveInitial()
+      : activeRepair.then(() => interactiveAttempt as Promise<InteractivePathOutcome>);
+  };
+
   return {
     apply,
-    applyInteractive: () => {
-      interactiveAttempt ??= apply()
-        // A rejected interactive probe is the same fact as one that answered
-        // nothing: we could not ask, so there is nothing to merge.
-        .then(() => deps.resolveInteractiveLoginPath().catch(() => null))
-        .then((interactivePath) => {
-          const { before, after } = install(interactivePath);
-          const outcome = decideInteractiveAdoption(interactivePath, before, after);
-          interactiveKind = outcome.kind;
-          deps.log(interactivePathLogLine(outcome));
-          return outcome;
-        });
-      return interactiveAttempt;
-    },
+    applyInteractive,
+    repair,
     interactiveProvenance: () => interactiveKind,
   };
 }

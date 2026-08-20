@@ -3611,9 +3611,17 @@ describe("doctor", () => {
 
   it("repairs before re-checking, so --fix reports the state it produced", async () => {
     const order: string[] = [];
+    const pathRepair = {
+      path: "/ud/bin:/opt/homebrew/bin:/Users/x/.bun/bin:/usr/bin",
+      provenance: "adopted" as const,
+      added: ["/opt/homebrew/bin"],
+      interactiveProvenance: "adopted" as const,
+      interactiveAdded: ["/Users/x/.bun/bin"],
+    };
     const doctor = doctorService({
       doctorRepair: async () => {
         order.push("repair");
+        return pathRepair;
       },
       doctorFacts: async () => {
         order.push("facts");
@@ -3631,8 +3639,9 @@ describe("doctor", () => {
       },
     });
 
-    await doctor({ ...observation, fix: true });
+    const response = await doctor({ ...observation, fix: true });
     expect(order).toEqual(["repair", "facts"]);
+    expect(response).toMatchObject({ ok: true, data: { pathRepair } });
   });
 
   it("does not repair unless asked", async () => {
@@ -3640,6 +3649,13 @@ describe("doctor", () => {
     await doctorService({
       doctorRepair: async () => {
         repaired = true;
+        return {
+          path: "/ud/bin",
+          provenance: "already-complete",
+          added: [],
+          interactiveProvenance: "already-complete",
+          interactiveAdded: [],
+        };
       },
     })(observation);
     expect(repaired).toBe(false);

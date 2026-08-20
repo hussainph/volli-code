@@ -482,6 +482,17 @@ describe("runCli — doctor", () => {
           data: {
             checks: [],
             summary: repaired["claude"] === null ? "1 failed of 1 checks." : "All 1 checks passed.",
+            ...(request.args["fix"] === true
+              ? {
+                  pathRepair: {
+                    path: "/ud/bin:/opt/homebrew/bin:/usr/bin",
+                    provenance: "adopted",
+                    added: ["/opt/homebrew/bin"],
+                    interactiveProvenance: "already-complete",
+                    interactiveAdded: [],
+                  },
+                }
+              : {}),
           },
         };
       },
@@ -496,7 +507,37 @@ describe("runCli — doctor", () => {
     expect(requests[1]).toBeDefined();
     expect(requests[1]?.args).not.toHaveProperty("fix");
     expect(requests[1]?.args["resolved"]).toEqual({ claude: "/ud/bin/claude" });
+    expect(stdout.join("")).toContain("Session PATH repair");
+    expect(stdout.join("")).toContain("env.added  /opt/homebrew/bin");
     expect(stdout.join("")).toContain("All 1 checks passed.");
+  });
+
+  it("surfaces a failed re-check after a successful repair", async () => {
+    const stderr: string[] = [];
+    let requests = 0;
+    const code = await runCli(["doctor", "--fix"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({ pathEntries: [], resolved: {} }),
+      request: async () => {
+        requests += 1;
+        return requests === 1
+          ? { v: 1, ok: true as const, data: { checks: [], summary: "All 0 checks passed." } }
+          : {
+              v: 1,
+              ok: false as const,
+              error: { code: "MUTATION_FAILED", message: "Re-check failed" },
+            };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(1);
+    expect(requests).toBe(2);
+    expect(stderr.join("")).toContain("Re-check failed");
   });
 
   it("does not re-check a doctor run that was not asked to repair", async () => {

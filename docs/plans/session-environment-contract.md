@@ -30,7 +30,7 @@ discovers it without probing failures.
 > runs the same report when a project is selected, and `937faa20` explains the
 > known .NET `/etc/paths.d` defect without changing it.
 >
-> **Six improvements remain open** — marked ○ below. A5 and the two non-`PATH`
+> **Five improvements remain open** — marked ○ below. A5 and the two non-`PATH`
 > bundle items want coordinating with VC-38, VC-109 and VC-70.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
@@ -427,11 +427,12 @@ kickoffs this ticket was raised over.
 
 ### D — Repair
 
-**○ D1 · Extend `doctor --fix` to re-run adoption.** (P1.) The repair path today
-rebuilds Volli's own shim, wrappers and shell chain. It cannot fix a `PATH`,
-because nothing models the `PATH` as repairable state. Once A1 and B2 land, the
-fix is `resetLoginShellPathCache()` + re-probe + re-adopt, which is already
-idempotent by construction.
+**✅ D1 · Extend `doctor --fix` to re-run adoption.** The repair drops the
+interactive probe cache after its installer work, asks fresh non-interactive
+and interactive shells, and re-runs the same additive, bin-dir-first merge.
+Its `Session PATH repair` report keeps the contract's `adopted` /
+`already-complete` / `probe-failed` vocabulary, names every directory it added,
+and states that only Sessions started afterwards receive the repaired PATH.
 
 **○ D2 · Make repair reachable from where the failure appears.** (P2.) An agent
 that hits command-not-found should be able to run one documented command and

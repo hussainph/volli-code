@@ -187,13 +187,24 @@ export async function runCli(
     // the wrappers to go and regenerate the wrappers. The second request
     // measures again, now that they exist, and carries no `fix`, so nothing is
     // repaired twice and what gets printed is the world the repair left behind.
-    const response =
-      first.ok && command === "doctor" && invocation.args["fix"] === true
-        ? await dependencies.request(socketPath, {
-            ...request,
-            args: { ...omitFix(invocation.args), ...(await dependencies.observe()) },
-          })
-        : first;
+    let response = first;
+    if (first.ok && command === "doctor" && invocation.args["fix"] === true) {
+      // The second request carries the calling Session's fresh observation, but
+      // the repair result exists only on the first. Preserve both facts: a
+      // Session already running still reports its startup PATH, while main's
+      // repair report names the PATH new Sessions will receive.
+      const pathRepair = (first.data as { pathRepair?: unknown }).pathRepair;
+      const rechecked = await dependencies.request(socketPath, {
+        ...request,
+        args: { ...omitFix(invocation.args), ...(await dependencies.observe()) },
+      });
+      response = rechecked.ok
+        ? {
+            ...rechecked,
+            data: { ...(rechecked.data as Record<string, unknown>), pathRepair },
+          }
+        : rechecked;
+    }
     if (!response.ok) {
       dependencies.stderr(renderCliError(response.error));
       return exitCodeForError(response.error.code);

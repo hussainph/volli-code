@@ -2,7 +2,7 @@ import { chmod, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import type { DoctorCheck } from "@volli/shared";
+import type { DoctorCheck, SessionEnvRepair } from "@volli/shared";
 import {
   entriesInDirectory,
   executableAt,
@@ -209,6 +209,35 @@ describe("renderDoctorCheck", () => {
   it("ends a report with its summary", () => {
     expect(renderDoctorReport([check()], "All 1 checks passed.")).toBe(
       "✓ Volli's bin is first on PATH\n    position 1 of 30\n\nAll 1 checks passed.\n",
+    );
+  });
+
+  it("reports the repair's two outcomes, exact additions, and its scope", () => {
+    const repair: SessionEnvRepair = {
+      path: "/volli/bin:/Users/x/.bun/bin:/opt/homebrew/bin:/usr/bin",
+      provenance: "adopted",
+      added: ["/opt/homebrew/bin"],
+      interactiveProvenance: "adopted",
+      interactiveAdded: ["/Users/x/.bun/bin"],
+    };
+
+    expect(renderDoctorReport([check()], "All 1 checks passed.", repair)).toContain(
+      "Session PATH repair\n" +
+        "    env.path  /volli/bin:/Users/x/.bun/bin:/opt/homebrew/bin:/usr/bin\n" +
+        "    env.provenance  adopted\n" +
+        "    env.added  /opt/homebrew/bin\n" +
+        "    env.interactiveProvenance  adopted\n" +
+        "    env.interactiveAdded  /Users/x/.bun/bin\n" +
+        "    Sessions started after this repair use this PATH. This running Session keeps the environment it started with.",
+    );
+    expect(
+      renderDoctorReport([check()], "All 1 checks passed.", {
+        ...repair,
+        added: [],
+        interactiveAdded: [],
+      }),
+    ).toContain(
+      "    env.added  -\n    env.interactiveProvenance  adopted\n    env.interactiveAdded  -",
     );
   });
 });
