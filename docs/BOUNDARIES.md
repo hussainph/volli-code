@@ -22,8 +22,8 @@ Two corollaries that settle recurring questions:
   channel catalog and its runtime validators are desktop-owned: the transport
   contract belongs to the host that owns the transport. A future non-desktop
   client imports `@volli/shared` for domain types and speaks to a host's API;
-  it must never inherit 109 Electron channel names by importing the domain
-  package.
+  it must never inherit the desktop's Electron channel catalog by importing the
+  domain package.
 
 ## Standing rules (review criteria)
 

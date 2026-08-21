@@ -1,9 +1,10 @@
 # Design language — spacing, width, typography
 
 This is a living description of the app-wide spatial and type language. Motion tokens live in
-`globals.css`; **color tokens are generated** from a theme seed by `@volli/shared`, and
-`globals.css` carries the generated default as its first-paint fallback — so nothing here should
-ever hard-code a color. The code and generated tokens are authoritative when this document drifts.
+`globals.css`; **color tokens are generated** from the stored canvas and resolved appearance by
+`@volli/shared`, and `globals.css` carries the generated default as its first-paint fallback — so
+nothing here should ever hard-code a color. The code and generated tokens are authoritative when
+this document drifts.
 
 **The principle:** cohesion is structural, not disciplinary. Surfaces compose shared tokens and
 primitives instead of hand-rolling containers and px values — a new surface is consistent by
@@ -76,11 +77,11 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 ## The framed content surface
 
 The main content area is a **floating card**: `rounded-xl`, hairline `border-border`, `m-2`
-(8px) on the rail-dark backdrop (`--rail`), applied once on `SidebarInset` in `app-shell.tsx`.
-Every page — the always-mounted sessions layer included — renders inside it, so the workspace
-reads as an object with edges instead of an edge-to-edge slab. This amends the earlier flat
-chrome-band treatment (decision #31); the chrome bar and workspace rail still form the dark "L",
-which is now the backdrop the card floats on.
+(8px) on the theme-derived rail backdrop (`--rail`), applied once on `SidebarInset` in
+`app-shell.tsx`. Every page — the always-mounted sessions layer included — renders inside it, so
+the workspace reads as an object with edges instead of an edge-to-edge slab. This amends the
+earlier flat chrome-band treatment (decision #31); the chrome bar and workspace rail still form
+the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 

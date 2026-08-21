@@ -11,12 +11,13 @@ Volli paints its window from a **canvas**: one to three colors placed on the
 window, plus a vibrancy and a grain amount. Every surface, text tier, border,
 and accent in the app derives from that canvas and repaints when you change it.
 
-Volli ships with one ember color, `#e8652a`, at 60% vibrancy and 15% grain.
+The default canvas starts with one color stop, `#e8652a`, at 60% vibrancy and
+15% grain.
 
-{/* TODO: capture Settings → Appearance with the canvas editor open (pad, stop
-    chips, swatch row, vibrancy slider, grain dial, contrast readout). No
-    screenshot exists yet and docs-shots.mjs has no step for this pane, so the
-    page references no image. */}
+{/* TODO: capture Settings → Appearance with the canvas editor open (mode,
+    pad, stop chips, swatch row, vibrancy slider, and grain dial). No screenshot
+    exists yet and docs-shots.mjs has no step for this pane, so the page
+    references no image. */}
 
 ## What a canvas is
 
@@ -80,43 +81,40 @@ contrast text on it can reach, and the readout below picks that up.
 
 ### Contrast
 
-Under those controls, Volli lists what text on your canvas measures: **Body
-copy**, **Secondary copy**, and **Sidebar nav**, each as an APCA `Lc` score
-against the floor it needs.
-
-A reading marked as being at this canvas's ceiling means no text color at all
-clears that floor on that surface.
-
-A small shortfall only shows in the readout. A larger one raises an alert
-naming what's affected, with an **Ease vibrancy to …** button when a lower
-vibrancy would clear it. If no vibrancy clears it, change the color.
+Volli stays quiet while the canvas meets its contrast floors. If a canvas makes
+body copy, secondary copy, or sidebar navigation unreachable, an alert names
+the affected surface. **Ease vibrancy to …** appears when a lower vibrancy can
+clear the floor. If no vibrancy clears it, change the color.
 
 ## Light, dark, and auto
 
-**Settings → Appearance → Light & dark** has one control: **Light**, **Dark**,
-or **Auto**. Auto follows macOS.
+**Settings → Appearance → App theme → Mode** offers **Light**, **Dark**, and
+**Auto**. Auto follows macOS.
 
 Mode and canvas are separate settings. The same canvas renders in both modes,
 and a project can override either one on its own.
 
 ## Use a different theme for one project
 
-Open **Configure → Appearance** for that project. It has four sections, each
-with its own **Inherit** / **Custom** switch: **App theme**, **Light & dark**,
-**Editor**, and **Terminal**.
+Open **Configure → Appearance** for that project. It has three sections:
+**App theme**, **Editor**, and **Terminal**.
 
-Every section starts on **Inherit** and says what the project is following.
-**Custom** pins whatever the section is already showing, so switching to it
-changes nothing on screen until you edit. **App theme** opens the same canvas
-editor Settings uses, scoped to this project: dragging in it repaints this
-window and saves to this project alone.
+**App theme** gives **Mode** and **Canvas** separate **Inherit** / **Custom**
+controls. A project can pin its mode while inheriting the app-wide canvas, or
+use its own canvas while following the app-wide mode. **Editor** and
+**Terminal** each have their own scope control.
 
-Switch back to **Inherit** to drop the override. The project follows the
-app-wide setting again, including any later change you make to it.
+Every control starts on **Inherit** and says what the project is following.
+**Custom** pins the value already showing, so switching to it does not repaint
+the app until you edit. A custom Canvas opens the same editor Settings uses,
+scoped to this project.
 
-While the project you're in overrides the canvas, **Settings → Appearance → App
-theme** marks itself **Workspace override**. Edits there still go to the
-app-wide canvas, not to the one this window is showing.
+Switch back to **Inherit** to drop that override. The project follows the
+app-wide setting again, including later changes.
+
+While the current project overrides the canvas, **Settings → Appearance → App
+theme** shows **Project override**. Edits there still go to the app-wide canvas,
+not to the one this window is showing.
 
 ## What the terminal does
 

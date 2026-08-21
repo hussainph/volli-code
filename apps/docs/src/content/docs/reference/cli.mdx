@@ -10,7 +10,7 @@ import { Aside } from "@astrojs/starlight/components";
 `volli` is how agents read the plan and report back, and it works just as well
 typed by hand. It talks to the running app over a local Unix socket.
 
-Every command accepts `--json` for machine-readable output.
+Every public command accepts `--json` for machine-readable output.
 
 ## Addressing
 
@@ -63,6 +63,16 @@ volli label list [--project <name>]
 ```
 
 A project's labels. Agents use it to check a label exists before applying it.
+
+### volli model list
+
+```sh
+volli model list [--all]
+```
+
+Lists signed-in providers, model IDs, and reasoning levels. `--all` also shows
+signed-out providers and unavailable models. Copy a printed `provider/model`
+value into `volli session start --model`.
 
 ## Tickets
 
@@ -263,6 +273,26 @@ volli app launch [--timeout <n>]
 
 Starts Volli if it isn't already running.
 
+### volli prompt baseline
+
+```sh
+volli prompt baseline [--ticket <id>] [--project <name>]
+```
+
+Estimates the prompt baseline for a fresh Project Session, broken down by
+section. `--ticket` measures a Ticket Session and includes that ticket's Runtime
+Brief. The estimate excludes tool definitions, the first user message, and
+provider overhead.
+
+### volli doctor
+
+```sh
+volli doctor [--fix]
+```
+
+Checks the live CLI, wrapper, harness, and shell integration. `--fix`
+regenerates the parts Volli owns and checks again.
+
 ### volli help
 
 ```sh
@@ -326,7 +356,7 @@ code is stable; the message isn't, so branch on the code.
 | --- | --- |
 | `2` | `USAGE`, `INVALID_REQUEST`, `UNSUPPORTED_COMMAND` |
 | `3` | `APP_UNREACHABLE` |
-| `1` | `DB_UNAVAILABLE`, `PROJECT_REQUIRED`, `PROJECT_NOT_FOUND`, `AMBIGUOUS_PROJECT`, `TICKET_NOT_FOUND`, `AMBIGUOUS_TICKET`, `SESSION_NOT_FOUND`, `AMBIGUOUS_CONTEXT`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `BODY_MATCH_FAILED`, `INVALID_COLUMN`, `INVALID_PRIORITY`, `ARCHIVED_TICKET`, `PREFIX_CONFLICT`, `FILE_READ_FAILED`, `MUTATION_FAILED`, `SOCKET_PROTOCOL`, `TIMEOUT` |
+| `1` | `DB_UNAVAILABLE`, `PROJECT_REQUIRED`, `PROJECT_NOT_FOUND`, `AMBIGUOUS_PROJECT`, `TICKET_NOT_FOUND`, `AMBIGUOUS_TICKET`, `SESSION_NOT_FOUND`, `AMBIGUOUS_CONTEXT`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `BODY_MATCH_FAILED`, `INVALID_COLUMN`, `INVALID_PRIORITY`, `ARCHIVED_TICKET`, `SESSION_ENDED`, `MODEL_REQUIRED`, `MODEL_UNAVAILABLE`, `PREFIX_CONFLICT`, `FILE_READ_FAILED`, `MUTATION_FAILED`, `SOCKET_PROTOCOL`, `TIMEOUT` |
 
 Run `volli help exit-codes` for the same table, generated from the codes the
 app actually emits.

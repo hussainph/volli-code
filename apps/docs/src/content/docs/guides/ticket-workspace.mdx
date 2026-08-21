@@ -8,42 +8,42 @@ sidebar:
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Opening a ticket gives you one working surface for its Ticket Body, Sessions,
-files, change set, and properties. The tab strip keeps the surfaces you open;
-the right rail helps you move between them.
+files, diffs, and properties. The main tab strip keeps the documents and
+Sessions you open. The right rail has **Now**, **Diffs**, and **Files** views.
 
-## Sessions
+## Now
 
-The **Sessions** rail lists the ticket's durable Session records. Open a record
-to return to its history. A Ticket Session carries the ticket's context and
-works from that ticket's worktree; it does not become a different Session when
-its live runtime attachment changes.
+**Now** shows the repository summary, ticket properties, and Sessions together.
+Use **Properties** here to edit status, priority, and labels. The repository
+summary shows the branch, base branch, worktree, changes, and pull-request
+state. Changing status updates the board; starting work remains a separate
+Session action.
 
-Use the ticket's session controls to start structured work after configuring
-**Settings → Model Access**. If you need a shell or an external TUI harness,
-open a terminal companion explicitly.
+The **Sessions** section lists the ticket's live and durable Session records.
+Open one to return to its history. A Ticket Session carries the ticket's
+context and works from that ticket's worktree; changing its live runtime
+attachment does not create a different Session.
+
+Use the Sessions heading to start structured work after configuring **Settings
+→ Model Access**. If you need a shell or an external TUI harness, open a
+terminal companion explicitly.
 
 ## Files and references
 
-The **Files** rail shows the ticket's file references and its worktree files.
-Use `@` in the Ticket Body to add a file reference. A reference resolves in the
-ticket's current context, so a file in **Ticket Files** can differ from the same
-path in **Project Files**.
+The **Files** rail shows file references from the Ticket Body, attached files,
+and the ticket worktree's directory tree. Use `@` in the Ticket Body to add a
+file reference. Selecting a file opens a preview tab; keeping it open pins the
+tab.
 
-**Project Files** read from the main checkout. **Ticket Files** read from the
-ticket worktree. Editing one does not edit the other.
+Ticket files read from the worktree. The project-level **Files** page reads from
+the main checkout, so the same path can contain different content in each
+place. Editing one does not edit the other.
 
-## Changes
+## Diffs
 
-The **Changes** rail compares the ticket worktree with its base branch. Open a
+The **Diffs** rail compares the ticket worktree with its base branch. Open a
 file to inspect its diff. The change set includes committed and uncommitted
 work, so it reflects the branch as it is on disk.
-
-## Properties
-
-Use **Properties** to inspect and edit ticket status, priority, labels, branch,
-base branch, worktree location, and pull-request information when present.
-Changing status updates the board. Starting structured work is a separate
-Session action.
 
 <Aside type="note">
   Worktrees are retained when a ticket is archived. See

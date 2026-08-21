@@ -1,16 +1,25 @@
 ---
-title: Build Volli Code from source
-description: Build and run the current macOS development version of Volli Code, then choose a default model for Sessions.
+title: Install Volli Code
+description: Download the signed Apple silicon build for macOS or run Volli Code from source, then choose a default model for Sessions.
 sidebar:
-  label: Build from source
+  label: Install
 ---
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-Volli Code currently ships as a source build for macOS. There is no packaged
-download yet.
+Volli Code ships as a signed, notarized macOS app for Apple silicon. You can
+also run the development build from source.
 
-## Requirements
+## Download the app
+
+Open [volli.app/download](https://volli.app/download/) and download the latest
+DMG. Stable releases appear when available; Canary builds contain newer,
+less-tested changes. Open the DMG and move Volli Code to Applications.
+
+Packaged builds check GitHub Releases for updates. Volli downloads an available
+update in the background and installs it when you quit the app.
+
+## Build from source
 
 You need a Mac, [git](https://git-scm.com), Node `^24.13.0`, and pnpm
 `11.10.0`. The repository pins the Node and pnpm versions it uses.
@@ -60,9 +69,9 @@ Volli does not silently switch to a different model or account.
 
 ## The `volli` CLI
 
-Volli includes a local `volli` command for working with the running app. The
-app can install it for terminals outside Volli; the terminal companions it
-opens already receive it on `PATH`.
+Volli installs its local `volli` command in the background. Terminal companions
+opened by the app already receive it on `PATH`. Open **Settings → CLI** to check
+the installation or run Doctor.
 
 Run this from a supported terminal companion to confirm its context:
 
