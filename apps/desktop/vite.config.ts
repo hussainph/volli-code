@@ -181,7 +181,6 @@ export default defineConfig(({ mode }) => ({
         "src/editor/file-refs.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
-        "src/editor/editor-theme-catalog.ts",
         "src/editor/monaco-runtime.ts",
         "src/editor/monaco-theme.ts",
         "src/editor/reveal.ts",

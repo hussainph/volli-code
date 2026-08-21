@@ -14,9 +14,9 @@
  * "close" still reads as a seam at the edges where the two meet.
  *
  * WHY CSS AND NOT A MERGED THEME. The alternative is merging `colors` into the
- * shiki theme before `registerTheme`, which means resolving app tokens to
- * literals at registration time and re-registering both themes on every canvas
- * change. These aliases cost nothing instead: the app rewrites its tokens onto
+ * shiki themes before Monaco bootstrap, which means resolving app tokens to
+ * literals and rebuilding both themes on every canvas change. These aliases
+ * cost nothing instead: the app rewrites its tokens onto
  * the root element on every canvas or appearance change and `var()` re-resolves
  * with them, so the editor follows a canvas drag live with no theme to rebuild.
  * Exactly the reasoning in `document-mode.css`, applied to the other mode.
@@ -113,11 +113,21 @@
 
 /* Diff washes stay the theme's red/green (they carry MEANING, and a canvas
    accent cannot say "removed"), but the furniture between the two panes is
-   app chrome and takes the app's border. */
+   app chrome and takes the app's border. Monaco names these gutter colors
+   `diffEditorGutter.insertedLineBackground` / `removedLineBackground` — not
+   the ordinary editorGutter add/delete keys. */
 .volli-source-mode .monaco-diff-editor {
   --vscode-diffEditor-border: var(--border);
-  --vscode-editorGutter-addedBackground: color-mix(in oklab, var(--positive) 55%, transparent);
-  --vscode-editorGutter-deletedBackground: color-mix(in oklab, var(--destructive) 55%, transparent);
+  --vscode-diffEditorGutter-insertedLineBackground: color-mix(
+    in oklab,
+    var(--positive) 55%,
+    transparent
+  );
+  --vscode-diffEditorGutter-removedLineBackground: color-mix(
+    in oklab,
+    var(--destructive) 55%,
+    transparent
+  );
 }
 
 /* --- the caret ------------------------------------------------------------ */

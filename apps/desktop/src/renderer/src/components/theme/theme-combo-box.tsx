@@ -12,10 +12,9 @@ import { cn } from "@renderer/lib/utils";
  * The searchable "pick one name from a catalog" control every Appearance row
  * uses — global Settings and per-project Configure alike.
  *
- * It exists because four rows (terminal theme, terminal font family, editor
- * theme, and both of their project-scoped twins) were the same eighty lines of
- * Popover + cmdk with one thing swapped, and the interesting part of that
- * eighty lines is a set of contracts that must NOT drift between them:
+ * It carries the shared Popover + cmdk contracts for Appearance rows that need
+ * a searchable catalog. The interesting part is a set of contracts that must
+ * NOT drift between those rows:
  *
  *  - **cmdk must be CONTROLLED** or it never calls `onValueChange` — it just
  *    updates its own store and returns. An uncontrolled picker here would
@@ -36,12 +35,12 @@ import { cn } from "@renderer/lib/utils";
 
 /**
  * One selectable row: the value written on commit, plus how it reads and
- * searches. Generic in the value so a catalog with a narrower id union (the
- * shipped editor themes) keeps that union all the way through `onSelect`,
- * rather than widening to `string` and needing a cast back at the call site.
+ * searches. Generic in the value so a catalog with a narrower id union keeps
+ * that union all the way through `onSelect`, rather than widening to `string`
+ * and needing a cast back at the call site.
  */
 export interface ThemeComboBoxItem<Value extends string = string> {
-  /** The catalog id / theme name this row commits. */
+  /** The value / theme name this row commits. */
   value: Value;
   label: string;
   /** Extra search terms — a theme's family, say. */

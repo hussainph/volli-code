@@ -63,6 +63,20 @@ describe("source-mode.css surface", () => {
     }
   });
 
+  it("uses Monaco's actual diff-gutter variables", () => {
+    // Monaco reads `diffEditorGutter.insertedLineBackground` and
+    // `removedLineBackground`; the former editorGutter add/delete aliases were
+    // inert because those color ids do not exist.
+    expect(rules).toMatch(
+      /--vscode-diffEditorGutter-insertedLineBackground:[^;]*var\(--positive\)/,
+    );
+    expect(rules).toMatch(
+      /--vscode-diffEditorGutter-removedLineBackground:[^;]*var\(--destructive\)/,
+    );
+    expect(rules).not.toContain("--vscode-editorGutter-addedBackground:");
+    expect(rules).not.toContain("--vscode-editorGutter-deletedBackground:");
+  });
+
   it("never selects a Document Mode editor", () => {
     // The two stylesheets describe mutually exclusive hosts. If this file could
     // reach a ticket body it would paint a ground under prose that is supposed

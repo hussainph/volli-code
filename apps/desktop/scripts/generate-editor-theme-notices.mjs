@@ -10,13 +10,10 @@
  *
  * Theme ids are read from `EDITOR_THEME_BY_APPEARANCE` in
  * `packages/shared/src/theme/editor-themes.ts` so this script cannot drift from
- * the IPC vocabulary / renderer catalog.
+ * the fixed light/dark pair Monaco bootstraps.
  *
- * That map, rather than `SHIPPED_EDITOR_THEME_IDS` beside it, because since
- * VC-123 the map holds the only string LITERALS: the exported array is derived
- * from it, and a regex parser that had to follow `EDITOR_THEME_BY_APPEARANCE.light`
- * back to its value would be a small TypeScript interpreter. Read the one
- * place the ids are actually written.
+ * The map holds the only theme-id literals. Read that one source instead of
+ * duplicating the pair in this plain-Node script.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -58,7 +55,7 @@ function readShippedEditorThemeIdsFromShared() {
   return ids;
 }
 
-/** Sole theme-id source — must stay identical to `@volli/shared`'s export. */
+/** Sole theme-id source — must stay identical to the shared appearance map. */
 const SHIPPED_THEME_IDS = readShippedEditorThemeIdsFromShared();
 
 const noticePath = process.argv[2];

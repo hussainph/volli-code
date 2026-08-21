@@ -1,3 +1,5 @@
+import vitesseLight from "@shikijs/themes/vitesse-light";
+import vitesseDark from "@shikijs/themes/vitesse-dark";
 import type * as Monaco from "monaco-editor";
 
 import {
@@ -10,7 +12,6 @@ import {
 // contribution: the furniture tokens must be in the document before the first
 // editor paints, and nothing outside an editor is selected by them.
 import "./source-mode.css";
-import { editorThemeImporterFor } from "./editor-theme-catalog";
 import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
 import { allShikiLanguageIds } from "./shiki-langs";
 import {
@@ -19,12 +20,7 @@ import {
   ensureShikiLanguageBound,
   type ShikiMonacoBootstrap,
 } from "./shiki-monaco";
-import {
-  activeMonacoEditorThemeId,
-  bindMonacoEditorThemeEnsure,
-  bindMonacoEditorThemeHost,
-  ensureMonacoEditorTheme,
-} from "./monaco-theme";
+import { bindMonacoEditorThemeHost, ensureMonacoEditorTheme } from "./monaco-theme";
 import { findTextEdits, type TextEdit } from "./text-reconciliation";
 import { startUnsavedDocumentReporting } from "./unsaved-report";
 
@@ -446,12 +442,11 @@ export function createShikiBackedModelFactory(
 }
 
 /**
- * Wire shiki once with the appearance's theme and empty langs, then register
- * every document language id as an empty Monaco shell so late providers can
- * attach. Call `wireShikiToMonaco` / bootstrap exactly once — late langs use
- * `registerLanguage`, late themes use `registerTheme` (shared themeMap/colorMap).
- * The OTHER of the two themes loads via the theme-ensure seam before `setTheme`
- * (no flash of an undefined theme on a light↔dark flip).
+ * Wire shiki once with the fixed Vitesse light/dark pair and empty langs, then
+ * register every document language id as an empty Monaco shell so late
+ * providers can attach. Both themes are static imports in this Monaco chunk:
+ * there is no per-theme catalog or on-demand theme request left to race an
+ * appearance flip.
  */
 export async function prepareMonacoEditorThemes(
   monaco: typeof Monaco,
@@ -460,22 +455,11 @@ export async function prepareMonacoEditorThemes(
   // see every document-identity id in monaco.languages.getLanguages().
   ensureMonacoLanguagesRegistered(monaco, allShikiLanguageIds());
 
-  // Boot into the mode the window is ALREADY wearing (preload stamped it before
-  // the first frame), so the very first editor is built light in a light app
-  // rather than correcting itself once the theme store hydrates.
-  const bootThemeLoad = editorThemeImporterFor(activeMonacoEditorThemeId());
   const shiki = await bootstrapShikiMonaco(monaco, {
-    themes: bootThemeLoad === null ? [] : [bootThemeLoad],
+    themes: [vitesseLight, vitesseDark],
     langs: [],
   });
 
-  bindMonacoEditorThemeEnsure(async (themeId) => {
-    if (shiki.highlighter.getLoadedThemes().includes(themeId)) return;
-    const load = editorThemeImporterFor(themeId);
-    if (load === null) return;
-    await shiki.highlighter.loadTheme(load);
-    await shiki.registerTheme(shiki.highlighter.getTheme(themeId));
-  });
   bindMonacoEditorThemeHost(monaco);
   // If the theme store already refreshed before runtime init, bind applied it.
   // Otherwise activate the appearance's theme so the first editor isn't unthemed.

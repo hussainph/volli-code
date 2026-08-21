@@ -4,7 +4,8 @@
  * Vendored from `@shikijs/monaco@4.3.1` (MIT — Copyright (c) 2021 Pine Wu,
  * Copyright (c) 2023 Anthony Fu) so we own a single `themeMap` / `colorMap` and
  * can `registerLanguage` after late `loadLanguage`. Call {@link wireShikiToMonaco}
- * exactly once — never stack `setTheme` wrappers.
+ * exactly once — never stack `setTheme` wrappers. The fixed editor theme pair
+ * is fully registered at bootstrap; only grammars load later.
  */
 
 import { textmateThemeToMonacoTheme } from "@shikijs/monaco";
@@ -12,7 +13,7 @@ import { EncodedTokenMetadata, INITIAL, type StateStack } from "@shikijs/vscode-
 import type * as Monaco from "monaco-editor";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import type { LanguageInput, ThemeInput, ThemeRegistrationResolved } from "shiki/types";
+import type { LanguageInput, ThemeInput } from "shiki/types";
 
 import { ensureShikiLanguage } from "./shiki-langs";
 
@@ -31,11 +32,6 @@ const FONT_STYLE_STRIKETHROUGH = 8;
 
 export interface ShikiMonacoBootstrap {
   highlighter: HighlighterCore;
-  /**
-   * Register a TextMate theme with Monaco without calling {@link wireShikiToMonaco}
-   * again. Updates the shared themeMap so late `setTheme` keeps token colors.
-   */
-  registerTheme: (theme: ThemeRegistrationResolved) => Promise<void>;
   /**
    * Install a TextMate tokens provider for a language already loaded into the
    * highlighter. Shares the bootstrap colorMap / setTheme wrapper.
@@ -57,8 +53,6 @@ interface ShikiMonacoWireOptions {
 
 interface ShikiMonacoWire {
   registerLanguage: (languageId: string) => void;
-  /** Sync themeMap + `defineTheme`. Theme must already be loaded in the highlighter. */
-  defineTheme: (theme: ThemeRegistrationResolved) => void;
 }
 
 class TokenizerState implements Monaco.languages.IState {
@@ -261,14 +255,7 @@ export function wireShikiToMonaco(
     registerLanguage(lang);
   }
 
-  return {
-    registerLanguage,
-    defineTheme(theme) {
-      const monacoTheme = textmateThemeToMonacoTheme(theme) as Monaco.editor.IStandaloneThemeData;
-      themeMap.set(theme.name, monacoTheme);
-      monaco.editor.defineTheme(theme.name, monacoTheme);
-    },
-  };
+  return { registerLanguage };
 }
 
 /**
@@ -296,9 +283,9 @@ export async function ensureShikiLanguageBound(
  * Create a JS-regex shiki highlighter (core + engine; no bundle-full registry)
  * and wire it to Monaco exactly once.
  *
- * Bootstrap with a tiny theme set (typically the default catalog theme) and
- * empty langs — late themes use {@link ShikiMonacoBootstrap.registerTheme};
- * late langs use {@link ensureShikiLanguageBound} / `registerLanguage`.
+ * Bootstrap with the fixed editor theme pair and empty langs. Themes never
+ * load later; late grammars use {@link ensureShikiLanguageBound} /
+ * `registerLanguage`.
  */
 export async function bootstrapShikiMonaco(
   monaco: typeof Monaco,
@@ -319,15 +306,5 @@ export async function bootstrapShikiMonaco(
     tokenizeTimeLimit: options.tokenizeTimeLimit,
   });
 
-  return {
-    highlighter,
-    registerLanguage: wire.registerLanguage,
-    async registerTheme(theme) {
-      if (!highlighter.getLoadedThemes().includes(theme.name)) {
-        await highlighter.loadTheme(theme);
-      }
-      const resolved = highlighter.getTheme(theme.name);
-      wire.defineTheme(resolved);
-    },
-  };
+  return { highlighter, registerLanguage: wire.registerLanguage };
 }

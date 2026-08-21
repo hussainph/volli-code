@@ -28,13 +28,15 @@
  * project scope arrives through {@link ThemeState.hydrate}. A second read path
  * would be a second answer to "what is the theme?".
  *
- * `volli:theme-state` is still read, for the two surfaces that are NOT the
- * canvas: the resolved ghostty chain and the global editor theme id.
+ * `volli:theme-state` is still read for the resolved Ghostty chain. Canvas and
+ * appearance already arrived in the bootstrap payload; Monaco derives its
+ * fixed light/dark pair from that appearance and needs no state of its own.
  */
 
 import {
   APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
+  editorThemeForAppearance,
   errorMessage,
   isAppearance,
   parseCanvas,
@@ -48,6 +50,7 @@ import type {
   Project,
   ProjectThemeOverride,
   ResolvedAppearance,
+  ShippedEditorThemeId,
 } from "@volli/shared";
 import type {
   ProjectCanvasWriteResult,
@@ -69,7 +72,6 @@ import {
   type PaintCanvasOptions,
 } from "@renderer/theme/canvas-paint";
 import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
-import { resolveEditorThemeId } from "@renderer/editor/editor-theme-catalog";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
 
@@ -90,7 +92,7 @@ export interface ThemeProjectScope {
 
 /** The preload theming surface this store needs — narrow, and fake-able in tests. */
 export interface ThemeGateway {
-  /** The resolved ghostty chain + the global editor id for a scope. NOT the canvas. */
+  /** The resolved Ghostty chain for a scope. Canvas and appearance arrive through bootstrap. */
   state(input: { projectId?: string }): Promise<ThemeStateResult>;
   setGlobalCanvas(canvas: Canvas): Promise<Result>;
   setGlobalAppearance(appearance: Appearance): Promise<Result>;
@@ -114,12 +116,6 @@ export interface ThemeGateway {
    * cache, never an authority — `{canvas, appearance}` stays the pair.
    */
   setFirstPaint(hint: { appearance: ResolvedAppearance; background: string }): Promise<Result>;
-  /**
-   * No `setProject` here. The migration-013 override's last renderer-writable
-   * field was the editor id, and VC-123 retired it; a project's terminal theme
-   * is written to its ghostty overlay FILE, not to this row. The IPC channel
-   * survives for main's own use — this store simply has nothing to send it.
-   */
 }
 
 /**
@@ -150,8 +146,8 @@ export interface ThemeStoreDeps {
    * one frame of a running gesture — see `theme/apply.ts`.
    */
   paintCanvas(canvas: Canvas, resolved: ResolvedAppearance, options?: PaintCanvasOptions): void;
-  /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
-  refreshEditorTheme(themeId: string): void;
+  /** Activates the Vitesse half derived from the resolved app appearance. */
+  refreshEditorTheme(themeId: ShippedEditorThemeId): void;
   /**
    * Runs ONE swap as an eased whole-window repaint (#69,
    * theme/scope-transition.ts). Handed the {@link paintCanvas} call rather than
@@ -223,7 +219,7 @@ interface ThemeState {
 
   /** Seeds the global canvas + appearance from the bootstrap payload's raw `app_state` rows. */
   hydrateGlobal(appState: Record<string, string>): void;
-  /** Reads the terminal chain + editor id for a scope, adopting the workspace's canvas columns with it. */
+  /** Reads the terminal chain for a scope, adopting the workspace's canvas columns with it. */
   hydrate(scope?: ThemeProjectScope | null): Promise<void>;
   /** The system flipped light↔dark: re-resolve and repaint every scope on `auto`. */
   noteSystemAppearance(prefersDark: boolean): void;
@@ -421,7 +417,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       // restatement of the mode this paint just resolved. Guarded on the id
       // rather than on the key above, because a canvas change at an unchanged
       // mode must not make every open editor re-theme.
-      const editorId = resolveEditorThemeId({ resolvedAppearance: active.resolved });
+      const editorId = editorThemeForAppearance(active.resolved);
       if (editorId !== paintedEditor) {
         paintedEditor = editorId;
         deps.refreshEditorTheme(editorId);

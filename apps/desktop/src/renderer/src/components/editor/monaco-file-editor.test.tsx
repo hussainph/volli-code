@@ -157,9 +157,9 @@ describe("fileEditorConstructionOptions", () => {
     });
   });
 
-  it("uses the active catalog theme so remounts do not clobber Appearance", () => {
-    refreshMonacoEditorTheme("nord");
-    expect(fileEditorConstructionOptions(base)).toMatchObject({ theme: "nord" });
+  it("uses the active Vitesse half so remounts do not clobber Appearance", () => {
+    refreshMonacoEditorTheme("vitesse-light");
+    expect(fileEditorConstructionOptions(base)).toMatchObject({ theme: "vitesse-light" });
   });
 });
 

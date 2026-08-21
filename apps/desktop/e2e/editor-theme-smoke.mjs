@@ -5,17 +5,16 @@
  * and a seeded git repo. Proves what unit tests cannot see:
  *
  *   1. Opening a project file boots a real Monaco editor (ready, no fallback).
- *   2. In a DARK app, Monaco paints the shipped dark theme's background.
- *   3. Flipping the app to LIGHT repaints Monaco with the light theme — no
- *      picker, no reload, no editor write. This is the whole ticket: the pair
+ *   2. Settings → Appearance → Mode drives Vitesse Dark in a dark app.
+ *   3. The same real control drives Vitesse Light in a light app — no picker
+ *      or editor preference exists.
+ *   4. Switching Mode back to dark restores Vitesse Dark, so the pairing
  *      follows the one appearance choice the app already has.
- *   4. Flipping back to dark restores the dark theme, so the follow is a live
- *      binding rather than a one-way boot-time read.
  *   5. The editor's FURNITURE comes from app tokens, not from the shiki theme:
- *      Monaco's background equals the app's own `--background` in light mode
- *      (source-mode.css), which is what makes the editor part of the surface.
- *   6. Source Mode and Document Mode still part ways: a ticket body paints NO
- *      catalog background and takes its ink from `--foreground`
+ *      Monaco's background equals the app's own `--background`, which is what
+ *      makes the editor part of the surface.
+ *   6. Source Mode and Document Mode still part ways: a ticket body paints no
+ *      syntax-theme background and takes its ink from `--foreground`
  *      (document-mode.css) — the split nothing but a real window can see.
  *
  * MANUALLY RUN (needs a display + the built app); not wired into CI:
@@ -52,17 +51,13 @@ if (process.platform !== "darwin") {
 }
 
 /**
- * The two shipped themes' `editor.background`, read out of `@shikijs/themes`
- * and pinned here as literals — independent of the app, so a regression in
- * which theme is chosen cannot rewrite the expectation with it.
- *
- * Only asserted where source-mode.css does NOT override the ground: it aliases
- * `--vscode-editor-background` to the app canvas, so what Monaco actually
- * paints is the app's background. The theme pins stay as the reference for
- * what would be on screen without that alias.
+ * A Monaco-only Vitesse marker, read out of `@shikijs/themes` and pinned here
+ * as literals. Source Mode intentionally owns `editor.background` with the app
+ * `--background` token, so the marker proves which fixed syntax theme Monaco
+ * selected without fighting that surface contract.
  */
-const VITESSE_LIGHT_BG = "#ffffff";
-const VITESSE_DARK_BG = "#121212";
+const VITESSE_LIGHT_THEME_MARKER = "#2993a3";
+const VITESSE_DARK_THEME_MARKER = "#5eaab5";
 
 const PROJECT_SEED_ID = "editor-theme-project";
 const PROJECT_NAME = "Editor Theme Project";
@@ -96,21 +91,21 @@ function treeDir(page, relPath) {
   return page.locator(`[data-testid="file-tree-dir"][data-rel-path="${relPath}"]`);
 }
 
-/**
- * Set the app-wide appearance through the same IPC the Mode control writes,
- * then wait for the renderer to finish repainting.
- *
- * Driven over `window.api` rather than by clicking Settings → Mode because the
- * assertion is about MONACO, not about the button: routing through the store's
- * own write path proves the editor follows the committed appearance, and keeps
- * this check from failing the day that control is restyled.
- */
+/** Opens the actual Settings → Appearance control instead of bypassing the renderer store. */
+async function openAppearanceSettings(page) {
+  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
+  await page
+    .getByRole("navigation", { name: "Settings categories" })
+    .getByRole("button", { name: "Appearance", exact: true })
+    .click();
+  await page.getByTestId("appearance-mode").waitFor();
+}
+
+/** Change appearance through the real segmented control and wait for its live paint. */
 async function setAppearance(page, appearance) {
-  const ok = await page.evaluate(async (mode) => {
-    const result = await window.api.theme.setGlobalAppearance(mode);
-    return result.ok;
-  }, appearance);
-  if (!ok) throw new Error(`setGlobalAppearance(${appearance}) failed`);
+  await openAppearanceSettings(page);
+  const choice = page.getByTestId("appearance-mode").locator(`[data-choice="${appearance}"]`);
+  if ((await choice.getAttribute("aria-pressed")) !== "true") await choice.click();
   await waitUntil(
     `<html> to wear the ${appearance} class`,
     async () =>
@@ -124,11 +119,16 @@ async function setAppearance(page, appearance) {
   );
 }
 
-/** The app's own `--background`, as the canvas system resolved it right now. */
+/** Resolve the app's own `--background` through a real painted element. */
 async function readAppBackground(page) {
-  return page.evaluate(() =>
-    getComputedStyle(document.documentElement).getPropertyValue("--background").trim(),
-  );
+  return page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = "var(--background)";
+    document.body.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  });
 }
 
 async function goToNav(page, label, settled) {
@@ -192,7 +192,7 @@ function cssColorToHex(css) {
     .join("")}`;
 }
 
-async function readMonacoBackground(page) {
+async function readMonacoSurface(page) {
   return page.evaluate(() => {
     const editor = document.querySelector("[data-monaco-status] .monaco-editor");
     if (editor === null) return null;
@@ -202,26 +202,53 @@ async function readMonacoBackground(page) {
       editor,
       ...editor.querySelectorAll(".overflow-guard, .monaco-editor-background"),
     ];
+    let background = getComputedStyle(editor).backgroundColor;
     for (const node of nodes) {
-      const bg = getComputedStyle(node).backgroundColor;
-      if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return bg;
+      const candidate = getComputedStyle(node).backgroundColor;
+      if (candidate && candidate !== "rgba(0, 0, 0, 0)" && candidate !== "transparent") {
+        background = candidate;
+        break;
+      }
     }
-    return getComputedStyle(editor).backgroundColor;
+    // Source Mode deliberately leaves this Monaco-only colour to Vitesse. Its
+    // values are opaque and differ between the fixed light/dark pair, unlike
+    // the app-token background above.
+    const themeMarker = getComputedStyle(editor)
+      .getPropertyValue("--vscode-editorBracketHighlight-foreground1")
+      .trim();
+    return { background, themeMarker };
   });
 }
 
-async function waitForMonacoBackground(page, expectedHex) {
+async function normalizedMonacoSurface(page) {
+  const surface = await readMonacoSurface(page);
+  if (surface === null) return null;
+  return {
+    background: cssColorToHex(surface.background),
+    themeMarker: cssColorToHex(surface.themeMarker),
+  };
+}
+
+async function waitForMonacoSurface(page, expected) {
   await waitUntil(
-    `Monaco background → ${expectedHex}`,
+    `Monaco ground → ${expected.background}; Vitesse marker → ${expected.themeMarker}`,
     async () => {
-      const css = await readMonacoBackground(page);
-      if (css === null) return null;
-      return cssColorToHex(css) === expectedHex.toLowerCase() ? css : null;
+      const surface = await normalizedMonacoSurface(page);
+      return surface?.background === expected.background &&
+        surface.themeMarker === expected.themeMarker
+        ? surface
+        : null;
     },
     { timeout: 8000 },
   ).catch(() => {});
-  const css = await readMonacoBackground(page);
-  return css === null ? null : cssColorToHex(css);
+  return normalizedMonacoSurface(page);
+}
+
+/** The app owns the ground; Vitesse owns this one unaliased Monaco marker. */
+async function waitForPairedMonacoSurface(page, themeMarker) {
+  const background = cssColorToHex(await readAppBackground(page));
+  const surface = await waitForMonacoSurface(page, { background, themeMarker });
+  return { background, surface };
 }
 
 /** Does a computed `background-color` actually fill anything? */
@@ -344,58 +371,86 @@ try {
     };
   });
 
-  await attempt(2, "a dark app paints Monaco with the shipped dark theme", async () => {
+  await attempt(
+    2,
+    "Settings Mode dark selects Vitesse Dark over the app-token ground",
+    async () => {
+      await setAppearance(page, "dark");
+      await openSeededFile(page);
+      const { background, surface } = await waitForPairedMonacoSurface(
+        page,
+        VITESSE_DARK_THEME_MARKER,
+      );
+      // Nothing about the editor is persisted any more — the appearance row is
+      // the only thing that decided this.
+      const payload = await page.evaluate(async () => {
+        const result = await window.api.theme.state({});
+        return result.ok ? Object.keys(result.value) : null;
+      });
+      return {
+        ok:
+          surface?.background === background &&
+          surface.themeMarker === VITESSE_DARK_THEME_MARKER &&
+          payload !== null &&
+          !payload.includes("editorThemeId"),
+        detail: `surface=${JSON.stringify(surface)} appBackground=${background} stateKeys=${JSON.stringify(payload)}`,
+      };
+    },
+  );
+
+  await attempt(
+    3,
+    "Settings Mode light selects Vitesse Light over the app-token ground",
+    async () => {
+      await setAppearance(page, "light");
+      const state = await openSeededFile(page);
+      const { background, surface } = await waitForPairedMonacoSurface(
+        page,
+        VITESSE_LIGHT_THEME_MARKER,
+      );
+      return {
+        ok:
+          surface?.background === background &&
+          surface.themeMarker === VITESSE_LIGHT_THEME_MARKER &&
+          state.status === "ready" &&
+          state.fallbacks === 0,
+        detail: `surface=${JSON.stringify(surface)} appBackground=${background} status=${state.status} fallbacks=${state.fallbacks}`,
+      };
+    },
+  );
+
+  await attempt(4, "Settings Mode dark restores Vitesse Dark", async () => {
+    // Proves the pairing is a live binding rather than a one-way boot-time read.
     await setAppearance(page, "dark");
     await openSeededFile(page);
-    const bg = await waitForMonacoBackground(page, VITESSE_DARK_BG);
-    // Nothing about the editor is persisted any more — the appearance row is
-    // the only thing that decided this.
-    const payload = await page.evaluate(async () => {
-      const result = await window.api.theme.state({});
-      return result.ok ? Object.keys(result.value) : null;
-    });
-    return {
-      ok: bg === VITESSE_DARK_BG && payload !== null && !payload.includes("editorThemeId"),
-      detail: `bg=${bg} expected=${VITESSE_DARK_BG} stateKeys=${JSON.stringify(payload)}`,
-    };
-  });
-
-  await attempt(3, "flipping the app to light repaints Monaco light, with no reload", async () => {
-    // The ticket, in one check: no picker was touched and nothing remounted.
-    await setAppearance(page, "light");
-    const bg = await waitForMonacoBackground(page, VITESSE_LIGHT_BG);
-    const state = await readMonacoState(page);
-    return {
-      ok: bg === VITESSE_LIGHT_BG && state.status === "ready" && state.fallbacks === 0,
-      detail: `bg=${bg} expected=${VITESSE_LIGHT_BG} status=${state.status} fallbacks=${state.fallbacks}`,
-    };
-  });
-
-  await attempt(4, "flipping back to dark restores the dark theme", async () => {
-    // Proves the pairing is a live binding, not a boot-time read.
-    await setAppearance(page, "dark");
-    const bg = await waitForMonacoBackground(page, VITESSE_DARK_BG);
-    return {
-      ok: bg === VITESSE_DARK_BG,
-      detail: `bg=${bg} expected=${VITESSE_DARK_BG}`,
-    };
-  });
-
-  await attempt(5, "the editor's ground is the app's own token, not the theme's", async () => {
-    // source-mode.css aliases `--vscode-editor-background` to `--background`,
-    // so in LIGHT the editor must match the app canvas rather than the shiki
-    // theme's flat white. Checked in light because that is where a mismatch
-    // between the two is visible at all.
-    await setAppearance(page, "light");
-    await openSeededFile(page);
-    const appBg = await readAppBackground(page);
-    const painted = await waitForMonacoBackground(page, cssColorToHex(appBg));
-    const editorClass = await page.evaluate(
-      () => document.querySelector("[data-monaco-status] .volli-source-mode") !== null,
+    const { background, surface } = await waitForPairedMonacoSurface(
+      page,
+      VITESSE_DARK_THEME_MARKER,
     );
     return {
-      ok: painted === cssColorToHex(appBg) && editorClass,
-      detail: `painted=${painted} --background=${appBg} sourceModeHost=${editorClass}`,
+      ok: surface?.background === background && surface.themeMarker === VITESSE_DARK_THEME_MARKER,
+      detail: `surface=${JSON.stringify(surface)} appBackground=${background}`,
+    };
+  });
+
+  await attempt(5, "the editor ground follows the app token rather than Vitesse", async () => {
+    // Checked in light because that is where the app canvas and Vitesse's flat
+    // white would visibly diverge if source-mode.css stopped aliasing them.
+    await setAppearance(page, "light");
+    await openSeededFile(page);
+    const { background, surface } = await waitForPairedMonacoSurface(
+      page,
+      VITESSE_LIGHT_THEME_MARKER,
+    );
+    const editorClass = await page.evaluate(
+      () => document.querySelector("[data-monaco-status].volli-source-mode") !== null,
+    );
+    return {
+      ok:
+        surface?.background === background &&
+        surface.themeMarker === VITESSE_LIGHT_THEME_MARKER &&
+        editorClass,
+      detail: `surface=${JSON.stringify(surface)} appBackground=${background} sourceModeHost=${editorClass}`,
     };
   });
 

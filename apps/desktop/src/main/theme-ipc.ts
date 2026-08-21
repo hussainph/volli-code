@@ -1,7 +1,7 @@
 /**
- * The theming IPC surface: read the resolved terminal chain for a scope, persist
- * the canvas and appearance at either scope, set the editor theme, set a
- * project's per-surface override, and write terminal overlay edits.
+ * The theming IPC surface: read the resolved terminal chain for a scope,
+ * persist canvas and appearance at either scope, retain a project's terminal
+ * override, and write terminal overlay edits.
  *
  * Two shapes worth naming up front, because they are what keep the design's
  * rules true at the boundary rather than only inside it:

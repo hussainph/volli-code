@@ -48,11 +48,10 @@ import { getBuiltinTheme } from "restty";
  * owns it. Every surface starts on **Inherit** (#72: per-project theming is off
  * by default), which is the ABSENCE of a stored value rather than a stored
  * "inherit" marker, so a project that has been reset reads exactly like one
- * that was never touched. **Custom** opens on whatever the surface is already
- * showing, so switching modes pins the look rather than changing it: for the
- * editor that is the catalog id currently resolved, for the terminal it is the
- * theme name the ghostty chain resolves (and nothing, when the chain names none
- * — Volli will not invent a name to write into a file the user owns).
+ * that was never touched. **Custom** opens on whatever the terminal is already
+ * showing, so switching modes pins the look rather than changing it: the theme
+ * name the Ghostty chain resolves, or nothing when the chain names none —
+ * Volli will not invent a name to write into a file the user owns.
  *
  * The app surface is TWO tri-states rather than one, because a project's
  * gradient and its light/dark choice are two independent columns on its row

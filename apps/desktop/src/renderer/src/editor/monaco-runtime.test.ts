@@ -5,8 +5,8 @@ const {
   ensureMonacoLanguagesRegistered,
   ensureShikiLanguageBound,
   allShikiLanguageIds,
-  editorThemeImporterFor,
-  resolveEditorThemeId,
+  vitesseLight,
+  vitesseDark,
   workerClasses,
   monacoModule,
 } = vi.hoisted(() => ({
@@ -14,10 +14,8 @@ const {
   ensureMonacoLanguagesRegistered: vi.fn(),
   ensureShikiLanguageBound: vi.fn(async () => true),
   allShikiLanguageIds: vi.fn(() => ["typescript", "toml"]),
-  editorThemeImporterFor: vi.fn((id: string) =>
-    id === "vitesse-dark" ? () => Promise.resolve({ name: "vitesse-dark" }) : null,
-  ),
-  resolveEditorThemeId: vi.fn(() => "vitesse-dark"),
+  vitesseLight: { name: "vitesse-light" },
+  vitesseDark: { name: "vitesse-dark" },
   workerClasses: {
     editor: class EditorWorker {
       constructor(readonly options?: WorkerOptions) {}
@@ -61,7 +59,8 @@ vi.mock("./shiki-monaco", () => ({
   ensureShikiLanguageBound,
 }));
 vi.mock("./shiki-langs", () => ({ allShikiLanguageIds }));
-vi.mock("./editor-theme-catalog", () => ({ editorThemeImporterFor, resolveEditorThemeId }));
+vi.mock("@shikijs/themes/vitesse-light", () => ({ default: vitesseLight }));
+vi.mock("@shikijs/themes/vitesse-dark", () => ({ default: vitesseDark }));
 vi.mock("monaco-editor/editor/editor.worker?worker", () => ({
   default: workerClasses.editor,
 }));
@@ -92,9 +91,6 @@ import {
   workerKindForLabel,
 } from "./monaco-runtime";
 import { resetMonacoEditorThemeForTests } from "./monaco-theme";
-
-const loadBootTheme = () => Promise.resolve({ name: "vitesse-dark" });
-const loadNord = () => Promise.resolve({ name: "nord" });
 
 interface FakeRange {
   startLineNumber: number;
@@ -250,7 +246,7 @@ function externalEditFactory() {
     Uri: { parse: vi.fn((uri: string) => ({ path: uri })) },
     languages: { getLanguages: () => [], register: vi.fn() },
   };
-  const session = { highlighter: {}, registerTheme: vi.fn(), registerLanguage: vi.fn() };
+  const session = { highlighter: {}, registerLanguage: vi.fn() };
   return createShikiBackedModelFactory(monaco as never, session as never);
 }
 
@@ -281,39 +277,30 @@ beforeEach(() => {
   resetMonacoEditorThemeForTests();
   bootstrapShikiMonaco.mockResolvedValue({
     highlighter: {
-      getLoadedThemes: () => ["vitesse-dark"],
-      loadTheme: vi.fn(async () => undefined),
+      getLoadedThemes: () => ["vitesse-light", "vitesse-dark"],
       getTheme: vi.fn((name: string) => ({ name })),
     },
-    registerTheme: vi.fn(async () => undefined),
     registerLanguage: vi.fn(),
   });
   ensureShikiLanguageBound.mockResolvedValue(true);
   allShikiLanguageIds.mockReturnValue(["typescript", "toml"]);
-  editorThemeImporterFor.mockImplementation((id: string) =>
-    id === "vitesse-dark" ? () => Promise.resolve({ name: "vitesse-dark" }) : null,
-  );
-  resolveEditorThemeId.mockReturnValue("vitesse-dark");
   monacoModule.editor.setTheme.mockClear();
   monacoModule.languages.register.mockClear();
 });
 
 describe("prepareMonacoEditorThemes", () => {
-  it("bootstraps with only the appearance's theme and empty langs (not both importers)", async () => {
+  it("bootstraps the fixed Vitesse light/dark pair and empty langs", async () => {
     const defineTheme = vi.fn();
     const setTheme = vi.fn();
     const monaco = {
       editor: { defineTheme, setTheme },
       languages: { getLanguages: () => [], register: vi.fn() },
     };
-    editorThemeImporterFor.mockReturnValue(loadBootTheme);
     const shiki = {
       highlighter: {
-        getLoadedThemes: () => ["vitesse-dark"],
-        loadTheme: vi.fn(async () => undefined),
+        getLoadedThemes: () => ["vitesse-light", "vitesse-dark"],
         getTheme: vi.fn((name: string) => ({ name })),
       },
-      registerTheme: vi.fn(async () => undefined),
       registerLanguage: vi.fn(),
     };
     bootstrapShikiMonaco.mockResolvedValue(shiki);
@@ -322,18 +309,15 @@ describe("prepareMonacoEditorThemes", () => {
 
     expect(allShikiLanguageIds).toHaveBeenCalledTimes(1);
     expect(ensureMonacoLanguagesRegistered).toHaveBeenCalledWith(monaco, ["typescript", "toml"]);
-    expect(editorThemeImporterFor).toHaveBeenCalledWith("vitesse-dark");
     expect(bootstrapShikiMonaco).toHaveBeenCalledTimes(1);
     expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, {
-      themes: [loadBootTheme],
+      themes: [vitesseLight, vitesseDark],
       langs: [],
     });
-    // Boot resolves off the appearance stamped on the document, not off a
-    // stored id — there is no stored id any more (VC-123).
-    expect(resolveEditorThemeId).toHaveBeenCalledWith({ resolvedAppearance: "dark" });
-    await vi.waitFor(() => {
-      expect(setTheme).toHaveBeenCalledWith("vitesse-dark");
-    });
+    // `document` is absent in this node suite, so the same preload fallback
+    // the app uses resolves dark. Both halves were already registered before
+    // this selection — no lazy importer can run here.
+    expect(setTheme).toHaveBeenCalledWith("vitesse-dark");
     expect(result).toBe(shiki);
   });
 
@@ -347,31 +331,14 @@ describe("prepareMonacoEditorThemes", () => {
 
     await prepareMonacoEditorThemes(monaco as never);
 
-    await vi.waitFor(() => {
-      expect(setTheme).toHaveBeenCalledWith("vitesse-dark");
-    });
+    expect(setTheme).toHaveBeenCalledWith("vitesse-dark");
     expect(defineTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
     expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
   });
 
-  it("bootstraps with no theme when the default importer is unavailable", async () => {
-    editorThemeImporterFor.mockReturnValue(null);
-    const monaco = {
-      editor: { defineTheme: vi.fn(), setTheme: vi.fn() },
-      languages: { getLanguages: () => [], register: vi.fn() },
-    };
-
-    await prepareMonacoEditorThemes(monaco as never);
-
-    expect(bootstrapShikiMonaco).toHaveBeenCalledWith(monaco, {
-      themes: [],
-      langs: [],
-    });
-  });
-
-  it("keeps a theme queued before bootstrap instead of forcing the ember default", async () => {
+  it("keeps a Vitesse refresh queued before bootstrap", async () => {
     const { refreshMonacoEditorTheme } = await import("./monaco-theme");
-    refreshMonacoEditorTheme("nord");
+    refreshMonacoEditorTheme("vitesse-light");
     const setTheme = vi.fn();
     const monaco = {
       editor: { defineTheme: vi.fn(), setTheme },
@@ -379,78 +346,9 @@ describe("prepareMonacoEditorThemes", () => {
     };
 
     await prepareMonacoEditorThemes(monaco as never);
-    await vi.waitFor(() => {
-      expect(setTheme).toHaveBeenCalledWith("nord");
-    });
+
+    expect(setTheme).toHaveBeenCalledWith("vitesse-light");
     expect(setTheme).not.toHaveBeenCalledWith("vitesse-dark");
-  });
-
-  it("loads a late catalog theme through registerTheme before setTheme", async () => {
-    const setTheme = vi.fn();
-    const monaco = {
-      editor: { defineTheme: vi.fn(), setTheme },
-      languages: { getLanguages: () => [], register: vi.fn() },
-    };
-    const registerTheme = vi.fn(async () => undefined);
-    const loadTheme = vi.fn(async () => undefined);
-    const getTheme = vi.fn((name: string) => ({ name, type: "dark" as const }));
-    bootstrapShikiMonaco.mockResolvedValue({
-      highlighter: {
-        getLoadedThemes: () => ["vitesse-dark"],
-        loadTheme,
-        getTheme,
-      },
-      registerTheme,
-      registerLanguage: vi.fn(),
-    });
-    editorThemeImporterFor.mockImplementation((id: string) => {
-      if (id === "vitesse-dark") return loadBootTheme;
-      if (id === "nord") return loadNord;
-      return null;
-    });
-
-    await prepareMonacoEditorThemes(monaco as never);
-    setTheme.mockClear();
-
-    const { refreshMonacoEditorTheme } = await import("./monaco-theme");
-    refreshMonacoEditorTheme("nord");
-    await vi.waitFor(() => {
-      expect(registerTheme).toHaveBeenCalled();
-      expect(setTheme).toHaveBeenCalledWith("nord");
-    });
-    expect(loadTheme).toHaveBeenCalledWith(loadNord);
-  });
-
-  it("skips loading and registration for a late id with no catalog importer", async () => {
-    const setTheme = vi.fn();
-    const loadTheme = vi.fn(async () => undefined);
-    const registerTheme = vi.fn(async () => undefined);
-    const monaco = {
-      editor: { defineTheme: vi.fn(), setTheme },
-      languages: { getLanguages: () => [], register: vi.fn() },
-    };
-    editorThemeImporterFor.mockImplementation((id: string) =>
-      id === "vitesse-dark" ? loadBootTheme : null,
-    );
-    bootstrapShikiMonaco.mockResolvedValue({
-      highlighter: {
-        getLoadedThemes: () => ["vitesse-dark"],
-        loadTheme,
-        getTheme: vi.fn((name: string) => ({ name })),
-      },
-      registerTheme,
-      registerLanguage: vi.fn(),
-    });
-
-    await prepareMonacoEditorThemes(monaco as never);
-    loadTheme.mockClear();
-    registerTheme.mockClear();
-    const { refreshMonacoEditorTheme } = await import("./monaco-theme");
-    refreshMonacoEditorTheme("missing");
-
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("missing"));
-    expect(loadTheme).not.toHaveBeenCalled();
-    expect(registerTheme).not.toHaveBeenCalled();
   });
 });
 
@@ -484,11 +382,7 @@ describe("createShikiBackedModelFactory", () => {
     const model = { id: "model-1" };
     const createModel = vi.fn(() => model);
     const parse = vi.fn((uri: string) => ({ path: uri }));
-    const session = {
-      highlighter: {},
-      registerTheme: vi.fn(),
-      registerLanguage: vi.fn(),
-    };
+    const session = { highlighter: {}, registerLanguage: vi.fn() };
     const monaco = {
       editor: { createModel },
       Uri: { parse },
@@ -1340,11 +1234,7 @@ describe("createShikiBackedModelFactory", () => {
       Uri: { parse: vi.fn((uri: string) => ({ path: uri })) },
       languages: { getLanguages: () => [], register: vi.fn() },
     };
-    const session = {
-      highlighter: {},
-      registerTheme: vi.fn(),
-      registerLanguage: vi.fn(),
-    };
+    const session = { highlighter: {}, registerLanguage: vi.fn() };
     const factory = createShikiBackedModelFactory(monaco as never, session as never);
 
     expect(
