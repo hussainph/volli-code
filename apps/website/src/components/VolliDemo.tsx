@@ -548,7 +548,9 @@ export default function VolliDemo() {
             </DemoNavChip>
           </aside>
 
-          <main className="demo-main-surface">
+          {/* A div, not <main>: the page that hosts this already has one, and
+              two main landmarks is one too many. */}
+          <div className="demo-main-surface">
             {/* Home's tab strip: a permanent Board tab, project chats beside it,
                 and one control that starts a chat. */}
             <div className="demo-home-tabs" aria-hidden="true">
@@ -595,7 +597,9 @@ export default function VolliDemo() {
                       }`}
                       data-phase={phase.key}
                       key={phase.key}
-                      aria-label={`${phase.label}, ${phaseTickets.length} tickets`}
+                      aria-label={`${phase.label}, ${phaseTickets.length} ${
+                        phaseTickets.length === 1 ? "ticket" : "tickets"
+                      }`}
                     >
                       <div className="demo-column-header">
                         <strong>{phase.label}</strong>
@@ -643,7 +647,7 @@ export default function VolliDemo() {
                 })}
               </div>
             </div>
-          </main>
+          </div>
         </div>
 
         {selected && (
