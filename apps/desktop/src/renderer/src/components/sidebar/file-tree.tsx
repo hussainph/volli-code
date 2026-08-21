@@ -2,8 +2,7 @@ import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
-import { errorMessage, type DirEntry, type Project } from "@volli/shared";
-import type { DirChangedEvent, DirPathInput } from "../../../../ipc/contract";
+import type { DirEntry, Project } from "@volli/shared";
 
 import {
   Collapsible,
@@ -20,10 +19,9 @@ import {
   SidebarMenuSkeleton,
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
-import { rearmWatch } from "@renderer/editor/rearm-watch";
-import { toastError } from "@renderer/lib/toast";
+import { useDirectoryWatch } from "@renderer/hooks/use-directory-watch";
+import { useProjectRootsReady } from "@renderer/hooks/use-project-roots-sync";
 import { toProjectRelPath } from "@renderer/lib/project-rel-path";
-import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 import {
@@ -37,132 +35,6 @@ import {
 
 interface FileTreeProps {
   project: Project;
-}
-
-/**
- * `projectId` + `relPath` as one map key. The separator only has to be absent
- * from the PREFIX for the key to be unambiguous, and a project id is a UUID —
- * so a relPath containing a space (a real file name) still keys correctly.
- */
-function dirKey(projectId: string, relPath: string): string {
-  return `${projectId} ${relPath}`;
-}
-
-type DirChangedListener = (event: DirChangedEvent) => void;
-
-const dirListeners = new Map<string, Set<DirChangedListener>>();
-let dirChangedSubscription: (() => void) | null = null;
-
-/**
- * ONE `onDirChanged` IPC subscription for the whole tree, fanned out by
- * directory. A per-node subscription would be simpler, but an expanded tree
- * routinely holds a few dozen open levels and each one would add an
- * `ipcRenderer` listener on the same channel — straight past Node's
- * max-listeners warning threshold for a purely bookkeeping reason. The single
- * subscription is created with the first watched level and torn down with the
- * last.
- */
-function subscribeDirChanged(
-  projectId: string,
-  relPath: string,
-  listener: DirChangedListener,
-): () => void {
-  const key = dirKey(projectId, relPath);
-  const listeners = dirListeners.get(key) ?? new Set<DirChangedListener>();
-  listeners.add(listener);
-  dirListeners.set(key, listeners);
-  dirChangedSubscription ??= window.api.files.onDirChanged((event) => {
-    for (const notify of dirListeners.get(dirKey(event.projectId, event.relPath)) ?? []) {
-      notify(event);
-    }
-  });
-
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) dirListeners.delete(key);
-    if (dirListeners.size === 0) {
-      dirChangedSubscription?.();
-      dirChangedSubscription = null;
-    }
-  };
-}
-
-/**
- * Keeps ONE expanded directory live: a non-recursive main-process watcher plus
- * the subscription that re-lists just that level when it changes. Non-recursive
- * by design (CONCEPT #54) — the renderer never hydrates a repository into
- * state, it only refreshes the levels the user has actually opened.
- *
- * Pass `relPath: null` for a collapsed (or out-of-project) level: nothing is
- * watched, and an already-registered watch is torn down by the cleanup. A
- * failed `watchDir` is never swallowed and never breaks the level — the listing
- * that is already on screen stays usable, it just won't refresh itself.
- */
-function useDirectoryWatch(projectId: string, relPath: string | null, refresh: () => void): void {
-  // The refresh closure changes identity every render; re-registering the
-  // watcher for that would churn a main-process fs watch per keystroke
-  // elsewhere in the app.
-  const refreshRef = React.useRef(refresh);
-  refreshRef.current = refresh;
-
-  React.useEffect(() => {
-    if (relPath === null) return;
-    const label = relPath === "" ? "the project root" : relPath;
-    let live = true;
-    // Teardown is deliberately fire-and-forget: a failed unwatch means the
-    // watcher was never installed or has already died with the window, neither
-    // of which the user can act on. Swallowing keeps it off the unhandled-
-    // rejection channel instead of leaving a bare `void` promise.
-    const dropWatch = (): void => {
-      void window.api.files.unwatchDir({ projectId, relPath }).catch(() => {});
-    };
-    void window.api.files
-      .watchDir({ projectId, relPath })
-      .then((result) => {
-        if (!live) {
-          // `watchDir` is async in main, so it can install its watcher AFTER
-          // this effect's cleanup already sent the unwatch — that watcher would
-          // then belong to nobody and live until the window dies. Undo it.
-          if (result.ok) dropWatch();
-          return;
-        }
-        if (!result.ok) {
-          toastError(`Live updates for ${label} are unavailable: ${result.error}`);
-        }
-      })
-      .catch((error: unknown) => {
-        if (live) {
-          toastError(`Live updates for ${label} are unavailable: ${errorMessage(error)}`);
-        }
-      });
-    const unsubscribe = subscribeDirChanged(projectId, relPath, (event) => {
-      refreshRef.current();
-      // Main tore this level's watcher down (issue #134). The listing above is
-      // still current — it was just refreshed — but nothing more will arrive
-      // unless the watch is re-armed, so try, and say so if it cannot be.
-      if (event.final !== true) return;
-      void rearmWatch<DirPathInput>(
-        {
-          watch: (input) => window.api.files.watchDir(input),
-          unwatch: (input) => window.api.files.unwatchDir(input),
-        },
-        { projectId, relPath },
-      ).then((result) => {
-        if (!live) {
-          if (result.ok) dropWatch();
-          return;
-        }
-        if (!result.ok) {
-          toastError(`Live updates for ${label} are unavailable: ${result.error}`);
-        }
-      });
-    });
-    return () => {
-      live = false;
-      unsubscribe();
-      dropWatch();
-    };
-  }, [projectId, relPath]);
 }
 
 /**
@@ -197,38 +69,22 @@ function loadListing(path: string, setListing: (listing: Listing) => void): void
  */
 export function FileTree({ project }: FileTreeProps) {
   const [root, setRoot] = React.useState<Listing>("loading");
-  // Gates the root WATCH on the same root-sync the root listing waits for.
-  // `watchDir` resolves its path against the main-process allowlist too, so
-  // arming it first would toast a spurious "live updates are unavailable" for a
-  // freshly added project and leave the level permanently unwatched — the watch
-  // effect has nothing that would retry it. Flipping this true re-runs that
-  // effect with a real relPath, which is what actually arms the watcher.
-  const [rootsSynced, setRootsSynced] = React.useState(false);
+  // Gates BOTH the root listing and the root watch: `listDirectory` and
+  // `watchDir` each resolve their path against the main-process allowlist, so
+  // arming either first would reject a freshly added project as "outside known
+  // projects" — and the watch has nothing that would retry it, leaving the
+  // level permanently unwatched behind a spurious "live updates are
+  // unavailable". Home's navigator waits on the same gate.
+  const rootsReady = useProjectRootsReady();
 
   React.useEffect(() => {
     // No run-once guard here: StrictMode's dev-only mount→cleanup→mount cycle
     // must re-fetch on the second run, because `cancelled` discards the first
     // run's result. A run-once ref alongside this cleanup deadlocks the tree
     // on its loading skeleton (the one fetch resolves already-cancelled).
+    if (!rootsReady) return;
     let cancelled = false;
     void (async () => {
-      // Register fs roots BEFORE the first listing. This effect runs in a
-      // descendant of AppShell, and React fires child effects before parent
-      // effects, so AppShell's root-sync would otherwise land AFTER this
-      // listDirectory — the main-process allowlist would still be stale and
-      // reject a freshly added project's path as "outside known projects".
-      // syncRoots is idempotent, so re-asserting the full current set is safe.
-      try {
-        await window.api.projects.syncRoots(
-          useProjectsStore.getState().projects.map((p) => p.path),
-        );
-      } catch {
-        // A failed sync just surfaces as the listing error below — nothing to do.
-      }
-      // Released even when the sync threw: AppShell mirrors the same roots, so
-      // the allowlist may well be current regardless. Arming the watch and
-      // reporting a real failure beats never watching at all.
-      if (!cancelled) setRootsSynced(true);
       try {
         const result = await window.api.fs.listDirectory(project.path);
         if (!cancelled) setRoot(toListing(result));
@@ -240,12 +96,12 @@ export function FileTree({ project }: FileTreeProps) {
     return () => {
       cancelled = true;
     };
-  }, [project.path]);
+  }, [project.path, rootsReady]);
 
   // The root level is always open, so it is always watched once the roots are
-  // synced. `""` is the root relPath the dir-watch API expects (main rejects
+  // ready. `""` is the root relPath the dir-watch API expects (main rejects
   // "."); `null` until then means "watch nothing yet".
-  useDirectoryWatch(project.id, rootsSynced ? "" : null, () => {
+  useDirectoryWatch(project.id, rootsReady ? "" : null, () => {
     loadListing(project.path, setRoot);
   });
 

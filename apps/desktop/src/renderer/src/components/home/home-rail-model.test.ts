@@ -16,6 +16,11 @@ describe("Home rail pages", () => {
     expect(HOME_RAIL_MODES[0]).toBe(DEFAULT_HOME_RAIL_MODE);
   });
 
+  it("adds Project Files after the two existing pages", () => {
+    expect(HOME_RAIL_MODES).toEqual(["now", "sessions", "files"]);
+    expect(HOME_RAIL_MODE_LABELS.files).toBe("Files");
+  });
+
   it("names every page it offers", () => {
     for (const mode of HOME_RAIL_MODES) {
       expect(HOME_RAIL_MODE_LABELS[mode].length).toBeGreaterThan(0);
@@ -27,6 +32,7 @@ describe("sanitizeHomeRailMode", () => {
   it("keeps every page this build offers", () => {
     expect(sanitizeHomeRailMode("now")).toBe("now");
     expect(sanitizeHomeRailMode("sessions")).toBe("sessions");
+    expect(sanitizeHomeRailMode("files")).toBe("files");
   });
 
   it("lands a retired or corrupt page on the resting one", () => {

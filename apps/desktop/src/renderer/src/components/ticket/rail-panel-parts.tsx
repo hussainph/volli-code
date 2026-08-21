@@ -12,13 +12,16 @@
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { errorMessage, type DiffStat } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -219,4 +222,115 @@ export function RailPanelSkeleton({ label, testId }: { label: string; testId: st
       ))}
     </div>
   );
+}
+
+/**
+ * The header both file navigators wear — the ticket's worktree listing and
+ * Home's Main checkout (VC-121).
+ *
+ * Three parts, and every one of them is a fact about a flat directory
+ * navigator rather than about which repository it is pointed at: the panel's
+ * name, a mono sub-line that names the ROOT at the top level and becomes the
+ * way back OUT once you walk into a folder, and a filter that toggles an input
+ * open beside the list it narrows. The two panels had drawn all three
+ * separately, differing only in which words they used and — accidentally — in
+ * what the filter matched.
+ *
+ * `children` is the slot for what one panel has and the other does not: the
+ * ticket's Attach control and its attachment strip.
+ */
+export function RailNavigatorHeader({
+  title,
+  root,
+  cwd,
+  upTestId,
+  filtering,
+  query,
+  onToggleFilter,
+  onQueryChange,
+  onNavigateUp,
+  actions,
+  children,
+}: {
+  /** The panel's name — "Ticket files", "Project files". */
+  title: string;
+  /** The mono sub-line at the top level: a branch, a project name. */
+  root: string;
+  /** The folder being browsed, or `""` at the root. */
+  cwd: string;
+  upTestId: string;
+  filtering: boolean;
+  query: string;
+  onToggleFilter(): void;
+  onQueryChange(next: string): void;
+  onNavigateUp(): void;
+  /** Controls parked beside Filter — they act on the panel, not on a row. */
+  actions?: React.ReactNode;
+  /** Anything under the title row and above the filter input. */
+  children?: React.ReactNode;
+}) {
+  return (
+    <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-ui font-medium">{title}</p>
+          {cwd === "" ? (
+            <p className="truncate font-mono text-ui text-muted-foreground">{root}</p>
+          ) : (
+            <button
+              type="button"
+              data-testid={upTestId}
+              onClick={onNavigateUp}
+              aria-label={`Leave ${cwd}`}
+              className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground hover:text-foreground"
+            >
+              <ArrowUUpLeftIcon className="size-3 shrink-0" />
+              <span className="truncate">{cwd}</span>
+            </button>
+          )}
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Filter files"
+              aria-pressed={filtering}
+              onClick={onToggleFilter}
+            >
+              <MagnifyingGlassIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Filter files</TooltipContent>
+        </Tooltip>
+        {actions}
+      </div>
+      {children}
+      {filtering ? (
+        <Input
+          autoFocus
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          aria-label="Filter files"
+          placeholder="Filter files…"
+          className="h-7 text-ui"
+        />
+      ) : null}
+    </header>
+  );
+}
+
+/**
+ * What a navigator's filter matches: the whole project-relative path, not just
+ * the basename.
+ *
+ * Spelled once because the two panels had answered it differently — one
+ * matched `relPath`, the other the bare name — which made the same magnifier,
+ * with the same placeholder, mean two things. The path is the useful answer:
+ * typing `renderer` in a repository root should find the folder, and typing
+ * `home-rail` inside a folder should still match a row named for its path.
+ */
+export function railNavigatorMatch(query: string, relPath: string): boolean {
+  const needle = query.trim().toLowerCase();
+  return needle === "" || relPath.toLowerCase().includes(needle);
 }
