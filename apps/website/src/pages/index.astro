@@ -6,41 +6,98 @@ import VolliDemo from "../components/VolliDemo";
 import "../styles/global.css";
 
 const repositoryUrl = "https://github.com/hussainph/volli-code";
+const releasesUrl = `${repositoryUrl}/releases`;
+const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
+const description =
+  "Volli Code is a local-first macOS workspace for code projects: a ticket board, chats that already have your project or ticket context, isolated Git worktrees, and a change set you review before it lands.";
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
-    <meta
-      name="description"
-      content="A local-first macOS workspace for Tickets, durable Pi-backed Sessions, isolated Git worktrees, and live code review."
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
     <link rel="canonical" href="https://volli.app/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://volli.app/" />
-    <meta property="og:title" content="Volli Code | Plan and run coding agents" />
-    <meta
-      property="og:description"
-      content="A local-first macOS workspace for Tickets, durable Pi-backed Sessions, isolated Git worktrees, and live code review."
-    />
+    <meta property="og:title" content="Volli Code | A local-first Mac workspace for code projects" />
+    <meta property="og:description" content={description} />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Volli Code | Plan and run coding agents" />
     <meta
-      name="twitter:description"
-      content="A local-first macOS workspace for Tickets, durable Pi-backed Sessions, isolated Git worktrees, and live code review."
+      name="twitter:title"
+      content="Volli Code | A local-first Mac workspace for code projects"
     />
+    <meta name="twitter:description" content={description} />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli Code | Plan and run coding agents</title>
+    <title>Volli Code | A local-first Mac workspace for code projects</title>
   </head>
   <body>
-    <main id="top">
-      <section class="hero-shell" aria-label="Interactive Volli product preview">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="footer-brand site-brand" href="#top" aria-label="Volli Code home">
+        <img src="/volli-icon-dark.png" alt="" width="34" height="34" />
+        <span>Volli</span>
+      </a>
+      <nav aria-label="Primary">
+        <a href={docsUrl}>Docs</a>
+        <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
+        <a href={repositoryUrl}>GitHub</a>
+        <a class="site-nav-cta" href="/download/">Download</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      {/* The promise before the picture: a visitor should know what this is and
+          whether their Mac is supported before meeting an interactive fake UI. */}
+      <section class="hero" id="top">
+        <span class="alpha-pill">Alpha · Apple silicon</span>
+        <h1 class="hero-headline">Plan the work. Chat it through. Review what changed.</h1>
+        <p class="hero-lede">
+          Volli Code is a local-first macOS workspace for code projects. Keep your work on a ticket
+          board, start a chat that already has the project or the ticket as its context, let ticket
+          work happen in its own isolated Git worktree, and read the change set before it lands.
+          Projects, tickets, and chat history stay on your Mac.
+        </p>
+
+        <div class="cta-row hero-cta">
+          <a class="cta cta-primary" href="/download/">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 2.6c.5 0 .9.4.9.9v8.9l3.2-3.2a.9.9 0 1 1 1.3 1.3l-4.8 4.7a.9.9 0 0 1-1.2 0L6.6 10.5a.9.9 0 1 1 1.3-1.3l3.2 3.2V3.5c0-.5.4-.9.9-.9Zm-7.5 14a.9.9 0 0 1 .9.9v1.6c0 .5.4.9.9.9h11.4c.5 0 .9-.4.9-.9v-1.6a.9.9 0 1 1 1.8 0v1.6a2.7 2.7 0 0 1-2.7 2.7H6.3a2.7 2.7 0 0 1-2.7-2.7v-1.6c0-.5.4-.9.9-.9Z"
+              />
+            </svg>
+            <span>Download for Apple silicon</span>
+          </a>
+          <a class="cta cta-secondary" href={`${docsUrl}/start/quickstart/`}>
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M4 4.6c0-.6.5-1.1 1.1-1.1h4.3c1.1 0 2.1.5 2.6 1.4.6-.9 1.5-1.4 2.6-1.4h4.3c.6 0 1.1.5 1.1 1.1v13c0 .6-.5 1.1-1.1 1.1h-4.3c-.9 0-1.7.4-2.2 1.1a.9.9 0 0 1-1.5 0 2.6 2.6 0 0 0-2.2-1.1H5.1c-.6 0-1.1-.5-1.1-1.1v-13Zm7.1 12.2V6.6c0-.7-.6-1.3-1.3-1.3H5.8v11h3.6c.6 0 1.2.2 1.7.5Zm1.8 0c.5-.3 1.1-.5 1.7-.5h3.6v-11h-4c-.7 0-1.3.6-1.3 1.3v10.2Z"
+              />
+            </svg>
+            <span>Read the quickstart</span>
+          </a>
+        </div>
+
+        <p class="hero-alpha-note">
+          Early alpha for Apple silicon Macs (M1 and later). Expect rough edges and changes between
+          builds. <a href={`${docsUrl}/start/install/`}>Install guide</a> ·
+          <a href={releasesUrl}>Release notes</a> ·
+          <a href={issuesUrl}>Report a problem</a>
+        </p>
+      </section>
+
+      <section class="hero-shell" aria-label="Volli product preview">
         <VolliDemo client:load />
-        <p class="hero-preview-label">Interactive product preview — drag tickets or open one to explore.</p>
+        {/* Labelled illustrative, not a pixel-accurate capture (VC-64). */}
+        <p class="hero-preview-label">
+          An illustration of the workflow, not a screenshot — drag a ticket or open one to explore.
+        </p>
       </section>
 
       <section class="statement-section">
@@ -50,7 +107,7 @@ const docsUrl = "https://docs.volli.app";
           </div>
 
           <div class="statement-copy">
-            <h1 class="statement-headline">
+            <h2 class="statement-headline">
               <span class="headline-lead">The ticket is</span>
               <MorphingText
                 client:load
@@ -62,22 +119,24 @@ const docsUrl = "https://docs.volli.app";
                   "the project history",
                 ]}
               />
-            </h1>
+            </h2>
 
             <div class="body-copy">
               <p>
-                Volli is a local-first macOS workspace for Tickets, durable Pi-backed Sessions,
-                isolated Git worktrees, and live Change Sets.
+                Home is where a project opens: a board of tickets on its own permanent tab, with
+                project chats and project files as tabs beside it. Nothing to navigate away to.
               </p>
               <p>
-                Plan the work in a Ticket, then start a Ticket or project Session with its context
-                and history intact. When a Ticket needs implementation, its Git worktree stays an
-                explicit, isolated checkout—not a replacement for the Ticket itself.
+                A chat is the thing you start. A project chat works from your main checkout — good
+                for turning a vague idea into a set of tickets. A ticket chat gets that ticket's
+                body and scoped context, and its implementation work happens in an isolated Git
+                worktree that stays a separate checkout, never a replacement for the ticket itself.
               </p>
               <p>
-                Pi powers Volli’s structured runtime. External and bring-your-own CLI harnesses
-                stay available as manual terminal companions, while the board, Sessions, and review
-                remain a coherent product surface.
+                Chats run on Volli's Pi-backed agent runtime, using the model you choose in <a
+                  href={`${docsUrl}/guides/settings/`}>Model Access</a
+                >. A terminal is there when you want to drive a CLI harness yourself — an explicit
+                companion you ask for, never a silent fallback.
               </p>
             </div>
 
@@ -89,7 +148,7 @@ const docsUrl = "https://docs.volli.app";
                     d="M12 2.6c.5 0 .9.4.9.9v8.9l3.2-3.2a.9.9 0 1 1 1.3 1.3l-4.8 4.7a.9.9 0 0 1-1.2 0L6.6 10.5a.9.9 0 1 1 1.3-1.3l3.2 3.2V3.5c0-.5.4-.9.9-.9Zm-7.5 14a.9.9 0 0 1 .9.9v1.6c0 .5.4.9.9.9h11.4c.5 0 .9-.4.9-.9v-1.6a.9.9 0 1 1 1.8 0v1.6a2.7 2.7 0 0 1-2.7 2.7H6.3a2.7 2.7 0 0 1-2.7-2.7v-1.6c0-.5.4-.9.9-.9Z"
                   />
                 </svg>
-                <span>Download for macOS</span>
+                <span>Download for Apple silicon</span>
               </a>
               <a class="cta cta-secondary" href={repositoryUrl}>
                 <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
@@ -114,8 +173,11 @@ const docsUrl = "https://docs.volli.app";
       <nav aria-label="Footer">
         <a href="/download/">Download</a>
         <a href={docsUrl}>Docs</a>
+        <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
         <a href={repositoryUrl}>GitHub</a>
-        <a href={`${repositoryUrl}#readme`}>Readme</a>
+        <a href={releasesUrl}>Releases</a>
+        <a href={`${repositoryUrl}/security/policy`}>Security</a>
+        <a href={issuesUrl}>Feedback</a>
       </nav>
     </footer>
   </body>

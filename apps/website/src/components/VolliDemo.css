@@ -274,19 +274,80 @@
 }
 
 .demo-main-surface {
+  display: flex;
   min-width: 0;
   min-height: 0;
   margin: 6px;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid #262626;
   border-radius: 10px;
   background: #111111;
 }
 
+/* Home's tab strip: the Board is a permanent first tab, project chats and files
+   sit beside it, and one control starts a chat (home/home-tab-strip.tsx). This
+   is the shape that replaced the old standalone Sessions page. */
+.demo-home-tabs {
+  display: flex;
+  height: 32px;
+  padding: 0 8px;
+  flex: 0 0 auto;
+  align-items: end;
+  gap: 3px;
+  border-bottom: 1px solid #242424;
+  background: #161616;
+}
+
+.demo-home-tabs > span {
+  display: inline-flex;
+  height: 25px;
+  max-width: 150px;
+  padding: 0 10px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px 6px 0 0;
+  color: #77777b;
+  font-size: 8.5px;
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.demo-home-tabs > span.is-active {
+  border-color: #2c2c2c;
+  border-bottom-color: #111111;
+  background: #111111;
+  color: #e7e7e9;
+}
+
+.demo-home-tabs svg {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+}
+
+/* The split control the app presses to Chat, with Terminal under the caret. */
+.demo-home-newchat {
+  margin-left: auto;
+  color: #cfcfd2 !important;
+  gap: 3px !important;
+}
+
+.demo-home-caret {
+  display: inline-flex;
+  padding-left: 3px;
+  align-items: center;
+  border-left: 1px solid #2f2f2f;
+}
+
 .demo-board-toolbar {
   display: flex;
   height: 42px;
   padding: 0 12px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
 }
@@ -352,7 +413,8 @@
 }
 
 .demo-board-scroll {
-  height: calc(100% - 42px);
+  min-height: 0;
+  flex: 1;
   padding: 0 10px 10px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -671,7 +733,7 @@
 }
 
 .demo-doc-layout,
-.demo-terminal-layout {
+.demo-chat-layout {
   display: grid;
   height: 100%;
   min-height: 0;
@@ -692,7 +754,7 @@
 }
 
 .demo-doc-main h2,
-.demo-terminal-heading h2,
+.demo-chat-heading h2,
 .demo-done-view h2 {
   margin: 6px 0 13px;
   color: #f5f5f5;
@@ -755,7 +817,7 @@
 }
 
 .demo-doc-activity,
-.demo-session-rail {
+.demo-chat-rail {
   min-width: 0;
   border-left: 1px solid #232323;
   background: #161616;
@@ -791,7 +853,12 @@
   color: #77777b;
 }
 
-.demo-terminal-main {
+/* Chat plane (VC-64). This used to be a terminal pastiche in monospace with
+   Claude-styled bullets while the label said Pi. The app's default session is a
+   structured chat, so this reads as one: prose, named turns, tool steps, and a
+   composer carrying the model and effort controls. */
+
+.demo-chat-main {
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -799,330 +866,248 @@
   background: #0f0f0f;
 }
 
-.demo-terminal-heading {
+.demo-chat-heading {
   display: flex;
-  min-height: 72px;
-  padding: 15px 20px;
+  min-height: 64px;
+  padding: 14px 20px;
   align-items: center;
+  justify-content: space-between;
   gap: 11px;
   border-bottom: 1px solid #202020;
 }
 
-.demo-terminal-heading h2 {
-  margin: 0 0 3px;
-  font-size: 17px;
+.demo-chat-heading h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
 }
 
-.demo-terminal-heading > div > span {
+.demo-chat-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: #77777b;
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: 8px;
 }
 
-.demo-agent-mark {
-  display: grid;
-  width: 30px;
-  height: 30px;
+.demo-chat-branch svg {
+  width: 9px;
+  height: 9px;
+}
+
+.demo-chat-scope {
   flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid #4a342b;
-  border-radius: 8px;
-  background: #2a1c16;
-  color: #f08a59;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 11px;
-  font-weight: 700;
+  padding: 3px 8px;
+  border: 1px solid #34302e;
+  border-radius: 999px;
+  color: #c08a68;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.demo-agent-mark.is-codex {
-  border-color: #34443b;
-  background: #18251f;
-  color: #8cbda4;
-}
-
-.demo-terminal-screen {
+.demo-chat-thread {
+  display: flex;
   min-height: 0;
+  padding: 18px 20px 8px;
   flex: 1;
-  padding: 20px 24px;
+  flex-direction: column;
+  gap: 16px;
   overflow-y: auto;
-  color: #a4a4a8;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 9.5px;
-  line-height: 1.65;
 }
 
-.demo-cli-screen {
-  display: flex;
-  padding: 0;
-  flex-direction: column;
-  background: #0b0b0c;
-  color: #c5c5c8;
-  font-size: 9px;
-  line-height: 1.45;
-}
-
-.demo-cli-banner {
-  display: flex;
-  min-height: 49px;
-  padding: 9px 15px;
-  align-items: center;
-  gap: 9px;
-  border-bottom: 1px solid #29272b;
-  background: #111012;
-}
-
-.demo-cli-logo {
+.demo-chat-turn {
   display: grid;
-  width: 27px;
-  height: 27px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid #53382e;
-  border-radius: 6px;
-  background: #251a17;
-  color: #ef8f60;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.demo-cli-banner > span:nth-child(2) {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.demo-cli-banner strong {
-  color: #f0edef;
-  font-size: 9.5px;
-  font-weight: 650;
-}
-
-.demo-cli-banner small,
-.demo-cli-context {
-  color: #78747b;
-  font-size: 7.5px;
-}
-
-.demo-cli-context {
-  margin-left: auto;
-}
-
-.demo-codex-banner {
-  min-height: 47px;
-  margin: 12px 15px 0;
-  border: 1px solid #343438;
-  border-radius: 5px;
-  background: #101113;
-}
-
-.demo-codex-banner .demo-cli-logo {
-  border-color: #34483e;
-  background: #142019;
-  color: #95c0aa;
-  font-size: 9px;
-}
-
-.demo-cli-prompt {
-  display: flex;
-  min-height: 42px;
-  padding: 11px 17px 10px;
-  align-items: flex-start;
-  gap: 9px;
-  border-bottom: 1px solid #252427;
-  color: #f2eef0;
-}
-
-.demo-cli-prompt > span {
-  color: #ed7f4a;
-  font-size: 13px;
-  line-height: 1;
-}
-
-.demo-cli-prompt strong {
-  font-weight: 520;
-}
-
-.demo-codex-prompt {
-  min-height: 40px;
-  border-bottom: 0;
-}
-
-.demo-codex-prompt > span,
-.demo-codex-bullet {
-  color: #8ab79f;
-}
-
-.demo-cli-turn,
-.demo-codex-turn {
-  display: grid;
-  padding: 12px 17px 4px;
-  gap: 8px;
-}
-
-.demo-cli-line,
-.demo-cli-response {
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr);
+  min-width: 0;
   gap: 5px;
 }
 
-.demo-cli-line > span:last-child,
-.demo-cli-response > span:last-child {
-  min-width: 0;
-}
-
-.demo-claude-bullet {
-  color: #e67b49;
-}
-
-.demo-cli-tool strong,
-.demo-codex-turn strong {
-  color: #e6e3e5;
-  font-weight: 620;
-}
-
-.demo-cli-tool small,
-.demo-cli-line small,
-.demo-cli-response small {
-  display: block;
-  margin-top: 2px;
-  color: #77747a;
+.demo-chat-author {
+  color: #85858a;
   font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.demo-cli-status {
+.demo-chat-turn p {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.demo-chat-turn.is-you p {
+  padding: 9px 12px;
+  border: 1px solid #2b2b2b;
+  border-radius: 9px;
+  background: #181818;
+  color: #e4e4e6;
+}
+
+.demo-chat-turn.is-agent p {
+  color: #b0b0b4;
+}
+
+.demo-chat-turn.is-agent .demo-chat-author {
+  color: #d08557;
+}
+
+/* Tool steps: what the chat did, as rows rather than terminal output. */
+.demo-chat-steps {
+  display: grid;
+  margin-top: 4px;
+  gap: 5px;
+}
+
+.demo-chat-steps > span {
   display: flex;
-  margin: 6px 17px 0;
+  padding: 6px 10px;
   align-items: center;
-  gap: 7px;
-  color: #d5c5c0;
+  gap: 8px;
+  border: 1px solid #262626;
+  border-radius: 7px;
+  background: #151515;
+  color: #cfcfd2;
+  font-size: 9.5px;
+  font-weight: 560;
 }
 
-.demo-cli-status > span {
-  color: #e67b49;
+.demo-chat-steps svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  color: #8a8a8f;
 }
 
-.demo-cli-status small {
-  margin-left: 2px;
-  color: #716d73;
+.demo-chat-steps small {
+  margin-left: 6px;
+  color: #79797e;
+  font-size: 8.5px;
+  font-weight: 400;
 }
 
-.demo-cli-response {
-  margin: 7px 17px 0;
+.demo-chat-handoff {
+  margin-top: 8px !important;
   padding: 9px 11px;
   border-left: 2px solid #a65736;
   background: #151113;
+  color: #cbb3a7 !important;
 }
 
-.demo-cli-response small {
-  color: #a87560;
+.demo-chat-handoff strong {
+  color: #ecdcd2;
+  font-weight: 620;
 }
 
-.demo-codex-edit small {
-  color: #7eaa92;
-}
-
-.demo-codex-divider {
+.demo-chat-working {
   display: flex;
-  margin: 8px 17px 2px;
-  align-items: center;
-  gap: 10px;
-  color: #656269;
-  font-size: 7.5px;
-  white-space: nowrap;
-}
-
-.demo-codex-divider::before,
-.demo-codex-divider::after {
-  height: 1px;
-  flex: 1;
-  background: #29282b;
-  content: "";
-}
-
-.demo-codex-response {
-  border-left-color: #426d59;
-  background: #0f1512;
-}
-
-.demo-cli-composer {
-  display: flex;
-  min-height: 39px;
-  margin-top: auto;
-  padding: 10px 17px 8px;
-  align-items: flex-start;
-  gap: 8px;
-  border-top: 1px solid #302e32;
-  color: #ed7f4a;
-  font-size: 13px;
-  line-height: 1;
-}
-
-.demo-codex-composer {
-  color: #8ab79f;
-}
-
-.demo-cli-cursor {
-  width: 5px;
-  height: 10px;
-  background: currentColor;
-  opacity: 0.72;
-}
-
-.demo-cli-footer {
-  display: flex;
-  min-height: 22px;
-  padding: 0 17px 7px;
-  align-items: center;
-  justify-content: space-between;
-  color: #666269;
-  font-size: 7px;
-}
-
-.demo-terminal-screen p {
-  margin: 0 0 6px;
-}
-
-.demo-terminal-command {
-  margin-bottom: 15px !important;
-  color: #efeff1;
-}
-
-.demo-terminal-command > span,
-.demo-terminal-glyph {
-  color: #e8652a;
-}
-
-.demo-terminal-diff {
-  margin-top: 14px !important;
-  color: #77a88f;
-}
-
-.demo-terminal-working {
-  display: flex;
-  margin-top: 15px !important;
   align-items: center;
   gap: 7px;
   color: #c8c8cb;
+  font-size: 9.5px;
 }
 
-.demo-working-dot {
-  width: 6px;
-  height: 6px;
+.demo-chat-working small {
+  color: #716d73;
+  font-size: 8.5px;
 }
 
-.demo-agent-question {
-  max-width: 590px;
-  margin-top: 17px;
-  padding: 11px 13px;
-  border: 1px solid #3b2a22;
+.demo-chat-spinner {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1.5px solid #3a2f2b;
+  border-radius: 50%;
+  border-top-color: #e67b49;
+  animation: demo-chat-spin 900ms linear infinite;
+}
+
+@keyframes demo-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Composer. The model and effort chips are the two decisions the real one
+   carries, so they are what the preview shows. */
+.demo-chat-composer {
+  display: flex;
+  min-height: 46px;
+  margin: 0 16px 14px;
+  padding: 9px 10px 9px 13px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #2c2c2c;
+  border-radius: 11px;
+  background: #161616;
+}
+
+.demo-chat-input {
+  min-width: 0;
+  color: #6b6b70;
+  font-size: 10px;
+}
+
+.demo-chat-chips {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.demo-chat-chip {
+  padding: 4px 8px;
+  border: 1px solid #2f2f2f;
+  border-radius: 999px;
+  background: #1c1c1c;
+  color: #9d9da2;
+  font-size: 8.5px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.demo-chat-send {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
   border-radius: 7px;
-  background: #1b1512;
-  color: #d8c2b7;
-  line-height: 1.55;
+  background: #e8652a;
+  color: #180c06;
 }
 
-.demo-session-rail {
+.demo-chat-send svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* The terminal, stated as the optional companion it is. */
+.demo-rail-note {
+  display: flex;
+  margin-top: auto;
+  padding: 10px;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  background: #131313;
+  color: #85858a;
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.demo-rail-note svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #6f6f74;
+}
+
+.demo-chat-rail {
   display: flex;
   min-height: 0;
   padding: 20px 14px;
@@ -1334,7 +1319,7 @@
   }
 
   .demo-doc-layout,
-  .demo-terminal-layout {
+  .demo-chat-layout {
     grid-template-columns: minmax(0, 1fr) 190px;
   }
 }
@@ -1391,6 +1376,14 @@
 
   .demo-main-surface {
     margin: 5px;
+  }
+
+  .demo-home-tabs {
+    padding: 0 6px;
+  }
+
+  .demo-home-tabs > span:not(.is-active):not(.demo-home-newchat) {
+    display: none;
   }
 
   .demo-board-toolbar {
@@ -1468,7 +1461,7 @@
   }
 
   .demo-doc-layout,
-  .demo-terminal-layout {
+  .demo-chat-layout {
     display: block;
     height: auto;
     min-height: 100%;
@@ -1488,57 +1481,39 @@
   }
 
   .demo-doc-activity,
-  .demo-session-rail {
+  .demo-chat-rail {
     display: none;
   }
 
-  .demo-terminal-main {
+  .demo-chat-main {
     min-height: 100%;
   }
 
-  .demo-terminal-heading {
-    min-height: 68px;
-    padding: 13px 16px;
+  .demo-chat-heading {
+    min-height: 60px;
+    padding: 12px 16px;
   }
 
-  .demo-terminal-heading h2 {
+  .demo-chat-heading h2 {
     font-size: 15px;
   }
 
-  .demo-terminal-screen {
-    padding: 17px 16px;
-    overflow: visible;
-    font-size: 8.5px;
-  }
-
-  .demo-cli-screen {
-    min-height: 318px;
-    padding: 0;
-    overflow: hidden;
-  }
-
-  .demo-cli-context {
+  .demo-chat-scope {
     display: none;
   }
 
-  .demo-codex-banner {
-    margin: 10px 12px 0;
+  .demo-chat-thread {
+    padding: 15px 16px 6px;
+    overflow: visible;
   }
 
-  .demo-cli-prompt,
-  .demo-cli-turn,
-  .demo-codex-turn,
-  .demo-cli-composer,
-  .demo-cli-footer {
-    padding-right: 13px;
-    padding-left: 13px;
+  .demo-chat-composer {
+    margin: 0 13px 12px;
   }
 
-  .demo-cli-response,
-  .demo-cli-status,
-  .demo-codex-divider {
-    margin-right: 13px;
-    margin-left: 13px;
+  /* The chips outgrow a phone-width composer before the placeholder does. */
+  .demo-chat-chip {
+    display: none;
   }
 
   .demo-done-view {
