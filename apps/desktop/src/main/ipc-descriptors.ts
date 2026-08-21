@@ -13,7 +13,6 @@ import {
   isHarnessTrustVerdict,
   isHexColor,
   isProjectThemeOverride,
-  isShippedEditorThemeId,
   isTicketPriority,
   isTicketStatus,
   isValidBranchName,
@@ -781,21 +780,6 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       return isRecord(input) && isCallerScope(input["projectId"]);
     },
     invalidError: "Invalid theme request",
-  },
-  "volli:theme-set-global-editor": {
-    // `projectId` names the CALLER's scope, never a second write target — it
-    // decides which scope's state the answer describes (#123).
-    // null = derive from app theme; otherwise only a shipped catalog id.
-    // `isShippedEditorThemeId` is the shared vocabulary the renderer catalog
-    // asserts against — an unknown string never reaches SQLite.
-    guard: (args): args is IpcArgs<"volli:theme-set-global-editor"> =>
-      args.length === 1 &&
-      isRecord(args[0]) &&
-      (args[0]["editorThemeId"] === null ||
-        (typeof args[0]["editorThemeId"] === "string" &&
-          isShippedEditorThemeId(args[0]["editorThemeId"]))) &&
-      isCallerScope(args[0]["projectId"]),
-    invalidError: "Invalid editor theme",
   },
   "volli:theme-set-project": {
     guard: (args): args is IpcArgs<"volli:theme-set-project"> => {

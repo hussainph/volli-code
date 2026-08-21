@@ -58,10 +58,10 @@ interface ProjectRow {
  * nothing upstream can populate them anymore).
  */
 function mapThemeOverride(row: ProjectRow): ProjectThemeOverride | null {
-  const override: ProjectThemeOverride = {
-    terminalThemeName: row.theme_terminal_name,
-    editorThemeId: row.theme_editor_id,
-  };
+  // `theme_editor_id` joined `theme_app_slug` and `theme_seed` as a dead column
+  // in VC-123: the editor follows the resolved appearance, which is migration
+  // 014's `theme_appearance`, so there is no per-project editor id to read.
+  const override: ProjectThemeOverride = { terminalThemeName: row.theme_terminal_name };
   return isProjectThemeOverrideEmpty(override) ? null : override;
 }
 
@@ -190,7 +190,7 @@ export function updateProjectThemeOverride(
         SET theme_app_slug = ?, theme_terminal_name = ?, theme_editor_id = ?, theme_seed = ?,
             row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
-  ).run(null, override?.terminalThemeName ?? null, override?.editorThemeId ?? null, null, now, id);
+  ).run(null, override?.terminalThemeName ?? null, null, null, now, id);
   return getProjectById(db, id);
 }
 

@@ -53,7 +53,6 @@ import type {
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
-  ShippedEditorThemeId,
   SkillReference,
   TerminalBusyResult,
   TerminalIoResult,
@@ -781,22 +780,6 @@ export interface ThemeStateInput {
   projectId?: string;
 }
 
-/**
- * Persists the global Monaco/shiki theme id (`app_state.theme_editor`).
- * `null` clears it back to the shipped default editor theme, independent of
- * appearance.
- */
-export interface ThemeSetGlobalEditorInput {
-  editorThemeId: ShippedEditorThemeId | null;
-  /**
-   * The scope the CALLER is in — not a second write target (#123). The write
-   * is global from every scope; this only says which scope's state to answer
-   * with, so a window showing a project that overrides a surface keeps wearing
-   * that override instead of being repainted to the new global.
-   */
-  projectId?: string;
-}
-
 export interface ThemeSetProjectInput {
   projectId: string;
   /** Per-surface override; `null` clears every surface back to inheriting the global theme. */
@@ -815,16 +798,12 @@ export type TerminalOverlayWriteInput = {
 
 /**
  * What a scope needs that `volli:data-bootstrap` cannot ship: the resolved
- * TERMINAL chain (which has to be read off the filesystem), plus the editor id
- * and the migration-013 row those two surfaces still live on. The app surface is
- * not here — its `{canvas, appearance}` pair rides the bootstrap payload.
+ * TERMINAL chain (which has to be read off the filesystem) and the
+ * migration-013 row that surface still lives on. The app surface is not here —
+ * its `{canvas, appearance}` pair rides the bootstrap payload — and neither is
+ * the editor, which since VC-123 is derived from that pair rather than stored.
  */
 export interface ThemeStatePayload {
-  /**
-   * Global Monaco/shiki theme id from `app_state`. `null` means the shipped
-   * default editor theme (appearance-independent) — never a resolved token set.
-   */
-  editorThemeId: ShippedEditorThemeId | null;
   /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
   projectOverride: ProjectThemeOverride | null;
   /** The project the state was resolved for, echoed back; null for the global scope. */
@@ -911,17 +890,8 @@ export type TerminalOverlayWriteResult = Result<{
  * ships — so a canvas write answers with a bare ack rather than fresh state.
  */
 export interface VolliThemeIpcContract {
-  /** The resolved terminal chain for a scope, plus the editor id and the migration-013 row. */
+  /** The resolved terminal chain for a scope, plus the migration-013 row. */
   "volli:theme-state": { args: [input: ThemeStateInput]; result: ThemeStateResult };
-  /**
-   * Persists the global editor theme id (`app_state.theme_editor`). `null` clears
-   * it back to the shipped default editor theme, independent of appearance.
-   * Resolves with fresh state.
-   */
-  "volli:theme-set-global-editor": {
-    args: [input: ThemeSetGlobalEditorInput];
-    result: ThemeStateResult;
-  };
   /** Persists one project's per-surface override (migration 013); `null` clears it. */
   "volli:theme-set-project": { args: [input: ThemeSetProjectInput]; result: ThemeSetProjectResult };
   /**

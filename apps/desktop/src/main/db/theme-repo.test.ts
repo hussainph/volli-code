@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { THEME_TOKEN_NAMES } from "@volli/shared";
 import type { Canvas } from "@volli/shared";
 
+import * as themeRepo from "./theme-repo";
 import {
   getFirstPaintHint,
   getGlobalAppearance,
@@ -10,8 +11,6 @@ import {
   setFirstPaintHint,
   setGlobalAppearance,
   setGlobalCanvas,
-  getGlobalEditorThemeId,
-  setGlobalEditorThemeId,
 } from "./theme-repo";
 import {
   getProjectById,
@@ -43,29 +42,28 @@ afterEach(() => {
   ctx.cleanup();
 });
 
-describe("global editor theme id (app_state kv)", () => {
-  it("reports null until an editor theme has been chosen", () => {
+describe("the retired global editor theme id", () => {
+  it("exposes no editor accessor — the editor follows the appearance row", () => {
+    // VC-123 removed the reader and the writer together. Keeping either would
+    // leave a second, contradictable answer to "which theme?" in the database.
     ctx = openTestDb();
-    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
+    expect(themeRepo).not.toHaveProperty("getGlobalEditorThemeId");
+    expect(themeRepo).not.toHaveProperty("setGlobalEditorThemeId");
   });
 
-  it("round-trips an authored catalog id and clears back to derive-from-app", () => {
-    ctx = openTestDb();
-
-    setGlobalEditorThemeId(ctx.db, "nord", 1000);
-    expect(getGlobalEditorThemeId(ctx.db)).toBe("nord");
-
-    setGlobalEditorThemeId(ctx.db, null, 2000);
-    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
-  });
-
-  it("degrades to null on a stored non-catalog editor theme id", () => {
+  it("leaves an upgraded database's `theme_editor` row alone rather than migrating it", () => {
+    // The tolerant read is that NOTHING reads it: an id from a build that had a
+    // picker now means what an absent row means. No migration, nothing to fail.
     ctx = openTestDb();
     ctx.db
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES ('theme_editor', ?, 0)")
-      .run("volli-dark");
+      .run("one-dark-pro");
 
-    expect(getGlobalEditorThemeId(ctx.db)).toBeNull();
+    const row = ctx.db.prepare("SELECT value FROM app_state WHERE key = 'theme_editor'").get() as
+      | { value: string }
+      | undefined;
+
+    expect(row?.value).toBe("one-dark-pro");
   });
 });
 
@@ -88,47 +86,36 @@ describe("project theme override", () => {
     const updated = updateProjectThemeOverride(
       ctx.db,
       id,
-      {
-        terminalThemeName: "Catppuccin Mocha",
-        editorThemeId: null,
-      },
+      { terminalThemeName: "Catppuccin Mocha" },
       1000,
     );
 
-    expect(updated?.themeOverride).toEqual({
-      terminalThemeName: "Catppuccin Mocha",
-      editorThemeId: null,
-    });
+    expect(updated?.themeOverride).toEqual({ terminalThemeName: "Catppuccin Mocha" });
     expect(getProjectById(ctx.db, id)?.themeOverride?.terminalThemeName).toBe("Catppuccin Mocha");
   });
 
-  // The dead `theme_app_slug`/`theme_seed` columns (migration 013) are no longer
-  // reachable through `ProjectThemeOverride` — this write always lands `null` in
-  // both, whatever the caller asks for.
-  it("always writes null into the two dead migration-013 columns", () => {
+  // The dead `theme_app_slug`/`theme_seed`/`theme_editor_id` columns are no
+  // longer reachable through `ProjectThemeOverride` — this write always lands
+  // `null` in all three, whatever the caller asks for. `theme_editor_id` joined
+  // them in VC-123, when the editor started following the resolved appearance.
+  it("always writes null into the three dead migration-013 columns", () => {
     const id = seedProject();
 
-    updateProjectThemeOverride(
-      ctx.db,
-      id,
-      { terminalThemeName: "Nord", editorThemeId: "nord" },
-      1000,
-    );
+    updateProjectThemeOverride(ctx.db, id, { terminalThemeName: "Nord" }, 1000);
 
     const row = ctx.db
-      .prepare("SELECT theme_app_slug, theme_seed FROM projects WHERE id = ?")
-      .get(id) as { theme_app_slug: string | null; theme_seed: string | null };
-    expect(row).toEqual({ theme_app_slug: null, theme_seed: null });
+      .prepare("SELECT theme_app_slug, theme_seed, theme_editor_id FROM projects WHERE id = ?")
+      .get(id) as {
+      theme_app_slug: string | null;
+      theme_seed: string | null;
+      theme_editor_id: string | null;
+    };
+    expect(row).toEqual({ theme_app_slug: null, theme_seed: null, theme_editor_id: null });
   });
 
   it("clears every surface back to inherit on null", () => {
     const id = seedProject();
-    updateProjectThemeOverride(
-      ctx.db,
-      id,
-      { terminalThemeName: "Nord", editorThemeId: "nord" },
-      1000,
-    );
+    updateProjectThemeOverride(ctx.db, id, { terminalThemeName: "Nord" }, 1000);
 
     const cleared = updateProjectThemeOverride(ctx.db, id, null, 2000);
 
@@ -138,12 +125,7 @@ describe("project theme override", () => {
   it("reports an all-null override as inheriting rather than as an empty object", () => {
     const id = seedProject();
 
-    const updated = updateProjectThemeOverride(
-      ctx.db,
-      id,
-      { terminalThemeName: null, editorThemeId: null },
-      1000,
-    );
+    const updated = updateProjectThemeOverride(ctx.db, id, { terminalThemeName: null }, 1000);
 
     expect(updated?.themeOverride).toBeNull();
   });
@@ -154,12 +136,7 @@ describe("project theme override", () => {
       row_version: number;
     };
 
-    updateProjectThemeOverride(
-      ctx.db,
-      id,
-      { terminalThemeName: "Nord", editorThemeId: null },
-      4242,
-    );
+    updateProjectThemeOverride(ctx.db, id, { terminalThemeName: "Nord" }, 4242);
 
     expect(
       ctx.db.prepare("SELECT row_version, updated_at FROM projects WHERE id = ?").get(id),

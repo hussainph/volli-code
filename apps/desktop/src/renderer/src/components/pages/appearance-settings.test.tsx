@@ -71,25 +71,23 @@ describe("Settings → Appearance", () => {
     expect(html).not.toContain("Body copy");
   });
 
-  it("hosts an Editor section beside the Terminal theme picker", () => {
+  it("hosts the App theme section above the Terminal one", () => {
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
-    expect(html).toContain("Editor");
+    expect(html).toContain("App theme");
     expect(html).toContain("Terminal");
-    // Section order: App theme (mode + canvas) → Editor → Terminal.
-    expect(html.indexOf("Editor")).toBeGreaterThan(html.indexOf("App theme"));
-    expect(html.indexOf("Terminal")).toBeGreaterThan(html.indexOf("Editor"));
+    expect(html.indexOf("Terminal")).toBeGreaterThan(html.indexOf("App theme"));
   });
 
-  it("shows the shipped editor default when none is pinned, labeled as the default", () => {
-    // Decision 6: the canvas does not drive Monaco, so an unset id resolves to
-    // one flat default rather than something mapped off the app.
+  it("offers no editor theme control — Mode already decides it", () => {
+    // VC-123. The editor wears one light theme or one dark one, chosen by the
+    // Mode segmented control in the App theme section above. A picker here
+    // would be a second answer to a question this page already asks once.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
-    expect(html).toContain('aria-label="Editor theme"');
-    expect(html).toContain("One Dark Pro");
-    expect(html).toContain("Default");
-    // Reset only appears when an explicit id is pinned (covered in the model).
+    expect(html).not.toContain('aria-label="Editor theme"');
+    expect(html).not.toContain("Search editor themes");
     expect(html).not.toContain("Reset editor theme to the default");
+    expect(html).toContain('aria-label="Appearance"');
   });
 });

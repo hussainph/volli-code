@@ -1,61 +1,20 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  EMPTY_PROJECT_THEME_OVERRIDE,
-  type GhosttyAppearancePayload,
-  type ProjectThemeOverride,
-} from "@volli/shared";
+import type { GhosttyAppearancePayload } from "@volli/shared";
 
+import * as model from "./project-appearance-model";
 import {
-  projectEditorChoice,
   projectTerminalChoice,
   projectTerminalOverlayEdits,
   terminalCustomSeed,
-  withProjectEditorChoice,
 } from "./project-appearance-model";
 
-function override(over: Partial<ProjectThemeOverride> = {}): ProjectThemeOverride {
-  return { ...EMPTY_PROJECT_THEME_OVERRIDE, ...over };
-}
-
-describe("projectEditorChoice", () => {
-  it("reads no override at all as Inherit", () => {
-    expect(projectEditorChoice(null)).toEqual({ kind: "inherit" });
-  });
-
-  it("reads a null editor id as Inherit", () => {
-    expect(projectEditorChoice(override({ terminalThemeName: "sunset" }))).toEqual({
-      kind: "inherit",
-    });
-  });
-
-  it("reads a stored catalog id as the theme choice", () => {
-    expect(projectEditorChoice(override({ editorThemeId: "nord" }))).toEqual({
-      kind: "theme",
-      themeId: "nord",
-    });
-  });
-});
-
-describe("withProjectEditorChoice", () => {
-  it("stores a catalog id, leaving the app surface alone", () => {
-    expect(
-      withProjectEditorChoice(override({ terminalThemeName: "sunset" }), {
-        kind: "theme",
-        themeId: "nord",
-      }),
-    ).toEqual(override({ terminalThemeName: "sunset", editorThemeId: "nord" }));
-  });
-
-  it("collapses to no override when the editor was the last surface set", () => {
-    expect(
-      withProjectEditorChoice(override({ editorThemeId: "nord" }), { kind: "inherit" }),
-    ).toBeNull();
-  });
-
-  it("starts from all-inheriting when the project has no override yet", () => {
-    expect(withProjectEditorChoice(null, { kind: "theme", themeId: "nord" })).toEqual(
-      override({ editorThemeId: "nord" }),
-    );
+describe("the retired editor surface", () => {
+  it("offers no editor choice — a project overrides its appearance instead", () => {
+    // VC-123. The editor reads one light theme or one dark one off the resolved
+    // appearance, and a project's appearance is a migration-014 column, so
+    // there is nothing per-project left for this module to own.
+    expect(model).not.toHaveProperty("projectEditorChoice");
+    expect(model).not.toHaveProperty("withProjectEditorChoice");
   });
 });
 
