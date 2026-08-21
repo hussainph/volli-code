@@ -34,6 +34,7 @@ import {
   resolveAutoTitleModel,
   resolveDefaultModel,
   sanitizeAutoTitle,
+  type AutoTitleTicket,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelSelection,
@@ -64,6 +65,11 @@ export interface AutoTitlerOptions {
    * one title costs one read.
    */
   readModelDefaults(): ModelAccessDefaults;
+  /**
+   * The Ticket a Ticket Session is work on, for the prompt's background. Never
+   * called for a project chat. `null` when the Ticket has gone.
+   */
+  readTicket(ticketId: string): AutoTitleTicket | null;
   inspectModelAccess(input: { signal: AbortSignal }): Promise<ModelAccessSnapshot>;
   completeUtility(input: UtilityCompletion): Promise<string>;
   retitle(sessionId: string, title: string): Promise<void>;
@@ -162,6 +168,17 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       );
       return;
     }
+    // The Ticket is background the message often does not carry: a CLI Session
+    // started with no -m says only "Begin work on this ticket". Losing it is
+    // not worth losing the title, so a failed read titles without it.
+    let ticket: AutoTitleTicket | null = null;
+    if (session.ticketId !== null) {
+      try {
+        ticket = options.readTicket(session.ticketId);
+      } catch (failure) {
+        logSkip(request.sessionId, `the ticket could not be read (${errorMessage(failure)})`);
+      }
+    }
     let raw: string;
     try {
       raw = await options.completeUtility({
@@ -170,7 +187,7 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
         // Capped and delimited: a title is six words, and the opening decides
         // them. A pasted file behind the question is billed input that buys
         // nothing, and unbounded text is where instruction-shaped content hides.
-        user: autoTitlePrompt(request.firstMessage),
+        user: autoTitlePrompt(request.firstMessage, ticket),
         signal,
       });
     } catch (failure) {

@@ -6,6 +6,7 @@ import {
   archiveTicket,
   deleteTicket,
   getTicket,
+  getTicketBrief,
   getTicketRow,
   insertTicket,
   listAllTickets,
@@ -40,6 +41,29 @@ function forceUnknownStatus(db: TestDb["db"], ticketId: string, status: string):
   db.prepare("UPDATE tickets SET status = ? WHERE id = ?").run(status, ticketId);
   db.pragma("ignore_check_constraints = 0");
 }
+
+describe("getTicketBrief", () => {
+  it("joins the project prefix so the brief carries a display id", () => {
+    const { projectId } = setup();
+    const ticket = testTicket(projectId, {
+      ticketNumber: 52,
+      title: "Rate limit the public search endpoint",
+      body: "Anonymous search is unmetered.",
+    });
+    insertTicket(ctx.db, ticket);
+
+    expect(getTicketBrief(ctx.db, ticket.id)).toEqual({
+      displayId: "VC-52",
+      title: "Rate limit the public search endpoint",
+      body: "Anonymous search is unmetered.",
+    });
+  });
+
+  it("answers undefined for a ticket that is gone", () => {
+    setup();
+    expect(getTicketBrief(ctx.db, "ghost")).toBeUndefined();
+  });
+});
 
 describe("insertTicket / getTicket — worktree identity columns (migration 003)", () => {
   it("defaults worktreePath/branch/baseBranch to null", () => {

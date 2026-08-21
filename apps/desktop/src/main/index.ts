@@ -55,7 +55,7 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectById, listProjects } from "./db/projects-repo";
-import { getTicket } from "./db/tickets-repo";
+import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
@@ -1010,6 +1010,10 @@ app.whenReady().then(async () => {
           // change that retunes it, and the next title should run under the
           // policy configured now. One read serves all three rungs.
           readModelDefaults: () => readModelAccessDefaults(sessionDb),
+          // What the Session is work ON. The CLI door's stock kickoff names no
+          // work at all, so without this a Ticket Session's title could only
+          // ever be the heuristic's "Work on VC-81".
+          readTicket: (ticketId) => getTicketBrief(sessionDb, ticketId) ?? null,
           inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
           completeUtility: (input) => piRuntimeHost.completeUtility(input),
           retitle: async (sessionId, title) => {
