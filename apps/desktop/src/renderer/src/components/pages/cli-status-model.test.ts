@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { CliToolStatus } from "../../../../ipc/contract";
-import { cliNeedsAttention, cliStatusRows, sessionPathComparison } from "./cli-status-model";
+import {
+  cliNeedsAttention,
+  cliStatusDisclosure,
+  cliStatusRows,
+  sessionPathComparison,
+} from "./cli-status-model";
 
 function session(
   overrides: Partial<CliToolStatus["environment"]["session"]> = {},
@@ -176,6 +181,29 @@ describe("cliStatusRows", () => {
     expect(row(rows, "link").detail).toBe("/home/me/.local/bin/volli");
     expect(row(rows, "wrappers").value).toBe("claude, codex");
     expect(cliNeedsAttention(rows)).toBe(false);
+  });
+
+  it("keeps all diagnostics behind the compact summary when nothing needs attention", () => {
+    const rows = cliStatusRows(status());
+    const disclosure = cliStatusDisclosure(rows);
+
+    expect(disclosure.needsAttention).toBe(false);
+    expect(disclosure.attentionRows).toEqual([]);
+    expect(disclosure.detailRows).toBe(rows);
+  });
+
+  it("keeps only warning diagnostics in sight when the compact summary needs attention", () => {
+    const rows = cliStatusRows(
+      status({
+        socket: { path: "/profiles/volli.sock", live: false },
+        shell: { name: "zsh", supported: true, chainActive: false },
+      }),
+    );
+    const disclosure = cliStatusDisclosure(rows);
+
+    expect(disclosure.needsAttention).toBe(true);
+    expect(disclosure.attentionRows.map((entry) => entry.key)).toEqual(["socket", "shell"]);
+    expect(disclosure.detailRows.map((entry) => entry.key)).toEqual(["link", "path", "wrappers"]);
   });
 
   it("warns on a missing link, but mutes it when the user explicitly removed the tools", () => {
