@@ -3,11 +3,11 @@
  *
  * Boots the BUILT app against an isolated scratch profile, seeds the repo's
  * established demo project (voltaic / VLT), and captures the images the docs
- * pages embed:
+ * pages and README embed:
  *
- *   board.png            — the kanban board, all five columns populated.
- *   ticket-workspace.png — a ticket open in its workspace with a live terminal
- *                          session and real output in it.
+ *   board.png            — Home's permanent Board tab, with all five columns populated.
+ *   ticket-workspace.png — a ticket's Body and its review rail, with Chat as the
+ *                          explicit next action.
  *
  * `theme-picker.png` used to be the third. Its surface — Settings → Appearance's
  * app-theme picker — went with the seed-based theming system, and the file is
@@ -18,22 +18,12 @@
  * row, the vibrancy and grain sliders, and the contrast readout. The Theming
  * guide carries a matching TODO and embeds no image until that shot exists.
  *
- * Two things are deliberate here and worth keeping:
- *
- *   • Capture goes through `webContents.capturePage()`, not Playwright's
- *     `page.screenshot()`. The terminal is a WebGPU canvas whose pixels never
- *     reach the DOM; CDP's screenshot path can hand back an empty canvas for it,
- *     while capturePage reads the COMPOSITED window — the same pixels a person
- *     sees — and it comes back at the display's device scale factor, so the PNGs
- *     are 2x on a retina Mac with no extra plumbing.
- *
- *   • The terminal transcript comes from a fake harness binary (the
- *     lib/fake-harness.mjs shadowing trick: scratch bin dir prepended to PATH,
- *     scratch ZDOTDIR so the developer's own dotfiles are never sourced). The
- *     docs must not depend on any coding agent being installed, and the shot
- *     must not advertise a particular vendor's CLI, so the fake is installed
- *     under the neutral name `agent` — Volli is harness-agnostic and this is
- *     what any command template looks like from the terminal's side.
+ * Capture goes through `webContents.capturePage()`, not Playwright's
+ * `page.screenshot()`. It records the built app window at the display's device
+ * scale factor, so a Retina run writes 2x PNGs without exposing the person's
+ * own projects, chats, or desktop. The fixture runs in an isolated profile and
+ * must prove its project is ready before it writes either image; a setup warning
+ * is evidence of a broken shot, not documentation.
  *
  * Like every other probe in this directory this is MANUALLY RUN (needs a
  * display + the built app) and is NOT wired into `vp test`:
@@ -59,10 +49,8 @@ import {
   REPO,
   seedProjects,
   sleep,
-  startTerminalSession,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
-import { buildFakeHarness, harnessEnv } from "./lib/fake-harness.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,74 +107,15 @@ const HERO_BODY = [
   "- Drop a draft once its ticket is actually created",
 ];
 
-/**
- * The fake harness transcript. Deliberately vendor-neutral: Volli drives any
- * CLI harness, and a docs screenshot should not read as an endorsement of one.
- * Written as a shell script body so the ANSI colors are what the terminal
- * actually renders rather than something faked in the DOM.
- */
-const AGENT_SCRIPT = String.raw`#!/bin/sh
-# Fake, vendor-neutral coding-agent CLI for the docs screenshots. Prints a
-# plausible transcript, then blocks so the session reads as still running.
-b=$(printf '\033[1m'); d=$(printf '\033[2m'); g=$(printf '\033[32m')
-o=$(printf '\033[38;5;209m'); r=$(printf '\033[0m')
-printf '%s\n' ""
-printf '  %sagent%s  voltaic · VLT-14  %svolli/VLT-14-composer-draft-cache%s\n' "$b" "$r" "$d" "$r"
-printf '%s\n' ""
-printf '  %sPlan%s\n' "$b" "$r"
-printf '    1. key the draft cache on {projectId, ticketId}\n'
-printf '    2. restore the draft when the composer re-opens\n'
-printf '    3. drop a draft once its ticket is created\n'
-printf '%s\n' ""
-printf '  %s>%s read   src/renderer/src/components/board/new-ticket/composer.tsx\n' "$o" "$r"
-printf '  %s>%s read   src/renderer/src/stores/drafts.ts\n' "$o" "$r"
-printf '  %s>%s edit   src/renderer/src/stores/drafts.ts        %s+34 -6%s\n' "$o" "$r" "$g" "$r"
-printf '  %s>%s new    src/renderer/src/stores/drafts.test.ts   %s+61%s\n' "$o" "$r" "$g" "$r"
-printf '%s\n' ""
-printf '  %sDrafts are keyed on {projectId, ticketId} now, so switching projects%s\n' "$d" "$r"
-printf '  %smid-compose no longer clobbers the draft in the other one.%s\n' "$d" "$r"
-printf '%s\n' ""
-printf '  %s>%s run    pnpm -C apps/desktop test drafts\n' "$o" "$r"
-printf '         %s+%s src/renderer/src/stores/drafts.test.ts  (9 tests) 112ms\n' "$g" "$r"
-printf '         %s9 passed%s · 0 failed\n' "$g" "$r"
-printf '%s\n' ""
-printf '  %s>%s Ready for review. Anything else on this ticket?%s\n' "$o" "$r" "$r"
-printf '%s\n' ""
-exec cat
-`;
-
-/** A neutral zsh prompt: the default one embeds the machine's hostname. */
-const PROMPT_LINE =
-  "\n# docs screenshots: neutral prompt (the default one prints the hostname).\n" +
-  "PROMPT='%F{245}%1~%f %F{208}>%f '\nRPROMPT=''\n";
-
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-docs-shots-");
 const { attempt, check, summarize } = createRunner();
 
 await fs.mkdir(OUT_DIR, { recursive: true });
-const home = join(scratch, "home");
-await fs.mkdir(join(home, ".config"), { recursive: true });
-
 const projectDir = await makeGitRepo(scratch, "voltaic-");
 await seedRepoTree(projectDir);
+await installFixtureDependencies(projectDir);
 
-// The shadowing scaffolding (scratch bin dir + PATH-neutral ZDOTDIR); the
-// `claude`/`codex`/`opencode` fakes it writes are unused here — the docs shot
-// runs the neutral `agent` binary added next to them.
-const harness = await buildFakeHarness(scratch);
-await fs.writeFile(join(harness.binDir, "agent"), AGENT_SCRIPT, { mode: 0o755 });
-await fs.chmod(join(harness.binDir, "agent"), 0o755);
-await fs.appendFile(join(harness.zdotDir, ".zshrc"), PROMPT_LINE);
-
-const app = await launch({
-  dbPath,
-  userDataDir,
-  extraEnv: {
-    ...harnessEnv(harness),
-    HOME: home,
-    XDG_CONFIG_HOME: join(home, ".config"),
-  },
-});
+const app = await launch({ dbPath, userDataDir });
 
 try {
   await assertProfileIsolated(app, userDataDir);
@@ -252,10 +181,19 @@ try {
   await page.reload();
   await page.waitForLoadState("domcontentloaded");
   await waitUntil("board", async () => (await cardById(page, heroId).count()) === 1);
-  await sleep(1200);
+
+  const readiness = await fixtureReadiness(page, projectDir);
+  const fixtureReady = readiness.dependencies === "installed" && !readiness.alertVisible;
+  check(
+    2,
+    "fixture project is ready for Sessions",
+    fixtureReady,
+    `dependencies=${readiness.dependencies ?? "none"} alert=${readiness.alertVisible}`,
+  );
+  if (!fixtureReady) throw new Error(`fixture is not capture-ready: ${JSON.stringify(readiness)}`);
 
   // ---- 1. the board -------------------------------------------------------
-  await attempt(2, "board.png", async () => {
+  await attempt(3, "board.png", async () => {
     await goToBoard(page);
     const fit = await fitBoardColumns(page);
     await parkPointer(page);
@@ -265,44 +203,25 @@ try {
   });
 
   // ---- 2. the ticket workspace -------------------------------------------
-  await attempt(3, "ticket-workspace.png", async () => {
+  await attempt(4, "ticket-workspace.png", async () => {
     // The board shot may have zoomed out / hidden the sidebar to fit five
-    // columns; the workspace shot wants the app back at native scale.
+    // columns; the workspace shot wants the released, chat-first default back
+    // at native scale. Do not open a terminal to make a screenshot: it is an
+    // optional companion, not the primary product story.
     await restoreChrome(page);
     await cardById(page, heroId).dblclick();
-    await waitUntil("detail view", async () => (await page.getByRole("tablist").count()) >= 1);
-
-    const aside = page.locator("aside");
-    await waitUntil("ticket rail", async () => (await aside.count()) === 1);
-    await startTerminalSession(aside);
-    // The session boots a worktree + PTY; the canvas is what says it is live.
-    await waitUntil("terminal canvas", async () => {
-      const rect = await visibleCanvas(page);
-      return rect !== null && rect.width > 200;
-    });
-    await sleep(2500);
-
-    const rect = await visibleCanvas(page);
-    await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    await sleep(400);
-    await page.keyboard.type("clear");
-    await page.keyboard.press("Enter");
-    await sleep(600);
-    await page.keyboard.type('agent "Cache composer drafts per project"');
-    await page.keyboard.press("Enter");
-    // Poll for the transcript instead of sleeping on it: the fake writes its
-    // last line and then blocks on stdin, so "still running" is the steady
-    // state and there is no completion event to wait for.
-    await sleep(2500);
+    await waitUntil(
+      "ticket workspace",
+      async () =>
+        (await page.getByRole("tablist", { name: "Ticket tabs", exact: true }).count()) === 1,
+    );
+    await waitUntil("ticket body", () =>
+      page.getByText(HERO_BODY[0], { exact: false }).isVisible(),
+    );
     await parkPointer(page);
     await sleep(600);
     return capture("ticket-workspace.png");
   });
-
-  // ---- 3. the app theme surface -------------------------------------------
-  // Was the seed picker; that surface is the canvas editor now and lands with
-  // it. Nothing here to shoot until it does — a shot of the interim placeholder
-  // would date the docs the day the editor arrives.
 } catch (error) {
   check("!", "docs shots crashed", false, String(error?.stack ?? error));
 } finally {
@@ -413,18 +332,6 @@ async function restoreChrome(page) {
   await sleep(600);
 }
 
-/** The visible terminal canvas's viewport rect (the active tab's), or null. */
-function visibleCanvas(page) {
-  return page.evaluate(() => {
-    const canvas = Array.from(document.querySelectorAll("canvas")).find(
-      (el) => el.offsetParent !== null && el.clientWidth > 0 && el.clientHeight > 0,
-    );
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  });
-}
-
 /**
  * Move the pointer somewhere inert. Hover states (card hover, theme-row preview,
  * button highlight) are real UI but they make a screenshot look mid-interaction.
@@ -434,9 +341,8 @@ async function parkPointer(page) {
 }
 
 /**
- * Give the fixture repo a plausible source tree, so the worktree the session
- * opens in — and anything in the shot that lists files — reads like a real
- * project instead of a lone README.
+ * Give the fixture repo a plausible source tree, so the board and ticket body
+ * read like a real project rather than a lone README.
  */
 async function seedRepoTree(dir) {
   const files = {
@@ -454,4 +360,36 @@ async function seedRepoTree(dir) {
   }
   await execFileAsync("git", ["add", "-A"], { cwd: dir });
   await execFileAsync("git", ["commit", "-q", "-m", "scaffold the renderer stores"], { cwd: dir });
+}
+
+/**
+ * This fixture is a JavaScript workspace with no packages to install. The
+ * product correctly regards its dependencies as ready only when `node_modules`
+ * exists, so create a harmless marker after committing the demo source. It is
+ * deliberately untracked: no documentation screenshot should imply that
+ * dependency folders belong in source control.
+ */
+async function installFixtureDependencies(dir) {
+  const nodeModules = join(dir, "node_modules");
+  await fs.mkdir(nodeModules, { recursive: true });
+  await fs.writeFile(join(nodeModules, ".volli-docs-fixture"), "ready\n", "utf8");
+}
+
+/**
+ * Capture is allowed only from a project that would not display a setup
+ * warning. Query the same CLI-status seam the UI uses, then confirm its notice
+ * has settled out of the rendered window.
+ */
+async function fixtureReadiness(page, cwd) {
+  const status = await page.evaluate(async (projectPath) => {
+    const response = await window.api.cli.status({ cwd: projectPath });
+    if (!response.ok) return { dependencies: null, statusError: String(response.error) };
+    return { dependencies: response.status.environment.session.dependencies, statusError: null };
+  }, cwd);
+  await sleep(800);
+  const alertVisible = await page
+    .getByText(`Sessions aren't ready for ${PROJECT.name}`, { exact: true })
+    .isVisible()
+    .catch(() => false);
+  return { ...status, alertVisible };
 }

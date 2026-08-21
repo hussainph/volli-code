@@ -16,6 +16,7 @@
     "test": "vp run -r test",
     "test:coverage": "vp run -r test:coverage",
     "smoke:pi": "pnpm run build && node apps/desktop/e2e/pi-ticket-chat-smoke.mjs && node apps/desktop/e2e/pi-project-chat-smoke.mjs && node apps/desktop/e2e/pi-sessions-host-smoke.mjs",
+    "smoke:docs-shots": "pnpm run build && env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/docs-shots.mjs",
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check"

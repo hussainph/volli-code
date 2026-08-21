@@ -18,6 +18,14 @@
   <a href="https://github.com/hussainph/volli-code/issues">Feedback</a>
 </p>
 
+<p align="center">
+  <img
+    src="apps/docs/src/assets/screenshots/board.png"
+    alt="Volli Code's Home Board tab with five ticket columns and a Chat control."
+    width="1200"
+  />
+</p>
+
 ## Install
 
 > [!IMPORTANT]
