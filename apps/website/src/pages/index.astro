@@ -1,6 +1,7 @@
 ---
 import "@fontsource-variable/mona-sans/wght.css";
 import MorphingText from "../components/MorphingText";
+import HeroFlow from "../components/HeroFlow.astro";
 import LifecycleAccordion from "../components/LifecycleAccordion.astro";
 import VolliDemo from "../components/VolliDemo";
 import "../styles/global.css";
@@ -10,7 +11,7 @@ const releasesUrl = `${repositoryUrl}/releases`;
 const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
 const description =
-  "Volli Code is a local-first macOS workspace for code projects: a ticket board, chats that already have your project or ticket context, isolated Git worktrees, and a change set you review before it lands.";
+  "A local-first Mac app for running coding agents you can actually review. Plan work as tickets, chat with full context, and keep every change in its own branch.";
 ---
 
 <!doctype html>
@@ -22,17 +23,14 @@ const description =
     <link rel="canonical" href="https://volli.app/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://volli.app/" />
-    <meta property="og:title" content="Volli Code | A local-first Mac workspace for code projects" />
+    <meta property="og:title" content="Volli Code | Run coding agents you can actually review" />
     <meta property="og:description" content={description} />
     <meta name="twitter:card" content="summary" />
-    <meta
-      name="twitter:title"
-      content="Volli Code | A local-first Mac workspace for code projects"
-    />
+    <meta name="twitter:title" content="Volli Code | Run coding agents you can actually review" />
     <meta name="twitter:description" content={description} />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli Code | A local-first Mac workspace for code projects</title>
+    <title>Volli Code | Run coding agents you can actually review</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -54,13 +52,12 @@ const description =
       {/* The promise before the picture: a visitor should know what this is and
           whether their Mac is supported before meeting an interactive fake UI. */}
       <section class="hero" id="top">
+        <div class="hero-copy">
         <span class="alpha-pill">Alpha · Apple silicon</span>
-        <h1 class="hero-headline">Plan the work. Chat it through. Review what changed.</h1>
+        <h1 class="hero-headline">Run coding agents without losing track of what they did.</h1>
         <p class="hero-lede">
-          Volli Code is a local-first macOS workspace for code projects. Keep your work on a ticket
-          board, start a chat that already has the project or the ticket as its context, let ticket
-          work happen in its own isolated Git worktree, and read the change set before it lands.
-          Projects, tickets, and chat history stay on your Mac.
+          A local-first Mac app. Plan work as tickets, start a chat that already has the context,
+          and let it work in its own branch. Nothing lands in your main checkout until you say so.
         </p>
 
         <div class="cta-row hero-cta">
@@ -85,11 +82,13 @@ const description =
         </div>
 
         <p class="hero-alpha-note">
-          Early alpha for Apple silicon Macs (M1 and later). Expect rough edges and changes between
-          builds. <a href={`${docsUrl}/start/install/`}>Install guide</a> ·
+          Apple silicon, M1 and later. <a href={`${docsUrl}/start/install/`}>Install guide</a> ·
           <a href={releasesUrl}>Release notes</a> ·
           <a href={issuesUrl}>Report a problem</a>
         </p>
+        </div>
+
+        <HeroFlow />
       </section>
 
       <section class="hero-shell" aria-label="Volli product preview">

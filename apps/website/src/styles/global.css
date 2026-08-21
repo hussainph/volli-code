@@ -152,42 +152,51 @@ a:focus-visible {
 }
 
 /* Hero — the plain-language promise, the alpha contract, and the primary CTA,
-   all ahead of the demo (VC-64 P0). */
+   ahead of the demo (VC-64 P0). Two columns: the copy carries the promise, the
+   flow vignette fills what would otherwise be dead space beside it. */
 .hero {
+  display: grid;
   width: 100%;
   max-width: 1312px;
   margin: 0 auto;
-  padding: 76px 40px 12px;
+  padding: 60px 40px 4px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+  gap: clamp(40px, 6vw, 96px);
+  align-items: center;
+}
+
+.hero-copy {
+  min-width: 0;
 }
 
 .hero-headline {
-  max-width: 17ch;
-  margin: 0 0 22px;
+  max-width: 19ch;
+  margin: 0 0 18px;
   color: var(--text);
-  font-size: clamp(40px, 5.6vw, 68px);
+  font-size: clamp(35px, 4.1vw, 54px);
   font-weight: 420;
-  letter-spacing: -0.05em;
-  line-height: 1.06;
+  letter-spacing: -0.045em;
+  line-height: 1.07;
   text-wrap: balance;
 }
 
 .hero-lede {
-  max-width: 62ch;
+  max-width: 46ch;
   margin: 0;
   color: var(--muted);
-  font-size: clamp(16px, 1.35vw, 18.5px);
+  font-size: clamp(16px, 1.25vw, 17.5px);
   font-weight: 360;
   letter-spacing: -0.012em;
-  line-height: 1.62;
+  line-height: 1.6;
 }
 
 .hero-cta {
-  padding-top: 30px;
+  padding-top: 26px;
 }
 
 .hero-alpha-note {
-  max-width: 62ch;
-  margin: 20px 0 0;
+  max-width: 52ch;
+  margin: 16px 0 0;
   color: var(--quiet);
   font-size: 13px;
   font-weight: 380;
@@ -905,7 +914,9 @@ footer nav a:hover {
   }
 
   .hero {
-    padding: 56px 24px 8px;
+    padding: 44px 24px 4px;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 370px);
+    gap: 44px;
   }
 
   .statement-section {
@@ -919,6 +930,19 @@ footer nav a:hover {
 
   footer {
     width: calc(100% - 64px);
+  }
+}
+
+@media (max-width: 880px) {
+  /* The vignette is decorative and the interactive demo is directly below it.
+     Below this width the copy needs the whole column more than the page needs
+     a second illustration. */
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero-flow {
+    display: none;
   }
 }
 
@@ -972,7 +996,7 @@ footer nav a:hover {
   }
 
   .hero {
-    padding: 34px 20px 4px;
+    padding: 30px 20px 4px;
   }
 
   .hero-headline {

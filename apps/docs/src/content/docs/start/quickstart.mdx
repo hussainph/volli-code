@@ -16,14 +16,8 @@ fifteen minutes.
 
 ## 1. Meet Home
 
-When you open a project, you land on **Home**.
-
-Home is a tabbed workspace. Its first tab is the **Board** and it never closes.
-Beside it, chats and files open as further tabs, so a chat sits one tab away
-from the board it came from.
-
-On the left you have your projects in the far rail, then **Home**, **Files**,
-and **Configure**, with **Settings** at the bottom.
+A project opens on **Home**, a tabbed workspace. The first tab is the **Board**
+and it never closes; chats and files open as tabs beside it.
 
 <Aside type="note" title="If you haven't added a project yet">
   Select **+** in the project rail and choose a git repository. That folder is
@@ -37,20 +31,18 @@ and **Configure**, with **Settings** at the bottom.
 
 1. **Press Chat** on Home's tab strip.
 
-   This starts a *project chat*. It works from your main checkout and it opens
-   as a tab beside the Board.
+   This starts a *project chat*, working from your main checkout.
 
 2. **Describe what you want, loosely.**
 
-   A project chat is the right place to be vague. Something like:
+   A project chat is the right place to be vague:
 
    > We need to move billing off the nightly job and onto Stripe webhooks. Break
    > that into tickets for me.
 
-3. **Let it turn that into tickets.**
+3. **Switch to the Board tab.**
 
-   A project chat can create and edit tickets on the board. Switch to the
-   **Board** tab and watch them land.
+   A project chat can create and edit tickets. Watch them land.
 
 </Steps>
 
@@ -64,12 +56,11 @@ and **Configure**, with **Settings** at the bottom.
 
 Open a ticket from the board.
 
-The first tab is its **body**, the ticket's canonical Markdown. This is the
-brief. Write what should change, what must not, and how you will judge the
-result. Anything vague here comes back as a vague change later.
+The first tab is its **body**. Write what should change, what must not, and how
+you will judge the result.
 
-The body is the starting context for every chat on this ticket, so it is worth
-the two minutes.
+This is the starting context for every chat on the ticket. Anything vague here
+comes back as a vague change later.
 
 ## 4. Start a ticket chat
 
@@ -82,55 +73,42 @@ the two minutes.
 
 2. **Watch it work, and answer it.**
 
-   The chat shows its turns and its tool steps as it goes. When it needs a
-   decision from you, it asks in the chat rather than guessing. You can
-   interrupt it at any point.
+   When it needs a decision, it asks instead of guessing. Interrupt it whenever
+   you want.
 
 3. **Leave and come back.**
 
-   Close the tab, switch projects, or quit the app. The chat keeps its identity
-   and its ordered history. Reopen it from the ticket's **Chats** rail, the
-   sidebar, or <kbd>⌘K</kbd>.
+   Close the tab or quit the app. Reopen the chat from the ticket's **Chats**
+   rail, the sidebar, or <kbd>⌘K</kbd>, with its history intact.
 
 </Steps>
 
 <Aside type="note" title="Moving a ticket does not start anything">
-  Board columns record where work *is*. Dragging a ticket to **Doing** organizes
-  your board; it does not choose a model or start a chat. Starting work is
-  always an explicit press of **Chat**. These are two separate actions on
-  purpose.
+  Dragging a ticket to **Doing** organizes your board. It does not start a chat.
+  Starting work is always an explicit press of **Chat**.
 </Aside>
 
 ## 5. Read what changed
 
-A ticket's implementation work happens in its own git worktree: a separate
-checkout on its own branch, beside your main one. Volli does not touch your
-main checkout.
+The ticket worked in its own git worktree, on its own branch, beside your main
+checkout rather than in it.
 
-In the ticket:
+- **Changes** shows the change set against the base branch.
+- **Files** opens the ticket's files as they are in the worktree.
 
-- **Changes** shows the change set against the base branch: which files, and
-  what moved in each.
-- **Files** opens the ticket's files as they are *in the worktree*, not in your
-  main checkout.
-
-Read the change yourself. Volli shows you what happened. It does not certify
-that the work is correct, and it does not run your test suite on your behalf.
+Read the change yourself. Volli shows you what happened; it does not certify the
+work is correct or run your tests for you.
 
 ## 6. Deliver it
 
-From the ticket's repository summary you can commit, push, and open or view a
-pull request, then move the ticket to the column that reflects reality. When
-you're finished with the ticket, clean up its worktree from the same place.
+Commit, push, and open a pull request from the ticket's repository summary, then
+move the ticket. Clean up its worktree from the same place when you're done.
 
 ## Using a terminal instead
 
-Everything above uses Volli's structured chat. If you would rather drive a CLI
-yourself, open the caret beside **Chat** and choose **Terminal**.
-
-That gives you a shell, in the ticket's worktree when a ticket has one, where
-you can run Claude Code, Codex, OpenCode, or any TUI you like. You ask for it
-explicitly. Volli never opens one for you as a fallback when a chat fails.
+To drive a CLI yourself, open the caret beside **Chat** and choose **Terminal**.
+You get a shell in the ticket's worktree for Claude Code, Codex, OpenCode, or
+your own TUI. Volli never opens one as a fallback.
 
 ## Next steps
 

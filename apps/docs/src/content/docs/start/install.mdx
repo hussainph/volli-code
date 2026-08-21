@@ -20,54 +20,26 @@ a model, and start your first chat.
 
 | | |
 | --- | --- |
-| **Mac** | Apple silicon (M1 or later). There is no Intel or universal build yet. |
-| **macOS** | A macOS version that runs current Electron builds. If the app refuses to open on your version, [tell us](https://github.com/hussainph/volli-code/issues). |
-| **Git** | A local [git](https://git-scm.com) install. Volli works on git repositories on disk. |
-| **A model** | An account with a model provider you configure in Model Access, after first launch. |
+| **Mac** | Apple silicon (M1 or later). No Intel or universal build yet. |
+| **macOS** | 12.0 Monterey or later. |
+| **Git** | Installed, with your repositories on disk. |
+| **A model** | An account with a model provider, set up on first launch. |
 
-Volli itself needs no account. You sign in to a model provider through Model
-Access, after first launch.
+Volli itself needs no account.
 
-## Download and open it
+## Install it
 
-<Steps>
+Download the `.dmg` from [volli.app/download](https://volli.app/download/), drag
+**Volli Code** to Applications, and open it.
 
-1. **Get the build.**
-
-   Open [volli.app/download](https://volli.app/download/) and download the
-   `.dmg`. There is one build, the current alpha. Older canary builds stay
-   available on [GitHub Releases](https://github.com/hussainph/volli-code/releases)
-   if you need to go back to one.
-
-2. **Move it to Applications.**
-
-   Open the `.dmg` and drag **Volli Code** to Applications, then eject the
-   disk image.
-
-3. **Open it.**
-
-   Builds are signed with a Developer ID and notarized by Apple, so Gatekeeper
-   opens them normally. You should not need to right-click → Open, and you
-   should not be told the app is damaged or from an unidentified developer.
-
-   <Aside type="tip">
-     If macOS *does* block the app, that usually means the download was
-     corrupted or altered in transit. Delete it, download again, and if it
-     happens twice [open an issue](https://github.com/hussainph/volli-code/issues)
-     rather than working around the warning.
-   </Aside>
-
-</Steps>
+If macOS blocks the app, the download was damaged. Delete it and download again.
 
 ## Updates
 
-The app checks GitHub Releases for newer builds, downloads one in the
-background, and installs it when you quit. During the alpha this means you move
-forward roughly as fast as builds ship.
-
-To pin yourself to a specific build instead, download that release's `.dmg`
-directly from [GitHub Releases](https://github.com/hussainph/volli-code/releases)
-and replace the app in Applications.
+The app installs a newer alpha when you quit. To stay on a specific build,
+download that release's `.dmg` from
+[GitHub Releases](https://github.com/hussainph/volli-code/releases) and replace
+the app in Applications.
 
 ## First run
 
@@ -81,10 +53,8 @@ and replace the app in Applications.
 
 2. **Choose a model.**
 
-   Open **Settings → Model Access** and pick a default model. Sign in to the
-   provider you want to use. Volli does not pick a provider for you, does not
-   fall back to a different model silently, and does not put provider
-   credentials in the renderer or in chat history.
+   Open **Settings → Model Access**, sign in to your provider, and pick a
+   default model. Volli never silently switches to a different one.
 
 3. **Start a chat.**
 
@@ -99,42 +69,33 @@ empty board to a reviewed change.
 
 ## Chats and terminals
 
-A **chat** is Volli's structured session. It runs on the Pi-backed agent
-runtime with the model you chose in Model Access, and Volli renders its turns,
-tool steps, and questions as product surfaces.
+A **chat** is Volli's structured session, running on the model you picked in
+Model Access. It's what **Chat** starts.
 
-A **terminal** is a manual companion. It opens a shell, in the ticket's worktree
-when a ticket has one, where you can drive Claude Code, Codex, OpenCode, or any
-TUI yourself. It sits under the caret beside **Chat**, and you ask for it
-explicitly. Volli never falls back to a terminal when a chat fails.
+A **terminal** is a manual companion: a shell in the ticket's worktree where you
+drive Claude Code, Codex, OpenCode, or your own TUI. It's under the caret beside
+**Chat**, and you ask for it explicitly. Volli never opens one as a fallback.
 
 ## The `volli` CLI
 
-Volli installs a local `volli` command in the background. Terminals that Volli
-opens already have it on `PATH`. Open **Settings → CLI** to check the
-installation or run Doctor.
-
-From a terminal Volli opened, this reports what that terminal is attached to:
+Terminals Volli opens already have the `volli` command on `PATH`. To see what a
+terminal is attached to:
 
 ```sh
 volli identify
 ```
 
-See the [CLI reference](/reference/cli/) for the full command set.
+Check the installation or run Doctor in **Settings → CLI**. Full command set in
+the [CLI reference](/reference/cli/).
 
 ## Where your data lives
 
-Volli keeps its data on your Mac:
+- Projects, tickets, and history: `~/Library/Application Support/Volli Code/`
+- Ticket worktrees: `~/.volli/worktrees/`
+- Chat transcripts: on disk, indexed locally
 
-- Projects, tickets, labels, and history: a SQLite database in Electron's
-  `userData` directory (`~/Library/Application Support/Volli Code/`).
-- Ticket worktrees: `~/.volli/worktrees/`.
-- Chat transcripts: on disk, indexed locally.
-
-Model requests leave your machine for the provider you selected in Model
-Access. Nothing else is sent anywhere.
-
-Removing a project from Volli does not delete its folder from disk.
+Model requests go to the provider you selected. Nothing else leaves your
+machine. Removing a project from Volli does not delete its folder.
 
 ## Uninstall
 
