@@ -29,7 +29,9 @@ open its workspace to start or return to a Session.
 **Needs Review.** The ticket is ready for you to inspect its Change Set and
 decide what happens next.
 
-**Done.** Finished. Volli keeps the worktree and branch around.
+**Done.** Finished. Volli keeps the ticket and branch. After the configured
+retention period, it can reclaim a clean worktree folder when no pull request
+is open and no work is running there.
 
 The board records work state; it does not own Session lifetime. A Ticket
 Session stays openable after the ticket moves.
@@ -117,12 +119,11 @@ scope of the work and the instruction the agent starts from.
 with their own colors, so the same label means the same thing across every
 ticket in a project.
 
-Set priority from a card's context menu, or from the **Properties** tab of
-the ticket's workspace. Labels have no context-menu entry; set them from the
-ticket workspace's **Properties** tab, or when you create the ticket, from
-the composer's Labels chip. Typing a name that doesn't exist yet and pressing
-Enter creates that label for the project, so there's no separate "manage
-labels" screen.
+Set priority from a card's context menu, or from **Properties** on the ticket
+workspace's **Now** rail. Labels have no context-menu entry; set them from the
+same Properties section, or when you create the ticket, from the composer's
+Labels chip. Typing a name that doesn't exist yet and pressing Enter creates
+that label for the project, so there's no separate "manage labels" screen.
 
 ## Comments
 
@@ -157,26 +158,31 @@ puts a ticket back on the board, and **Delete permanently** removes it and
 its full history for good. It's the one genuinely destructive action in this
 flow, and the only one that asks you to confirm it can't be undone.
 
-### Auto-archive
+### Retention and archive prompts
 
-Volli watches every worktree ticket's pull request in the background (it
-needs `gh`, the GitHub CLI, on your PATH) and prompts you to wrap one up in
-two cases: its PR merged, in any column, or it's sat in Done for 14 days with
-no open PR. Neither case archives anything by itself. The retention check only
-prompts; you still click through it.
+Volli watches every worktree ticket's pull request in the background. This
+requires `gh`, the GitHub CLI, on your PATH. It offers **Archive & clean** in
+two cases: the pull request merged, in any column, or the ticket has spent the
+configured retention period in Done with no open pull request. Neither case
+archives the ticket by itself.
 
-That prompt shows up in the ticket's workspace, on the **Properties** tab,
-under Pull request: the button that normally reads "Push updates" or "View
-PR" changes to **Archive & clean**. Clicking it removes the worktree and then
-archives the ticket, in that order. If the worktree still has uncommitted
-work, it refuses the same way [Remove
-worktree…](#the-ticket-context-menu) does, leaving the ticket on the board
-for you to resolve.
+The prompt appears in the ticket workspace's **Now** rail, under the repository
+summary. The button that normally reads **Push updates** or **View PR** changes
+to **Archive & clean**. Clicking it removes the worktree and then archives the
+ticket. If the worktree has uncommitted work, the action refuses and leaves the
+ticket on the board.
 
-Two ways to turn a prompt down. **Keep** pins the ticket so neither case ever
-prompts again, until you unpin it. **Dismiss** just clears the current
-prompt; it's offered again the next time you launch Volli. Both live in the
-same menu as Archive & clean.
+The Done retention period also governs automatic worktree reclamation. Once a
+ticket has spent that long in Done, Volli can remove its clean worktree folder
+when no pull request is open and no work is running there. The ticket remains
+on the board, and its branch, commits, and pull-request URL remain available.
+Volli sends a notification when it reclaims a folder.
+
+Two ways to turn a prompt down. **Keep worktree** exempts the ticket from both
+archive prompts and automatic worktree reclamation until you remove the pin.
+**Dismiss** clears the current archive prompt for this launch; Volli can offer
+it again after the next launch. Both actions live in the same menu as
+**Archive & clean**.
 
 Volli checks every worktree ticket about once a minute. If `gh` fails (not
 installed, not authenticated, offline), Volli backs off: it doubles the wait

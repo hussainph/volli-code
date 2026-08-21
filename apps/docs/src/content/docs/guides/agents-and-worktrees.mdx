@@ -70,11 +70,16 @@ socket. It can inspect ticket context and report work to the app. See the
 A ticket's change set includes committed and uncommitted changes relative to
 its base branch. Volli reads it from git rather than storing a copy.
 
-Archiving a ticket retains its worktree. If you no longer need one after its
-branch is landed, remove it with git yourself.
+Archiving a ticket retains its worktree. You can remove a worktree from the
+ticket context menu, or use **Archive & clean** when Volli offers it. A clean
+worktree can also be reclaimed after the ticket has spent the configured
+retention period in Done with no open pull request and no work running there.
+The ticket, branch, commits, and pull-request URL remain.
+
+To remove one yourself after its branch is landed, run:
 
 ```sh
-git worktree remove ~/.volli/worktrees/<project>/<TICKET-ID>-<slug>
+git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-<slug>
 ```
 
 ## Next steps
@@ -83,7 +88,7 @@ git worktree remove ~/.volli/worktrees/<project>/<TICKET-ID>-<slug>
   <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
-    description="Inspect a ticket's Sessions, files, change set, and properties."
+    description="Inspect a ticket's Sessions, files, diffs, and Now rail."
   />
   <LinkCard
     title="Troubleshooting"
