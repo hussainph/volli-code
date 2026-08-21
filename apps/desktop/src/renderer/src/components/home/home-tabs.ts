@@ -4,7 +4,7 @@
  *
  * Home is the ticket workspace's own grammar one level up: a permanent first
  * tab that cannot be closed (the Board, exactly as a ticket's Body tab), with
- * the project's own Sessions opening beside it. Two surfaces need the same
+ * the project's own Sessions and Main-checkout Files beside it. Two surfaces need the same
  * answer and cannot read it the same way — `home-surface.tsx` renders off it,
  * `sessions-layer.tsx` gates its panes on it — so the decision lives here once,
  * pure, and both callers hand it their store reads.
@@ -30,6 +30,48 @@ export const HOME_BOARD_TAB_ID = "board";
 /** Whether `tabId` names the permanent Board tab. */
 export function isHomeBoardTab(tabId: string): boolean {
   return tabId === HOME_BOARD_TAB_ID;
+}
+
+/**
+ * Record one Home-tab visit in least-to-most-recent order.
+ *
+ * A tab has one place in the history: revisiting it moves it to the end, while
+ * reporting the tab already in front is a no-op by identity. The history is
+ * session-local navigation memory, not durable workspace state.
+ */
+export function visitHomeTab(history: readonly string[], tabId: string): readonly string[] {
+  if (history.at(-1) === tabId) return history;
+  return [...history.filter((candidate) => candidate !== tabId), tabId];
+}
+
+/** The active tab and pruned MRU history after an active Home tab closes. */
+export interface HomeTabCloseResolution {
+  active: string;
+  history: readonly string[];
+}
+
+/**
+ * Return to the most recently visited Home tab that still exists.
+ *
+ * The closed tab and stale history entries are removed first. Board is the
+ * permanent fallback when this app run has no surviving prior visit — for
+ * example, closing a restored File tab immediately after relaunch.
+ */
+export function closeHomeTabHistory(input: {
+  history: readonly string[];
+  closedTabId: string;
+  openTabIds: readonly string[];
+}): HomeTabCloseResolution {
+  const open = new Set(input.openTabIds);
+  let history: readonly string[] = [];
+  for (const tabId of input.history) {
+    if (tabId !== input.closedTabId && open.has(tabId)) history = visitHomeTab(history, tabId);
+  }
+  const active = history.at(-1) ?? HOME_BOARD_TAB_ID;
+  return {
+    active,
+    history: history.length === 0 ? [HOME_BOARD_TAB_ID] : history,
+  };
 }
 
 /**

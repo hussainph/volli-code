@@ -41,15 +41,24 @@ import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
  *
  * A terminal tab carries its whole store record — park state, panes and exit
  * codes are all read off it — while a chat tab carries the two facts a chat has
- * on a strip: its title and its liveness. `id` is the tab's identity in the
- * merged strip and in `homeActiveTab`; a chat's is `chat:`-prefixed
- * (`ticket-chat-tab.ts`) and the Board's is a bare word, so the three id spaces
- * never collide.
+ * on a strip: its title and its liveness. A File tab carries the Main-checkout
+ * path plus preview/dirty presentation. `id` is the identity in the merged
+ * strip and in `homeActiveTab`; chat and File ids are prefixed, terminal ids are
+ * UUIDs, and the Board is a bare word, so the four spaces never collide.
  */
 export type HomeTabDescriptor =
   | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
-  | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus };
+  | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus }
+  | {
+      kind: "file";
+      id: string;
+      relPath: string;
+      title: string;
+      hint: string | null;
+      preview: boolean;
+      dirty: boolean;
+    };
 
 /** The Board tab, spelled once. */
 export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
@@ -60,8 +69,10 @@ interface HomeTabStripProps {
   onSelect(tab: HomeTabDescriptor): void;
   /** Never raised for the Board tab, which carries no close affordance. */
   onClose(tab: HomeTabDescriptor): void;
-  /** Never raised for the Board tab, which is not renamable. */
+  /** Never raised for the Board or File tabs, which are not renamable. */
   onRename(tab: HomeTabDescriptor, title: string): void;
+  /** Double-click / Keep Open on a preview File tab. */
+  onPinFile(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
   /** The project's skills — the "Chat with skill" submenu's rows. */
@@ -92,10 +103,10 @@ interface HomeTabStripProps {
  * where it floated above a surface it did not own. It owns this one.)
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
- * without a ticket — terminals first and chats after, each in the order it was
- * opened. A trailing split control starts either; every tab but the Board
- * carries a hover-revealed close, a right-click menu, and double-click inline
- * rename.
+ * without a ticket — terminals first and chats after — then Main-checkout File
+ * tabs in their reducer order. A trailing split control starts either Session;
+ * every tab but the Board carries a hover-revealed close and a right-click
+ * menu. Session tabs rename on double-click; preview File tabs pin.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
@@ -107,6 +118,7 @@ export function HomeTabStrip({
   onSelect,
   onClose,
   onRename,
+  onPinFile,
   onNewSession,
   onNewChat,
   skills,
@@ -181,6 +193,19 @@ export function HomeTabStrip({
             />
           );
         }
+        if (descriptor.kind === "file") {
+          return (
+            <HomeFileTab
+              key={descriptor.id}
+              tab={descriptor}
+              active={active}
+              tabStop={tabStop}
+              onSelect={() => onSelect(descriptor)}
+              onPin={() => onPinFile(descriptor.relPath)}
+              onClose={() => onClose(descriptor)}
+            />
+          );
+        }
         // One set of callbacks for both Session kinds — what differs between
         // them is what each tab DRAWS and what its menu offers, never how the
         // strip reports a selection, a close, or a rename.
@@ -251,6 +276,56 @@ function BoardTab({
         <KanbanIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
       }
     />
+  );
+}
+
+/** One Main-checkout File tab, sharing the ticket strip's preview/pin vocabulary. */
+function HomeFileTab({
+  tab,
+  active,
+  tabStop,
+  onSelect,
+  onPin,
+  onClose,
+}: {
+  tab: Extract<HomeTabDescriptor, { kind: "file" }>;
+  active: boolean;
+  tabStop: boolean;
+  onSelect(): void;
+  onPin(): void;
+  onClose(): void;
+}) {
+  const inner = (
+    <Tab
+      data-testid="home-file-tab"
+      data-rel-path={tab.relPath}
+      data-preview={tab.preview ? "true" : undefined}
+      data-dirty={tab.dirty ? "true" : undefined}
+      label={tab.title}
+      hint={tab.hint ?? undefined}
+      active={active}
+      tabStop={tabStop}
+      dirty={tab.dirty}
+      labelClassName={tab.preview ? "italic" : undefined}
+      onActivate={onSelect}
+      onDoubleClick={tab.preview ? onPin : undefined}
+      onClose={onClose}
+    />
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
+          Keep Open
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem icon={XIcon} onSelect={onClose}>
+          Close
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

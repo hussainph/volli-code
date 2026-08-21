@@ -1,5 +1,5 @@
 /**
- * Home: the board and the project's own Sessions, as tabs.
+ * Home: the board, the project's own Sessions, and Main-checkout Files as tabs.
  *
  * The shape (VC-54, VC-42 phase 3). The nav row used to hold a "Board" page and
  * a "Sessions" page, and the second was the app's most confusing taxonomy — it
@@ -7,7 +7,7 @@
  * visit, and its tabs were easily mistaken for a ticket workspace's. So the
  * Board nav became **Home**, a tabbed environment in exactly the ticket
  * workspace's grammar: a permanent first tab that cannot be closed (the Board,
- * precisely as a ticket's Body tab), with Project Sessions opening beside it.
+ * precisely as a ticket's Body tab), with Project Sessions and Files beside it.
  *
  * That arrangement is the product argument, made spatial instead of explained.
  * A Home Session is an ORCHESTRATOR: start from a nebulous idea and leave with
@@ -52,11 +52,14 @@
  */
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { SkillReference } from "@volli/shared";
+import type { FileWorkspaceTab, SkillReference } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { HOME_BOARD_TAB, HomeTabStrip, type HomeTabDescriptor } from "./home-tab-strip";
 import { HomeRail } from "./home-rail";
+import { fileTabLabels } from "@renderer/components/files/file-tab-labels";
+import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
+import { useProjectFileWorkspace } from "@renderer/components/files/use-project-file-workspace";
 import { isHomeBoardTab, resolveHomeTabs } from "./home-tabs";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
@@ -67,12 +70,14 @@ import {
   startProjectTerminal,
 } from "@renderer/components/sessions/session-create";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import {
   chatTabId,
   chatTabStatus,
   CHAT_TAB_FALLBACK_LABEL,
 } from "@renderer/components/ticket/ticket-chat-tab";
+import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useBoardStore } from "@renderer/stores/board";
@@ -142,11 +147,33 @@ export function HomeSurface({ visible }: { visible: boolean }) {
    */
   const hydratedRef = React.useRef(new Set<string>());
 
-  // Terminals first, then chats, each in the order it was opened: the strip is
-  // stable under everything except opening and closing a tab.
-  const tabIds = React.useMemo(
+  // Session ids first (terminals, then chats), preserving the strip's existing
+  // order. File tabs append after them and keep their own reducer order.
+  const sessionTabIds = React.useMemo(
     () => [...terminalTabs.map((tab) => tab.sessionId), ...openChatIds.map(chatTabId)],
     [openChatIds, terminalTabs],
+  );
+  const closeHomeFile = useWorkspaceStore((state) => state.closeHomeFile);
+  const closeFileFromHome = React.useCallback(
+    (relPath: string) => {
+      if (selectedId === null) return;
+      // A dirty-close decision can stand open while Session tabs change. Read
+      // survivors at the instant Close finally commits so MRU never returns to
+      // a Session the user closed while the guard was waiting.
+      const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
+      const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
+      closeHomeFile(selectedId, relPath, [
+        ...sessions.map((tab) => tab.sessionId),
+        ...chats.map(chatTabId),
+      ]);
+    },
+    [closeHomeFile, selectedId],
+  );
+  const fileWorkspace = useProjectFileWorkspace(selectedId, closeFileFromHome);
+  const fileTabs = fileWorkspace.files.tabs;
+  const tabIds = React.useMemo(
+    () => [...sessionTabIds, ...fileTabs.map((tab) => fileTabId(tab.relPath))],
+    [fileTabs, sessionTabIds],
   );
   const { active: activeTabId, restore } = resolveHomeTabs({
     tabIds,
@@ -188,6 +215,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
 
   // ── What is on screen ────────────────────────────────────────────────────
   const boardTabActive = isHomeBoardTab(activeTabId);
+  const activeFileRelPath = parseFileTabId(activeTabId);
   const ticket = useBoardStore((state) =>
     selectedId !== null && openTicketId !== null
       ? state.ticketsByProject[selectedId]?.find((candidate) => candidate.id === openTicketId)
@@ -218,9 +246,9 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // Home's own details panel (VC-55), on the SAME persisted collapse the ticket
   // workspace's uses — one ⌥⌘B preference, honoured by both, because they are
   // one object at two scopes and a reader who hides one has said what they
-  // want. It belongs to a SESSION, so the Board tab has none: the board is not
-  // a Session, and a rail about "where this Session runs" over a board would be
-  // about nothing.
+  // want. It belongs to Home's working tabs — Sessions and Files — so the Board
+  // has none: a repository navigator or Session facts over the board would be
+  // about an object that is not in front.
   const railCollapsed = useUiStore((state) => state.railCollapsed);
   const railWidth = useUiStore((state) => state.railWidth);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
@@ -245,6 +273,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // and only one of them can have a confirm up at a time anyway.
   const closeGuard = useCloseGuard();
   const openHomeBoard = useWorkspaceStore((state) => state.openHomeBoard);
+  const activateHomeFile = useWorkspaceStore((state) => state.activateHomeFile);
+  const pinHomeFile = useWorkspaceStore((state) => state.pinHomeFile);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
   const handleSelect = React.useCallback(
@@ -258,6 +288,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         openHomeBoard(selectedId);
         return;
       }
+      if (descriptor.kind === "file") {
+        activateHomeFile(selectedId, descriptor.relPath);
+        return;
+      }
       setHomeActiveTab(selectedId, descriptor.id);
       // A terminal tab is in front on two ledgers: this surface's (recorded)
       // and the terminal container's own, which is what the keep-alive render
@@ -265,7 +299,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       // it.
       if (descriptor.kind === "terminal") setActiveSession(selectedId, descriptor.tab.sessionId);
     },
-    [openHomeBoard, selectedId, setActiveSession, setHomeActiveTab],
+    [activateHomeFile, openHomeBoard, selectedId, setActiveSession, setHomeActiveTab],
   );
 
   const handleClose = React.useCallback(
@@ -278,18 +312,21 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         useChatSessionsStore.getState().closeChatTab(selectedId, descriptor.sessionId);
         return;
       }
+      if (descriptor.kind === "file") {
+        void fileWorkspace.requestClose(descriptor.relPath);
+        return;
+      }
       const liveIds = sessionPanes(descriptor.tab.layout)
         .filter((pane) => pane.exitCode === null)
         .map((pane) => pane.sessionId);
       closeGuard.guard(liveIds, () => closeTerminalSession(selectedId, descriptor.tab.sessionId));
     },
-    [closeGuard, selectedId],
+    [closeGuard, fileWorkspace, selectedId],
   );
 
   const handleRename = React.useCallback((descriptor: HomeTabDescriptor, title: string) => {
-    // Each kind has its own optimistic surface to move before the durable
-    // write — a chat must never reach the PTY rename, which would address a
-    // terminal that does not exist.
+    // Each Session kind has its own optimistic surface to move before the
+    // durable write. Board and File tabs never raise this callback.
     if (descriptor.kind === "chat") {
       void renameChatSession(descriptor.sessionId, title);
       return;
@@ -297,18 +334,32 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     if (descriptor.kind === "terminal") renameTerminalSession(descriptor.tab.sessionId, title);
   }, []);
 
+  const rail =
+    railVisible && selected !== null ? (
+      <aside
+        className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
+        style={{ width: railWidth }}
+      >
+        <RailResizeHandle />
+        <HomeRail project={selected} activeTabId={activeTabId} />
+      </aside>
+    ) : null;
+
   return (
     <>
       {stripVisible && selectedId !== null ? (
         <HomeTabs
           terminalTabs={terminalTabs}
           chatIds={openChatIds}
+          fileTabs={fileTabs}
+          dirtyFilePaths={fileWorkspace.dirtyPaths}
           activeTabId={activeTabId}
           creating={creating}
           skills={skills}
           onSelect={handleSelect}
           onClose={handleClose}
           onRename={handleRename}
+          onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
           onNewChat={() => void startProjectChat(selectedId)}
           onNewChatWithSkill={(name) => void startProjectChat(selectedId, [name])}
           onNewSession={() => void startProjectTerminal(selectedId)}
@@ -322,24 +373,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           it is never unmounted for a nav, project or tab change. Visible only
           when a Home SESSION tab is in front — the board covers the same box. */}
       <SessionsLayer
-        visible={visible && !boardTabActive}
+        visible={visible && !boardTabActive && activeFileRelPath === null}
         activeTabId={activeTabId}
-        rail={
-          railVisible && selectedId !== null ? (
-            // Resizable, on the same grip and the same persisted width the
-            // ticket rail uses — the two are one panel at two scopes, so a
-            // reader who sizes one has sized both. `relative` makes the aside
-            // the grip's positioning context.
-            <aside
-              className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
-              style={{ width: railWidth }}
-            >
-              <RailResizeHandle />
-              <HomeRail projectId={selectedId} activeTabId={activeTabId} />
-            </aside>
-          ) : null
-        }
+        rail={activeFileRelPath === null ? rail : null}
       />
+
+      {visible && selected !== null && activeFileRelPath !== null ? (
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+            <FileView
+              key={`${selected.id}:${activeFileRelPath}`}
+              projectId={selected.id}
+              relPath={activeFileRelPath}
+              initialViewState={fileWorkspace.viewStates[activeFileRelPath]}
+              onViewStateChange={fileWorkspace.handleViewStateChange}
+              onDirtyChange={fileWorkspace.handleDirtyChange}
+            />
+          </div>
+          {rail}
+        </div>
+      ) : null}
 
       {visible && selected !== null && boardTabActive ? (
         ticket !== undefined ? (
@@ -366,6 +419,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         pending={closeGuard.pending}
         onConfirm={closeGuard.confirm}
         onCancel={closeGuard.cancel}
+      />
+      <FileSaveGuardDialog
+        relPath={fileWorkspace.pendingRelPath}
+        onCancel={fileWorkspace.cancelClose}
+        onChoose={fileWorkspace.chooseClose}
       />
     </>
   );
@@ -407,12 +465,15 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
 function HomeTabs({
   terminalTabs,
   chatIds,
+  fileTabs,
+  dirtyFilePaths,
   activeTabId,
   creating,
   skills,
   onSelect,
   onClose,
   onRename,
+  onPinFile,
   onNewSession,
   onNewChat,
   onNewChatWithSkill,
@@ -422,12 +483,15 @@ function HomeTabs({
 }: {
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
+  fileTabs: readonly FileWorkspaceTab[];
+  dirtyFilePaths: ReadonlySet<string>;
   activeTabId: string;
   creating: boolean;
   skills?: readonly SkillReference[];
   onSelect(tab: HomeTabDescriptor): void;
   onClose(tab: HomeTabDescriptor): void;
   onRename(tab: HomeTabDescriptor, title: string): void;
+  onPinFile(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
   onNewChatWithSkill(name: string): void;
@@ -447,6 +511,7 @@ function HomeTabs({
   const chatStatuses = useChatSessionsStore(
     useShallow((state) => chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]))),
   );
+  const fileLabels = fileTabLabels(fileTabs.map((tab) => tab.relPath));
   const tabs: HomeTabDescriptor[] = [
     HOME_BOARD_TAB,
     ...terminalTabs.map((tab): HomeTabDescriptor => ({ kind: "terminal", id: tab.sessionId, tab })),
@@ -459,6 +524,18 @@ function HomeTabs({
         status: chatStatuses[index] ?? "idle",
       }),
     ),
+    ...fileTabs.map((tab, index): HomeTabDescriptor => {
+      const label = fileLabels[index] ?? { name: tab.relPath, hint: null };
+      return {
+        kind: "file",
+        id: fileTabId(tab.relPath),
+        relPath: tab.relPath,
+        title: label.name,
+        hint: label.hint,
+        preview: !tab.pinned,
+        dirty: dirtyFilePaths.has(tab.relPath),
+      };
+    }),
   ];
 
   return (
@@ -470,6 +547,7 @@ function HomeTabs({
       onSelect={onSelect}
       onClose={onClose}
       onRename={onRename}
+      onPinFile={onPinFile}
       onNewSession={onNewSession}
       onNewChat={onNewChat}
       onNewChatWithSkill={onNewChatWithSkill}

@@ -17,9 +17,10 @@
  * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
  * Diff tabs landing where you left them after lazy content reload, issue #109,
  * or the Project Files workspace that must resume where you left it, decisions
- * #55/#56), while `nav`, `expandedDirs` and `expandedSessionGroups` stay session-only — nav resetting to
- * Home on relaunch is a settled decision (see ui.ts's history) and now applies
- * per workspace. The partialize below prunes each record down to that persisted
+ * #55/#56), while `nav`, `expandedDirs`, `expandedSessionGroups`, and Home's
+ * close-return `homeTabHistory` stay session-only — nav resetting to Home on
+ * relaunch is a settled decision (see ui.ts's history) and now applies per
+ * workspace. The partialize below prunes each record down to that persisted
  * set; merge rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale
  * values so old localStorage can never smuggle in an invalid view/sort/ticket
  * id — or an unusable tab record.
@@ -48,8 +49,10 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 import {
   HOME_BOARD_TAB_ID,
+  closeHomeTabHistory,
   isHomeBoardTab,
   sanitizeHomeActiveTab,
+  visitHomeTab,
 } from "@renderer/components/home/home-tabs";
 import {
   TICKET_BODY_TAB_ID,
@@ -178,9 +181,9 @@ export interface WorkspaceUiState {
   projectFileViewStates: Record<string, unknown>;
   /**
    * Which tab is in front on Home. {@link HOME_BOARD_TAB_ID} for the permanent
-   * Board tab, else a terminal session id or a `chat:<sessionId>` id — the same
-   * mixed id space `ticketTabs[].active` uses, which the bare word cannot
-   * collide with (both others are UUID-shaped).
+   * Board tab, a terminal session id, a `chat:<sessionId>` id, or a
+   * `file:<relPath>` id. Prefixes separate chat/File identity from UUID-shaped
+   * terminals and from the bare permanent word.
    *
    * PERSISTED, and that is the whole of VC-54's scope 4. What it points at is
    * resident (`chat-sessions.ts`'s `openTabs`), so this is not a receipt for
@@ -194,6 +197,12 @@ export interface WorkspaceUiState {
    * as it does for a Ticket. Full strip restoration is VC-105.
    */
   homeActiveTab: string;
+  /**
+   * Home tabs in least-to-most-recent visit order. Session-only: it answers
+   * where closing an active File tab returns during this app run, while VC-105
+   * owns durable restoration of the whole strip.
+   */
+  homeTabHistory: readonly string[];
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
@@ -208,6 +217,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   projectFiles: EMPTY_FILE_WORKSPACE,
   projectFileViewStates: {},
   homeActiveTab: HOME_BOARD_TAB_ID,
+  homeTabHistory: [],
 };
 
 /** The active-tab id of the always-present Ticket Body tab — the fallback when a
@@ -320,6 +330,17 @@ interface WorkspaceState {
    * "the Board tab means the plain board" lives.
    */
   setHomeActiveTab(projectId: string, tabId: string): void;
+  /** Preview a Main-checkout file and bring its Home tab to the front atomically. */
+  previewHomeFile(projectId: string, relPath: string): void;
+  /** Pin a Main-checkout file and bring its Home tab to the front atomically. */
+  pinHomeFile(projectId: string, relPath: string): void;
+  /** Bring an already-open Main-checkout File tab to the front. */
+  activateHomeFile(projectId: string, relPath: string): void;
+  /**
+   * Close a Home File tab. When active, return through MRU Home-tab history,
+   * considering `openSessionTabIds` as the live non-file tabs in the strip.
+   */
+  closeHomeFile(projectId: string, relPath: string, openSessionTabIds: readonly string[]): void;
   /**
    * THE seam for "Home is now in front", optionally bringing `tabId` forward.
    *
@@ -714,6 +735,11 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
   );
 }
 
+/** Record the current Home tab and then the one being brought forward. */
+function homeHistoryAfterVisit(current: WorkspaceUiState, nextTabId: string): readonly string[] {
+  return visitHomeTab(visitHomeTab(current.homeTabHistory, current.homeActiveTab), nextTabId);
+}
+
 /** The project's record merged with `changes` — spread into `set()`. */
 function patchWorkspace(
   state: WorkspaceState,
@@ -816,28 +842,120 @@ export function createWorkspaceStore(storage?: StateStorage) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             if (current.homeActiveTab === tabId) return state;
-            return patchWorkspace(state, projectId, { homeActiveTab: tabId });
+            return patchWorkspace(state, projectId, {
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        previewHomeFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = previewFile(current.projectFiles, relPath);
+            const tabId = fileTabId(relPath);
+            return patchWorkspace(state, projectId, {
+              nav: "home",
+              projectFiles,
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        pinHomeFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = activateFile(pinFile(current.projectFiles, relPath), relPath);
+            const tabId = fileTabId(relPath);
+            return patchWorkspace(state, projectId, {
+              nav: "home",
+              projectFiles,
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        activateHomeFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
+            const projectFiles = activateFile(current.projectFiles, relPath);
+            const tabId = fileTabId(relPath);
+            return patchWorkspace(state, projectId, {
+              nav: "home",
+              projectFiles,
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        closeHomeFile(projectId, relPath, openSessionTabIds) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = closeFile(current.projectFiles, relPath);
+            if (projectFiles === current.projectFiles) return state;
+
+            const closedTabId = fileTabId(relPath);
+            const projectFileViewStates = { ...current.projectFileViewStates };
+            delete projectFileViewStates[relPath];
+            if (current.homeActiveTab !== closedTabId) {
+              return patchWorkspace(state, projectId, {
+                projectFiles,
+                projectFileViewStates,
+                homeTabHistory: current.homeTabHistory.filter((tabId) => tabId !== closedTabId),
+              });
+            }
+
+            const close = closeHomeTabHistory({
+              history: current.homeTabHistory,
+              closedTabId,
+              openTabIds: [
+                HOME_BOARD_TAB_ID,
+                ...openSessionTabIds,
+                ...projectFiles.tabs.map((tab) => fileTabId(tab.relPath)),
+              ],
+            });
+            const activeFile = parseFileTabId(close.active);
+            return patchWorkspace(state, projectId, {
+              projectFiles:
+                activeFile === null ? projectFiles : activateFile(projectFiles, activeFile),
+              projectFileViewStates,
+              homeActiveTab: close.active,
+              homeTabHistory: close.history,
+            });
           });
         },
 
         openHome(projectId, tabId) {
-          set((state) =>
-            patchWorkspace(
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            return patchWorkspace(
               state,
               projectId,
-              tabId === undefined ? { nav: "home" } : { nav: "home", homeActiveTab: tabId },
-            ),
-          );
+              tabId === undefined
+                ? { nav: "home" }
+                : {
+                    nav: "home",
+                    homeActiveTab: tabId,
+                    homeTabHistory: homeHistoryAfterVisit(current, tabId),
+                  },
+            );
+          });
         },
 
         openHomeBoard(projectId) {
-          set((state) =>
-            patchWorkspace(state, projectId, {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            return patchWorkspace(state, projectId, {
               nav: "home",
               homeActiveTab: HOME_BOARD_TAB_ID,
+              homeTabHistory: homeHistoryAfterVisit(current, HOME_BOARD_TAB_ID),
               openTicketId: null,
-            }),
-          );
+            });
+          });
         },
 
         openTicket(projectId, ticketId) {

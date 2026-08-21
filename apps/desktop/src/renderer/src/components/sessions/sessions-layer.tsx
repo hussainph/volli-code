@@ -186,8 +186,7 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
   useNewSessionShortcut();
 
   const selectedId = selected?.id ?? null;
-  const setNav = useWorkspaceStore((state) => state.setNav);
-  const previewProjectFile = useWorkspaceStore((state) => state.previewProjectFile);
+  const previewHomeFile = useWorkspaceStore((state) => state.previewHomeFile);
 
   // A chat in front covers the plane, so the terminals under it stand down.
   // They stay mounted — only their visibility flips (see the keep-alive below).
@@ -223,7 +222,7 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
    *
    *  • absolute under a ticket's worktree → that ticket's file tab, and its
    *    workspace brought to front (the transcript pointed there by name);
-   *  • absolute under the main checkout → relativized into Project Files;
+   *  • absolute under the main checkout → relativized into a Home File tab;
    *  • relative → this chat's own venue, the main checkout, as before;
    *  • anything else → a toast, and NO navigation — never a pane whose only
    *    content is an error.
@@ -254,10 +253,9 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
         workspace.openTicketWorkspace(selectedId, target.ticketId);
         return;
       }
-      previewProjectFile(selectedId, target.relPath);
-      setNav(selectedId, "files");
+      previewHomeFile(selectedId, target.relPath);
     },
-    [previewProjectFile, selectedId, selectedPath, setNav],
+    [previewHomeFile, selectedId, selectedPath],
   );
 
   // ⌘D split, ⌘⌥arrow pane nav, ⌘+/-/0 font size — resolved off the focused

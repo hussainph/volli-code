@@ -8,13 +8,15 @@
  * the same ⌥⌘B panel the ticket workspace has — parity rather than a new idea,
  * because Home and a ticket workspace are the same object at two scopes.
  *
- * TWO PAGES, and each is scoped by what only Home can answer:
+ * THREE PAGES, scoped to the Main checkout and the project's own work:
  *
  *  • **Now** — the venue this Session stands in, and what the Session is.
  *  • **Sessions** — the project's OWN Sessions, and only those. A ticket's
  *    Sessions already live in that ticket's rail, so listing them here would
  *    make Home a second index of the same rows. What has no other home is the
  *    Project Session you closed, which reopens from here.
+ *  • **Files** — the Main checkout navigator. It opens preview/pinned File tabs
+ *    in Home rather than sending the whole app to a separate nav page.
  *
  * WHAT IS DELIBERATELY NOT HERE. The "Mentioned" block the design calls for —
  * the tickets a transcript wrote `@vc-nn` at — needs the backlink mechanism
@@ -27,16 +29,23 @@
  * rail's does.
  */
 import * as React from "react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useShallow } from "zustand/react/shallow";
+import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
+import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { effectiveHarnessId, harnessLabel, venueLooseCount } from "@volli/shared";
+import { effectiveHarnessId, harnessLabel, venueLooseCount, type Project } from "@volli/shared";
 
 import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
+import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { terminalTabDot, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { isFileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
@@ -64,10 +73,10 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 const SECTION = cn("flex flex-col gap-2 pt-4", RAIL_PANEL_INSET);
 
 export function HomeRail({
-  projectId,
+  project,
   activeTabId,
 }: {
-  projectId: string;
+  project: Project;
   /**
    * Which Home tab is in front, resolved once by `home-surface.tsx`. Read here
    * only to say which Session the Now page is about — never re-derived: two
@@ -89,23 +98,42 @@ export function HomeRail({
         id={`home-rail-page-${mode}`}
         role="tabpanel"
         aria-labelledby={`home-rail-tab-${mode}`}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-8"
+        className={cn(
+          "flex min-h-0 flex-1 flex-col",
+          mode === "files" ? "overflow-hidden" : "overflow-y-auto pb-8",
+        )}
       >
-        {mode === "now" ? <NowPage projectId={projectId} activeTabId={activeTabId} /> : null}
-        {mode === "sessions" ? <SessionsPage projectId={projectId} /> : null}
+        {mode === "now" ? <NowPage projectId={project.id} activeTabId={activeTabId} /> : null}
+        {mode === "sessions" ? <SessionsPage projectId={project.id} /> : null}
+        {mode === "files" ? (
+          <HomeFilesPanel
+            project={project}
+            onPreviewFile={(relPath) =>
+              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+            }
+            onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
+          />
+        ) : null}
       </section>
     </div>
   );
 }
 
+const HOME_MODE_ICONS: Record<HomeRailMode, PhosphorIcon> = {
+  now: ChatCircleDotsIcon,
+  sessions: ClockCounterClockwiseIcon,
+  files: FoldersIcon,
+};
+
 /**
- * The rail's header: the ticket rail's centred pill, with this surface's two
- * pages. Both wear their labels — the ticket's pill hides two of three behind
- * icons because three pages cannot fit 160px with their names on, and two can.
+ * The rail's header: the ticket rail's centred three-page pill. Only the
+ * selected page wears its label, so all three remain legible at the 240px rail
+ * floor without truncation; inactive icons carry labels and tooltips.
  *
- * Translucent and blurred rather than opaque: at `top-0` of a column whose
- * pages scroll beneath it, the bar is a floating material rather than a strip
- * the layout gives away.
+ * The selected segment uses the ticket rail's same restrained layout spring:
+ * its purpose is state indication and spatial continuity while the flex row
+ * rearranges, not decoration. Keyboard traversal opts out so a held arrow key
+ * never waits on motion, and reduced-motion removes both travel and crossfade.
  */
 function HomeRailTabs({
   mode,
@@ -115,6 +143,9 @@ function HomeRailTabs({
   onSelectMode(next: HomeRailMode): void;
 }) {
   const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const [animateSelection, setAnimateSelection] = React.useState(true);
+  const reducedMotion = useReducedMotion() ?? false;
+  const animated = animateSelection && !reducedMotion;
 
   function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -128,6 +159,7 @@ function HomeRailTabs({
           : (index + (event.key === "ArrowRight" ? 1 : -1) + count) % count;
     const nextMode = HOME_RAIL_MODES[next];
     if (nextMode === undefined) return;
+    setAnimateSelection(false);
     onSelectMode(nextMode);
     refs.current[next]?.focus();
   }
@@ -145,9 +177,15 @@ function HomeRailTabs({
         className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
       >
         {HOME_RAIL_MODES.map((key, index) => {
+          const Icon = HOME_MODE_ICONS[key];
+          const label = HOME_RAIL_MODE_LABELS[key];
           const active = mode === key;
-          return (
-            <button
+          const tab = (
+            <motion.button
+              layout={animated}
+              transition={
+                animated ? { type: "spring", duration: 0.32, bounce: 0.1 } : { duration: 0 }
+              }
               key={key}
               ref={(node) => {
                 refs.current[index] = node;
@@ -157,20 +195,51 @@ function HomeRailTabs({
               id={`home-rail-tab-${key}`}
               aria-controls={`home-rail-page-${key}`}
               aria-selected={active}
+              aria-label={label}
               tabIndex={active ? 0 : -1}
               data-testid={`home-rail-tab-${key}`}
-              onClick={() => onSelectMode(key)}
+              onClick={() => {
+                setAnimateSelection(true);
+                onSelectMode(key);
+              }}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
-                "h-8 flex-1 rounded-full text-ui transition-colors outline-none",
+                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-full text-ui outline-none",
+                active ? "w-[84px]" : "w-8",
                 "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
+                !reducedMotion &&
+                  "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 active
                   ? "bg-accent text-foreground shadow-raised"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
-              {HOME_RAIL_MODE_LABELS[key]}
-            </button>
+              <motion.span layout="position" className="flex shrink-0 items-center">
+                <Icon className="size-3.5" />
+              </motion.span>
+              <AnimatePresence initial={false} mode="popLayout">
+                {active ? (
+                  <motion.span
+                    key={`${key}-label`}
+                    initial={animated ? { opacity: 0, transform: "translateX(-4px)" } : false}
+                    animate={{ opacity: 1, transform: "translateX(0)" }}
+                    exit={animated ? { opacity: 0, transform: "translateX(3px)" } : { opacity: 0 }}
+                    transition={{ duration: reducedMotion ? 0 : 0.14, ease: [0.23, 1, 0.32, 1] }}
+                    className="whitespace-nowrap"
+                  >
+                    {label}
+                  </motion.span>
+                ) : null}
+              </AnimatePresence>
+            </motion.button>
+          );
+          return (
+            <Tooltip key={key} open={active ? false : undefined}>
+              <TooltipTrigger asChild>{tab}</TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                {label}
+              </TooltipContent>
+            </Tooltip>
           );
         })}
       </div>
@@ -269,7 +338,10 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
  */
 function SessionFacts({ activeTabId }: { activeTabId: string }) {
   const sessionId = React.useMemo(() => parseHomeChatTab(activeTabId), [activeTabId]);
-  const terminal = isHomeBoardTab(activeTabId) || sessionId !== null ? null : activeTabId;
+  const terminal =
+    isHomeBoardTab(activeTabId) || isFileTabId(activeTabId) || sessionId !== null
+      ? null
+      : activeTabId;
   const projection = useChatSessionsStore((state) =>
     sessionId === null ? null : (state.sessions[sessionId]?.projection ?? null),
   );

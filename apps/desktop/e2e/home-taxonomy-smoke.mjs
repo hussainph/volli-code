@@ -20,6 +20,9 @@
  *   2. The Sessions nav item is gone; the nav is Home / Files / Configure.
  *   3. "+ New Session" opens a Project Session tab beside the Board, and the
  *      Board tab is not closable.
+ *   3a. The Home rail's Files page lists and live-watches the Main checkout;
+ *       click/double-click preview and pin a Home File tab, whose close returns
+ *       to the previously visited Session tab.
  *   4. Selecting the Board tab returns to the board with the Session tab still
  *      on the strip — and the terminal under it is never unmounted.
  *   5. Opening a ticket HIDES the Home strip; leaving the ticket restores it,
@@ -36,6 +39,9 @@
  *     pnpm run build
  *     node apps/desktop/e2e/home-taxonomy-smoke.mjs
  */
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+
 import {
   launch,
   makeGitRepo,
@@ -165,6 +171,69 @@ try {
   );
 
   await attempt(
+    "3a",
+    "the Home rail browses live Project Files; preview/pin tabs close back to the previous Session",
+    async () => {
+      const terminalTab = strip(page).getByRole("tab").filter({ hasNotText: "Board" }).first();
+      const terminalLabel = await terminalTab.getAttribute("aria-label");
+      const panesBefore = await terminalCanvasCount(page);
+
+      await page.getByTestId("home-rail-tab-files").click();
+      const filesPanel = page.getByTestId("home-files-panel");
+      await waitUntil("Home Project Files panel", async () => (await filesPanel.count()) === 1);
+      const readme = filesPanel.locator('[data-testid="ticket-files-row"][data-path="README.md"]');
+      await waitUntil("README in Home Files", async () => (await readme.count()) === 1);
+
+      // The panel's current level is under a real non-recursive dir watch. A
+      // file appearing on disk has to arrive without a manual refresh.
+      await fs.writeFile(join(projectPath, "appeared.md"), "# appeared\n", "utf8");
+      const appeared = filesPanel.locator(
+        '[data-testid="ticket-files-row"][data-path="appeared.md"]',
+      );
+      await waitUntil("live root listing update", async () => (await appeared.count()) === 1, {
+        timeout: 15000,
+      });
+
+      await readme.click();
+      const fileTab = page.locator('[data-testid="home-file-tab"][data-rel-path="README.md"]');
+      await waitUntil(
+        "README Home preview tab",
+        async () =>
+          (await fileTab.count()) === 1 &&
+          (await fileTab.getAttribute("data-preview")) === "true" &&
+          (await fileTab.getAttribute("aria-selected")) === "true",
+      );
+
+      await readme.dblclick();
+      await waitUntil(
+        "README Home tab pinned",
+        async () => (await fileTab.getAttribute("data-preview")) !== "true",
+      );
+      if (process.env.VOLLI_SMOKE_SCREENSHOT) {
+        await page.screenshot({ path: process.env.VOLLI_SMOKE_SCREENSHOT, fullPage: true });
+      }
+
+      await fileTab.getByTestId("tab-close").click();
+      await waitUntil("README Home tab closed", async () => (await fileTab.count()) === 0);
+      const activeAfterClose = await strip(page)
+        .locator('[role="tab"][aria-selected="true"]')
+        .getAttribute("aria-label");
+      const panesAfter = await terminalCanvasCount(page);
+      const filesWorkbench = await page.locator('[data-testid="files-workbench"]').count();
+
+      return {
+        ok:
+          terminalLabel !== null &&
+          activeAfterClose === terminalLabel &&
+          panesBefore > 0 &&
+          panesAfter === panesBefore &&
+          filesWorkbench === 0,
+        detail: `return=${activeAfterClose} expected=${terminalLabel} panes=${panesBefore}→${panesAfter} topLevelFiles=${filesWorkbench}`,
+      };
+    },
+  );
+
+  await attempt(
     4,
     "the Board tab returns to the board with the Session tab still on the strip",
     async () => {
@@ -209,16 +278,42 @@ try {
 
   await attempt(6, "a nav round trip to Files unmounts no live terminal", async () => {
     const before = await terminalCanvasCount(page);
+    // Home's flat navigator and the hidden primary tree share the root watch.
+    // After Home's panel unmounted, the tree must still receive this change —
+    // one consumer's cleanup cannot silence the other.
+    await fs.writeFile(join(projectPath, "after-home-panel.md"), "# still live\n", "utf8");
     await page.getByRole("button", { name: "Files", exact: true }).click();
+    const liveTreeRow = page.locator(
+      '[data-testid="file-tree-file"][data-rel-path="after-home-panel.md"]',
+    );
+    await waitUntil(
+      "primary file tree watch after Home Files unmount",
+      async () => (await liveTreeRow.count()) === 1,
+    );
     const duringFiles = await terminalCanvasCount(page);
     await page.getByRole("button", { name: "Home", exact: true }).click();
     await waitUntil("Home's strip to come back", async () => (await strip(page).count()) > 0);
     const after = await terminalCanvasCount(page);
     return {
       ok: before > 0 && duringFiles === before && after === before,
-      detail: `panes ${before} → files:${duringFiles} → ${after}`,
+      detail: `panes ${before} → files:${duringFiles} → ${after}; sharedRootWatch=live`,
     };
   });
+
+  // `volli:workspace` writes through a debounced SQLite bridge. Observe the
+  // empty File workspace durably before releasing this renderer; otherwise a
+  // fast smoke can relaunch against the pinned value written just before Close.
+  await waitUntil("closed Home File tab to persist", () =>
+    page.evaluate(async (projectId) => {
+      const boot = await window.api.data.bootstrap();
+      if (!boot.ok) return false;
+      const raw = boot.data.appState["volli:workspace"];
+      if (typeof raw !== "string") return false;
+      const parsed = JSON.parse(raw);
+      const record = parsed?.state?.byProject?.[projectId];
+      return record === undefined || record?.projectFiles?.tabs?.length === 0;
+    }, PROJECT.id),
+  );
 
   await app.close();
 
