@@ -340,6 +340,45 @@ export interface FilePathInput {
   relPath: string;
 }
 
+/** A known macOS app that can open a safely resolved Files target. */
+export type ExternalAppId =
+  | "vscode"
+  | "cursor"
+  | "zed"
+  | "xcode"
+  | "android-studio"
+  | "terminal"
+  | "iterm2"
+  | "ghostty"
+  | "warp";
+
+export type ExternalAppKind = "editor" | "terminal";
+
+/** Renderer-safe app metadata; bundle ids and application paths stay in main. */
+export interface ExternalApp {
+  id: ExternalAppId;
+  label: string;
+  kind: ExternalAppKind;
+}
+
+/** A file or folder target plus one allowlisted external application. */
+export interface ExternalAppOpenFileInput extends FilePathInput {
+  appId: ExternalAppId;
+}
+
+/** The ticket's live worktree root plus one allowlisted external application. */
+export interface ExternalAppOpenWorktreeInput {
+  projectId: string;
+  ticketId: string;
+  appId: ExternalAppId;
+}
+
+/** A ticket's live worktree root, resolved in main before Finder sees it. */
+export interface WorktreeRevealInput {
+  projectId: string;
+  ticketId: string;
+}
+
 /**
  * One expanded directory of the Project Files tree, watched for changes
  * (issue #106). Project Files is always MAIN-rooted (CONCEPT #54), so there is
@@ -535,9 +574,9 @@ export interface VolliDataIpcContract {
 export type DataIpcChannel = keyof VolliDataIpcContract;
 
 /**
- * Global artifacts + `@file` refs (docs/plans/global-artifacts.md) plus the
- * Project Files workspace (issue #106) — the file channels
- * `src/main/volli-fs.ts` owns.
+ * Global artifacts + `@file` refs (docs/plans/global-artifacts.md), the
+ * Project Files workspace (issue #106), and Files' external-app launch/reveal
+ * surface — the file channels `src/main/volli-fs.ts` owns.
  */
 export interface VolliFileIpcContract {
   /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
@@ -550,6 +589,20 @@ export interface VolliFileIpcContract {
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
   /** Reveals the resolved file in Finder. */
   "volli:file-reveal": { args: [input: FilePathInput]; result: Result };
+  /** The currently installed allowlisted editor and terminal applications. */
+  "volli:external-app-list": { args: []; result: ExternalAppListResult };
+  /** Launches one allowlisted application with a safe main- or worktree-scoped file path. */
+  "volli:external-app-open-file": {
+    args: [input: ExternalAppOpenFileInput];
+    result: Result;
+  };
+  /** Launches one allowlisted application with the ticket's resolved worktree root. */
+  "volli:external-app-open-worktree": {
+    args: [input: ExternalAppOpenWorktreeInput];
+    result: Result;
+  };
+  /** Reveals the ticket's resolved worktree root in Finder. */
+  "volli:worktree-reveal": { args: [input: WorktreeRevealInput]; result: Result };
   /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
   "volli:file-watch": { args: [input: FilePathInput]; result: Result };
   "volli:file-unwatch": { args: [input: FilePathInput]; result: Result };
@@ -1697,6 +1750,9 @@ export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
  * when the ~20k entry cap was hit.
  */
 export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
+
+/** The installed subset of the allowlisted editor and terminal catalogue. */
+export type ExternalAppListResult = Result<{ apps: ExternalApp[] }>;
 
 /** The composer's `/` picker is project-scoped, exactly like the file index. */
 export interface PromptTemplateIndexInput {

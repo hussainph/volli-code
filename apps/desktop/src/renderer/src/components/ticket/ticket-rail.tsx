@@ -27,14 +27,12 @@
  *   - Do NOT call those openers from agent/filesystem event handlers.
  */
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import type { SkillReference, Ticket } from "@volli/shared";
 
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
@@ -45,15 +43,18 @@ import {
   selectRailMode,
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { cn } from "@renderer/lib/utils";
 import { RAIL_MIN_WIDTH, useUiStore } from "@renderer/stores/ui";
 
-const MODE_ICONS: Record<TicketRailMode, PhosphorIcon> = {
+const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = {
   now: ChatCircleDotsIcon,
   changes: GitDiffIcon,
   files: FoldersIcon,
 };
+
+/** This surface's pages, in pill order, as {@link RailModeTabs} takes them. */
+function railModeTabs(modes: readonly TicketRailMode[]): RailModeTab<TicketRailMode>[] {
+  return modes.map((key) => ({ key, label: TICKET_RAIL_MODE_LABELS[key], icon: MODE_ICONS[key] }));
+}
 
 /**
  * Above this width the rail takes the design's roomy 16px edge inset; at or
@@ -62,146 +63,6 @@ const MODE_ICONS: Record<TicketRailMode, PhosphorIcon> = {
  * 300) — the app's rail resizes continuously and has to answer for 260px too.
  */
 const RAIL_NARROW_MAX_WIDTH = (RAIL_MIN_WIDTH + 300) / 2;
-
-/**
- * The rail's header: a centred tablist where only the selected tab wears its
- * label, so three pages fit a 160px pill at the rail's narrowest width without
- * ever truncating a word. Presentational — page state lives in the UI store.
- *
- * Translucent and blurred rather than opaque: at `top-0` of a column whose
- * pages scroll beneath it, the bar is a floating material, not a strip the
- * layout gives away.
- *
- * The selection is a Motion layout animation, not a width transition. A CSS
- * transition can grow the selected tab, but it cannot make the two tabs beside
- * it travel with it — they jump to their new x as soon as the flex row
- * reflows. `layout` measures both frames, so the whole pill rearranges as one
- * object. Arrow-key navigation deliberately opts out (`animateSelection`): a
- * held arrow key walks the tablist faster than a 320ms settle, and an
- * animation that is always mid-flight reads as lag rather than motion.
- */
-function TicketRailTabs({
-  mode,
-  modes,
-  onSelectMode,
-}: {
-  mode: TicketRailMode;
-  /** Which pages this surface offers — see `availableRailModes`. */
-  modes: readonly TicketRailMode[];
-  onSelectMode(mode: TicketRailMode): void;
-}) {
-  const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
-  const [animateSelection, setAnimateSelection] = React.useState(true);
-  const reducedMotion = useReducedMotion() ?? false;
-  const animated = animateSelection && !reducedMotion;
-
-  function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? modes.length - 1
-          : (index + (event.key === "ArrowRight" ? 1 : -1) + modes.length) % modes.length;
-    const nextMode = modes[next];
-    if (nextMode === undefined) return;
-    setAnimateSelection(false);
-    onSelectMode(nextMode);
-    refs.current[next]?.focus();
-  }
-
-  return (
-    <div
-      className={cn(
-        "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
-        RAIL_PANEL_INSET,
-      )}
-    >
-      <div
-        role="tablist"
-        aria-label="Ticket rail pages"
-        // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
-        // height (40px), so the track can never disagree with what it holds.
-        className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
-      >
-        {modes.map((key, index) => {
-          const Icon = MODE_ICONS[key];
-          const label = TICKET_RAIL_MODE_LABELS[key];
-          const active = mode === key;
-          const tab = (
-            <motion.button
-              layout={animated}
-              transition={
-                animated ? { type: "spring", duration: 0.32, bounce: 0.1 } : { duration: 0 }
-              }
-              key={key}
-              ref={(node) => {
-                refs.current[index] = node;
-              }}
-              type="button"
-              role="tab"
-              id={`ticket-rail-tab-${key}`}
-              aria-controls={`ticket-rail-page-${key}`}
-              aria-selected={active}
-              aria-label={label}
-              tabIndex={active ? 0 : -1}
-              data-testid={`ticket-rail-tab-${key}`}
-              onClick={() => {
-                setAnimateSelection(true);
-                onSelectMode(key);
-              }}
-              onKeyDown={(event) => onKeyDown(event, index)}
-              className={cn(
-                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-full text-ui outline-none",
-                active ? "w-[84px]" : "w-8",
-                // `scale-100!` is the press's reduced-motion cancel: dropping
-                // the transition below only made the depress instant, it never
-                // removed it, and `transform-none` could not have — see the
-                // press note in `ui/button.tsx`.
-                "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
-                !reducedMotion &&
-                  "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
-                active
-                  ? "bg-accent text-foreground shadow-raised"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-              )}
-            >
-              <motion.span layout="position" className="flex shrink-0 items-center">
-                <Icon className="size-3.5" />
-              </motion.span>
-              <AnimatePresence initial={false} mode="popLayout">
-                {active ? (
-                  <motion.span
-                    key={`${key}-label`}
-                    initial={animated ? { opacity: 0, transform: "translateX(-4px)" } : false}
-                    animate={{ opacity: 1, transform: "translateX(0)" }}
-                    exit={animated ? { opacity: 0, transform: "translateX(3px)" } : { opacity: 0 }}
-                    transition={{ duration: reducedMotion ? 0 : 0.14, ease: [0.23, 1, 0.32, 1] }}
-                    className="whitespace-nowrap"
-                  >
-                    {label}
-                  </motion.span>
-                ) : null}
-              </AnimatePresence>
-            </motion.button>
-          );
-          // The selected tab already wears its name, so its tooltip would only
-          // repeat it — `open={false}` keeps the trigger's accessibility wiring
-          // without ever showing the bubble.
-          return (
-            <Tooltip key={key} open={active ? false : undefined}>
-              <TooltipTrigger asChild>{tab}</TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {label}
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 export function TicketRail({
   projectId,
@@ -279,7 +140,13 @@ export function TicketRail({
       data-narrow={narrow ? "true" : "false"}
       data-testid="ticket-rail"
     >
-      <TicketRailTabs mode={mode} modes={modes} onSelectMode={onSelectMode} />
+      <RailModeTabs
+        modes={railModeTabs(modes)}
+        active={mode}
+        label="Ticket rail pages"
+        idPrefix="ticket-rail"
+        onSelect={onSelectMode}
+      />
       <section
         id={`ticket-rail-page-${mode}`}
         role="tabpanel"

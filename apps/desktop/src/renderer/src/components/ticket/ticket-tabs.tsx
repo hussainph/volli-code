@@ -23,6 +23,7 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type { SkillReference } from "@volli/shared";
 
+import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
   runOnLivePanes,
@@ -122,6 +123,9 @@ export interface TicketTabDescriptor {
 }
 
 interface TicketTabStripProps {
+  /** The ticket's owning project, used to resolve file tabs in main. */
+  projectId: string;
+  ticketId: string;
   tabs: readonly TicketTabDescriptor[];
   activeTabId: string;
   /** Disables the session-start control while a session of either kind is booting. */
@@ -160,6 +164,8 @@ interface TicketTabStripProps {
  * shared primitive's.
  */
 function TicketTab({
+  projectId,
+  ticketId,
   tab,
   active,
   tabStop,
@@ -171,6 +177,8 @@ function TicketTab({
   onCommitRename,
   onCancelRename,
 }: {
+  projectId: string;
+  ticketId: string;
   tab: TicketTabDescriptor;
   active: boolean;
   /** This tab is the strip's single roving-tabindex entry point. */
@@ -190,6 +198,10 @@ function TicketTab({
   const renamable = tab.kind === "session" || tab.kind === "chat";
   const closable = isClosableTicketTab(tab.kind);
   const preview = tab.preview === true;
+  const fileTarget =
+    tab.kind === "file" && tab.relPath !== undefined
+      ? { kind: "file" as const, projectId, ticketId, relPath: tab.relPath }
+      : null;
   // A terminal tab's own PTY facts. Called for every kind (hooks are not
   // conditional) and null for the four that have no PTY.
   const terminal = useTerminalTabState(tab.kind === "session" ? tab.id : null);
@@ -270,23 +282,30 @@ function TicketTab({
     />
   );
 
-  // Session and chat tabs rename; preview File tabs get Keep Open (decision
-  // #56). Doc / Diff / pinned File tabs skip the menu.
-  if (!renamable && !(preview && onPin !== undefined)) return inner;
+  // Session and chat tabs rename; File tabs hold the external-app/Finder
+  // submenu whether pinned or previewed; preview tabs additionally get Keep
+  // Open. Doc and Diff tabs still have nothing to offer.
+  if (!renamable && fileTarget === null && !(preview && onPin !== undefined)) return inner;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        {fileTarget !== null ? (
+          <>
+            <ExternalAppContextMenu target={fileTarget} />
+            {preview ? <ContextMenuSeparator /> : null}
+          </>
+        ) : null}
         {renamable ? (
           <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
             Rename
           </ContextMenuItem>
-        ) : (
+        ) : preview ? (
           <ContextMenuItem icon={PushPinIcon} onSelect={onPin}>
             Keep Open
           </ContextMenuItem>
-        )}
+        ) : null}
         {/* The warm-park tier (issue #51) is about a PTY holding memory, and a
             ticket's PTY holds exactly as much as the project's — these items
             were simply never ported over when this strip learned about Sessions.
@@ -346,6 +365,8 @@ function TicketTab({
 
 /** Purely presentational tab strip — content lives in the caller (ticket-detail.tsx). */
 export function TicketTabStrip({
+  projectId,
+  ticketId,
   tabs,
   activeTabId,
   creating,
@@ -419,6 +440,8 @@ export function TicketTabStrip({
       {tabs.map((tab, index) => (
         <TicketTab
           key={tab.id}
+          projectId={projectId}
+          ticketId={ticketId}
           tab={tab}
           active={tab.id === activeTabId}
           tabStop={index === stop}

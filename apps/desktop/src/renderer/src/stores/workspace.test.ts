@@ -387,6 +387,19 @@ describe("openHomeBoard", () => {
       openTicketId: null,
     });
   });
+
+  it("creates the plain Board state for a project with no prior workspace record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+
+    store.getState().openHomeBoard("project-a");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: HOME_BOARD_TAB_ID,
+      homeTabHistory: [HOME_BOARD_TAB_ID],
+      openTicketId: null,
+    });
+  });
 });
 
 describe("openTicket", () => {
@@ -1477,6 +1490,137 @@ describe("ticket diff view-state persistence", () => {
   });
 });
 
+describe("Home file workspace", () => {
+  it("previews a file as an active Home tab and records the tab it came from", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "chat:one");
+    store.getState().setNav("project-a", "files");
+
+    store.getState().previewHomeFile("project-a", "src/app.ts");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      homeActiveTab: "file:src/app.ts",
+      homeTabHistory: [HOME_BOARD_TAB_ID, "chat:one", "file:src/app.ts"],
+      projectFiles: {
+        tabs: [{ relPath: "src/app.ts", pinned: false }],
+        activeRelPath: "src/app.ts",
+      },
+    });
+  });
+
+  it("pins and activates Home files without duplicating their tabs", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewHomeFile("project-a", "one.ts");
+    store.getState().previewHomeFile("project-a", "two.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+    store.getState().previewHomeFile("project-a", "three.ts");
+
+    store.getState().activateHomeFile("project-a", "two.ts");
+
+    expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
+      tabs: [
+        { relPath: "two.ts", pinned: true },
+        { relPath: "three.ts", pinned: false },
+      ],
+      activeRelPath: "two.ts",
+    });
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("file:two.ts");
+  });
+
+  it("closes active files back through surviving MRU tabs", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "chat:one");
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+    store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
+
+    store.getState().closeHomeFile("project-a", "two.ts", ["chat:one"]);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("file:one.ts");
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({});
+
+    store.getState().closeHomeFile("project-a", "one.ts", ["chat:one"]);
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "chat:one",
+      homeTabHistory: [HOME_BOARD_TAB_ID, "chat:one"],
+      projectFiles: EMPTY_FILE_WORKSPACE,
+    });
+  });
+
+  it("closes an inactive file without moving the Home tab in front", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+    store.getState().activateHomeFile("project-a", "one.ts");
+    store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
+
+    store.getState().closeHomeFile("project-a", "two.ts", []);
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "file:one.ts",
+      homeTabHistory: [HOME_BOARD_TAB_ID, "file:one.ts"],
+      projectFiles: {
+        tabs: [{ relPath: "one.ts", pinned: true }],
+        activeRelPath: "one.ts",
+      },
+      projectFileViewStates: {},
+    });
+  });
+
+  it("ignores activation and close requests for files that are not open", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    const before = store.getState().byProject;
+
+    store.getState().activateHomeFile("project-a", "missing.ts");
+    store.getState().closeHomeFile("project-a", "missing.ts", []);
+    store.getState().activateHomeFile("project-never-seen", "missing.ts");
+    store.getState().closeHomeFile("project-never-seen", "missing.ts", []);
+
+    expect(store.getState().byProject).toBe(before);
+    expect(store.getState().byProject["project-never-seen"]).toBeUndefined();
+  });
+
+  it("restores the active Home File tab but not session-local visit history", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setHomeActiveTab("project-a", "chat:one");
+    store.getState().previewHomeFile("project-a", "src/app.ts");
+
+    const restored = createWorkspaceStore(storage).getState().byProject["project-a"];
+
+    expect(restored).toMatchObject({
+      homeActiveTab: "file:src/app.ts",
+      homeTabHistory: [],
+      projectFiles: {
+        tabs: [{ relPath: "src/app.ts", pinned: false }],
+        activeRelPath: "src/app.ts",
+      },
+    });
+    const persisted = JSON.parse(storage.getItem("volli:workspace")!) as {
+      state: { byProject: Record<string, Record<string, unknown>> };
+    };
+    expect(persisted.state.byProject["project-a"]).not.toHaveProperty("homeTabHistory");
+  });
+
+  it("falls back to Board when a restored file has no surviving visit history", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewProjectFile("project-a", "one.ts");
+    store.getState().setHomeActiveTab("project-a", "file:one.ts");
+    // Model the session-only history being absent after a relaunch.
+    store.setState((state) => ({
+      byProject: {
+        ...state.byProject,
+        "project-a": { ...state.byProject["project-a"]!, homeTabHistory: [] },
+      },
+    }));
+
+    store.getState().closeHomeFile("project-a", "one.ts", []);
+
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+  });
+});
+
 describe("project file workspace", () => {
   it("previewProjectFile opens a preview tab for that project only", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -1814,6 +1958,7 @@ describe("forget", () => {
       projectFiles: EMPTY_FILE_WORKSPACE,
       projectFileViewStates: {},
       homeActiveTab: HOME_BOARD_TAB_ID,
+      homeTabHistory: [],
     });
   });
 

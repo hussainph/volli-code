@@ -997,6 +997,8 @@ export function TicketDetail({
           in the main column below it. */}
         {terminalFocused ? null : (
           <TicketTabStrip
+            projectId={projectId}
+            ticketId={ticket.id}
             tabs={tabs}
             activeTabId={activeTab.id}
             creating={creating || creatingChat}

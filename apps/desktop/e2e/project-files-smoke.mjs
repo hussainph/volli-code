@@ -25,7 +25,7 @@
  *   6. ⌘S saves, and DISK BYTES match — the tab goes clean and the file read
  *      back with `fs` really contains the typed text. This is the core of the
  *      acceptance criterion: real bytes, not UI state.
- *   7. Navigate away and back RESTORES the workspace — Board, then Files: the
+ *   7. Navigate away and back RESTORES the workspace — Home, then Files: the
  *      same tabs, in the same order, with the same pinned/preview flags and the
  *      same active tab.
  *   8. Restoration is LAZY — on return, exactly ONE Monaco host is mounted (the
@@ -293,7 +293,7 @@ async function main() {
     // ===================================================================
     await attempt(
       1,
-      "Files nav opens the workbench (empty) and the sidebar tree lists the seeded repo, including nested src/ and lib/",
+      "Files nav opens the workbench (empty), the sidebar tree lists the seeded repo, and a file row exposes Open in… plus Finder",
       async () => {
         await goToNav(page, "Files", filesSettled(page));
         const empty = await waitUntil(
@@ -311,13 +311,33 @@ async function main() {
         await expandDir(page, "src", APP_TS);
         await expandDir(page, "lib", LIB_APP_TS);
         const nested = (await treeFile(page, UTIL_TS).count()) === 1;
+        // The external-app submenu remains useful before discovery completes:
+        // Finder is always its one truthful fallback item.
+        await treeFile(page, APP_TS).click({ button: "right" });
+        const openIn = page.getByText("Open in…", { exact: true });
+        const menuOpen = await waitUntil("Open in menu on a tree row", async () =>
+          (await openIn.isVisible()) ? true : null,
+        );
+        if (menuOpen) await openIn.hover();
+        const finder = page.getByText("Reveal in Finder", { exact: true });
+        const finderVisible = await waitUntil("Finder fallback in Open in menu", async () =>
+          (await finder.isVisible()) ? true : null,
+        );
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Escape");
         // Nothing is open yet, so no editor may be mounted.
         const monaco = await readMonaco(page);
 
-        const ok = !!empty && !!rootRows && nested && monaco.hostCount === 0;
+        const ok =
+          !!empty &&
+          !!rootRows &&
+          nested &&
+          !!menuOpen &&
+          !!finderVisible &&
+          monaco.hostCount === 0;
         return {
           ok,
-          detail: `empty=${!!empty} rootRows=${!!rootRows} nested=${nested} monacoHosts=${monaco.hostCount}`,
+          detail: `empty=${!!empty} rootRows=${!!rootRows} nested=${nested} openIn=${!!menuOpen} finder=${!!finderVisible} monacoHosts=${monaco.hostCount}`,
         };
       },
     );
@@ -500,7 +520,7 @@ async function main() {
     let beforeNav = [];
     await attempt(
       7,
-      "Board → Files restores the same tabs, in the same order, with the same pinned/preview flags and the same active tab",
+      "Home → Files restores the same tabs, in the same order, with the same pinned/preview flags and the same active tab",
       async () => {
         // Re-open a preview tab first, so the restored strip has to carry BOTH
         // kinds of tab (three pinned + one preview) rather than a uniform set.
@@ -512,10 +532,10 @@ async function main() {
         });
         await waitForMonacoReady(page, README);
 
-        await goToNav(page, "Board", boardSettled(page));
+        await goToNav(page, "Home", boardSettled(page));
         // The workbench is genuinely gone, not merely hidden.
         const unmounted = await waitUntil(
-          "files workbench unmounted on Board",
+          "files workbench unmounted on Home",
           async () => (await page.locator('[data-testid="files-workbench"]').count()) === 0,
         );
 

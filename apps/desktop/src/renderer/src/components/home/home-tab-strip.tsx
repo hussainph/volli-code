@@ -8,6 +8,7 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
 import type { SkillReference } from "@volli/shared";
 
@@ -41,15 +42,24 @@ import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
  *
  * A terminal tab carries its whole store record — park state, panes and exit
  * codes are all read off it — while a chat tab carries the two facts a chat has
- * on a strip: its title and its liveness. `id` is the tab's identity in the
- * merged strip and in `homeActiveTab`; a chat's is `chat:`-prefixed
- * (`ticket-chat-tab.ts`) and the Board's is a bare word, so the three id spaces
- * never collide.
+ * on a strip: its title and its liveness. A File tab carries the Main-checkout
+ * path plus preview/dirty presentation. `id` is the identity in the merged
+ * strip and in `homeActiveTab`; chat and File ids are prefixed, terminal ids are
+ * UUIDs, and the Board is a bare word, so the four spaces never collide.
  */
 export type HomeTabDescriptor =
   | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
-  | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus };
+  | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus }
+  | {
+      kind: "file";
+      id: string;
+      relPath: string;
+      title: string;
+      hint: string | null;
+      preview: boolean;
+      dirty: boolean;
+    };
 
 /** The Board tab, spelled once. */
 export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
@@ -60,8 +70,12 @@ interface HomeTabStripProps {
   onSelect(tab: HomeTabDescriptor): void;
   /** Never raised for the Board tab, which carries no close affordance. */
   onClose(tab: HomeTabDescriptor): void;
-  /** Never raised for the Board tab, which is not renamable. */
+  /** Never raised for the Board or File tabs, which are not renamable. */
   onRename(tab: HomeTabDescriptor, title: string): void;
+  /** Double-click / Keep Open on a preview File tab. */
+  onPinFile(relPath: string): void;
+  /** "Close Others" on a File tab — closes every OTHER File tab, guards included. */
+  onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
   /** The project's skills — the "Chat with skill" submenu's rows. */
@@ -92,10 +106,10 @@ interface HomeTabStripProps {
  * where it floated above a surface it did not own. It owns this one.)
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
- * without a ticket — terminals first and chats after, each in the order it was
- * opened. A trailing split control starts either; every tab but the Board
- * carries a hover-revealed close, a right-click menu, and double-click inline
- * rename.
+ * without a ticket — terminals first and chats after — then Main-checkout File
+ * tabs in their reducer order. A trailing split control starts either Session;
+ * every tab but the Board carries a hover-revealed close and a right-click
+ * menu. Session tabs rename on double-click; preview File tabs pin.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
@@ -107,6 +121,8 @@ export function HomeTabStrip({
   onSelect,
   onClose,
   onRename,
+  onPinFile,
+  onCloseOtherFiles,
   onNewSession,
   onNewChat,
   skills,
@@ -181,6 +197,20 @@ export function HomeTabStrip({
             />
           );
         }
+        if (descriptor.kind === "file") {
+          return (
+            <HomeFileTab
+              key={descriptor.id}
+              tab={descriptor}
+              active={active}
+              tabStop={tabStop}
+              onSelect={() => onSelect(descriptor)}
+              onPin={() => onPinFile(descriptor.relPath)}
+              onClose={() => onClose(descriptor)}
+              onCloseOthers={() => onCloseOtherFiles(descriptor.relPath)}
+            />
+          );
+        }
         // One set of callbacks for both Session kinds — what differs between
         // them is what each tab DRAWS and what its menu offers, never how the
         // strip reports a selection, a close, or a rename.
@@ -251,6 +281,73 @@ function BoardTab({
         <KanbanIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
       }
     />
+  );
+}
+
+/**
+ * One Main-checkout File tab.
+ *
+ * It speaks the PROJECT FILES strip's vocabulary rather than the ticket
+ * strip's, and that is the deliberate half of the choice: these are main
+ * checkout files, opened out of the same `FileWorkspaceState` the Files
+ * workbench reduces, so `file-tab-strip.tsx`'s menu is the one a person has
+ * already met on the same files — Keep Open (disabled once pinned, so the menu
+ * keeps one shape), Close, Close Others. The ticket strip differs because a
+ * pinned ticket File tab has no menu at all, which would leave Home's keyboard
+ * users with no route to Close.
+ */
+function HomeFileTab({
+  tab,
+  active,
+  tabStop,
+  onSelect,
+  onPin,
+  onClose,
+  onCloseOthers,
+}: {
+  tab: Extract<HomeTabDescriptor, { kind: "file" }>;
+  active: boolean;
+  tabStop: boolean;
+  onSelect(): void;
+  onPin(): void;
+  onClose(): void;
+  onCloseOthers(): void;
+}) {
+  const inner = (
+    <Tab
+      data-testid="home-file-tab"
+      data-rel-path={tab.relPath}
+      // Spelled both ways, as on the Files strip: a test and the smoke read
+      // "false" rather than having to tell an absent attribute from a stale one.
+      data-preview={tab.preview ? "true" : "false"}
+      data-dirty={tab.dirty ? "true" : "false"}
+      label={tab.title}
+      hint={tab.hint ?? undefined}
+      active={active}
+      tabStop={tabStop}
+      dirty={tab.dirty}
+      labelClassName={tab.preview ? "italic" : undefined}
+      onActivate={onSelect}
+      onDoubleClick={tab.preview ? onPin : undefined}
+      onClose={onClose}
+    />
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
+          Keep Open
+        </ContextMenuItem>
+        <ContextMenuItem icon={XIcon} onSelect={onClose}>
+          Close
+        </ContextMenuItem>
+        <ContextMenuItem icon={XSquareIcon} onSelect={onCloseOthers}>
+          Close Others
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

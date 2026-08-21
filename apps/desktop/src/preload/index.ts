@@ -67,6 +67,9 @@ import type {
   DataChangedEvent,
   DirChangedEvent,
   DirPathInput,
+  ExternalAppListResult,
+  ExternalAppOpenFileInput,
+  ExternalAppOpenWorktreeInput,
   FileChangedEvent,
   FileIndexInput,
   FileIndexResult,
@@ -161,6 +164,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeStatusResult,
   WorktreeWatchErrorEvent,
+  WorktreeRevealInput,
 } from "../ipc/contract";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -664,6 +668,17 @@ const api = {
       invoke("volli:prompt-templates", input),
     /** Reveals the resolved file in Finder. */
     reveal: (input: FilePathInput): Promise<Result> => invoke("volli:file-reveal", input),
+    /** The installed subset of the allowlisted external-editor catalogue. */
+    listExternalApps: (): Promise<ExternalAppListResult> => invoke("volli:external-app-list"),
+    /** Opens a resolved main- or ticket-worktree file/folder in one known external app. */
+    openInExternalApp: (input: ExternalAppOpenFileInput): Promise<Result> =>
+      invoke("volli:external-app-open-file", input),
+    /** Opens the ticket's live worktree root in one known external app. */
+    openWorktreeInExternalApp: (input: ExternalAppOpenWorktreeInput): Promise<Result> =>
+      invoke("volli:external-app-open-worktree", input),
+    /** Reveals the ticket's live worktree root in Finder without accepting a renderer path. */
+    revealWorktree: (input: WorktreeRevealInput): Promise<Result> =>
+      invoke("volli:worktree-reveal", input),
     /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
     watch: (input: FilePathInput): Promise<Result> => invoke("volli:file-watch", input),
     unwatch: (input: FilePathInput): Promise<Result> => invoke("volli:file-unwatch", input),

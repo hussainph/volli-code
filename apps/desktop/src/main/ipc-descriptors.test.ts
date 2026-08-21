@@ -1543,6 +1543,61 @@ describe("FILE_IPC descriptor table", () => {
     }
   });
 
+  describe("volli:external-app-list", () => {
+    const { guard, invalidError } = FILE_IPC["volli:external-app-list"];
+
+    it("takes no input", () => {
+      expect(guard([])).toBe(true);
+      expect(guard([{}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("external app target channels", () => {
+    const file = FILE_IPC["volli:external-app-open-file"];
+    const worktree = FILE_IPC["volli:external-app-open-worktree"];
+    const revealWorktree = FILE_IPC["volli:worktree-reveal"];
+
+    it("accepts a safe-shaped external-app file target and rejects an unknown app id", () => {
+      expect(
+        file.guard([{ projectId: "p1", ticketId: "t1", relPath: "src/main.ts", appId: "vscode" }]),
+      ).toBe(true);
+      expect(
+        file.guard([
+          { projectId: "p1", ticketId: "t1", relPath: "src/main.ts", appId: "android-studio" },
+        ]),
+      ).toBe(true);
+      expect(file.guard([{ projectId: "p1", relPath: "src/main.ts", appId: "unknown" }])).toBe(
+        false,
+      );
+    });
+
+    it("rejects malformed external-app file targets", () => {
+      expect(file.guard([null])).toBe(false);
+      expect(file.guard([{ projectId: 1, relPath: "x.ts", appId: "vscode" }])).toBe(false);
+      expect(file.guard([{ projectId: "p1", relPath: 1, appId: "vscode" }])).toBe(false);
+      expect(file.guard([])).toBe(false);
+    });
+
+    it("accepts a ticket worktree target and rejects every missing or malformed part", () => {
+      expect(worktree.guard([{ projectId: "p1", ticketId: "t1", appId: "terminal" }])).toBe(true);
+      expect(worktree.guard([null])).toBe(false);
+      expect(worktree.guard([{ projectId: 1, ticketId: "t1", appId: "terminal" }])).toBe(false);
+      expect(worktree.guard([{ projectId: "p1", ticketId: 1, appId: "terminal" }])).toBe(false);
+      expect(worktree.guard([{ projectId: "p1", ticketId: "t1", appId: "unknown" }])).toBe(false);
+    });
+
+    it("accepts only a project/ticket pair for worktree reveal", () => {
+      expect(revealWorktree.guard([{ projectId: "p1", ticketId: "t1" }])).toBe(true);
+      expect(revealWorktree.guard([null])).toBe(false);
+      expect(revealWorktree.guard([{ projectId: 1, ticketId: "t1" }])).toBe(false);
+      expect(revealWorktree.guard([{ projectId: "p1", ticketId: 1 }])).toBe(false);
+    });
+  });
+
   describe("volli:dir-watch / volli:dir-unwatch (shared DirPathInput shape)", () => {
     const channels = ["volli:dir-watch", "volli:dir-unwatch"] as const;
 
@@ -1673,11 +1728,15 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 10 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(10);
+    it("covers all 14 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(14);
       expect(FILE_CHANNELS).toContain("volli:prompt-templates");
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");
+      expect(FILE_CHANNELS).toContain("volli:external-app-list");
+      expect(FILE_CHANNELS).toContain("volli:external-app-open-file");
+      expect(FILE_CHANNELS).toContain("volli:external-app-open-worktree");
+      expect(FILE_CHANNELS).toContain("volli:worktree-reveal");
       expect(FILE_CHANNELS).toContain("volli:dir-watch");
       expect(FILE_CHANNELS).toContain("volli:dir-unwatch");
     });
