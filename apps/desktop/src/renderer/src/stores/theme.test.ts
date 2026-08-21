@@ -8,7 +8,6 @@ import {
   type Appearance,
   type Canvas,
   type GhosttyAppearancePayload,
-  type ProjectThemeOverride,
   type ResolvedAppearance,
 } from "@volli/shared";
 import type { ThemeStatePayload } from "../../../ipc/contract";
@@ -163,11 +162,6 @@ function fakeGateway(over: Partial<ThemeGateway> = {}): ThemeGateway {
       project: { id: projectId, themeAppearance: appearance } as never,
     })),
     setFirstPaint: vi.fn(async () => ({ ok: true as const })),
-    setProject: vi.fn(async (projectId: string, override: ProjectThemeOverride | null) => ({
-      ok: true as const,
-      project: { id: projectId } as never,
-      value: statePayload({ projectId, projectOverride: override }),
-    })),
     ...over,
   };
 }

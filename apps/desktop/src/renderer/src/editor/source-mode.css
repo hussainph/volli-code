@@ -1,0 +1,133 @@
+/**
+ * Source Mode chrome, painted from app tokens (VC-123).
+ *
+ * The shiki theme owns the CODE — every `mtk*` colour, the whole point of
+ * having a syntax theme at all. What it must not own is the FURNITURE: the
+ * ground the code sits on, the gutter beside it, the wash under a selection,
+ * the find widget floating over it. Those are app surfaces that happen to be
+ * inside an editor, and a theme author's opinion about them is an opinion
+ * about a different application's chrome.
+ *
+ * Left alone, that furniture arrived from the theme and the editor read as a
+ * rectangle of someone else's app pasted into this one. Vitesse is a close
+ * neighbour of the canvas in both modes, which is why it was chosen — but
+ * "close" still reads as a seam at the edges where the two meet.
+ *
+ * WHY CSS AND NOT A MERGED THEME. The alternative is merging `colors` into the
+ * shiki theme before `registerTheme`, which means resolving app tokens to
+ * literals at registration time and re-registering both themes on every canvas
+ * change. These aliases cost nothing instead: the app rewrites its tokens onto
+ * the root element on every canvas or appearance change and `var()` re-resolves
+ * with them, so the editor follows a canvas drag live with no theme to rebuild.
+ * Exactly the reasoning in `document-mode.css`, applied to the other mode.
+ *
+ * WHY THE HOST CLASS. `standaloneThemeService` writes the active theme's
+ * variables onto `.monaco-editor` itself with a one-class rule, so a bare
+ * `.monaco-editor` block here would TIE on specificity and be decided by
+ * whichever stylesheet the browser saw last — and Monaco injects its own at
+ * theme-apply time, after this file. `.volli-source-mode .monaco-editor` is
+ * (0,2,0) and wins outright, the same way document mode does.
+ *
+ * The two modes are mutually exclusive by construction: a host carries one
+ * class or the other, never both.
+ */
+
+/* --- the surface ---------------------------------------------------------- */
+
+.volli-source-mode .monaco-editor,
+.volli-source-mode .monaco-diff-editor {
+  /* The ground. A file view fills a workbench pane that is already the app's
+     background, so the editor stops being a rectangle ON the surface and
+     becomes the surface. */
+  --vscode-editor-background: var(--background);
+  --vscode-editorGutter-background: var(--background);
+  --vscode-editorStickyScroll-background: var(--background);
+  --vscode-breadcrumb-background: var(--background);
+
+  /* Line numbers are chrome, not code: the muted rung, lifting to full ink on
+     the active line the way every other "current row" in the app does. */
+  --vscode-editorLineNumber-foreground: var(--muted-foreground);
+  --vscode-editorLineNumber-activeForeground: var(--foreground);
+
+  /* Ink at low alpha rather than an authored pair per mode: it lands the same
+     perceptual step off the page in both appearances, and follows the canvas.
+     Monaco paints selection UNDER the text, so the wash never dims a glyph. */
+  --vscode-editor-selectionBackground: color-mix(in oklab, var(--foreground) 22%, transparent);
+  --vscode-editor-inactiveSelectionBackground: color-mix(
+    in oklab,
+    var(--foreground) 10%,
+    transparent
+  );
+  --vscode-editor-selectionHighlightBackground: color-mix(
+    in oklab,
+    var(--foreground) 10%,
+    transparent
+  );
+
+  /* The current line, one veil step off the ground — the same barely-there
+     lift the app uses for a hovered row, not the theme's flat grey. */
+  --vscode-editor-lineHighlightBackground: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --vscode-editor-lineHighlightBorder: transparent;
+
+  /* The find widget is a POPOVER that happens to live in an editor. It takes
+     the app's popover tokens so it matches every other floating panel rather
+     than the theme's idea of a dialog. */
+  --vscode-editorWidget-background: var(--popover);
+  --vscode-editorWidget-foreground: var(--foreground);
+  --vscode-editorWidget-border: var(--border);
+  --vscode-editorWidget-resizeBorder: var(--border-strong);
+  --vscode-input-background: var(--background);
+  --vscode-input-foreground: var(--foreground);
+  --vscode-input-border: var(--border);
+  --vscode-focusBorder: var(--ring);
+  --vscode-inputOption-activeBorder: var(--ring);
+  --vscode-inputOption-activeBackground: color-mix(in oklab, var(--primary) 20%, transparent);
+  --vscode-inputOption-activeForeground: var(--foreground);
+
+  /* A find hit is the app's accent — the same colour the rest of the window
+     uses to say "this one". The current hit is the opaque rung, the rest a
+     wash, so "which match am I on" survives at a glance. */
+  --vscode-editor-findMatchBackground: color-mix(in oklab, var(--primary) 45%, transparent);
+  --vscode-editor-findMatchHighlightBackground: color-mix(
+    in oklab,
+    var(--primary) 22%,
+    transparent
+  );
+  --vscode-editor-findMatchBorder: var(--primary);
+
+  /* Monaco draws its own scrollbar out of divs, so the app's global
+     `::-webkit-scrollbar` treatment cannot reach it — same three tokens, same
+     rest → hover → grabbed progression (globals.css). */
+  --vscode-scrollbarSlider-background: var(--border);
+  --vscode-scrollbarSlider-hoverBackground: var(--border-strong);
+  --vscode-scrollbarSlider-activeBackground: var(--muted-foreground);
+
+  /* Indent guides and the whitespace dots sit under the code and must never
+     compete with it: border weight, not ink weight. */
+  --vscode-editorIndentGuide-background1: var(--border);
+  --vscode-editorIndentGuide-activeBackground1: var(--border-strong);
+  --vscode-editorWhitespace-foreground: var(--border);
+}
+
+/* --- the diff view -------------------------------------------------------- */
+
+/* Diff washes stay the theme's red/green (they carry MEANING, and a canvas
+   accent cannot say "removed"), but the furniture between the two panes is
+   app chrome and takes the app's border. */
+.volli-source-mode .monaco-diff-editor {
+  --vscode-diffEditor-border: var(--border);
+  --vscode-editorGutter-addedBackground: color-mix(in oklab, var(--positive) 55%, transparent);
+  --vscode-editorGutter-deletedBackground: color-mix(in oklab, var(--destructive) 55%, transparent);
+}
+
+/* --- the caret ------------------------------------------------------------ */
+
+/* The caret is the one editor colour Monaco emits as a literal rule instead of
+   a variable (its `viewCursors` theming participant), so it takes a rule of its
+   own — matching `document-mode.css`, and for the same reason: it stands where
+   the next glyph will land, so it is the colour of a glyph. */
+.volli-source-mode .monaco-editor .cursors-layer .cursor {
+  background-color: var(--foreground);
+  border-color: var(--foreground);
+  color: var(--background);
+}

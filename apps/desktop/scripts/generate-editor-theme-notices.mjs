@@ -8,9 +8,15 @@
  * Upstream source:
  *   https://github.com/shikijs/textmate-grammars-themes/blob/main/packages/tm-themes/NOTICE
  *
- * Theme ids are read from `SHIPPED_EDITOR_THEME_IDS` in
+ * Theme ids are read from `EDITOR_THEME_BY_APPEARANCE` in
  * `packages/shared/src/theme/editor-themes.ts` so this script cannot drift from
  * the IPC vocabulary / renderer catalog.
+ *
+ * That map, rather than `SHIPPED_EDITOR_THEME_IDS` beside it, because since
+ * VC-123 the map holds the only string LITERALS: the exported array is derived
+ * from it, and a regex parser that had to follow `EDITOR_THEME_BY_APPEARANCE.light`
+ * back to its value would be a small TypeScript interpreter. Read the one
+ * place the ids are actually written.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -29,23 +35,25 @@ const SHIKI_RUNTIME_PACKAGES = [
 ];
 
 /**
- * Parse `SHIPPED_EDITOR_THEME_IDS` from shared source (plain Node, no TS loader).
+ * Parse `EDITOR_THEME_BY_APPEARANCE`'s values from shared source (plain Node, no
+ * TS loader). Order follows the map, which is light-then-dark.
  * @returns {string[]}
  */
 function readShippedEditorThemeIdsFromShared() {
   const source = readFileSync(sharedEditorThemesPath, "utf8");
-  const match = source.match(
-    /export const SHIPPED_EDITOR_THEME_IDS\s*=\s*\[([\s\S]*?)\]\s*as const/,
-  );
+  const match = source.match(/const EDITOR_THEME_BY_APPEARANCE\s*=\s*\{([\s\S]*?)\}\s*as const/);
   if (match === null) {
-    throw new Error(`Could not find SHIPPED_EDITOR_THEME_IDS in ${sharedEditorThemesPath}`);
+    throw new Error(`Could not find EDITOR_THEME_BY_APPEARANCE in ${sharedEditorThemesPath}`);
   }
-  const ids = [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  // `light: "vitesse-light",` — take the VALUE of each entry.
+  const ids = [...match[1].matchAll(/:\s*"([^"]+)"/g)].map((m) => m[1]);
   if (ids.length === 0) {
-    throw new Error(`SHIPPED_EDITOR_THEME_IDS parsed empty from ${sharedEditorThemesPath}`);
+    throw new Error(`EDITOR_THEME_BY_APPEARANCE parsed empty from ${sharedEditorThemesPath}`);
   }
   if (new Set(ids).size !== ids.length) {
-    throw new Error(`SHIPPED_EDITOR_THEME_IDS in ${sharedEditorThemesPath} contains duplicate ids`);
+    throw new Error(
+      `EDITOR_THEME_BY_APPEARANCE in ${sharedEditorThemesPath} maps two appearances to one theme`,
+    );
   }
   return ids;
 }
@@ -107,7 +115,7 @@ if (
   [...covered].some((id) => !sharedSet.has(id))
 ) {
   throw new Error(
-    "NOTICE theme ids must equal SHIPPED_EDITOR_THEME_IDS from @volli/shared exactly",
+    "NOTICE theme ids must equal EDITOR_THEME_BY_APPEARANCE's values from @volli/shared exactly",
   );
 }
 

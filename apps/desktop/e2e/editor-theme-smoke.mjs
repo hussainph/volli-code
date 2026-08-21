@@ -1,20 +1,22 @@
 /**
- * End-to-end smoke for Monaco editor theming (issue #122).
+ * End-to-end smoke for Monaco editor theming (issue #122, VC-123).
  *
  * Drives the REAL packaged app through Playwright against an isolated profile
  * and a seeded git repo. Proves what unit tests cannot see:
  *
  *   1. Opening a project file boots a real Monaco editor (ready, no fallback).
- *   2. The default Ember → One Dark Pro catalog theme paints Monaco's
- *      editor.background (not an unthemed / volli-dark surface).
- *   3. Settings → Appearance → Editor theme commit persists via
- *      `window.api.theme` and survives returning to Files.
- *   4. After committing Nord, Monaco's background matches Nord's
- *      editor.background — proof setTheme applied a catalog id.
- *   5. Source Mode and Document Mode part ways under that same committed
- *      catalog theme: a ticket body paints NO catalog background and takes its
- *      ink from `--foreground` (document-mode.css), which is the split nothing
- *      but a real window can see.
+ *   2. In a DARK app, Monaco paints the shipped dark theme's background.
+ *   3. Flipping the app to LIGHT repaints Monaco with the light theme — no
+ *      picker, no reload, no editor write. This is the whole ticket: the pair
+ *      follows the one appearance choice the app already has.
+ *   4. Flipping back to dark restores the dark theme, so the follow is a live
+ *      binding rather than a one-way boot-time read.
+ *   5. The editor's FURNITURE comes from app tokens, not from the shiki theme:
+ *      Monaco's background equals the app's own `--background` in light mode
+ *      (source-mode.css), which is what makes the editor part of the surface.
+ *   6. Source Mode and Document Mode still part ways: a ticket body paints NO
+ *      catalog background and takes its ink from `--foreground`
+ *      (document-mode.css) — the split nothing but a real window can see.
  *
  * MANUALLY RUN (needs a display + the built app); not wired into CI:
  *
@@ -49,9 +51,18 @@ if (process.platform !== "darwin") {
   process.exit(1);
 }
 
-/** Shiki catalog editor.background pins — independent of the generator. */
-const ONE_DARK_PRO_BG = "#282c34";
-const NORD_BG = "#2e3440";
+/**
+ * The two shipped themes' `editor.background`, read out of `@shikijs/themes`
+ * and pinned here as literals — independent of the app, so a regression in
+ * which theme is chosen cannot rewrite the expectation with it.
+ *
+ * Only asserted where source-mode.css does NOT override the ground: it aliases
+ * `--vscode-editor-background` to the app canvas, so what Monaco actually
+ * paints is the app's background. The theme pins stay as the reference for
+ * what would be on screen without that alias.
+ */
+const VITESSE_LIGHT_BG = "#ffffff";
+const VITESSE_DARK_BG = "#121212";
 
 const PROJECT_SEED_ID = "editor-theme-project";
 const PROJECT_NAME = "Editor Theme Project";
@@ -85,8 +96,39 @@ function treeDir(page, relPath) {
   return page.locator(`[data-testid="file-tree-dir"][data-rel-path="${relPath}"]`);
 }
 
-function editorThemeTrigger(page) {
-  return page.getByRole("button", { name: "Editor theme", exact: true });
+/**
+ * Set the app-wide appearance through the same IPC the Mode control writes,
+ * then wait for the renderer to finish repainting.
+ *
+ * Driven over `window.api` rather than by clicking Settings → Mode because the
+ * assertion is about MONACO, not about the button: routing through the store's
+ * own write path proves the editor follows the committed appearance, and keeps
+ * this check from failing the day that control is restyled.
+ */
+async function setAppearance(page, appearance) {
+  const ok = await page.evaluate(async (mode) => {
+    const result = await window.api.theme.setGlobalAppearance(mode);
+    return result.ok;
+  }, appearance);
+  if (!ok) throw new Error(`setGlobalAppearance(${appearance}) failed`);
+  await waitUntil(
+    `<html> to wear the ${appearance} class`,
+    async () =>
+      (await page.evaluate(
+        (mode) =>
+          mode === "light"
+            ? document.documentElement.classList.contains("light")
+            : !document.documentElement.classList.contains("light"),
+        appearance,
+      )) || null,
+  );
+}
+
+/** The app's own `--background`, as the canvas system resolved it right now. */
+async function readAppBackground(page) {
+  return page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--background").trim(),
+  );
 }
 
 async function goToNav(page, label, settled) {
@@ -96,12 +138,6 @@ async function goToNav(page, label, settled) {
 
 const filesSettled = (page) => async () =>
   (await page.locator('[data-testid="files-workbench"]').count()) === 1;
-
-async function openAppearanceSettings(page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  await page.getByRole("button", { name: "Appearance", exact: true }).click();
-  await editorThemeTrigger(page).waitFor();
-}
 
 async function expandDir(page, relPath, expectChild) {
   await waitUntil(
@@ -308,72 +344,65 @@ try {
     };
   });
 
-  await attempt(2, "an unset editor theme paints the shipped One Dark Pro background", async () => {
-    const state = await page.evaluate(async () => {
+  await attempt(2, "a dark app paints Monaco with the shipped dark theme", async () => {
+    await setAppearance(page, "dark");
+    await openSeededFile(page);
+    const bg = await waitForMonacoBackground(page, VITESSE_DARK_BG);
+    // Nothing about the editor is persisted any more — the appearance row is
+    // the only thing that decided this.
+    const payload = await page.evaluate(async () => {
       const result = await window.api.theme.state({});
-      return result.ok ? result.value.editorThemeId : null;
+      return result.ok ? Object.keys(result.value) : null;
     });
-    const bg = await waitForMonacoBackground(page, ONE_DARK_PRO_BG);
     return {
-      ok: state === null && bg === ONE_DARK_PRO_BG,
-      detail: `editorThemeId=${JSON.stringify(state)} bg=${bg} expected=${ONE_DARK_PRO_BG}`,
+      ok: bg === VITESSE_DARK_BG && payload !== null && !payload.includes("editorThemeId"),
+      detail: `bg=${bg} expected=${VITESSE_DARK_BG} stateKeys=${JSON.stringify(payload)}`,
     };
   });
 
-  await attempt(3, "Appearance Editor theme commit persists Nord", async () => {
-    await openAppearanceSettings(page);
-    await editorThemeTrigger(page).click();
-    await page.getByRole("combobox", { name: "Search editor themes" }).fill("Nord");
-    await page
-      .getByRole("option", { name: /^Nord$/ })
-      .first()
-      .click();
-
-    const label = await waitUntil("Editor theme trigger shows Nord", async () => {
-      const text = (await editorThemeTrigger(page).textContent())?.trim();
-      return text === "Nord" ? text : null;
-    });
-
-    const persisted = await waitUntil("theme.state editorThemeId=nord", async () => {
-      const result = await page.evaluate(async () => window.api.theme.state({}));
-      return result.ok && result.value.editorThemeId === "nord" ? "nord" : null;
-    });
-
+  await attempt(3, "flipping the app to light repaints Monaco light, with no reload", async () => {
+    // The ticket, in one check: no picker was touched and nothing remounted.
+    await setAppearance(page, "light");
+    const bg = await waitForMonacoBackground(page, VITESSE_LIGHT_BG);
+    const state = await readMonacoState(page);
     return {
-      ok: label === "Nord" && persisted === "nord",
-      detail: `label=${JSON.stringify(label)} persisted=${persisted}`,
+      ok: bg === VITESSE_LIGHT_BG && state.status === "ready" && state.fallbacks === 0,
+      detail: `bg=${bg} expected=${VITESSE_LIGHT_BG} status=${state.status} fallbacks=${state.fallbacks}`,
     };
   });
 
-  await attempt(4, "returning to Files paints Monaco with Nord background", async () => {
-    const monaco = await openSeededFile(page);
-    const bg = await waitForMonacoBackground(page, NORD_BG);
+  await attempt(4, "flipping back to dark restores the dark theme", async () => {
+    // Proves the pairing is a live binding, not a boot-time read.
+    await setAppearance(page, "dark");
+    const bg = await waitForMonacoBackground(page, VITESSE_DARK_BG);
     return {
-      ok: monaco.status === "ready" && bg === NORD_BG,
-      detail: `status=${monaco.status} bg=${bg} expected=${NORD_BG}`,
+      ok: bg === VITESSE_DARK_BG,
+      detail: `bg=${bg} expected=${VITESSE_DARK_BG}`,
     };
   });
 
-  await attempt(5, "catalog theme path never resurrects volli-dark", async () => {
-    const probe = await page.evaluate(async () => {
-      const result = await window.api.theme.state({});
-      const id = result.ok ? result.value.editorThemeId : null;
-      const editor = document.querySelector("[data-monaco-status] .monaco-editor");
-      return {
-        editorThemeId: id,
-        monacoClass: editor?.className ?? null,
-        mentionsVolliDark: (editor?.className ?? "").includes("volli-dark"),
-      };
-    });
+  await attempt(5, "the editor's ground is the app's own token, not the theme's", async () => {
+    // source-mode.css aliases `--vscode-editor-background` to `--background`,
+    // so in LIGHT the editor must match the app canvas rather than the shiki
+    // theme's flat white. Checked in light because that is where a mismatch
+    // between the two is visible at all.
+    await setAppearance(page, "light");
+    await openSeededFile(page);
+    const appBg = await readAppBackground(page);
+    const painted = await waitForMonacoBackground(page, cssColorToHex(appBg));
+    const editorClass = await page.evaluate(
+      () => document.querySelector("[data-monaco-status] .volli-source-mode") !== null,
+    );
     return {
-      ok: probe.editorThemeId === "nord" && probe.mentionsVolliDark === false,
-      detail: JSON.stringify(probe),
+      ok: painted === cssColorToHex(appBg) && editorClass,
+      detail: `painted=${painted} --background=${appBg} sourceModeHost=${editorClass}`,
     };
   });
 
-  await attempt(6, "a ticket body ignores the catalog theme and wears app tokens", async () => {
-    // Still on the committed Nord, deliberately: passing here under the SHIPPED
-    // default would only prove that the two happened to agree.
+  await attempt(6, "a ticket body stays transparent while a file view is grounded", async () => {
+    // Run in LIGHT, deliberately. Document Mode is transparent in both modes,
+    // so under dark this would pass even if the split had collapsed — light is
+    // where "no ground of its own" and "the app's ground" look different.
     await openTicketDocument(page);
     const surface = await readDocumentSurface(page);
     if (surface === null) return { ok: false, detail: "no Document Mode editor mounted" };

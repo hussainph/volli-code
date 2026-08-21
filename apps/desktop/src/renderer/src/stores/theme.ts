@@ -52,7 +52,6 @@ import type {
 import type {
   ProjectCanvasWriteResult,
   Result,
-  ThemeSetProjectResult,
   ThemeStatePayload,
   ThemeStateResult,
 } from "../../../ipc/contract";
@@ -115,10 +114,12 @@ export interface ThemeGateway {
    * cache, never an authority — `{canvas, appearance}` stays the pair.
    */
   setFirstPaint(hint: { appearance: ResolvedAppearance; background: string }): Promise<Result>;
-  setProject(
-    projectId: string,
-    override: ProjectThemeOverride | null,
-  ): Promise<ThemeSetProjectResult>;
+  /**
+   * No `setProject` here. The migration-013 override's last renderer-writable
+   * field was the editor id, and VC-123 retired it; a project's terminal theme
+   * is written to its ghostty overlay FILE, not to this row. The IPC channel
+   * survives for main's own use — this store simply has nothing to send it.
+   */
 }
 
 /**
@@ -180,7 +181,6 @@ const defaultDeps: ThemeStoreDeps = {
     setProjectAppearance: (projectId, appearance) =>
       window.api.theme.setProjectAppearance(projectId, appearance),
     setFirstPaint: (hint) => window.api.theme.setFirstPaint(hint),
-    setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
   },
   // Point-free on purpose. An arrow re-listing the parameters is how the
   // `transient` flag came to be silently dropped here: a shorter function is
@@ -559,15 +559,18 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
     };
 
     /**
-     * The migration-013 row for this scope — now just the terminal name.
+     * The migration-013 row this scope is holding — now just the terminal name.
      *
      * The canvas and appearance writes below rebuild the whole override, so
      * without this they would drop the terminal half of a project that had one.
+     *
+     * Takes no project id and needs no scope check: both callers run it inside
+     * their own `if (inScope)`, which has already established that the store is
+     * holding the override for the project being written. A second check there
+     * could only ever answer the same way.
      */
-    const legacyOverrideFor = (projectId: string): ProjectThemeOverride | null => {
-      const state = get();
-      if (state.projectId !== projectId) return null;
-      const terminalThemeName = state.projectOverride?.terminalThemeName ?? null;
+    const heldTerminalOverride = (): ProjectThemeOverride | null => {
+      const terminalThemeName = get().projectOverride?.terminalThemeName ?? null;
       return terminalThemeName === null ? null : { terminalThemeName };
     };
 
@@ -776,7 +779,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
             preview: null,
             projectOverride: surfaceOverride(
               { projectId, canvas, appearance: previous?.appearance ?? null },
-              legacyOverrideFor(projectId),
+              heldTerminalOverride(),
             ),
           });
         }
@@ -803,7 +806,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
             previewAppearance: null,
             projectOverride: surfaceOverride(
               { projectId, canvas: previous?.canvas ?? null, appearance },
-              legacyOverrideFor(projectId),
+              heldTerminalOverride(),
             ),
           });
         }

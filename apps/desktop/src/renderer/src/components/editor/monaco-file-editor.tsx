@@ -610,7 +610,11 @@ export function MonacoFileEditor({
           onOverwriteDisk={() => void runSaveRef.current()}
         />
       )}
-      <div ref={hostRef} className="min-h-0 w-full flex-1 overflow-hidden" />
+      {/* `volli-source-mode` is the hook `editor/source-mode.css` paints the
+          editor's FURNITURE through (ground, gutter, selection, find widget).
+          It is the Source Mode twin of `volli-document-mode`, and the two are
+          mutually exclusive: a host wears one or the other. */}
+      <div ref={hostRef} className="volli-source-mode min-h-0 w-full flex-1 overflow-hidden" />
     </div>
   );
 }

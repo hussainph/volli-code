@@ -6,6 +6,10 @@ import {
   type SequenceEditStep,
   STANDARD_SEQUENCE_DIFF_BUDGET,
 } from "./bounded-sequence-diff";
+// Ships with the Monaco chunk, like `document-mode.css` ships with its
+// contribution: the furniture tokens must be in the document before the first
+// editor paints, and nothing outside an editor is selected by them.
+import "./source-mode.css";
 import { editorThemeImporterFor } from "./editor-theme-catalog";
 import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
 import { allShikiLanguageIds } from "./shiki-langs";
