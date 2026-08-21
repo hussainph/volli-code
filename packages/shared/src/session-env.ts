@@ -133,6 +133,30 @@ function parentDirectory(path: string): string {
 }
 
 /**
+ * The ancestors a workspace question may consult: `cwd` up to and including
+ * the repository root, or the filesystem root when no repository encloses
+ * `cwd`. The `.git` marker (a directory in a primary checkout, a file in a
+ * linked worktree) is the boundary because a session's workspace facts are
+ * facts about its checkout: the directories above a repository belong to
+ * other projects, and a stray `~/package.json` beside a `~/node_modules`
+ * must never answer for a worktree that has neither — the false "installed"
+ * an unbounded walk produces.
+ */
+function* workspaceAncestors(
+  cwd: string,
+  pathExists: (path: string) => boolean,
+): Generator<string> {
+  let directory = cwd;
+  for (;;) {
+    yield directory;
+    if (pathExists(joinPath(directory, ".git"))) return;
+    const parent = parentDirectory(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+/**
  * The first executable named `command` on `pathEntries` — what a shell would
  * pick, resolved without invoking one. Shared by `volli identify`'s env block
  * and `volli doctor`'s observations so the two surfaces cannot disagree about
@@ -167,29 +191,63 @@ export async function resolveSessionEnvTools(
 /**
  * Whether the workspace a session stands in has its dependencies installed.
  *
- * Walks from the session cwd to the filesystem root, because a session can
- * start in a package subdirectory of a pnpm workspace: only the workspace
- * root carries `node_modules`, and only the root's answer is the truth.
- * `installed` when any manifest-bearing ancestor has its `node_modules`;
- * `absent` when one has a manifest but none has its dependencies (the
- * worktree-provisioning coin flip the contract declares); `null` when no
- * ancestor is a package workspace at all — the honest third answer for a
- * directory `pnpm install` has nothing to say about.
+ * Walks from the session cwd up to the repository boundary (see
+ * {@link workspaceAncestors}), because a session can start in a package
+ * subdirectory of a pnpm workspace: the workspace root may be the only
+ * ancestor that carries `node_modules`, and the root's answer is the truth.
+ * `installed` when any manifest-bearing ancestor inside the repository has
+ * its `node_modules`; `absent` when one has a manifest but none has its
+ * dependencies (the worktree-provisioning coin flip the contract declares);
+ * `null` when no ancestor is a package workspace at all — the honest third
+ * answer for a directory an install command has nothing to say about.
  */
 export function workspaceDependenciesStatus(
   cwd: string,
   pathExists: (path: string) => boolean,
 ): WorkspaceDependenciesStatus {
-  let directory = cwd;
   let sawManifest = false;
-  for (;;) {
+  for (const directory of workspaceAncestors(cwd, pathExists)) {
     if (pathExists(joinPath(directory, "package.json"))) {
       sawManifest = true;
       if (pathExists(joinPath(directory, "node_modules"))) return "installed";
     }
-    const parent = parentDirectory(directory);
-    if (parent === directory) break;
-    directory = parent;
   }
   return sawManifest ? "absent" : null;
+}
+
+/**
+ * The lockfile spellings that name a workspace's package manager, checked in
+ * this order beside each manifest the walk passes.
+ */
+const LOCKFILE_INSTALL_COMMANDS: ReadonlyArray<readonly [lockfile: string, command: string]> = [
+  ["pnpm-lock.yaml", "pnpm install"],
+  ["yarn.lock", "yarn install"],
+  ["package-lock.json", "npm install"],
+  ["bun.lock", "bun install"],
+  ["bun.lockb", "bun install"],
+];
+
+/**
+ * The command that installs the workspace enclosing `cwd`, judged by the
+ * lockfile beside its manifests — the same repository-bounded walk as
+ * {@link workspaceDependenciesStatus}, so the two answers always describe
+ * the same workspace. The nearest manifest's lockfile wins. `null` when no
+ * ancestor is a package workspace; `npm install` when a manifest exists but
+ * no lockfile names a package manager, because a bare manifest is npm's to
+ * install. Telling a yarn workspace to `pnpm install` was the measured cost
+ * this exists to remove (VC-94 review).
+ */
+export function workspaceInstallCommand(
+  cwd: string,
+  pathExists: (path: string) => boolean,
+): string | null {
+  let sawManifest = false;
+  for (const directory of workspaceAncestors(cwd, pathExists)) {
+    if (!pathExists(joinPath(directory, "package.json"))) continue;
+    sawManifest = true;
+    for (const [lockfile, command] of LOCKFILE_INSTALL_COMMANDS) {
+      if (pathExists(joinPath(directory, lockfile))) return command;
+    }
+  }
+  return sawManifest ? "npm install" : null;
 }

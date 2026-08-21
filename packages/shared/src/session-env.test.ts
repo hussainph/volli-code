@@ -5,6 +5,7 @@ import {
   resolveSessionEnvTools,
   SESSION_ENV_TOOLS,
   workspaceDependenciesStatus,
+  workspaceInstallCommand,
 } from "./session-env";
 import type { PathResolver } from "./session-env";
 
@@ -126,5 +127,111 @@ describe("workspaceDependenciesStatus", () => {
         resolver([], ["/work/volli/package.json"]).exists,
       ),
     ).toBe("absent");
+  });
+
+  // The stray-ancestor case the boundary exists for: a `~/package.json` with
+  // a `~/node_modules` (a classic accidental install) must never answer for a
+  // worktree that has neither. The `.git` marker is a file in a linked
+  // worktree and a directory in a primary checkout; existence is the test
+  // either way.
+  it("stops at the repository boundary instead of crediting an unrelated ancestor", () => {
+    expect(
+      workspaceDependenciesStatus(
+        "/Users/me/worktrees/wt",
+        resolver(
+          [],
+          [
+            "/Users/me/worktrees/wt/package.json",
+            "/Users/me/worktrees/wt/.git",
+            "/Users/me/package.json",
+            "/Users/me/node_modules",
+          ],
+        ).exists,
+      ),
+    ).toBe("absent");
+  });
+
+  it("still reaches a monorepo root inside the same repository", () => {
+    expect(
+      workspaceDependenciesStatus(
+        "/repo/packages/a",
+        resolver(
+          [],
+          [
+            "/repo/packages/a/package.json",
+            "/repo/package.json",
+            "/repo/node_modules",
+            "/repo/.git",
+          ],
+        ).exists,
+      ),
+    ).toBe("installed");
+  });
+});
+
+describe("workspaceInstallCommand", () => {
+  it("names the package manager whose lockfile sits at the workspace root", () => {
+    expect(
+      workspaceInstallCommand(
+        "/repo/packages/a",
+        resolver(
+          [],
+          ["/repo/packages/a/package.json", "/repo/package.json", "/repo/pnpm-lock.yaml"],
+        ).exists,
+      ),
+    ).toBe("pnpm install");
+  });
+
+  it.each([
+    ["yarn.lock", "yarn install"],
+    ["package-lock.json", "npm install"],
+    ["bun.lock", "bun install"],
+    ["bun.lockb", "bun install"],
+  ])("maps %s to `%s`", (lockfile, command) => {
+    expect(
+      workspaceInstallCommand(
+        "/work/acme",
+        resolver([], ["/work/acme/package.json", `/work/acme/${lockfile}`]).exists,
+      ),
+    ).toBe(command);
+  });
+
+  it("lets the nearest manifest's lockfile win over the root's", () => {
+    expect(
+      workspaceInstallCommand(
+        "/repo/vendored",
+        resolver(
+          [],
+          [
+            "/repo/vendored/package.json",
+            "/repo/vendored/package-lock.json",
+            "/repo/package.json",
+            "/repo/pnpm-lock.yaml",
+          ],
+        ).exists,
+      ),
+    ).toBe("npm install");
+  });
+
+  it("defaults a lockfile-less manifest to npm, the manager every manifest answers to", () => {
+    expect(
+      workspaceInstallCommand("/work/acme", resolver([], ["/work/acme/package.json"]).exists),
+    ).toBe("npm install");
+  });
+
+  it("is null when no ancestor is a package workspace", () => {
+    expect(workspaceInstallCommand("/home/me", resolver().exists)).toBeNull();
+  });
+
+  it("does not read lockfiles past the repository boundary", () => {
+    expect(
+      workspaceInstallCommand(
+        "/repo/wt",
+        resolver(
+          [],
+          ["/repo/wt/package.json", "/repo/wt/.git", "/repo/package.json", "/repo/yarn.lock"],
+        ).exists,
+      ),
+    ).toBe("npm install");
   });
 });
