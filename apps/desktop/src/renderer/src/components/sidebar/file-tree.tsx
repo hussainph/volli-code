@@ -4,11 +4,17 @@ import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import type { DirEntry, Project } from "@volli/shared";
 
+import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@renderer/components/ui/collapsible";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -194,25 +200,38 @@ function FileNode({ name, path, project }: { name: string; path: string; project
       relPath !== null && state.byProject[project.id]?.projectFiles.activeRelPath === relPath,
   );
 
+  const row = (
+    <SidebarMenuButton
+      data-testid="file-tree-file"
+      data-rel-path={relPath ?? undefined}
+      isActive={active}
+      // A path that doesn't resolve inside the project can't be opened; the
+      // row stays visible (it is real on disk) but inert rather than lying.
+      disabled={relPath === null}
+      onClick={() => {
+        if (relPath !== null) previewProjectFile(project.id, relPath);
+      }}
+      onDoubleClick={() => {
+        if (relPath !== null) pinProjectFile(project.id, relPath);
+      }}
+    >
+      <FileIcon />
+      <span>{name}</span>
+    </SidebarMenuButton>
+  );
+
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton
-        data-testid="file-tree-file"
-        data-rel-path={relPath ?? undefined}
-        isActive={active}
-        // A path that doesn't resolve inside the project can't be opened; the
-        // row stays visible (it is real on disk) but inert rather than lying.
-        disabled={relPath === null}
-        onClick={() => {
-          if (relPath !== null) previewProjectFile(project.id, relPath);
-        }}
-        onDoubleClick={() => {
-          if (relPath !== null) pinProjectFile(project.id, relPath);
-        }}
-      >
-        <FileIcon />
-        <span>{name}</span>
-      </SidebarMenuButton>
+      {relPath === null ? (
+        row
+      ) : (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <ExternalAppContextMenu target={{ kind: "file", projectId: project.id, relPath }} />
+          </ContextMenuContent>
+        </ContextMenu>
+      )}
     </SidebarMenuItem>
   );
 }
@@ -262,28 +281,38 @@ function DirectoryNode({ name, path, project }: { name: string; path: string; pr
     }
   }
 
+  const row = (
+    <SidebarMenuButton data-testid="file-tree-dir" data-rel-path={relPath ?? undefined}>
+      <CaretRightIcon weight="bold" className="transition-transform" />
+      <FolderIcon />
+      <span>{name}</span>
+    </SidebarMenuButton>
+  );
+  const trigger = relPath === null ? row : <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>;
+
   return (
     <SidebarMenuItem>
-      <Collapsible
-        className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
-        open={expanded}
-        onOpenChange={handleOpenChange}
-      >
-        <CollapsibleTrigger asChild>
-          <SidebarMenuButton data-testid="file-tree-dir" data-rel-path={relPath ?? undefined}>
-            <CaretRightIcon weight="bold" className="transition-transform" />
-            <FolderIcon />
-            <span>{name}</span>
-          </SidebarMenuButton>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          {/* Tighter than stock (mx-3.5 px-2.5): real repos nest deep, and at
-              ~48px/level names vanish by depth four even in a wide sidebar. */}
-          <SidebarMenuSub className="mr-0 ml-4 pr-0 pl-1">
-            <ListingRows listing={children} parentPath={path} project={project} />
-          </SidebarMenuSub>
-        </CollapsibleContent>
-      </Collapsible>
+      <ContextMenu>
+        <Collapsible
+          className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
+          open={expanded}
+          onOpenChange={handleOpenChange}
+        >
+          <CollapsibleTrigger asChild>{trigger}</CollapsibleTrigger>
+          <CollapsibleContent>
+            {/* Tighter than stock (mx-3.5 px-2.5): real repos nest deep, and at
+                ~48px/level names vanish by depth four even in a wide sidebar. */}
+            <SidebarMenuSub className="mr-0 ml-4 pr-0 pl-1">
+              <ListingRows listing={children} parentPath={path} project={project} />
+            </SidebarMenuSub>
+          </CollapsibleContent>
+        </Collapsible>
+        {relPath !== null ? (
+          <ContextMenuContent>
+            <ExternalAppContextMenu target={{ kind: "file", projectId: project.id, relPath }} />
+          </ContextMenuContent>
+        ) : null}
+      </ContextMenu>
     </SidebarMenuItem>
   );
 }

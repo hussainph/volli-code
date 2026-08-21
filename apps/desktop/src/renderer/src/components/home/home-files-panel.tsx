@@ -26,12 +26,14 @@ function absoluteDirectory(projectPath: string, relPath: string): string {
  * drawing: one flat current-folder list, click-to-preview and double-click-to-pin.
  */
 export function HomeFilesList({
+  projectId,
   cwd,
   entries,
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
 }: {
+  projectId: string;
   cwd: string;
   entries: readonly DirEntry[];
   onPreviewFile(relPath: string): void;
@@ -40,6 +42,7 @@ export function HomeFilesList({
 }) {
   return (
     <TicketFilesList
+      projectId={projectId}
       referenced={[]}
       worktree={entries.map((entry) => ({
         relPath: joinRel(cwd, entry.name),
@@ -173,6 +176,7 @@ export function HomeFilesPanel({
         <RailPanelSkeleton label="files" testId="home-files-loading" />
       ) : (
         <HomeFilesList
+          projectId={project.id}
           cwd={cwd}
           entries={visibleEntries}
           onPreviewFile={onPreviewFile}

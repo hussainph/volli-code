@@ -12,6 +12,7 @@ function render(
 ) {
   return renderToStaticMarkup(
     <FileTabStrip
+      projectId="project-1"
       tabs={tabs}
       activeRelPath={activeRelPath}
       dirtyPaths={dirtyPaths}

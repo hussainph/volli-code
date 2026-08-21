@@ -73,6 +73,7 @@ import {
 } from "@volli/shared";
 import type { WorktreeCommitInput } from "../../../../ipc/contract";
 
+import { ExternalAppDropdownMenu } from "@renderer/components/files/external-app-menu";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import {
   formatChangeSetSummary,
@@ -542,16 +543,6 @@ function WorktreeMissingNotice({
 function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
   const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticket.id));
 
-  async function reveal() {
-    if (ticket.worktreePath === null) return;
-    try {
-      const result = await window.api.fs.revealInFinder(ticket.worktreePath);
-      if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
-    } catch (error) {
-      toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
-    }
-  }
-
   return (
     <PopoverContent align="start" className="flex w-72 flex-col gap-4 p-4">
       {ticket.worktreePath === null ? (
@@ -595,15 +586,9 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
             {ticket.worktreePath ?? <span className="text-muted-foreground">—</span>}
           </span>
           {ticket.worktreePath ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Reveal in Finder"
-              title="Reveal in Finder"
-              onClick={() => void reveal()}
-            >
-              <FolderOpenIcon />
-            </Button>
+            <ExternalAppDropdownMenu
+              target={{ kind: "worktree", projectId, ticketId: ticket.id }}
+            />
           ) : null}
         </div>
         {worktreePhase === "failed" ? (
