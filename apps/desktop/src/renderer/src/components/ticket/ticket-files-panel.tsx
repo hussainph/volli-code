@@ -84,7 +84,7 @@ function FileRow({
   onPin,
 }: {
   projectId: string;
-  ticketId: string;
+  ticketId?: string;
   relPath: string;
   label: string;
   kind: "file" | "directory" | "reference";
@@ -144,7 +144,7 @@ export function TicketFilesList({
   onOpenDirectory,
 }: {
   projectId: string;
-  ticketId: string;
+  ticketId?: string;
   referenced: readonly TicketFileRefRow[];
   worktree: readonly TicketWorktreeEntry[];
   /** Single-click: open in the replaceable File preview slot (decision #56). */

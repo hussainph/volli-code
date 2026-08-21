@@ -12,6 +12,7 @@ function render(cwd: string, entries: Array<{ name: string; kind: "file" | "dir"
   return renderToStaticMarkup(
     <TooltipProvider>
       <HomeFilesList
+        projectId="project-1"
         cwd={cwd}
         entries={entries}
         onPreviewFile={noop}
