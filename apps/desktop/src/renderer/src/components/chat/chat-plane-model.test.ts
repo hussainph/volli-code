@@ -39,6 +39,7 @@ import {
   sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
+  visibleBlocker,
   steerRollbackState,
   steerTurnIsCurrent,
   steerQueuedMessage,
@@ -206,6 +207,7 @@ const ACTS: SessionBlockerActs = {
   retryRuntime: NO_OP,
   openSettings: NO_OP,
   signIn: NO_OP,
+  dismissError: NO_OP,
   dismiss: NO_OP,
 };
 
@@ -283,41 +285,75 @@ describe("sessionBlocker", () => {
     expect(blocker?.action?.label).toBe("Retry");
   });
 
-  it("lets the reader retire the transport latch, and nothing durable", () => {
+  it("lets the reader dismiss every error, including durable attention", () => {
     const dismissed: string[] = [];
-    const acts: SessionBlockerActs = { ...ACTS, dismiss: () => dismissed.push("dismissed") };
-
-    // The Session's own transport latch is renderer-local state: the row may
-    // be retired without anyone's permission, Retry staying for the recovery.
-    const latch = sessionBlocker(
-      blockerInput({ sessionError: "Lost the Session stream: socket hang up" }),
-      acts,
-      false,
-    );
-    expect(latch?.dismiss?.label).toBe("Dismiss");
-    latch?.dismiss?.act();
-    expect(dismissed).toEqual(["dismissed"]);
-
-    // Durable facts are not dismissable — a click cannot sign a provider in,
-    // refill a quota, or resurrect a stopped adapter.
-    expect(
-      sessionBlocker(raised(attention("adapter_unrecoverable")), acts, false)?.dismiss,
-    ).toBeUndefined();
-    expect(
-      sessionBlocker(raised(attention("auth_required")), acts, false)?.dismiss,
-    ).toBeUndefined();
-    expect(
-      sessionBlocker(blockerInput({ catalogState: "empty" }), acts, false)?.dismiss,
-    ).toBeUndefined();
-    expect(
+    const dismissedSessionErrors: string[] = [];
+    const acts: SessionBlockerActs = {
+      ...ACTS,
+      dismissError: () => dismissedSessionErrors.push("dismissed"),
+      dismiss: (key) => dismissed.push(key),
+    };
+    const errors = [
+      sessionBlocker(
+        blockerInput({ sessionError: "Lost the Session stream: socket hang up" }),
+        acts,
+        false,
+      ),
+      sessionBlocker(raised(attention("adapter_unrecoverable")), acts, false),
+      sessionBlocker(raised(attention("auth_required")), acts, false),
       sessionBlocker(
         blockerInput({
           sessionModel: { providerId: "openai", providerLabel: "OpenAI", state: "unavailable" },
         }),
         acts,
         false,
-      )?.dismiss,
+      ),
+      sessionBlocker(
+        blockerInput({ catalogError: "ECONNRESET", catalogState: "error" }),
+        acts,
+        false,
+      ),
+    ];
+
+    for (const blocker of errors) {
+      expect(blocker?.tone).toBe("error");
+      expect(blocker?.dismiss?.label).toBe("Dismiss");
+      blocker?.dismiss?.act();
+    }
+    expect(dismissed).toHaveLength(errors.length);
+    expect(dismissedSessionErrors).toEqual(["dismissed"]);
+
+    // Waiting and setup rows name a current process or missing setup; neither
+    // is an error to hide.
+    expect(sessionBlocker(raised(rateLimited(null)), acts, false)?.dismiss).toBeUndefined();
+    expect(
+      sessionBlocker(blockerInput({ catalogState: "empty" }), acts, false)?.dismiss,
     ).toBeUndefined();
+  });
+
+  it("hides a dismissed error only until its report clears or changes", () => {
+    const stopped = sessionBlocker(raised(attention("adapter_unrecoverable")), ACTS, false);
+    const dismissKey = stopped?.dismissKey;
+
+    expect(dismissKey).toBeDefined();
+    expect(visibleBlocker(stopped, dismissKey ?? null)).toEqual({
+      blocker: null,
+      dismissedKey: dismissKey ?? null,
+    });
+    // A successful recovery clears the source; the same error can then be
+    // reported again instead of staying hidden for the rest of the view.
+    expect(visibleBlocker(null, dismissKey ?? null)).toEqual({ blocker: null, dismissedKey: null });
+    expect(visibleBlocker(stopped, null)).toEqual({ blocker: stopped, dismissedKey: null });
+
+    const reErrored = sessionBlocker(
+      raised(attention("adapter_unrecoverable", "stream closed again")),
+      ACTS,
+      false,
+    );
+    expect(visibleBlocker(reErrored, dismissKey ?? null)).toEqual({
+      blocker: reErrored,
+      dismissedKey: null,
+    });
   });
 
   it("keeps a harness attention the card cannot answer", () => {
@@ -329,19 +365,21 @@ describe("sessionBlocker", () => {
   it("sends both provider-owned recoveries to Settings with the failed run's retry beside it", () => {
     // Signing in happens inside Settings now, so the pair no longer forks on
     // whether a manual Ticket terminal exists to hand off to.
-    expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toEqual({
+    expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toMatchObject({
       message: "Sign-in required",
       detail: null,
       tone: "error",
       action: { label: "Settings", act: NO_OP },
       secondaryAction: { label: "Retry", act: NO_OP },
+      dismiss: { label: "Dismiss" },
     });
-    expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toEqual({
+    expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toMatchObject({
       message: "Configuration invalid",
       detail: null,
       tone: "error",
       action: { label: "Settings", act: NO_OP },
       secondaryAction: { label: "Retry", act: NO_OP },
+      dismiss: { label: "Dismiss" },
     });
   });
 
@@ -410,11 +448,12 @@ describe("sessionBlocker", () => {
         ACTS,
         false,
       ),
-    ).toEqual({
+    ).toMatchObject({
       message: "Model unavailable for OpenAI",
       detail: null,
       tone: "error",
       action: null,
+      dismiss: { label: "Dismiss" },
     });
   });
 
@@ -516,11 +555,12 @@ describe("sessionBlocker", () => {
       false,
     );
 
-    expect(blocker).toEqual({
+    expect(blocker).toMatchObject({
       message: "Models unavailable",
       detail: "ECONNRESET",
       tone: "error",
       action: { label: "Settings", act: NO_OP },
+      dismiss: { label: "Dismiss" },
     });
     // A card on screen is not a reason to hide it, but it IS a reason not to
     // add a second row about models to one.
@@ -533,14 +573,15 @@ describe("sessionBlocker", () => {
   });
 
   it("carries the harness's own wording under every attention it draws", () => {
-    expect(sessionBlocker(raised(attention("adapter_disconnected", "EPIPE")), ACTS, false)).toEqual(
-      {
-        message: "Disconnected",
-        detail: "EPIPE",
-        tone: "error",
-        action: { label: "Retry", act: NO_OP },
-      },
-    );
+    expect(
+      sessionBlocker(raised(attention("adapter_disconnected", "EPIPE")), ACTS, false),
+    ).toMatchObject({
+      message: "Disconnected",
+      detail: "EPIPE",
+      tone: "error",
+      action: { label: "Retry", act: NO_OP },
+      dismiss: { label: "Dismiss" },
+    });
   });
 
   it("answers every attention kind, and offers a button only where one can help", () => {

@@ -97,6 +97,7 @@ import {
   sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
+  visibleBlocker,
   steerRollbackState,
   steerQueuedMessage,
   settledHeldIds,
@@ -254,6 +255,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   // once, and one boolean disables every other card's controls while one of
   // them is in flight.
   const [resolving, setResolving] = React.useState<ReadonlySet<string>>(EMPTY_RESOLVING);
+  // A dismiss is a view choice, never a Session mutation. It lasts only while
+  // this exact error remains current; a cleared or changed error earns its row
+  // back without requiring a retry just to make it visible again.
+  const [dismissedBlockerKey, setDismissedBlockerKey] = React.useState<string | null>(null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -892,6 +897,9 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   const liveTurn = working ? (turns.at(-1) ?? null) : null;
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
+  const dismissBlocker = React.useCallback((dismissKey: string) => {
+    setDismissedBlockerKey(dismissKey);
+  }, []);
 
   const blockerActs = React.useMemo<SessionBlockerActs>(
     () => ({
@@ -907,11 +915,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
-      // The transport latch is the surface's own state; retiring it is the
-      // reader's call, not a recovery (VC-97).
-      dismiss: () => dismissError(),
+      dismissError: () => dismissError(),
+      dismiss: dismissBlocker,
     }),
-    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissBlocker, dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -923,7 +930,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
         .map((provider) => ({ id: provider.id, label: provider.label })),
     [providers],
   );
-  const blocker = sessionBlocker(
+  const candidateBlocker = sessionBlocker(
     {
       sessionError: session.sessionError,
       attention: projection?.attention ?? EMPTY_ATTENTION,
@@ -935,6 +942,13 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     blockerActs,
     interactions.length > 0,
   );
+  const blockerPresentation = visibleBlocker(candidateBlocker, dismissedBlockerKey);
+  React.useEffect(() => {
+    if (blockerPresentation.dismissedKey !== dismissedBlockerKey) {
+      setDismissedBlockerKey(blockerPresentation.dismissedKey);
+    }
+  }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
+  const blocker = blockerPresentation.blocker;
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
@@ -1188,11 +1202,13 @@ export const TurnRunningMark = React.memo(function TurnRunningMark({
 
 /* ---------------------------------------------------------------- blocked */
 
-function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
+export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
   return (
+    // The composer overlay ignores hits so its empty padding does not cover the
+    // transcript. This row carries recovery controls, so it must opt back in.
     <div
       className={cn(
-        "mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
+        "pointer-events-auto mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
         blocker.tone === "error" ? "border-destructive/30" : "border-border",
       )}
     >
@@ -1260,10 +1276,9 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           {blocker.secondaryAction.label}
         </Button>
       ) : null}
-      {/* The one row that reports this surface's own latch — Retry stays for
-          the recovery, and this retires the row when the reader has read it.
-          An icon, not a labeled button: it competes with nothing, and the row's
-          words are the retry's business, not its. */}
+      {/* Every error can be retired locally without claiming its recovery has
+          happened. An icon, not a labeled button: it competes with nothing,
+          and the row's words are the recovery's business, not its. */}
       {blocker.dismiss ? (
         <Button
           size="icon-xs"

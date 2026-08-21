@@ -592,12 +592,12 @@ export interface SessionBlockerState {
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
   /**
-   * Present only where the row reports renderer-local state the reader may
-   * retire without anyone's permission — the Session's own transport latch.
-   * Durable facts (attention, the catalog, the pinned model) carry no dismiss:
-   * they block typing for reasons a click cannot change, and a row that hid
-   * one would be promising the typing works when it does not.
+   * A renderer-local identity for a dismissible error. The Session ledger stays
+   * intact: the view hides this exact report until it clears or changes, then a
+   * later error is shown again.
    */
+  dismissKey?: string;
+  /** Every error can be dismissed locally; waiting and setup rows remain visible. */
   dismiss?: SessionBlockerAction;
 }
 
@@ -623,8 +623,10 @@ export interface SessionBlockerActs {
   openSettings(): void;
   /** Opens Model Access AT the named provider's sign-in — never merely the category. */
   signIn(providerId: string): void;
-  /** Retires the transport latch the error row reports; see {@link SessionBlockerState.dismiss}. */
-  dismiss(): void;
+  /** Clears the Session's own transport latch, which is not a durable fact. */
+  dismissError(): void;
+  /** Hides one rendered error locally; a changed or re-raised report returns. */
+  dismiss(dismissKey: string): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -649,9 +651,9 @@ export function terminalCompanionTabId(
  * Four sources, in the order they answer:
  *
  * 1. `sessionError` — this Session's own transport. If the stream is gone the
- *    attention we hold is a memory, so it does not get to speak over it. It is
- *    also the one row carrying a dismiss, because it alone reports state this
- *    surface owns rather than a durable fact about the harness.
+ *    attention we hold is a memory, so it does not get to speak over it.
+ *    Every error row can be dismissed locally; a dismiss never edits the
+ *    durable fact and the row returns when its report clears or changes.
  * 2. `sessionModel` — the Session is pinned to a model this profile cannot run.
  *    It outranks the attention because every failure such a Session will ever
  *    raise is downstream of this one fact, the harness's own report of it names
@@ -678,50 +680,62 @@ export function sessionBlocker(
   const retry: SessionBlockerAction = { label: "Retry", act: acts.recover };
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
+  const dismiss = (key: string) => () => acts.dismiss(key);
   if (input.sessionError !== null) {
-    return {
-      message: input.sessionError,
-      detail: null,
-      tone: "error",
-      action: retry,
-      // The latch is this surface's own state, so the reader may retire it —
-      // the failure it names stays recoverable through Retry either way.
-      dismiss: { label: "Dismiss", act: acts.dismiss },
-    };
+    const dismissKey = `session-error:${input.sessionError}`;
+    return errorBlocker(
+      {
+        message: input.sessionError,
+        detail: null,
+        action: retry,
+      },
+      dismissKey,
+      () => {
+        acts.dismissError();
+        acts.dismiss(dismissKey);
+      },
+    );
   }
   // Only a catalog that has answered may accuse the Session's model: while it
   // loads, every model reads as unavailable.
   const sessionModel = input.catalogState === "ready" ? input.sessionModel : null;
   if (sessionModel !== null && sessionModel.state !== "available") {
+    const dismissKey = `session-model:${sessionModel.providerId}:${sessionModel.state}`;
     return sessionModel.state === "authentication-required"
-      ? {
-          // The same fact the harness reports as `auth_required`, read before a
-          // message is spent on it instead of after. The action goes STRAIGHT
-          // to this provider's sign-in — the row already knows who — rather
-          // than to a category the user would then have to search. What it
-          // does NOT carry is the exact-run Retry beside it: nothing has run.
-          message: `Sign-in required for ${sessionModel.providerLabel}`,
-          detail: null,
-          tone: "error",
-          action: { label: "Sign in", act: () => acts.signIn(sessionModel.providerId) },
-        }
-      : {
-          // No action, because the two this row could offer are both wrong.
-          // Settings writes the app DEFAULT, copied into a Session at birth and
-          // never re-read, so it cannot repin this one; Retry re-runs a model
-          // that is gone. The pill directly under this row is the repair, and a
-          // ready catalog means it is already offering something runnable.
-          message: `Model unavailable for ${sessionModel.providerLabel}`,
-          detail: null,
-          tone: "error",
-          action: null,
-        };
+      ? errorBlocker(
+          {
+            // The same fact the harness reports as `auth_required`, read before a
+            // message is spent on it instead of after. The action goes STRAIGHT
+            // to this provider's sign-in — the row already knows who — rather
+            // than to a category the user would then have to search. What it
+            // does NOT carry is the exact-run Retry beside it: nothing has run.
+            message: `Sign-in required for ${sessionModel.providerLabel}`,
+            detail: null,
+            action: { label: "Sign in", act: () => acts.signIn(sessionModel.providerId) },
+          },
+          dismissKey,
+          dismiss(dismissKey),
+        )
+      : errorBlocker(
+          {
+            // No action, because the two this row could offer are both wrong.
+            // Settings writes the app DEFAULT, copied into a Session at birth and
+            // never re-read, so it cannot repin this one; Retry re-runs a model
+            // that is gone. The pill directly under this row is the repair, and a
+            // ready catalog means it is already offering something runnable.
+            message: `Model unavailable for ${sessionModel.providerLabel}`,
+            detail: null,
+            action: null,
+          },
+          dismissKey,
+          dismiss(dismissKey),
+        );
   }
   const attention = input.attention.primary;
   if (attention) {
     return asked && answeredByCard(attention.kind)
       ? null
-      : attentionBlocker(attention, retry, retryRuntime, settings);
+      : attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss);
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -750,12 +764,16 @@ export function sessionBlocker(
   // being none — and from the Session's own transport. Settings is the action
   // because saving a preference is what re-asks the catalog.
   if (input.catalogError !== null && !asked) {
-    return {
-      message: "Models unavailable",
-      detail: input.catalogError,
-      tone: "error",
-      action: settings,
-    };
+    const dismissKey = `catalog-error:${input.catalogError}`;
+    return errorBlocker(
+      {
+        message: "Models unavailable",
+        detail: input.catalogError,
+        action: settings,
+      },
+      dismissKey,
+      dismiss(dismissKey),
+    );
   }
   return null;
 }
@@ -763,6 +781,43 @@ export function sessionBlocker(
 /** The two attention kinds a card standing on screen already answers. */
 function answeredByCard(kind: SessionAttention["kind"]): boolean {
   return kind === "input_required" || kind === "permission_required";
+}
+
+function errorBlocker(
+  input: Omit<SessionBlockerState, "tone" | "dismissKey" | "dismiss">,
+  dismissKey: string,
+  dismiss: () => void,
+): SessionBlockerState {
+  return {
+    ...input,
+    tone: "error",
+    dismissKey,
+    dismiss: { label: "Dismiss", act: dismiss },
+  };
+}
+
+/**
+ * A local dismissal survives only while the same error is still current. A
+ * cleared or changed report releases it, so the next error can surface without
+ * needing a durable mutation merely to make a row visible again.
+ */
+export function visibleBlocker(
+  blocker: SessionBlockerState | null,
+  dismissedKey: string | null,
+): { blocker: SessionBlockerState | null; dismissedKey: string | null } {
+  const retainedDismissal =
+    dismissedKey !== null && dismissedKey === blocker?.dismissKey ? dismissedKey : null;
+  return { blocker: retainedDismissal === null ? blocker : null, dismissedKey: retainedDismissal };
+}
+
+function attentionDismissKey(attention: SessionAttention): string {
+  const scheduledAt =
+    attention.kind === "rate_limited"
+      ? attention.retryAt
+      : attention.kind === "quota_exhausted"
+        ? attention.resetAt
+        : null;
+  return JSON.stringify(["attention", attention.id, attention.kind, attention.detail, scheduledAt]);
 }
 
 /**
@@ -787,14 +842,19 @@ function providerRecovery(input: {
   detail: string | null;
   settings: SessionBlockerAction;
   retryRuntime: SessionBlockerAction;
+  dismissKey: string;
+  dismiss(): void;
 }): SessionBlockerState {
-  return {
-    message: input.message,
-    detail: input.detail,
-    tone: "error",
-    action: input.settings,
-    secondaryAction: input.retryRuntime,
-  };
+  return errorBlocker(
+    {
+      message: input.message,
+      detail: input.detail,
+      action: input.settings,
+      secondaryAction: input.retryRuntime,
+    },
+    input.dismissKey,
+    input.dismiss,
+  );
 }
 
 /**
@@ -805,7 +865,9 @@ function providerRecovery(input: {
  * has to be answered here, not silently absorbed into whichever branch was
  * cheapest to reach.
  *
- * Which kinds earn a button, and why the rest do not:
+ * Which kinds earn a recovery button, and why the rest do not. Every error
+ * also carries a local Dismiss, which hides the current report without claiming
+ * it is repaired.
  *
  * - **Settings + Retry** — Pi auth/configuration recovery sends you to Model
  *   Access, where signing in now happens, and then retries the exact failed run
@@ -822,35 +884,51 @@ function providerRecovery(input: {
  *   every attempt it makes on its own; the run itself is still there to try
  *   again, and re-running it is not the same act as re-establishing a
  *   connection that never dropped.
- * - **Nothing** — `context_limit_reached` (the runtime has already compacted
- *   this Session and been refused again, so there is nothing left to summarize
- *   and no button that could); `quota_exhausted` (a spent allowance is
- *   not retryable and no local setting refills it); `partial_turn_interrupted`
- *   (a stopped turn left the composer usable — resending is typing, not
- *   recovering); `input_required` and `permission_required` (the answer lives on
- *   the interaction card, which outranks this row entirely).
+ * - **No recovery** — `context_limit_reached` (the runtime has already compacted
+ *   this Session and been refused again, so there is nothing left to summarize);
+ *   `quota_exhausted` (a spent allowance is not retryable and no local setting
+ *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
+ *   usable — resending is typing, not recovering); `input_required` and
+ *   `permission_required` (the answer lives on the interaction card, which
+ *   outranks this row entirely).
  */
 function attentionBlocker(
   attention: SessionAttention,
   retry: SessionBlockerAction,
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
+  dismiss: (dismissKey: string) => void,
 ): SessionBlockerState {
   const detail = attention.detail;
+  const dismissKey = attentionDismissKey(attention);
+  const dismissAttention = () => dismiss(dismissKey);
   switch (attention.kind) {
     case "auth_required":
-      return providerRecovery({ message: "Sign-in required", detail, settings, retryRuntime });
+      return providerRecovery({
+        message: "Sign-in required",
+        detail,
+        settings,
+        retryRuntime,
+        dismissKey,
+        dismiss: dismissAttention,
+      });
     case "configuration_invalid":
       return providerRecovery({
         message: "Configuration invalid",
         detail,
         settings,
         retryRuntime,
+        dismissKey,
+        dismiss: dismissAttention,
       });
     case "transport_retrying":
       return { message: "Reconnecting", detail, tone: "waiting", action: retry };
     case "adapter_disconnected":
-      return { message: "Disconnected", detail, tone: "error", action: retry };
+      return errorBlocker(
+        { message: "Disconnected", detail, action: retry },
+        dismissKey,
+        dismissAttention,
+      );
     case "rate_limited":
       return {
         message: `Rate limited${untilClause(attention.retryAt)}`,
@@ -859,18 +937,25 @@ function attentionBlocker(
         action: retry,
       };
     case "quota_exhausted":
-      return {
-        message: `Quota exhausted${untilClause(attention.resetAt)}`,
-        detail,
-        tone: "error",
-        action: null,
-      };
+      return errorBlocker(
+        { message: `Quota exhausted${untilClause(attention.resetAt)}`, detail, action: null },
+        dismissKey,
+        dismissAttention,
+      );
     case "context_limit_reached":
-      return { message: "Context limit reached", detail, tone: "error", action: null };
+      return errorBlocker(
+        { message: "Context limit reached", detail, action: null },
+        dismissKey,
+        dismissAttention,
+      );
     case "partial_turn_interrupted":
       return { message: "Turn interrupted", detail, tone: "waiting", action: null };
     case "adapter_unrecoverable":
-      return { message: "Session stopped", detail, tone: "error", action: retryRuntime };
+      return errorBlocker(
+        { message: "Session stopped", detail, action: retryRuntime },
+        dismissKey,
+        dismissAttention,
+      );
     case "input_required":
       return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
     case "permission_required":
