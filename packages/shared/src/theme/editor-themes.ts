@@ -12,9 +12,9 @@
  * Vitesse ships both halves as a designed pair, which is what makes the
  * light↔dark flip read as one editor changing clothes rather than two editors.
  *
- * Renderer catalog metadata (labels, static importers) lives in
- * `apps/desktop/.../editor-theme-catalog.ts` and must assert the same set, so
- * the shipped bundle and this vocabulary cannot drift.
+ * The static shiki importers live in `apps/desktop/.../editor-theme-catalog.ts`
+ * and must assert the same set, so the shipped bundle and this vocabulary
+ * cannot drift. There are no labels any more: nothing names a theme at a user.
  *
  * Pure: string ids only, no shiki / Electron / DOM imports.
  */

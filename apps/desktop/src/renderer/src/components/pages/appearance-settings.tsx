@@ -57,10 +57,11 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  *
  * Preview here is a real palette swap, not a sample panel: we render the
  * terminal, so highlighting a theme repaints every live session and closing
- * the menu puts it back. The Editor picker does the same for Monaco through
- * the theme store ({@link useThemeStore.startEditorPreview} /
- * {@link useThemeStore.endEditorPreview}) so `paintedEditor` stays coherent
- * with App-theme preview.
+ * the menu puts it back.
+ *
+ * The editor has no row and no preview of its own (VC-123). It wears one light
+ * theme or one dark one, decided by Mode above — so the App theme section
+ * previews Monaco too, through the same repaint.
  */
 export function AppearanceSettings() {
   const terminal = useThemeStore((state) => state.terminal);

@@ -136,7 +136,6 @@ export default defineConfig(({ mode }) => ({
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/edge-region.ts",
         "src/components/sidebar/listing.ts",
-        "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
         // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
         // as tab-focus.ts: the squiggle's geometry is arithmetic the view
