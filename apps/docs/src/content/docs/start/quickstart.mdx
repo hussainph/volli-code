@@ -1,15 +1,15 @@
 ---
 title: Quickstart
-description: Go from an empty board to a reviewed change — add a project, start a chat, create a ticket, and read what changed.
+description: Add a project, shape an idea into tickets with a chat, run one in an isolated worktree, and read the change it produced.
 sidebar:
   label: Quickstart
 ---
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-This is the whole path through Volli: add a project, talk to it, turn that into
-tickets, let a ticket do its work in isolation, and read the change before you
-accept it.
+By the end of this page you will have added a project, turned a loose idea into
+tickets with a chat, run one ticket in its own isolated worktree, and read the
+change it produced.
 
 You need Volli [installed](/start/install/), a git repository on disk, and about
 fifteen minutes.
@@ -19,16 +19,16 @@ fifteen minutes.
 When you open a project, you land on **Home**.
 
 Home is a tabbed workspace. Its first tab is the **Board** and it never closes.
-Beside it, chats and files open as further tabs. There is no separate "Sessions"
-page to navigate to — a chat is a tab, right next to the board it came from.
+Beside it, chats and files open as further tabs, so a chat sits one tab away
+from the board it came from.
 
-The left rails: your projects on the far left, then **Home / Files /
-Configure**, with **Settings** at the bottom.
+On the left you have your projects in the far rail, then **Home**, **Files**,
+and **Configure**, with **Settings** at the bottom.
 
 <Aside type="note" title="If you haven't added a project yet">
   Select **+** in the project rail and choose a git repository. That folder is
   the project's main checkout. Volli derives a ticket prefix from the folder
-  name — a folder called `harbor` gives you `HB-1`, `HB-2`, and so on.
+  name. A folder called `harbor` gives you `HB-1`, `HB-2`, and so on.
 </Aside>
 
 ## 2. Start a project chat
@@ -55,17 +55,16 @@ Configure**, with **Settings** at the bottom.
 </Steps>
 
 <Aside type="tip">
-  Project chat, ticket chat — the difference is scope, not power. A project chat
-  sees your main checkout and the whole board, which is what you want when the
-  work isn't shaped yet. A ticket chat sees one ticket and works in that
-  ticket's own checkout.
+  The difference between the two is scope. A project chat sees your main checkout
+  and the whole board, which is what you want when the work isn't shaped yet. A
+  ticket chat sees one ticket and works in that ticket's own checkout.
 </Aside>
 
 ## 3. Write the ticket body
 
 Open a ticket from the board.
 
-The first tab is its **body** — the ticket's canonical Markdown. This is the
+The first tab is its **body**, the ticket's canonical Markdown. This is the
 brief. Write what should change, what must not, and how you will judge the
 result. Anything vague here comes back as a vague change later.
 
@@ -89,8 +88,8 @@ the two minutes.
 
 3. **Leave and come back.**
 
-   Close the tab, switch projects, quit the app. The chat keeps its identity and
-   its ordered history — reopen it from the ticket's **Chats** rail, the
+   Close the tab, switch projects, or quit the app. The chat keeps its identity
+   and its ordered history. Reopen it from the ticket's **Chats** rail, the
    sidebar, or <kbd>⌘K</kbd>.
 
 </Steps>
@@ -104,9 +103,9 @@ the two minutes.
 
 ## 5. Read what changed
 
-A ticket's implementation work happens in its own git worktree — a separate
-checkout on its own branch, beside your main one. Your main checkout is not
-touched.
+A ticket's implementation work happens in its own git worktree: a separate
+checkout on its own branch, beside your main one. Volli does not touch your
+main checkout.
 
 In the ticket:
 
@@ -115,9 +114,8 @@ In the ticket:
 - **Files** opens the ticket's files as they are *in the worktree*, not in your
   main checkout.
 
-Read the change yourself. Volli shows you what happened; it does not certify
-that the work is correct, and it does not run your test suite and declare
-victory. That judgment is yours.
+Read the change yourself. Volli shows you what happened. It does not certify
+that the work is correct, and it does not run your test suite on your behalf.
 
 ## 6. Deliver it
 
@@ -130,10 +128,9 @@ you're finished with the ticket, clean up its worktree from the same place.
 Everything above uses Volli's structured chat. If you would rather drive a CLI
 yourself, open the caret beside **Chat** and choose **Terminal**.
 
-That gives you a shell — in the ticket's worktree, when a ticket has one — where
-you can run Claude Code, Codex, OpenCode, or any TUI you like. It is a companion
-you ask for explicitly. Volli will never open one for you as a fallback when a
-chat fails.
+That gives you a shell, in the ticket's worktree when a ticket has one, where
+you can run Claude Code, Codex, OpenCode, or any TUI you like. You ask for it
+explicitly. Volli never opens one for you as a fallback when a chat fails.
 
 ## Next steps
 

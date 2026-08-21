@@ -7,8 +7,8 @@ sidebar:
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-Volli Code is a local-first macOS workspace for code projects. This page is the
-install contract for the alpha: what runs, on what, and what to expect.
+Volli Code is a local-first macOS workspace for code projects. Install it, pick
+a model, and start your first chat.
 
 <Aside type="caution" title="This is an alpha">
   Volli Code is in early alpha. Builds are published as prereleases, features
@@ -25,7 +25,8 @@ install contract for the alpha: what runs, on what, and what to expect.
 | **Git** | A local [git](https://git-scm.com) install. Volli works on git repositories on disk. |
 | **A model** | An account with a model provider you configure in Model Access, after first launch. |
 
-Volli itself needs no account. You sign in to a *model provider*, not to Volli.
+Volli itself needs no account. You sign in to a model provider through Model
+Access, after first launch.
 
 ## Download and open it
 
@@ -34,7 +35,7 @@ Volli itself needs no account. You sign in to a *model provider*, not to Volli.
 1. **Get the build.**
 
    Open [volli.app/download](https://volli.app/download/) and download the
-   `.dmg`. There is one build — the current alpha. Older canary builds stay
+   `.dmg`. There is one build, the current alpha. Older canary builds stay
    available on [GitHub Releases](https://github.com/hussainph/volli-code/releases)
    if you need to go back to one.
 
@@ -46,7 +47,7 @@ Volli itself needs no account. You sign in to a *model provider*, not to Volli.
 3. **Open it.**
 
    Builds are signed with a Developer ID and notarized by Apple, so Gatekeeper
-   opens them normally — you should not need to right-click → Open, and you
+   opens them normally. You should not need to right-click → Open, and you
    should not be told the app is damaged or from an unidentified developer.
 
    <Aside type="tip">
@@ -96,16 +97,16 @@ and replace the app in Applications.
 Continue with the [Quickstart](/start/quickstart/) for the full path from an
 empty board to a reviewed change.
 
-## Chats and terminals are different things
+## Chats and terminals
 
 A **chat** is Volli's structured session. It runs on the Pi-backed agent
 runtime with the model you chose in Model Access, and Volli renders its turns,
 tool steps, and questions as product surfaces.
 
-A **terminal** is a manual companion. It opens a shell — in the ticket's
-worktree when a ticket has one — where you can drive Claude Code, Codex,
-OpenCode, or any TUI yourself. It sits under the caret beside **Chat**, and you
-have to ask for it. Volli never falls back to a terminal when a chat fails.
+A **terminal** is a manual companion. It opens a shell, in the ticket's worktree
+when a ticket has one, where you can drive Claude Code, Codex, OpenCode, or any
+TUI yourself. It sits under the caret beside **Chat**, and you ask for it
+explicitly. Volli never falls back to a terminal when a chat fails.
 
 ## The `volli` CLI
 
@@ -155,15 +156,14 @@ Removing a project from Volli does not delete its folder from disk.
    ```
 
    For each one you no longer want, run `git worktree remove <path>` from the
-   repository it belongs to. Your project folders themselves are untouched by
-   uninstalling.
+   repository it belongs to. Uninstalling does not touch your project folders.
 
 </Steps>
 
 ## Build from source
 
 You can also run the development build. You need a Mac, [git](https://git-scm.com),
-Node `^24.13.0`, and pnpm `11.10.0` — the repository pins both.
+Node `^24.13.0`, and pnpm `11.10.0`. The repository pins both versions.
 
 <Steps>
 
