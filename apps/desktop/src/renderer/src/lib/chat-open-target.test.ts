@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveChatOpenTarget } from "./chat-open-target";
+import { chatWorktreeRefs, normalizeChatToolPath, resolveChatOpenTarget } from "./chat-open-target";
 
 const projectPath = "/Users/dev/code/app";
 const worktrees = [
@@ -49,6 +49,17 @@ describe("resolveChatOpenTarget", () => {
       resolveChatOpenTarget({ path, projectPath, worktrees, scope: { kind: "project" } }),
     ).toEqual({ kind: "outside", path });
   });
+
+  it.each([[".."], ["../sibling.ts"]])(
+    "treats the venue-escaping relative path %j as outside",
+    (path) => {
+      // No checkout to resolve a leading `..` against — outside, not a relPath
+      // main would only reject as invalid.
+      expect(
+        resolveChatOpenTarget({ path, projectPath, worktrees, scope: { kind: "project" } }),
+      ).toEqual({ kind: "outside", path });
+    },
+  );
 
   // ---- absolute paths: containment decides -----------------------------------
 
@@ -138,5 +149,67 @@ describe("resolveChatOpenTarget", () => {
         scope: { kind: "project" },
       }),
     ).toEqual({ kind: "project-file", relPath: "src/x.ts" });
+  });
+});
+
+// The renderer's mirror of Pi's own tool-path normalization (pi-agent-core
+// path-utils): a spelling the runtime successfully READ must open the same
+// file when clicked, not a literal `@…`/dot-segmented relPath.
+describe("normalizeChatToolPath", () => {
+  it("strips one leading @ (Pi's @-mention spelling)", () => {
+    expect(normalizeChatToolPath("@src/a.ts")).toBe("src/a.ts");
+  });
+
+  it("strips only the FIRST @ — an @ inside a name is a real character", () => {
+    expect(normalizeChatToolPath("@src/@scoped/pkg.ts")).toBe("src/@scoped/pkg.ts");
+  });
+
+  it("folds Unicode spaces to plain spaces, as Pi's resolver does", () => {
+    expect(normalizeChatToolPath("docs/plan\u202Fnotes.md")).toBe("docs/plan notes.md");
+    expect(normalizeChatToolPath("docs/wide\u3000name.md")).toBe("docs/wide name.md");
+  });
+
+  it("resolves relative dot segments the way path.resolve would", () => {
+    expect(normalizeChatToolPath("src/../a.ts")).toBe("a.ts");
+    expect(normalizeChatToolPath("./src/./b.ts")).toBe("src/b.ts");
+    expect(normalizeChatToolPath("src//c.ts")).toBe("src/c.ts");
+  });
+
+  it("resolves absolute dot segments, dropping a .. above the root", () => {
+    expect(normalizeChatToolPath("/repo/src/../a.ts")).toBe("/repo/a.ts");
+    expect(normalizeChatToolPath("/../x.ts")).toBe("/x.ts");
+  });
+
+  it("keeps a leading .. on a relative path so the resolver can call it outside", () => {
+    expect(normalizeChatToolPath("../sibling.ts")).toBe("../sibling.ts");
+    expect(normalizeChatToolPath("a/../../b.ts")).toBe("../b.ts");
+  });
+
+  it("reduces the bare current dir to the empty string (resolver: outside)", () => {
+    expect(normalizeChatToolPath(".")).toBe("");
+    expect(normalizeChatToolPath("./")).toBe("");
+  });
+
+  it("leaves an ordinary path untouched", () => {
+    expect(normalizeChatToolPath("src/components/nav.tsx")).toBe("src/components/nav.tsx");
+  });
+});
+
+describe("chatWorktreeRefs", () => {
+  it("keeps only tickets with a live worktree, preserving order", () => {
+    expect(
+      chatWorktreeRefs([
+        { id: "t-1", worktreePath: "/w/one" },
+        { id: "t-2", worktreePath: null },
+        { id: "t-3", worktreePath: "/w/three" },
+      ]),
+    ).toEqual([
+      { ticketId: "t-1", worktreePath: "/w/one" },
+      { ticketId: "t-3", worktreePath: "/w/three" },
+    ]);
+  });
+
+  it("maps an empty board to no refs", () => {
+    expect(chatWorktreeRefs([])).toEqual([]);
   });
 });

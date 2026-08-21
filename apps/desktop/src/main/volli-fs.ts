@@ -108,6 +108,8 @@ export function fsFaultText(error: unknown): string {
     case "EACCES":
     case "EPERM":
       return "Permission was denied";
+    case "EEXIST":
+      return "File already exists";
     case "EISDIR":
       return "Not a file";
     default:
@@ -579,7 +581,9 @@ export async function writeFile(
         await ensureVolliDir(projectPath);
       }
     } catch (error) {
-      return { ok: false, error: errorMessage(error) };
+      // Same friendly mapping as the write itself — this failure reaches the
+      // same save toast, and a raw mkdir errno is no better copy there.
+      return { ok: false, error: fsFaultText(error) };
     }
   }
   const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);

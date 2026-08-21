@@ -20,7 +20,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
-import { resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
+import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -241,11 +241,7 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
       const target = resolveChatOpenTarget({
         path,
         projectPath: selectedPath,
-        worktrees: tickets.flatMap((ticket) =>
-          ticket.worktreePath === null
-            ? []
-            : [{ ticketId: ticket.id, worktreePath: ticket.worktreePath }],
-        ),
+        worktrees: chatWorktreeRefs(tickets),
         scope: { kind: "project" },
       });
       if (target.kind === "outside") {

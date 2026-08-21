@@ -6,6 +6,12 @@ that wraps them, and the paths by which chats and tickets open files. Every
 claim below is verified against the code at the cited location; nothing here is
 from memory of how it was supposed to work.
 
+**Status.** The findings describe the `main` baseline this branch audited.
+Slice 1 of §5 (worktree-correct chat routing + friendly fs errors) is
+IMPLEMENTED on this same branch — §2.1's diagnosis is therefore of the
+behavior this branch replaces, and §5.1 records what actually shipped. Slices
+2–6 are filed as VC-121…VC-125.
+
 The ticket's proposal — demote Files from first-class nav, move file access
 into the session rails, add a Codex-style "Open in <editor>" escape hatch — is
 assessed at the end, with a recommended work breakdown.
@@ -61,7 +67,7 @@ Two facts that frame everything else:
 
 ## 2. The reported bugs, verified
 
-### 2.1 "Files outside the main repo folder fire an ENOENT error" — CONFIRMED, two mechanisms
+### 2.1 "Files outside the main repo folder fire an ENOENT error" — CONFIRMED, two mechanisms (FIXED on this branch — see §5.1)
 
 A **project-session** chat routes every file click to the Files page:
 `sessions-layer.tsx:222` (`openProjectFile`) calls
@@ -224,11 +230,18 @@ while for TS some visible errors are false positives.
 
 Ordered; each slice is independently shippable.
 
-1. **Worktree-correct file opening from chats + friendly errors** (bug, high).
-   Relativize tool paths against the session's venue root before `onOpenFile`;
-   route a path that resolves into a ticket worktree to that ticket's file tab
-   (or at minimum read through the worktree seam); map errno catch-alls to
-   "File was not found"-class copy.
+1. **Worktree-correct file opening from chats + friendly errors** (bug, high) —
+   **DONE, this branch.** `resolveChatOpenTarget` (renderer `lib/`) classifies
+   every chat-named path before any store or IPC: worktree-absolute → that
+   ticket's file tab + workspace, main-absolute → relativized, venue-escaping
+   or uncontained → an honest toast, no navigation. Activity-row clicks first
+   run `normalizeChatToolPath` — the renderer mirror of Pi's own tool-path
+   normalization (leading `@`, Unicode spaces, dot segments) — while markdown
+   mentions stay literal. Main-side, `fsFaultText` maps the COMMON errno faults
+   (ENOENT/ENOTDIR, EACCES/EPERM, EEXIST, EISDIR) to UI copy in the read/write
+   catch-alls and the `.volli` self-heal; an exotic code (EIO, ELOOP) keeps its
+   raw message DELIBERATELY — rare enough that a precise clue beats a vague
+   blanket.
 2. **Two-theme editor appearance** (high). Light + dark shiki themes keyed to
    resolved appearance; delete the catalog/picker; align Monaco chrome colors
    with app tokens where cheap (background, gutter, selection).

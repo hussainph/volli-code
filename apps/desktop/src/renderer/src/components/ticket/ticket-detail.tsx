@@ -60,7 +60,7 @@ import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/do
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
-import { resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
+import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -694,11 +694,7 @@ export function TicketDetail({
       const target = resolveChatOpenTarget({
         path,
         projectPath,
-        worktrees: tickets.flatMap((candidate) =>
-          candidate.worktreePath === null
-            ? []
-            : [{ ticketId: candidate.id, worktreePath: candidate.worktreePath }],
-        ),
+        worktrees: chatWorktreeRefs(tickets),
         scope: { kind: "ticket", ticketId: ticket.id },
       });
       if (target.kind === "outside") {

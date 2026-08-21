@@ -39,6 +39,22 @@ export interface ChatWorktreeRef {
   worktreePath: string;
 }
 
+/**
+ * The {@link ChatWorktreeRef}s among the board's ticket rows — those with a
+ * live worktree. Shared by both chat surfaces so the conversion cannot drift
+ * between them (each reads the board store at click time and hands the rows
+ * here).
+ */
+export function chatWorktreeRefs(
+  tickets: ReadonlyArray<{ id: string; worktreePath: string | null }>,
+): ChatWorktreeRef[] {
+  return tickets.flatMap((ticket) =>
+    ticket.worktreePath === null
+      ? []
+      : [{ ticketId: ticket.id, worktreePath: ticket.worktreePath }],
+  );
+}
+
 /** Which venue the chat that named the path runs in. */
 export type ChatOpenScope = { kind: "project" } | { kind: "ticket"; ticketId: string };
 
@@ -53,6 +69,48 @@ export type ChatOpenTarget =
 /** A single leading `./` stripped — tool inputs spell venue-relative paths both ways. */
 function stripDotSlash(path: string): string {
   return path.startsWith("./") ? path.slice(2) : path;
+}
+
+/** The Unicode spaces Pi's own tool runtime folds to a plain space (path-utils.js `UNICODE_SPACES`). */
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/**
+ * Lexical `.`/`..` resolution — what `node:path.resolve` does to dot segments,
+ * string-only (this is the renderer). Empty segments (`//`) collapse; a `..`
+ * above an ABSOLUTE root is dropped exactly as `resolve` drops it; a `..` above
+ * a RELATIVE start is kept, so the caller can see the path escapes its venue.
+ */
+function resolveDotSegments(path: string): string {
+  const absolute = path.startsWith("/");
+  const out: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (out.length > 0 && out.at(-1) !== "..") out.pop();
+      else if (!absolute) out.push("..");
+      continue;
+    }
+    out.push(segment);
+  }
+  return (absolute ? "/" : "") + out.join("/");
+}
+
+/**
+ * The renderer's mirror of Pi's OWN tool-path normalization, for paths that
+ * arrive off ACTIVITY rows (tool inputs). Pi's runtime folds Unicode spaces to
+ * a plain space and strips one leading `@` (`pi-agent-core` path-utils
+ * `normalizeToolPath`), then resolves the rest against the venue with
+ * `path.resolve` — which collapses `.`/`..` segments. So a tool call that
+ * successfully read `@src/a.ts` or `src/../a.ts` carries that raw spelling in
+ * its descriptor, and WITHOUT this mirror a click on the row would ask main
+ * for a literal `@src/a.ts` (not found) or a dot-segmented relPath (rejected).
+ *
+ * Activity paths only — a markdown file MENTION is the model's literal prose
+ * and is deliberately left as written.
+ */
+export function normalizeChatToolPath(path: string): string {
+  const spaced = path.replace(UNICODE_SPACES, " ");
+  return resolveDotSegments(spaced.startsWith("@") ? spaced.slice(1) : spaced);
 }
 
 /**
@@ -72,8 +130,12 @@ export function resolveChatOpenTarget(input: {
   if (!path.startsWith("/")) {
     const relPath = stripDotSlash(path);
     // A relative path that strips to nothing ("." / "./") names a directory,
-    // not a file — nothing a file tab can show.
+    // not a file — nothing a file tab can show. One that still LEADS with `..`
+    // (post-normalization) climbs out of the venue toward a root nobody named:
+    // there is no checkout to resolve it against, so it is honestly outside
+    // rather than a relPath main would only reject as invalid.
     if (relPath.length === 0 || relPath === ".") return { kind: "outside", path };
+    if (relPath === ".." || relPath.startsWith("../")) return { kind: "outside", path };
     return scope.kind === "ticket"
       ? { kind: "ticket-file", ticketId: scope.ticketId, relPath }
       : { kind: "project-file", relPath };
