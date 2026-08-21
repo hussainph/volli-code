@@ -229,7 +229,7 @@ function CredentialHelperIssueNotice({
           Git&apos;s <code className="font-mono text-current">{issue.helper}</code> helper. If it
           has no matching credential, macOS can show a GUI keychain prompt. A Session cannot answer
           it, so a fetch, push, or other Git operation can hang. Volli will not rewrite your Git
-          configuration. Detection only; VC-70 and VC-45 own the headless-safe credential guarantee.
+          configuration.
         </>
       }
     />
@@ -248,6 +248,10 @@ function credentialHelperScope(
       return "This project's Git configuration";
     case "command":
       return "Git command configuration";
+    // Git's own word for a source it does not classify — Apple Git reports
+    // its Xcode-bundled gitconfig this way. The location names the file.
+    case "unknown":
+      return "Git configuration";
   }
 }
 

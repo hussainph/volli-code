@@ -77,10 +77,18 @@ function effectiveCredentialHelpers(
   return helpers;
 }
 
-function issueScope(scope: string): CliCredentialHelperIssue["scope"] | null {
+/**
+ * Git's scope word, folded to the vocabulary the notice speaks. Never `null`:
+ * Apple's `/usr/bin/git` reports its Xcode-bundled gitconfig — the file that
+ * enables `osxkeychain` on a stock Mac — with scope `unknown` (measured,
+ * Apple Git-155), and a hazard detector that dropped unclassified scopes
+ * would call exactly that stock setup safe. An unrecognized scope is
+ * reported as `unknown`, with Git's own origin naming the file.
+ */
+function issueScope(scope: string): CliCredentialHelperIssue["scope"] {
   if (scope === "system" || scope === "global" || scope === "command") return scope;
   if (scope === "local" || scope === "worktree") return "repo-local";
-  return null;
+  return "unknown";
 }
 
 function location(origin: string): string {
@@ -108,15 +116,14 @@ export async function credentialHelperIssues(
   }
 
   return effectiveCredentialHelpers(parseCredentialHelperConfig(output)).flatMap((entry) => {
-    const scope = issueScope(entry.scope);
-    if (scope === null || !/^osxkeychain(?:\s|$)/.test(entry.helper)) return [];
+    if (!/^osxkeychain(?:\s|$)/.test(entry.helper)) return [];
     // A helper value can carry arbitrary command arguments; the UI only needs
     // the known helper name, never the raw configuration value.
     return [
       {
         kind: "osxkeychain-may-prompt-gui" as const,
         helper: "osxkeychain" as const,
-        scope,
+        scope: issueScope(entry.scope),
         location: location(entry.origin),
       },
     ];

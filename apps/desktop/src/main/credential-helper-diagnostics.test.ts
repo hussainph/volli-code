@@ -83,6 +83,33 @@ describe("credentialHelperIssues", () => {
     ]);
   });
 
+  // The stock-Mac case the VC-94 review caught live: Apple's /usr/bin/git
+  // (Apple Git-155) reports the Xcode-bundled gitconfig — the file that
+  // enables osxkeychain by default — with scope `unknown`. Dropping
+  // unclassified scopes would call exactly that setup safe while a Session
+  // push can still hang on the keychain prompt.
+  it("reports Apple Git's unclassified Xcode-bundled scope instead of dropping it", async () => {
+    await expect(
+      credentialHelperIssues("/work/acme", {
+        readCredentialHelperConfig: async () =>
+          gitConfigOutput([
+            [
+              "unknown",
+              "file:/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
+              "osxkeychain",
+            ],
+          ]),
+      }),
+    ).resolves.toEqual([
+      {
+        kind: "osxkeychain-may-prompt-gui",
+        helper: "osxkeychain",
+        scope: "unknown",
+        location: "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
+      },
+    ]);
+  });
+
   it("does not read Git config when no project is in scope", async () => {
     const readCredentialHelperConfig = vi.fn(async () => gitConfigOutput([]));
 

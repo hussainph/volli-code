@@ -680,8 +680,13 @@ export interface CliSystemPathIssue {
 export interface CliCredentialHelperIssue {
   kind: "osxkeychain-may-prompt-gui";
   helper: "osxkeychain";
-  /** Git's `local` and `worktree` scopes both mean this project's configuration. */
-  scope: "system" | "global" | "repo-local" | "command";
+  /**
+   * Git's `local` and `worktree` scopes both mean this project's
+   * configuration. `unknown` is Git's own word for a source it does not
+   * classify — Apple's `/usr/bin/git` reports its Xcode-bundled gitconfig,
+   * the file that enables `osxkeychain` on a stock Mac, exactly this way.
+   */
+  scope: "system" | "global" | "repo-local" | "command" | "unknown";
   /** The config file or command source Git itself reported for the helper. */
   location: string;
 }
@@ -697,6 +702,14 @@ export interface CliSessionPathStatus {
   tools: Readonly<Record<SessionEnvTool, string | null>>;
   /** Project-scoped dependency state; `null` when no project workspace was supplied. */
   dependencies: WorkspaceDependenciesStatus;
+  /**
+   * The command that installs the scoped workspace's dependencies, judged by
+   * its lockfile (`@volli/shared`'s `workspaceInstallCommand`); `null` when
+   * no project workspace was supplied or none encloses it. Settings/alert
+   * vocabulary only — `volli identify`'s env block deliberately stays the
+   * exact field set the contract published.
+   */
+  installCommand: string | null;
 }
 
 export interface CliToolStatus {

@@ -20,6 +20,7 @@ function environment(
         pnpm: "/opt/homebrew/bin/pnpm",
       },
       dependencies: null,
+      installCommand: null,
     },
     ...overrides,
     systemPathIssues: overrides.systemPathIssues ?? [],
@@ -40,6 +41,7 @@ describe("SessionPathComparison", () => {
             interactiveProvenance: "pending",
             tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
             dependencies: null,
+            installCommand: null,
           },
         })}
       />,
@@ -111,8 +113,36 @@ describe("SessionPathComparison", () => {
     expect(html).toContain("/Users/me/.gitconfig");
     expect(html).toContain("can hang");
     expect(html).toContain("Volli will not rewrite your Git configuration.");
-    expect(html).toContain("Detection only");
+    // Product copy carries no internal ticket vocabulary (VC-94 review).
+    expect(html).not.toContain("VC-");
+    expect(html).not.toContain("Detection only");
     expect(html).not.toContain("Fix");
+  });
+
+  // Apple Git reports its Xcode-bundled gitconfig — the file that enables
+  // osxkeychain on a stock Mac — with a scope Git does not classify. The
+  // notice still names the file rather than staying silent.
+  it("names a helper from Git's unclassified scope by its file", () => {
+    const html = renderToStaticMarkup(
+      <SessionPathComparison
+        environment={environment({
+          credentialHelperIssues: [
+            {
+              kind: "osxkeychain-may-prompt-gui",
+              helper: "osxkeychain",
+              scope: "unknown",
+              location: "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(html).toContain("A Git credential helper can prompt a Session");
+    expect(html).toContain(
+      "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
+    );
+    expect(html).toContain("Git configuration");
   });
 
   it("does not call an unavailable login PATH a match and keeps the Session value readable", () => {
@@ -127,6 +157,7 @@ describe("SessionPathComparison", () => {
             interactiveProvenance: "pending",
             tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
             dependencies: null,
+            installCommand: null,
           },
         })}
       />,
