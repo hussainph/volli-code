@@ -728,12 +728,6 @@ app.whenReady().then(async () => {
           // or the Blob store.
           prepareTurnAttachments: (message, owner) =>
             prepareTurnAttachments(dbHandle.db, blobsRoot(app.getPath("userData")), message, owner),
-          // The same Role-in/purpose-out resolution the Session defaults use
-          // (VC-53), for the runtime's own background work: a compaction summary
-          // is cost-efficient background work by definition, which is what the
-          // `utility` purpose names. Read per call, so retuning it in Settings
-          // reaches a Session already running.
-          utilityModel: () => resolveDefaultModel(readModelAccessDefaults(dbHandle.db), "utility"),
           // Read per compaction rather than captured here, for the same reason:
           // a Session outlives the Settings change that retunes it, and the
           // next compaction should run under the policy configured now.

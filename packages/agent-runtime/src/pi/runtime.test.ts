@@ -46,8 +46,8 @@ import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } fro
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
-/** A second catalog entry, so "which model summarized" has a visible answer. */
-const UTILITY_MODEL_ID = "claude-utility-mini";
+/** A second catalog entry, so a chat-model change has a visible summary answer. */
+const CHAT_MODEL_ID = "claude-chat-model";
 const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
 
 // --- scripted model stream -------------------------------------------------
@@ -4356,57 +4356,41 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
-  /** Drive one Session to the reserve and report which model each call used. */
-  async function modelsCalled(
-    utilityModel: PiRuntimeHostOptions["utilityModel"],
-  ): Promise<string[]> {
+  /** Drive one Session to the reserve after changing the model selected in chat. */
+  async function modelsCalledAfterChatModelChange(): Promise<string[]> {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(overflowing(calls, settles("## Goal\nsummarized elsewhere")), [
+      models: modelsWithStream(overflowing(calls, settles("## Goal\nsummarized in chat")), [
         { id: MODEL_ID, reasoning: true },
-        { id: UTILITY_MODEL_ID },
+        { id: CHAT_MODEL_ID },
       ]),
-      ...(utilityModel === undefined ? {} : { utilityModel }),
     });
     const handle = await runtime.startSession(attachment.spec);
     await handle.submitUserMessage("remember the marker");
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
     await handle.submitUserMessage(PASTED);
     await handle.submitUserMessage("carry on");
     await handle.close();
     return calls.map((call) => call.model);
   }
 
-  it("summarizes on the utility model the host names", async () => {
-    const utility = {
-      providerId: PROVIDER_ID,
-      modelId: UTILITY_MODEL_ID,
-      reasoningLevel: "off",
-    } as const;
+  it("summarizes on the model selected in the Session's chat", async () => {
+    const chatModel = `${PROVIDER_ID}/${CHAT_MODEL_ID}`;
 
-    expect(await modelsCalled(() => utility)).toEqual([
+    expect(await modelsCalledAfterChatModelChange()).toEqual([
       SESSION_MODEL,
-      SESSION_MODEL,
-      `${PROVIDER_ID}/${UTILITY_MODEL_ID}`,
-      SESSION_MODEL,
+      chatModel,
+      chatModel,
+      chatModel,
     ]);
-  });
-
-  it("falls back to the Session's own model rather than not summarizing", async () => {
-    // Three ways to have no utility model — no host answer at all, a host with
-    // nothing configured, and a host naming a model this collection does not
-    // know — and one outcome: the summary is generated, on the model at hand.
-    const unknown = {
-      providerId: PROVIDER_ID,
-      modelId: "never-provisioned",
-      reasoningLevel: "off",
-    } as const;
-    const onlyTheSessionModel = Array.from({ length: 4 }, () => SESSION_MODEL);
-
-    expect(await modelsCalled(undefined)).toEqual(onlyTheSessionModel);
-    expect(await modelsCalled(() => null)).toEqual(onlyTheSessionModel);
-    expect(await modelsCalled(() => unknown)).toEqual(onlyTheSessionModel);
   });
 });
 
