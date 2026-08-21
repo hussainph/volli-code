@@ -1551,6 +1551,11 @@ describe("FILE_IPC descriptor table", () => {
       expect(
         file.guard([{ projectId: "p1", ticketId: "t1", relPath: "src/main.ts", appId: "vscode" }]),
       ).toBe(true);
+      expect(
+        file.guard([
+          { projectId: "p1", ticketId: "t1", relPath: "src/main.ts", appId: "android-studio" },
+        ]),
+      ).toBe(true);
       expect(file.guard([{ projectId: "p1", relPath: "src/main.ts", appId: "unknown" }])).toBe(
         false,
       );

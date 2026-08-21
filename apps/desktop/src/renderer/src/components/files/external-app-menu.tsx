@@ -74,7 +74,7 @@ export function ExternalAppsProvider({
 
 function AppGlyph({ app }: { app: ExternalApp }) {
   const Icon = app.kind === "editor" ? CodeIcon : TerminalWindowIcon;
-  return <Icon aria-hidden />;
+  return <Icon aria-hidden weight="fill" />;
 }
 
 function useExternalAppActions(target: ExternalAppTarget) {
@@ -138,14 +138,20 @@ export function ExternalAppContextMenu({
 
   return (
     <ContextMenuSub>
-      <ContextMenuSubTrigger icon={ArrowSquareOutIcon}>{label}</ContextMenuSubTrigger>
+      <ContextMenuSubTrigger icon={ArrowSquareOutIcon} iconWeight="fill">
+        {label}
+      </ContextMenuSubTrigger>
       <ContextMenuSubContent>
         {entries.map((entry) => {
           if (entry.kind === "finder") {
             return (
               <React.Fragment key="finder">
                 {apps.length > 0 ? <ContextMenuSeparator /> : null}
-                <ContextMenuItem icon={FolderOpenIcon} onSelect={() => void reveal()}>
+                <ContextMenuItem
+                  icon={FolderOpenIcon}
+                  iconWeight="fill"
+                  onSelect={() => void reveal()}
+                >
                   Reveal in Finder
                 </ContextMenuItem>
               </React.Fragment>
@@ -153,7 +159,12 @@ export function ExternalAppContextMenu({
           }
           const Icon = entry.app.kind === "editor" ? CodeIcon : TerminalWindowIcon;
           return (
-            <ContextMenuItem key={entry.app.id} icon={Icon} onSelect={() => void open(entry.app)}>
+            <ContextMenuItem
+              key={entry.app.id}
+              icon={Icon}
+              iconWeight="fill"
+              onSelect={() => void open(entry.app)}
+            >
               {entry.app.label}
             </ContextMenuItem>
           );
@@ -179,7 +190,7 @@ export function ExternalAppDropdownMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button size="xs" variant="ghost" className="shrink-0" aria-label={label} title={label}>
-          <ArrowSquareOutIcon />
+          <ArrowSquareOutIcon weight="fill" />
           Open
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
@@ -191,7 +202,7 @@ export function ExternalAppDropdownMenu({
               <React.Fragment key="finder">
                 {apps.length > 0 ? <DropdownMenuSeparator /> : null}
                 <DropdownMenuItem onSelect={() => void reveal()}>
-                  <FolderOpenIcon aria-hidden />
+                  <FolderOpenIcon aria-hidden weight="fill" />
                   Reveal in Finder
                 </DropdownMenuItem>
               </React.Fragment>

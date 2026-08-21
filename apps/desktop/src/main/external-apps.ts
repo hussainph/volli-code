@@ -21,6 +21,12 @@ const EXTERNAL_APPS: readonly ExternalAppDefinition[] = [
   { id: "cursor", label: "Cursor", kind: "editor", bundleId: "com.todesktop.230313mzl4w4u92" },
   { id: "zed", label: "Zed", kind: "editor", bundleId: "dev.zed.Zed" },
   { id: "xcode", label: "Xcode", kind: "editor", bundleId: "com.apple.dt.Xcode" },
+  {
+    id: "android-studio",
+    label: "Android Studio",
+    kind: "editor",
+    bundleId: "com.google.android.studio",
+  },
   { id: "terminal", label: "Terminal", kind: "terminal", bundleId: "com.apple.Terminal" },
   { id: "iterm2", label: "iTerm2", kind: "terminal", bundleId: "com.googlecode.iterm2" },
   { id: "ghostty", label: "Ghostty", kind: "terminal", bundleId: "com.mitchellh.ghostty" },

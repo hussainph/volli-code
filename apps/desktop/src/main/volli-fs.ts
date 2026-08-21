@@ -20,7 +20,7 @@
 import { existsSync, promises as fsp, statSync, watch as fsWatch } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { shell } from "electron";
 import type { WebContents } from "electron";
 import type Database from "better-sqlite3";
@@ -74,7 +74,10 @@ import { getTicketRow } from "./db/tickets-repo";
 import type { TicketRow } from "./db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+import { isPathWithinRoots } from "./project-roots";
 import { loadPromptTemplates } from "./prompt-templates";
+import { worktreesHome } from "./worktree-runtime";
+import { isInside } from "./worktree/paths";
 import { loadSkills } from "./skills";
 
 const execFileAsync = promisify(execFile);
@@ -1101,6 +1104,12 @@ function resolveProjectPath(
   return { ok: true, projectPath: project.path };
 }
 
+interface FileScope {
+  projectPath: string;
+  worktreeRoot: string | null;
+  usesWorktree: boolean;
+}
+
 /**
  * The main-repo path plus the ticket's worktree root (the seam) for a file
  * request. `ticketId` is optional; when given it's checked against `projectId`
@@ -1110,25 +1119,84 @@ async function resolveFileScope(
   db: Database.Database,
   projectId: string,
   ticketId: string | undefined,
-): Promise<
-  { ok: true; projectPath: string; worktreeRoot: string | null } | { ok: false; error: string }
-> {
+): Promise<{ ok: true; value: FileScope } | { ok: false; error: string }> {
   const project = resolveProjectPath(db, projectId);
   if (!project.ok) return project;
-  if (ticketId === undefined)
-    return { ok: true, projectPath: project.projectPath, worktreeRoot: null };
+  if (ticketId === undefined) {
+    return {
+      ok: true,
+      value: { projectPath: project.projectPath, worktreeRoot: null, usesWorktree: false },
+    };
+  }
   const row = getTicketRow(db, ticketId);
   if (!row) return { ok: false, error: "Unknown ticket" };
   if (row.project_id !== projectId)
     return { ok: false, error: "Ticket does not belong to project" };
   return {
     ok: true,
-    projectPath: project.projectPath,
-    worktreeRoot: await worktreeRootFromRow(row),
+    value: {
+      projectPath: project.projectPath,
+      worktreeRoot: await worktreeRootFromRow(row),
+      usesWorktree: row.uses_worktree !== 0,
+    },
   };
 }
 
-/** Resolves only a LIVE ticket worktree: unlike a File read, it must never fall back to main. */
+/**
+ * Resolves a live worktree before passing it to Finder or an external app.
+ * `worktree_path` is durable data, not an authorization to open any directory:
+ * it must remain inside the ticket's project root, a registered project root,
+ * or the app-owned worktree home after canonicalization.
+ */
+async function resolveTrustedLiveWorktree(
+  scope: FileScope,
+): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
+  if (!scope.usesWorktree || scope.worktreeRoot === null) {
+    return { ok: false, error: "Worktree folder was not found" };
+  }
+
+  let worktreeRoot: string;
+  try {
+    worktreeRoot = await fsp.realpath(resolve(scope.worktreeRoot));
+  } catch {
+    return { ok: false, error: "Worktree folder was not found" };
+  }
+  if (
+    !isInside(scope.projectPath, worktreeRoot) &&
+    !isPathWithinRoots(worktreeRoot) &&
+    !isInside(worktreesHome(), worktreeRoot)
+  ) {
+    return { ok: false, error: "Worktree folder is outside known projects" };
+  }
+  return await resolveSafePath(scope.projectPath, worktreeRoot, "", { allowRoot: true });
+}
+
+/**
+ * Resolves a file target destined for Finder or an external app. A ticket that
+ * uses worktrees must resolve a trusted live worktree; it never silently opens
+ * Main when that checkout is gone.
+ */
+async function resolveExternalFileTarget(
+  scope: FileScope,
+  ticketId: string | undefined,
+  relPath: string,
+): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
+  let worktreeRoot = scope.worktreeRoot;
+  if (ticketId !== undefined && !isVolliRelPath(relPath)) {
+    if (scope.usesWorktree) {
+      const worktree = await resolveTrustedLiveWorktree(scope);
+      if (!worktree.ok) return worktree;
+      worktreeRoot = worktree.value.filePath;
+    } else {
+      // A ticket that opted out of worktrees correctly lives in Main. Do not
+      // trust an unexpected stale worktree_path for a native-app action.
+      worktreeRoot = null;
+    }
+  }
+  return await resolveSafePath(scope.projectPath, worktreeRoot, relPath);
+}
+
+/** Resolves only a trusted LIVE ticket worktree: unlike a File read, it must never fall back to main. */
 async function resolveLiveWorktree(
   db: Database.Database,
   projectId: string,
@@ -1136,8 +1204,7 @@ async function resolveLiveWorktree(
 ): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
   const scope = await resolveFileScope(db, projectId, ticketId);
   if (!scope.ok) return scope;
-  if (scope.worktreeRoot === null) return { ok: false, error: "Worktree folder was not found" };
-  return await resolveSafePath(scope.projectPath, scope.worktreeRoot, "", { allowRoot: true });
+  return await resolveTrustedLiveWorktree(scope.value);
 }
 
 /** The live watch managers `registerFileIpcHandlers` owns — one per watch surface. */
@@ -1201,7 +1268,7 @@ export function registerFileIpcHandlers(
     "volli:file-read": async (input: FilePathInput): Promise<FileReadResult> => {
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
-      return await readFile(scope.projectPath, scope.worktreeRoot, input.relPath);
+      return await readFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
     },
 
     "volli:external-app-list": async (): Promise<ExternalAppListResult> => ({
@@ -1212,7 +1279,7 @@ export function registerFileIpcHandlers(
     "volli:external-app-open-file": async (input: ExternalAppOpenFileInput): Promise<Result> => {
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
-      const resolved = await resolveSafePath(scope.projectPath, scope.worktreeRoot, input.relPath);
+      const resolved = await resolveExternalFileTarget(scope.value, input.ticketId, input.relPath);
       if (!resolved.ok) return resolved;
       return await externalApps.open(input.appId, resolved.value.filePath);
     },
@@ -1240,8 +1307,8 @@ export function registerFileIpcHandlers(
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
       return await writeFile(
-        scope.projectPath,
-        scope.worktreeRoot,
+        scope.value.projectPath,
+        scope.value.worktreeRoot,
         input.relPath,
         input.content,
         input.expectedMtime,
@@ -1257,13 +1324,24 @@ export function registerFileIpcHandlers(
     "volli:file-reveal": async (input: FilePathInput): Promise<RevealResult> => {
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
-      return await revealFile(scope.projectPath, scope.worktreeRoot, input.relPath);
+      const resolved = await resolveExternalFileTarget(scope.value, input.ticketId, input.relPath);
+      if (!resolved.ok) return resolved;
+      try {
+        shell.showItemInFolder(resolved.value.filePath);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
     },
 
     "volli:file-watch": async (input: FilePathInput, sender: WebContents): Promise<Result> => {
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
-      const resolved = await resolveSafePath(scope.projectPath, scope.worktreeRoot, input.relPath);
+      const resolved = await resolveSafePath(
+        scope.value.projectPath,
+        scope.value.worktreeRoot,
+        input.relPath,
+      );
       if (!resolved.ok) return resolved;
       const { source, filePath } = resolved.value;
       return manager.watch(
@@ -1274,7 +1352,7 @@ export function registerFileIpcHandlers(
         source,
         dirname(filePath),
         basename(filePath),
-        scope.projectPath,
+        scope.value.projectPath,
       );
     },
 

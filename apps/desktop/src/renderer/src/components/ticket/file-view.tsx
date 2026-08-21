@@ -110,7 +110,7 @@ export function overwriteAutosaveConflict(input: {
  *  - `read-only` — images, binary, and truncated reads (saving a capped prefix
  *    back would destroy everything past the cap): the SAME Monaco source editor
  *    with `readOnly` set (so a mid-draft flip past the cap keeps the editing
- *    surface and the draft), an inline image, or a Reveal-in-Finder stub.
+ *    surface and the draft), an inline image, or a binary-file state.
  *
  * Both editable paths are conflict-guarded by the on-disk mtime: each write
  * carries the last-seen mtime as `expectedMtime`, and disk moving under a dirty

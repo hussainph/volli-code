@@ -25,7 +25,7 @@
  *   6. ⌘S saves, and DISK BYTES match — the tab goes clean and the file read
  *      back with `fs` really contains the typed text. This is the core of the
  *      acceptance criterion: real bytes, not UI state.
- *   7. Navigate away and back RESTORES the workspace — Board, then Files: the
+ *   7. Navigate away and back RESTORES the workspace — Home, then Files: the
  *      same tabs, in the same order, with the same pinned/preview flags and the
  *      same active tab.
  *   8. Restoration is LAZY — on return, exactly ONE Monaco host is mounted (the

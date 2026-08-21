@@ -323,6 +323,7 @@ export type ExternalAppId =
   | "cursor"
   | "zed"
   | "xcode"
+  | "android-studio"
   | "terminal"
   | "iterm2"
   | "ghostty"

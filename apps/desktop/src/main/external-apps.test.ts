@@ -9,13 +9,18 @@ describe("ExternalAppGateway", () => {
       platform: "darwin",
       async findBundle(bundleId) {
         lookedUp.push(bundleId);
-        return bundleId === "com.microsoft.VSCode" || bundleId === "com.apple.Terminal";
+        return (
+          bundleId === "com.microsoft.VSCode" ||
+          bundleId === "com.google.android.studio" ||
+          bundleId === "com.apple.Terminal"
+        );
       },
       async openBundle() {},
     });
 
     await expect(gateway.list()).resolves.toEqual([
       { id: "vscode", label: "VS Code", kind: "editor" },
+      { id: "android-studio", label: "Android Studio", kind: "editor" },
       { id: "terminal", label: "Terminal", kind: "terminal" },
     ]);
     expect(lookedUp).toEqual([
@@ -23,6 +28,7 @@ describe("ExternalAppGateway", () => {
       "com.todesktop.230313mzl4w4u92",
       "dev.zed.Zed",
       "com.apple.dt.Xcode",
+      "com.google.android.studio",
       "com.apple.Terminal",
       "com.googlecode.iterm2",
       "com.mitchellh.ghostty",
