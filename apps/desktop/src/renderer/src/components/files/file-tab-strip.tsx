@@ -20,10 +20,12 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 import type { FileWorkspaceTab } from "@volli/shared";
 
+import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
@@ -31,6 +33,8 @@ import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
 import { fileTabLabels } from "./file-tab-labels";
 
 export interface FileTabStripProps {
+  /** The Project Files checkout that every tab in this strip resolves against. */
+  projectId: string;
   /** The workspace's tabs in strip order (`@volli/shared`'s FileWorkspaceState.tabs). */
   tabs: readonly FileWorkspaceTab[];
   activeRelPath: string | null;
@@ -45,6 +49,7 @@ export interface FileTabStripProps {
 }
 
 function FileTab({
+  projectId,
   relPath,
   name,
   hint,
@@ -57,6 +62,7 @@ function FileTab({
   onClose,
   onCloseOthers,
 }: {
+  projectId: string;
   relPath: string;
   name: string;
   hint: string | null;
@@ -90,6 +96,8 @@ function FileTab({
         />
       </ContextMenuTrigger>
       <ContextMenuContent>
+        <ExternalAppContextMenu target={{ kind: "file", projectId, relPath }} />
+        <ContextMenuSeparator />
         <ContextMenuItem icon={PushPinIcon} disabled={!preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>
@@ -105,6 +113,7 @@ function FileTab({
 }
 
 export function FileTabStrip({
+  projectId,
   tabs,
   activeRelPath,
   dirtyPaths,
@@ -130,6 +139,7 @@ export function FileTabStrip({
         return (
           <FileTab
             key={tab.relPath}
+            projectId={projectId}
             relPath={tab.relPath}
             name={label.name}
             hint={label.hint}

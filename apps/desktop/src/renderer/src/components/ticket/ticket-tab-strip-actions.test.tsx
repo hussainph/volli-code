@@ -13,6 +13,8 @@ function buttonTag(html: string, label: string): string {
 function strip(creating: boolean, railCollapsed = false): string {
   return renderToStaticMarkup(
     <TicketTabStrip
+      projectId="project-1"
+      ticketId="ticket-1"
       tabs={[{ id: "doc", kind: "body", label: "VC-6" }]}
       activeTabId="doc"
       creating={creating}

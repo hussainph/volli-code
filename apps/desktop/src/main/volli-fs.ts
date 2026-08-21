@@ -2,8 +2,9 @@
  * All Node fs work for the global-artifacts + `@file` rework
  * (docs/plans/global-artifacts.md): the whole-project file index (git
  * ls-files, gitignore-respecting, `.volli/artifacts/` force-included),
- * worktree-aware read/write/reveal of any repo file, the single project-scoped
- * `.volli/artifacts/` create flow, and a per-open-tab debounced file watch —
+ * worktree-aware read/write/reveal and external-app launch of any repo file,
+ * the single project-scoped `.volli/artifacts/` create flow, and a per-open-tab
+ * debounced file watch —
  * plus, for the Project Files workspace (issue #106), a per-expanded-directory
  * watch that refreshes one listing at a time rather than mirroring the repo.
  * Mirrors pty.ts/ghostty-config.ts's shape: pure fs helpers exported for direct
@@ -40,12 +41,17 @@ import {
   withMarkdownExtension,
 } from "@volli/shared";
 import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
+import { systemExternalAppGateway } from "./external-apps";
+import type { ExternalAppGateway } from "./external-apps";
 import type { FileKind, FileSource, IndexedFile } from "@volli/shared";
 import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   DirChangedEvent,
   DirPathInput,
+  ExternalAppListResult,
+  ExternalAppOpenFileInput,
+  ExternalAppOpenWorktreeInput,
   FileChangedEvent,
   FileContent,
   FileIndexInput,
@@ -60,6 +66,7 @@ import type {
   Result,
   RevealResult,
   VolliIpcEvent,
+  WorktreeRevealInput,
 } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
 import { getProjectById } from "./db/projects-repo";
@@ -273,9 +280,26 @@ async function resolveSafePath(
   projectPath: string,
   worktreeRoot: string | null,
   relPath: string,
+  options: { allowRoot?: boolean } = {},
 ): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
-  if (!isSafeRelPath(relPath)) return { ok: false, error: "Invalid file path" };
   const { root, source } = resolveRootFor(projectPath, worktreeRoot, relPath);
+  // The one caller that names a ROOT is the ticket-repository external-app
+  // action. It never receives a renderer-supplied absolute path: `root` came
+  // from resolveFileScope's project/ticket lookup, and realpath canonicalizes
+  // it before any native app sees it. Ordinary file APIs retain the strict
+  // non-empty relative-path rule below.
+  if (options.allowRoot && relPath === "") {
+    try {
+      return { ok: true, value: { root, source, filePath: await fsp.realpath(root) } };
+    } catch {
+      return {
+        ok: false,
+        error:
+          source === "worktree" ? "Worktree folder was not found" : "Project folder was not found",
+      };
+    }
+  }
+  if (!isSafeRelPath(relPath)) return { ok: false, error: "Invalid file path" };
   const filePath = join(root, relPath);
   const check = await assertWithinRoot(root, filePath);
   if (!check.ok) return check;
@@ -1104,6 +1128,18 @@ async function resolveFileScope(
   };
 }
 
+/** Resolves only a LIVE ticket worktree: unlike a File read, it must never fall back to main. */
+async function resolveLiveWorktree(
+  db: Database.Database,
+  projectId: string,
+  ticketId: string,
+): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
+  const scope = await resolveFileScope(db, projectId, ticketId);
+  if (!scope.ok) return scope;
+  if (scope.worktreeRoot === null) return { ok: false, error: "Worktree folder was not found" };
+  return await resolveSafePath(scope.projectPath, scope.worktreeRoot, "", { allowRoot: true });
+}
+
 /** The live watch managers `registerFileIpcHandlers` owns — one per watch surface. */
 export interface FileIpcWatchManagers {
   files: FileWatchManager;
@@ -1124,12 +1160,13 @@ export interface FileIpcOptions {
    * once, in `index.ts`, and handed down rather than read here.
    */
   globalSkillsDir: string;
+  /** Native app detection/launch, injectable so the IPC boundary stays testable without macOS. */
+  externalApps?: ExternalAppGateway;
 }
 
 /**
- * Registers every `volli:file-*` / `volli:dir-*` / `volli:artifact-create`
- * handler through the
- * shared guard→body→envelope registry (issue #98): `FILE_IPC` (@volli/shared)
+ * Registers every file, directory, artifact, and external-app handler through
+ * the shared guard→body→envelope registry (issue #98): `FILE_IPC` (@volli/shared)
  * supplies the descriptor table (validators + invalid-request messages) and
  * `registerGuardedIpcHandlers` applies guard → body → try/catch; this module
  * supplies only the handler bodies below. When the db failed to open, every
@@ -1151,6 +1188,7 @@ export function registerFileIpcHandlers(
   }
 
   const db = handle.db;
+  const externalApps = options.externalApps ?? systemExternalAppGateway;
 
   const handlers: IpcHandlerTable<FileIpcChannel> = {
     "volli:file-index": async (input: FileIndexInput): Promise<FileIndexResult> => {
@@ -1164,6 +1202,38 @@ export function registerFileIpcHandlers(
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
       return await readFile(scope.projectPath, scope.worktreeRoot, input.relPath);
+    },
+
+    "volli:external-app-list": async (): Promise<ExternalAppListResult> => ({
+      ok: true,
+      apps: await externalApps.list(),
+    }),
+
+    "volli:external-app-open-file": async (input: ExternalAppOpenFileInput): Promise<Result> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      const resolved = await resolveSafePath(scope.projectPath, scope.worktreeRoot, input.relPath);
+      if (!resolved.ok) return resolved;
+      return await externalApps.open(input.appId, resolved.value.filePath);
+    },
+
+    "volli:external-app-open-worktree": async (
+      input: ExternalAppOpenWorktreeInput,
+    ): Promise<Result> => {
+      const resolved = await resolveLiveWorktree(db, input.projectId, input.ticketId);
+      if (!resolved.ok) return resolved;
+      return await externalApps.open(input.appId, resolved.value.filePath);
+    },
+
+    "volli:worktree-reveal": async (input: WorktreeRevealInput): Promise<Result> => {
+      const resolved = await resolveLiveWorktree(db, input.projectId, input.ticketId);
+      if (!resolved.ok) return resolved;
+      try {
+        shell.showItemInFolder(resolved.value.filePath);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
     },
 
     "volli:file-write": async (input: FileWriteInput): Promise<FileWriteResult> => {

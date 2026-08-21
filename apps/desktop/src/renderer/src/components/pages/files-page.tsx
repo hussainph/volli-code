@@ -41,6 +41,7 @@ function FilesWorkbench({ project }: { project: Project }) {
   return (
     <div data-testid="files-workbench" className="flex min-h-0 flex-1 flex-col">
       <FileTabStrip
+        projectId={projectId}
         tabs={workspace.files.tabs}
         activeRelPath={activeRelPath}
         dirtyPaths={workspace.dirtyPaths}

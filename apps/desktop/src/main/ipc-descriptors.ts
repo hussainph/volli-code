@@ -22,6 +22,7 @@ import {
   parseHarnessId,
 } from "@volli/shared";
 
+import { isExternalAppId } from "./external-apps";
 import type {
   CliIpcChannel,
   DataIpcChannel,
@@ -645,9 +646,9 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
 export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 
 // ---- file-IPC descriptor table ------------------------------------------
-// Exactly one entry per VolliFileIpcContract channel (the 7 file/artifact
-// channels `src/main/volli-fs.ts` owns). Every one of that module's handlers
-// falls back to the same "Invalid request" string on a bad shape.
+// Exactly one entry per VolliFileIpcContract channel (the file, artifact, and
+// external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
+// handlers falls back to the same "Invalid request" string on a bad shape.
 
 /** The `{ projectId, ticketId?, relPath }` shape shared by read/reveal/watch/unwatch. */
 function isFilePathInput(
@@ -656,6 +657,32 @@ function isFilePathInput(
   if (!isRecord(value)) return false;
   if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
   return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+}
+
+/** The file-path shape plus one closed app id — callers never name a bundle or command. */
+function isExternalAppOpenFileInput(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const appId = value["appId"];
+  return isFilePathInput(value) && isExternalAppId(appId);
+}
+
+/** The closed app id plus the two ids that name a ticket's worktree. */
+function isExternalAppOpenWorktreeInput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value["projectId"] === "string" &&
+    typeof value["ticketId"] === "string" &&
+    isExternalAppId(value["appId"])
+  );
+}
+
+/** The project/ticket pair needed to resolve a worktree root without trusting a path from renderer. */
+function isWorktreeRevealInput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value["projectId"] === "string" &&
+    typeof value["ticketId"] === "string"
+  );
 }
 
 /**
@@ -679,6 +706,25 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
   "volli:file-read": {
     guard: (args): args is IpcArgs<"volli:file-read"> =>
       args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:external-app-list": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:external-app-open-file": {
+    guard: (args): args is IpcArgs<"volli:external-app-open-file"> =>
+      args.length === 1 && isExternalAppOpenFileInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:external-app-open-worktree": {
+    guard: (args): args is IpcArgs<"volli:external-app-open-worktree"> =>
+      args.length === 1 && isExternalAppOpenWorktreeInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:worktree-reveal": {
+    guard: (args): args is IpcArgs<"volli:worktree-reveal"> =>
+      args.length === 1 && isWorktreeRevealInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:file-write": {

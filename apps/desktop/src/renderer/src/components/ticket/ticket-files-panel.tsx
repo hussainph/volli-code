@@ -21,6 +21,7 @@ import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { type AttachmentsHandle, useAttachments } from "@renderer/hooks/use-attachments";
@@ -39,6 +40,11 @@ import {
   type TicketWorktreeEntry,
 } from "@renderer/components/ticket/ticket-files-model";
 import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
@@ -69,12 +75,16 @@ const ROW_ICONS: Record<"file" | "directory" | "reference", PhosphorIcon> = {
 };
 
 function FileRow({
+  projectId,
+  ticketId,
   relPath,
   label,
   kind,
   onActivate,
   onPin,
 }: {
+  projectId: string;
+  ticketId: string;
   relPath: string;
   label: string;
   kind: "file" | "directory" | "reference";
@@ -85,7 +95,7 @@ function FileRow({
   const { filename, parentPath } = splitFilesPath(relPath);
   const primary = kind === "reference" ? label : filename;
   const Icon = ROW_ICONS[kind];
-  return (
+  const row = (
     <ListRow
       density="two-line"
       data-testid="ticket-files-row"
@@ -112,16 +122,29 @@ function FileRow({
       }
     />
   );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ExternalAppContextMenu target={{ kind: "file", projectId, ticketId, relPath }} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 /** Presentational Files list — unit-tested via renderToStaticMarkup. */
 export function TicketFilesList({
+  projectId,
+  ticketId,
   referenced,
   worktree,
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
 }: {
+  projectId: string;
+  ticketId: string;
   referenced: readonly TicketFileRefRow[];
   worktree: readonly TicketWorktreeEntry[];
   /** Single-click: open in the replaceable File preview slot (decision #56). */
@@ -146,6 +169,8 @@ export function TicketFilesList({
       {worktree.map((entry) => (
         <li key={`wt:${entry.relPath}`}>
           <FileRow
+            projectId={projectId}
+            ticketId={ticketId}
             relPath={entry.relPath}
             label={splitFilesPath(entry.relPath).filename}
             kind={entry.kind}
@@ -161,6 +186,8 @@ export function TicketFilesList({
       {referenced.map((row) => (
         <li key={`ref:${row.relPath}`}>
           <FileRow
+            projectId={projectId}
+            ticketId={ticketId}
             relPath={row.relPath}
             label={row.label}
             kind="reference"
@@ -371,6 +398,8 @@ export function TicketFilesPanel({
         />
       ) : null}
       <TicketFilesList
+        projectId={ticket.projectId}
+        ticketId={ticket.id}
         referenced={referenced}
         worktree={worktree}
         onPreviewFile={onPreviewFile}

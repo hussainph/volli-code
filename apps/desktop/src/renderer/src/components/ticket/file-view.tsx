@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
@@ -12,7 +12,6 @@ import {
   type DocumentFileRefs,
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
-import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Notice } from "@renderer/components/ui/notice";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
@@ -637,26 +636,6 @@ export function FileView({
     }
   }
 
-  async function handleReveal() {
-    try {
-      const result = await window.api.files.reveal({ projectId, ticketId, relPath });
-      if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
-    } catch (error) {
-      toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
-    }
-  }
-
-  const revealButton = (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label="Reveal in Finder"
-      onClick={() => void handleReveal()}
-    >
-      <FolderOpenIcon />
-    </Button>
-  );
-
   if (state.status === "loading") {
     return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading…</p>;
   }
@@ -730,10 +709,7 @@ export function FileView({
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
         {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
         {state.truncated && (
-          <Notice
-            title="Showing the first 1 MiB. Reveal in Finder for the whole file."
-            actions={revealButton}
-          />
+          <Notice title="Showing the first 1 MiB. Open in… for the whole file." />
         )}
         <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
           <MonacoFileEditor
@@ -773,12 +749,8 @@ export function FileView({
   // binary
   return (
     <div className={cn("flex-1", EMPTY_PAGE, "gap-4")}>
-      <FolderOpenIcon className="size-6 text-muted-foreground" />
+      <FileIcon className="size-6 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
-      <Button size="sm" variant="secondary" onClick={() => void handleReveal()}>
-        <FolderOpenIcon />
-        Reveal in Finder
-      </Button>
     </div>
   );
 }

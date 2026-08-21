@@ -61,6 +61,7 @@ import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertTicket } from "./db/tickets-repo";
+import type { ExternalAppGateway } from "./external-apps";
 
 // ---- shared test scaffolding -------------------------------------------------
 
@@ -1147,7 +1148,10 @@ describe("FileWatchManager", () => {
 
 // ---- IPC handler integration (real db + real temp project dirs) --------------
 
-function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
+function setupDbAndHandlers(
+  projectPath: string = makeGitRepoDir(),
+  externalApps?: ExternalAppGateway,
+): {
   ctx: TestDb;
   projectId: string;
   ticketId: string;
@@ -1166,7 +1170,14 @@ function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
   // Same stance for the personal skills tier: a real but absent path, never
   // the running user's own `~/.agents/skills`.
   const globalSkillsDir = join(makeTempProjectDir(), ".agents", "skills");
-  registerFileIpcHandlers({ ok: true, db: ctx.db }, { globalCommandsDir, globalSkillsDir });
+  registerFileIpcHandlers(
+    { ok: true, db: ctx.db },
+    {
+      globalCommandsDir,
+      globalSkillsDir,
+      externalApps,
+    },
+  );
   return {
     ctx,
     projectId: project.id,
@@ -1561,6 +1572,149 @@ describe("registerFileIpcHandlers", () => {
     expect(showItemInFolderMock).toHaveBeenCalled();
   });
 
+  it("opens a ticket file's worktree copy through the external-app IPC", async () => {
+    const opened: { appId: string; path: string }[] = [];
+    const externalApps: ExternalAppGateway = {
+      async list() {
+        return [];
+      },
+      async open(appId, path) {
+        opened.push({ appId, path });
+        return { ok: true };
+      },
+    };
+    const setup = setupDbAndHandlers(makeGitRepoDir(), externalApps);
+    ctx = setup.ctx;
+    const worktree = makeTempProjectDir();
+    await mkdir(join(setup.projectPath, "src"));
+    await mkdir(join(worktree, "src"));
+    await writeFile(join(setup.projectPath, "src", "main.ts"), "main copy", "utf8");
+    await writeFile(join(worktree, "src", "main.ts"), "worktree copy", "utf8");
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:external-app-open-file",
+      {},
+      {
+        projectId: setup.projectId,
+        ticketId: ticket.id,
+        relPath: "src/main.ts",
+        appId: "vscode",
+      },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(opened).toEqual([{ appId: "vscode", path: join(worktree, "src", "main.ts") }]);
+  });
+
+  it("opens and reveals the live ticket worktree through safe main-process targets", async () => {
+    const opened: { appId: string; path: string }[] = [];
+    const externalApps: ExternalAppGateway = {
+      async list() {
+        return [];
+      },
+      async open(appId, path) {
+        opened.push({ appId, path });
+        return { ok: true };
+      },
+    };
+    const setup = setupDbAndHandlers(makeGitRepoDir(), externalApps);
+    ctx = setup.ctx;
+    const worktree = makeTempProjectDir();
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+
+    const openedResult = await invoke<{ ok: boolean; error?: string }>(
+      "volli:external-app-open-worktree",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id, appId: "terminal" },
+    );
+    const revealedResult = await invoke<{ ok: boolean; error?: string }>(
+      "volli:worktree-reveal",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id },
+    );
+
+    const resolvedWorktree = realpathSync(worktree);
+    expect(openedResult).toEqual({ ok: true });
+    expect(revealedResult).toEqual({ ok: true });
+    expect(opened).toEqual([{ appId: "terminal", path: resolvedWorktree }]);
+    expect(showItemInFolderMock).toHaveBeenCalledWith(resolvedWorktree);
+  });
+
+  it("lists the installed external-app subset without exposing bundle ids", async () => {
+    const externalApps: ExternalAppGateway = {
+      async list() {
+        return [
+          { id: "vscode", label: "VS Code", kind: "editor" },
+          { id: "ghostty", label: "Ghostty", kind: "terminal" },
+        ];
+      },
+      async open() {
+        return { ok: true };
+      },
+    };
+    const setup = setupDbAndHandlers(makeGitRepoDir(), externalApps);
+    ctx = setup.ctx;
+
+    await expect(invoke("volli:external-app-list", {})).resolves.toEqual({
+      ok: true,
+      apps: [
+        { id: "vscode", label: "VS Code", kind: "editor" },
+        { id: "ghostty", label: "Ghostty", kind: "terminal" },
+      ],
+    });
+  });
+
+  it("refuses an unsafe external-app path before it reaches a launcher", async () => {
+    const opened: { appId: string; path: string }[] = [];
+    const externalApps: ExternalAppGateway = {
+      async list() {
+        return [];
+      },
+      async open(appId, path) {
+        opened.push({ appId, path });
+        return { ok: true };
+      },
+    };
+    const setup = setupDbAndHandlers(makeGitRepoDir(), externalApps);
+    ctx = setup.ctx;
+
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:external-app-open-file",
+      {},
+      { projectId: setup.projectId, relPath: "../../outside", appId: "vscode" },
+    );
+
+    expect(result).toEqual({ ok: false, error: "Invalid file path" });
+    expect(opened).toEqual([]);
+  });
+
+  it("refuses worktree actions when no live worktree exists instead of opening main", async () => {
+    const opened: { appId: string; path: string }[] = [];
+    const externalApps: ExternalAppGateway = {
+      async list() {
+        return [];
+      },
+      async open(appId, path) {
+        opened.push({ appId, path });
+        return { ok: true };
+      },
+    };
+    const setup = setupDbAndHandlers(makeGitRepoDir(), externalApps);
+    ctx = setup.ctx;
+
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:external-app-open-worktree",
+      {},
+      { projectId: setup.projectId, ticketId: setup.ticketId, appId: "terminal" },
+    );
+
+    expect(result).toEqual({ ok: false, error: "Worktree folder was not found" });
+    expect(opened).toEqual([]);
+  });
+
   it("watches and unwatches a file through the IPC channels", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
@@ -1665,6 +1819,10 @@ describe("registerFileIpcHandlers", () => {
     "volli:file-write",
     "volli:artifact-create",
     "volli:file-reveal",
+    "volli:external-app-list",
+    "volli:external-app-open-file",
+    "volli:external-app-open-worktree",
+    "volli:worktree-reveal",
     "volli:file-watch",
     "volli:file-unwatch",
     "volli:dir-watch",
