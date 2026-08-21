@@ -4105,6 +4105,7 @@ describe("session.start", () => {
     );
     const startInputs: SessionStartInput[] = [];
     const kickoffs: { sessionId: string; text: string }[] = [];
+    const refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[] = [];
     const mutations: unknown[] = [];
     const notices: SessionStartedNotice[] = [];
     let id = 0;
@@ -4137,12 +4138,13 @@ describe("session.start", () => {
       submitSessionMessage: async (input) => {
         kickoffs.push(input);
       },
+      refineAutoTitle: (input) => refinements.push(input),
       onMutation: (change) => mutations.push(change),
       onSessionStarted: (notice) => notices.push(notice),
     });
     const execute = (args: Record<string, unknown>, env: Record<string, string> = {}) =>
       service.execute({ v: 1, cmd: "session.start", args, ctx: { cwd: "/repo/volli", env } });
-    return { service, execute, startInputs, kickoffs, mutations, notices };
+    return { service, execute, startInputs, kickoffs, refinements, mutations, notices };
   }
 
   it("starts through the product facade and answers in public ids only", async () => {
@@ -4215,6 +4217,57 @@ describe("session.start", () => {
     });
 
     expect(harness.startInputs[0]).toMatchObject({ title: "My review" });
+  });
+
+  it("requests one model refinement behind a heuristic kickoff title", async () => {
+    const harness = startHarness();
+
+    await harness.execute({
+      id: "VC-1",
+      message: "Validate VC-52 before release",
+    });
+
+    expect(harness.refinements).toEqual([
+      {
+        sessionId: startedSessionId,
+        firstMessage: "Validate VC-52 before release",
+        heuristicTitle: "Validate VC-52",
+      },
+    ]);
+  });
+
+  it("refines the stock kickoff too, from the message it actually sent", async () => {
+    const harness = startHarness();
+
+    await harness.execute({ id: "VC-1" });
+
+    expect(harness.refinements).toEqual([
+      {
+        sessionId: startedSessionId,
+        firstMessage: DEFAULT_KICKOFF_MESSAGE,
+        heuristicTitle: "Work on VC-1",
+      },
+    ]);
+  });
+
+  it("makes zero refinement requests for an explicit --title", async () => {
+    const harness = startHarness();
+
+    await harness.execute({ id: "VC-1", title: "My review" });
+
+    expect(harness.refinements).toEqual([]);
+  });
+
+  it("makes zero refinement requests when the kickoff never went out", async () => {
+    const harness = startHarness({ state: "needs-recovery" });
+
+    await harness.execute({ id: "VC-1", message: "Validate VC-52 before release" });
+
+    // A Session held for recovery has not sent this message and may never
+    // send it — titling from text nobody submitted would spend a model call
+    // on a conversation that did not happen. Same gate as the kickoff itself.
+    expect(harness.kickoffs).toEqual([]);
+    expect(harness.refinements).toEqual([]);
   });
 
   it("announces the start to every surface without moving the board", async () => {

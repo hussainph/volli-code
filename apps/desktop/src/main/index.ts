@@ -56,7 +56,7 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectById, listProjects } from "./db/projects-repo";
-import { getTicket } from "./db/tickets-repo";
+import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
@@ -75,6 +75,7 @@ import {
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
+import { createAutoTitler } from "./session-runtime/auto-title";
 import {
   createSessions,
   StructuredSessionsError,
@@ -112,6 +113,7 @@ import {
   broadcastHarnessEvent,
   broadcastSessionActivity,
   broadcastSessionHarness,
+  broadcastSessionRetitled,
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
@@ -1021,6 +1023,59 @@ app.whenReady().then(async () => {
           createSession: sessions?.create,
           attachSession: sessions?.attach,
         });
+  /**
+   * Model-call titling (VC-81): the one main-side hook both doors feed.
+   *
+   * The ladder itself is stated once in `@volli/shared`
+   * (`resolveAutoTitleModel`); this only supplies the three rungs it reads
+   * and the doors that run it. Absent with any of its three dependencies
+   * (the same rule as `sessions` above), which reads as pure heuristic
+   * titling: the shipped fallback.
+   */
+  const autoTitler =
+    sessionEngine !== null && sessionDb !== null && piRuntimeHost !== null
+      ? createAutoTitler({
+          readSession: async (sessionId) => {
+            const projection = await sessionEngine.getSession({ sessionId });
+            if (projection === null) return null;
+            return {
+              title: projection.session.title,
+              ticketId: projection.session.ticketId,
+              model: projection.modelSelection,
+            };
+          },
+          // Read per refinement, not captured: a Session outlives the Settings
+          // change that retunes it, and the next title should run under the
+          // policy configured now. One read serves all three rungs.
+          readModelDefaults: () => readModelAccessDefaults(sessionDb),
+          // What the Session is work ON. The CLI door's stock kickoff names no
+          // work at all, so without this a Ticket Session's title could only
+          // ever be the heuristic's "Work on VC-81".
+          readTicket: (ticketId) => getTicketBrief(sessionDb, ticketId) ?? null,
+          inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
+          completeUtility: (input) => piRuntimeHost.completeUtility(input),
+          retitle: async (sessionId, title) => {
+            const submitted = await sessionEngine.submit({
+              commandId: randomUUID(),
+              sessionId,
+              intent: { kind: "session.retitle", title },
+              provenance: {
+                source: { kind: "system", id: "auto-title", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+            });
+            if (submitted.receipt?.status !== "completed") {
+              throw new Error("Session retitle was not completed");
+            }
+            // Tell the windows. `session.retitle` reaches the ledger without
+            // the runtime publish, and no renderer moved a label on the way
+            // in (the CLI door has no window at all), so this is the only
+            // thing that makes the model's title appear before an unrelated
+            // refresh happens to re-read the projection.
+            broadcastSessionRetitled(sessionId, title);
+          },
+        })
+      : null;
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
   // database open recorded above, Node-ABI classification included). Left
@@ -1262,6 +1317,8 @@ app.whenReady().then(async () => {
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
+    // The renderer door of auto-titling (VC-81); absent with the runtime.
+    autoTitle: autoTitler === null ? undefined : (input) => void autoTitler.refine(input),
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
@@ -1918,6 +1975,12 @@ app.whenReady().then(async () => {
                   });
                 },
               }
+            : {}),
+          // The CLI door of auto-titling (VC-81): a kickoff-derived heuristic
+          // title gets one model refinement behind it. Absent with the
+          // runtime, which reads as pure heuristic titling.
+          ...(autoTitler !== null
+            ? { refineAutoTitle: (input) => void autoTitler.refine(input) }
             : {}),
           // The no-redirect rule (VC-13 decision 2): a start pushes a toast
           // notice; the toast's action is the only thing that ever opens the

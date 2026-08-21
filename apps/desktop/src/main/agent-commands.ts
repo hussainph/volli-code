@@ -83,6 +83,7 @@ import {
   terminalNativeReference,
   terminalSessionRecord,
 } from "./session-control";
+import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { PI_TOOLS } from "./session-runtime/pi-adapter";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type { Sessions } from "./session-runtime/sessions";
@@ -251,6 +252,15 @@ export interface AgentCommandServiceOptions {
    * caller's exit code.
    */
   submitSessionMessage?: (input: { sessionId: string; text: string }) => Promise<void>;
+  /**
+   * Fires one model-call title refinement (VC-81) behind a kickoff-derived
+   * heuristic title, on the owner's ladder — utility default, then the
+   * Session's own model, then the Role's default. Never fires for an
+   * explicit `--title` (that is already a person's choice), and never
+   * rejects: the heuristic is the fallback the titler keeps on failure.
+   * Absent means no model refinement this launch — heuristic only.
+   */
+  refineAutoTitle?: (input: AutoTitleRequest) => void;
   /**
    * Called after `session.start` opens a Session, with everything the
    * renderer's toast says and targets. A notice, not a navigation: the app
@@ -1682,6 +1692,20 @@ export function createAgentCommandService(
                   `[volli] kickoff for session ${shortSessionId(started.sessionId)} was not delivered: ${errorMessage(error)}`,
                 );
               });
+          }
+          // Only the heuristic door refines: a session started with an
+          // explicit --title is a person's naming and gets zero title calls.
+          //
+          // Gated on the same `ready` the kickoff delivery is gated on. A
+          // Session held for recovery has not sent its first user message and
+          // may never send this one — titling it from text nobody submitted
+          // would spend a model call on a conversation that did not happen.
+          if (typeof title !== "string" && started.state === "ready") {
+            options.refineAutoTitle?.({
+              sessionId: started.sessionId,
+              firstMessage: kickoff,
+              heuristicTitle: sessionTitle,
+            });
           }
           options.onMutation?.({
             ticketId: resolved.ticket.id,

@@ -54,6 +54,7 @@ import {
   type RuntimeSessionIdentity,
   type SessionRuntimeSpec,
   type TurnObservation,
+  type UtilityCompletion,
 } from "@volli/shared";
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
@@ -243,7 +244,58 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     inspectModelAccess: (input) =>
       inspectPiModelAccess({ models: host.models, credentials: host.credentials }, host.now, input),
     startSession: (spec) => attachSession(host, spec),
+    completeUtility: (input) => runUtilityCompletion(host, input),
   };
+}
+
+/**
+ * One utility completion on an explicit model, read back as plain text.
+ *
+ * The executor half of the port — the caller resolved and validated the
+ * model; this runs it and refuses rather than substitutes. A model this
+ * collection does not hold throws, a failed stop reason throws, and an
+ * answer with no text throws: the caller keeps its heuristic title and logs,
+ * which is the whole of the contract on this side.
+ */
+async function runUtilityCompletion(
+  host: PiRuntimeHost,
+  input: UtilityCompletion,
+): Promise<string> {
+  const model = host.models.getModel(input.model.providerId, input.model.modelId);
+  if (model === undefined) {
+    throw new Error(
+      `Model ${input.model.providerId}/${input.model.modelId} is not in this runtime's catalog.`,
+    );
+  }
+  const message = await host.models.completeSimple(
+    model,
+    { systemPrompt: input.systemPrompt, messages: [queuedUserMessage(input.user)] },
+    {
+      // The same translation Pi's own agent makes for a Session at "off"
+      // (agent.js: thinkingLevel === "off" → reasoning omitted): SimpleStreamOptions
+      // has no "off" value, and omitting the option IS the off-path, not a
+      // default-level request. Every other level passes through verbatim.
+      ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
+  );
+  if (hasFailedStopReason(message)) {
+    throw new Error(sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."));
+  }
+  // Agent message tokens only. `thinking` blocks are dropped here rather than
+  // filtered downstream, because a caller that runs a model at a reasoning
+  // level it did not want (titling does, on every model that cannot be turned
+  // off) must never see the thinking at all — a reasoning span is not an
+  // answer, and the shape of one varies per provider.
+  let text = "";
+  for (const block of message.content) {
+    if (block.type === "text") text += block.text;
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    throw new Error("The utility completion returned no text.");
+  }
+  return trimmed;
 }
 
 /** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */

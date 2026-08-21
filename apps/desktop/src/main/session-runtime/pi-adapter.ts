@@ -349,6 +349,8 @@ function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
 export interface PiRuntimeHost {
   readonly adapter: NativeHarnessAdapter;
   inspectModelAccess: AgentRuntime["inspectModelAccess"];
+  /** The utility-completion door (VC-81 auto-titling), passed through unchanged. */
+  completeUtility: AgentRuntime["completeUtility"];
 }
 
 /** Main-owned singular runtime host; the native adapter remains private migration scaffolding. */
@@ -371,6 +373,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
   return {
     adapter: piNativeAdapter(options, runtime, now),
     inspectModelAccess: (input) => runtime.inspectModelAccess(input),
+    completeUtility: (input) => runtime.completeUtility(input),
   };
 }
 

@@ -212,6 +212,29 @@ export interface BlobLinkDraftsInput {
 export interface SessionRenameInput {
   sessionId: string;
   title: string;
+  /**
+   * Present only on the automatic heuristic rename (VC-81): the first user
+   * message, from which main may derive a sharper title with one model call
+   * once this rename has stuck.
+   *
+   * A rider on the rename rather than a channel of its own, because it is the
+   * same surface and the same moment — `docs/BOUNDARIES.md` asks new work to
+   * migrate the raw channels it touches, not to add another beside them. It
+   * also removes the window a second round-trip opened, in which the title
+   * could change between the write and the request that names its baseline.
+   * A person's rename never carries it, which is what keeps title calls at
+   * zero for a Session someone named.
+   */
+  refineFrom?: string;
+}
+
+/**
+ * A retitle main performed on its own (VC-81 auto-titling), pushed so live
+ * surfaces can move their labels the same way a renderer rename does.
+ */
+export interface SessionRetitledEvent {
+  sessionId: string;
+  title: string;
 }
 
 /** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
@@ -1318,6 +1341,14 @@ export type VolliIpcEvent =
   // so every window can surface the automated de-escalation where the mover is
   // looking (a toast with a jump-to-ticket action) — never silently.
   | "volli:sessions-interrupted"
+  // A Session was retitled by main rather than by a person (VC-81's auto-title
+  // model call). Every other retitle originates in the renderer, which moves
+  // its own labels optimistically; this one has no such writer, and
+  // `session.retitle` goes straight to the ledger WITHOUT the runtime publish
+  // (see chat/rename.ts), so nothing on screen would learn the title changed
+  // until an unrelated refresh. The durable write is still the truth — this
+  // only tells the windows to catch up.
+  | "volli:session-retitled"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.

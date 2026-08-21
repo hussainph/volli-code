@@ -40,6 +40,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 // so a strip states only its width.
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
@@ -224,6 +225,13 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   dirty?: boolean;
   /** Treatments on the label itself: italic for a preview, struck for an exit. */
   labelClassName?: string;
+  /**
+   * Reveal the label word by word when it CHANGES (VC-81's landing-title
+   * motion). Opt-in: only chat Session tabs carry it — a file tab's label
+   * swaps on every save and a reveal there would read as the strip stuttering.
+   * Never animates on first mount, and never under reduced motion.
+   */
+  revealLabel?: boolean;
   /** Non-null while this tab is being renamed in place. */
   renaming?: TabRenaming | null;
   /** Not `onSelect`, which a div already owns as a DOM event. */
@@ -242,6 +250,7 @@ export function Tab({
   closable = true,
   dirty = false,
   labelClassName,
+  revealLabel = false,
   renaming = null,
   onActivate,
   onClose,
@@ -320,7 +329,9 @@ export function Tab({
         // A plain span, not a button: the tab div above is the `role="tab"`
         // that click, Enter and Space activate, so there is no nested
         // interactive control inside it.
-        <span className={cn("max-w-40 truncate", labelClassName)}>{label}</span>
+        <span className={cn("max-w-40 truncate", labelClassName)}>
+          {revealLabel ? <TitleReveal text={label} /> : label}
+        </span>
       )}
       {hint !== undefined && !renamingNow ? (
         // Dimmer than the tab's own muted ink so it stays subordinate on an

@@ -975,6 +975,20 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ sessionId: "s1", title: "   " }])).toBe(false);
     });
 
+    it("accepts the optional auto-title rider", () => {
+      expect(guard([{ sessionId: "s1", title: "New title", refineFrom: "Fix the parser" }])).toBe(
+        true,
+      );
+    });
+
+    it("rejects a non-string rider", () => {
+      expect(guard([{ sessionId: "s1", title: "New title", refineFrom: 1 }])).toBe(false);
+    });
+
+    it("rejects a blank rider — there is no message to title from", () => {
+      expect(guard([{ sessionId: "s1", title: "New title", refineFrom: "   " }])).toBe(false);
+    });
+
     it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
     });

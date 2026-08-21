@@ -1,9 +1,11 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { useState, type ReactNode } from "react";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
 /** One selectable category in a settings surface: its rail row plus the pane it renders. */
@@ -174,13 +176,48 @@ export function InheritNote({ children }: { children: ReactNode }) {
 }
 
 /**
+ * A row label's hover helper. A real `<button>` because that is what it is:
+ * something focusable that says a sentence. A span with `tabIndex` and an
+ * `aria-label` takes the tab stop but has no role to hang a name on, so a
+ * screen reader reaches it and announces nothing.
+ */
+function SettingsRowHelp({ help }: { help: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={help}
+          // Nothing to activate: the tooltip is the whole content, shown on
+          // hover and on focus. The button exists to be reachable and named.
+          className="inline-flex cursor-help text-muted-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring/45"
+        >
+          <InfoIcon aria-hidden className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-64">
+        {help}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * A single setting: label + optional description on the left, its control on
  * the right. Rows stacked inside a {@link SettingsSection} are separated by a
  * hairline divider (suppressed on the first row). `align="start"` top-aligns
  * the control for multi-line controls; the default centers it.
+ *
+ * `help` is the one sanctioned exception to the copy rule (CLAUDE.md: labels
+ * are nouns, the control is the explanation): a hover helper for a slot whose
+ * PURPOSE cannot be read off its own name, asked for on VC-81 for the Utility
+ * model. It renders here rather than at each call site so every helper in
+ * Settings is the same glyph, the same placement and the same button — a real
+ * focusable control with a name, not a bare span wearing an `aria-label`.
  */
 export function SettingsRow({
   label,
+  help,
   description,
   htmlFor,
   align = "center",
@@ -188,6 +225,8 @@ export function SettingsRow({
   children,
 }: {
   label: string;
+  /** One thought, one hover: what this slot is FOR. Omit unless the name cannot say it. */
+  help?: string;
   description?: ReactNode;
   htmlFor?: string;
   align?: "center" | "start";
@@ -210,7 +249,14 @@ export function SettingsRow({
     >
       <div className="min-w-0 flex-1">
         <label className="block text-sm font-medium" htmlFor={htmlFor}>
-          {label}
+          {help === undefined ? (
+            label
+          ) : (
+            <span className="inline-flex items-center gap-1.5">
+              {label}
+              <SettingsRowHelp help={help} />
+            </span>
+          )}
         </label>
         {description ? (
           <p className="mt-1 text-ui leading-5 text-muted-foreground">{description}</p>

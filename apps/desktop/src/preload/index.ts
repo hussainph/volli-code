@@ -112,6 +112,7 @@ import type {
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
+  SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
@@ -411,7 +412,15 @@ const api = {
     /** A ticket's Session listing rows, newest first — backs the right-rail linked-sessions list. */
     listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
       invoke("volli:session-list-for-ticket", input),
-    /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
+    /**
+     * Renames a session (project- or ticket-scoped); the title is trimmed and
+     * must be non-empty in main.
+     *
+     * `refineFrom` rides along on the automatic heuristic rename only (VC-81):
+     * main may then derive a sharper title with one model call. The result
+     * still answers the rename — the refinement is best effort behind it, and
+     * its failures keep the title this call just wrote.
+     */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
     /**
@@ -432,6 +441,18 @@ const api = {
       ipcRenderer.on("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to retitles main performed itself (VC-81 auto-titling).
+     * Renderer-originated renames move their own labels and never arrive
+     * here; this carries the ones nothing on screen would otherwise learn.
+     */
+    onRetitled: (callback: (event: SessionRetitledEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRetitledEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-retitled" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-retitled" satisfies VolliIpcEvent, listener);
     },
     /**
      * Subscribes to canonical harness events (harness-events): a hook the

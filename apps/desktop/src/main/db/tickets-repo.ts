@@ -8,8 +8,10 @@
  */
 import type Database from "better-sqlite3";
 import {
+  displayTicketId,
   isTicketStatus,
   type ArchivedTicket,
+  type AutoTitleTicket,
   type Ticket,
   type HarnessId,
   type TicketPriority,
@@ -228,6 +230,40 @@ export function getTicket(db: Database.Database, ticketId: string): Ticket | und
 /** The raw row (no labels attached) — used internally to read current values before a mutation. */
 export function getTicketRow(db: Database.Database, ticketId: string): TicketRow | undefined {
   return prepared<[string], TicketRow>(db, "SELECT * FROM tickets WHERE id = ?").get(ticketId);
+}
+
+/**
+ * What a Ticket Session is ABOUT, in one read: the display id, the title and
+ * the body.
+ *
+ * Exists for auto-titling (VC-81), whose problem is that a Session's first
+ * message is often "Begin work on this ticket" — a sentence that names no
+ * work. The ticket is where the work is described, and a title derived
+ * without it would be the same words for every Session on the board.
+ *
+ * One query rather than `getTicket` + a project lookup, because the display id
+ * needs the project's prefix and the caller needs neither labels nor status.
+ */
+export function getTicketBrief(
+  db: Database.Database,
+  ticketId: string,
+): AutoTitleTicket | undefined {
+  const row = prepared<
+    [string],
+    { ticketPrefix: string; ticketNumber: number; title: string; body: string }
+  >(
+    db,
+    `SELECT p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber,
+            t.title AS title, t.body AS body
+       FROM tickets t JOIN projects p ON p.id = t.project_id WHERE t.id = ?`,
+  ).get(ticketId);
+  return row === undefined
+    ? undefined
+    : {
+        displayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
+        title: row.title,
+        body: row.body,
+      };
 }
 
 /**

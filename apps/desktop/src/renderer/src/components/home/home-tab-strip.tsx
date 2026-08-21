@@ -522,6 +522,9 @@ function ChatTab({
           title={status === "waiting" ? `${title}\nWaiting for you` : title}
           onActivate={onSelect}
           status={status}
+          // A landing auto-title reveals here word by word (VC-81); terminal
+          // and board tabs stay static.
+          revealLabel
           leading={
             // Bold, not filled: the dot beside it is already a solid object,
             // and two in a 12px row is one too many. Same treatment as the

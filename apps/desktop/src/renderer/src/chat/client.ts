@@ -1024,6 +1024,12 @@ export class ChatSessionClient {
    * Retitles this Session from a just-delivered message, if nothing has named
    * it yet. A non-null title was explicitly set by a person, including one
    * that happens to read `Chat 1`, so automatic naming never replaces it.
+   *
+   * The rename carries the first user message with it (VC-81), which asks
+   * main to derive a sharper title behind this write with one model call.
+   * Main owns the model ladder, the call, and the guard that a person's
+   * rename during the call wins; an unavailable model or a refusal simply
+   * leaves the heuristic name that is already on screen.
    */
   #autoTitle(body: string, attachments: readonly BlobLinkView[]): void {
     const title = this.#slice()?.projection?.session.title ?? null;
@@ -1039,7 +1045,11 @@ export class ChatSessionClient {
     const subject = autoTitleFromMessage(body) ?? attachments[0]?.label;
     /* v8 ignore next -- submit refuses a message with neither text nor attachments */
     if (subject === undefined) return;
-    void renameChatSession(this.sessionId, subject);
+    // The model reads the same first user message the heuristic read: the body
+    // when there are words, the attachment's label when there are not.
+    /* v8 ignore next -- submit refuses a message with no text AND no attachments */
+    const firstMessage = body.trim().length > 0 ? body : (attachments[0]?.label ?? "");
+    void renameChatSession(this.sessionId, subject, firstMessage);
   }
 
   #writes(): ChatSessionWrites {
