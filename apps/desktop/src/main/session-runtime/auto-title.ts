@@ -22,14 +22,22 @@
  * and read as if the heuristic were the only fallback; the ticket comment is
  * the current word.
  *
- * A rung that resolves but cannot run reasoning "off" is refused rather than
- * clamped or substituted, and a Session nobody named a title for is never
- * answered with anything but the heuristic. Failures log and keep the
- * heuristic; this is not a mutation a person requested, so nothing toasts.
+ * Titling runs as cheaply as the chosen model allows: `off` where the model
+ * offers it, otherwise the least reasoning it will do
+ * ({@link cheapestReasoningLevel}), with the thinking discarded on the way
+ * back out. Refusing every model that cannot be turned off left the feature
+ * inert on a large slice of real profiles — most of the OpenAI reasoning tier
+ * cannot. This is a downward choice from validated catalog data, not pi's
+ * clampThinkingLevel, which climbs.
+ *
+ * A Session nobody named a title for is never answered with anything but the
+ * heuristic. Failures log and keep the heuristic; this is not a mutation a
+ * person requested, so nothing toasts.
  */
 import {
   AUTO_TITLE_SYSTEM_PROMPT,
   autoTitlePrompt,
+  cheapestReasoningLevel,
   errorMessage,
   resolveAutoTitleModel,
   resolveDefaultModel,
@@ -159,12 +167,14 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       );
       return;
     }
-    // The call always runs thinking off. Refused rather than clamped when the
-    // catalog cannot do "off": pi-ai would silently climb to the next level.
-    if (!available.reasoningLevels.includes("off")) {
+    // As cheap as this model goes. Only a model offering no level at all is
+    // refused, which the catalog does not currently produce but the type
+    // allows.
+    const reasoningLevel = cheapestReasoningLevel(available.reasoningLevels);
+    if (reasoningLevel === null) {
       logSkip(
         request.sessionId,
-        `model ${chosen.providerId}/${chosen.modelId} cannot run reasoning off`,
+        `model ${chosen.providerId}/${chosen.modelId} offers no reasoning level`,
       );
       return;
     }
@@ -182,7 +192,7 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
     let raw: string;
     try {
       raw = await options.completeUtility({
-        model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel: "off" },
+        model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel },
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
         // Capped and delimited: a title is six words, and the opening decides
         // them. A pasted file behind the question is billed input that buys

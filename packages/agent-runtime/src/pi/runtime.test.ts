@@ -5466,4 +5466,23 @@ describe("completeUtility", () => {
       }),
     ).rejects.toThrow("returned no text");
   });
+
+  it("returns agent message tokens only, never the reasoning beside them", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({
+        text: "Fix the login flow",
+        thinking: "The user wants a title. Six words maximum.",
+      }),
+    });
+    // Titling runs at a reasoning level it did not ask for on every model that
+    // cannot be turned off, so the thinking must not reach the caller at all.
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "low" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).resolves.toBe("Fix the login flow");
+  });
 });

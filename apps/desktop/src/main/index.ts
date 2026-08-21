@@ -113,6 +113,7 @@ import {
   broadcastHarnessEvent,
   broadcastSessionActivity,
   broadcastSessionHarness,
+  broadcastSessionRetitled,
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
@@ -1066,6 +1067,12 @@ app.whenReady().then(async () => {
             if (submitted.receipt?.status !== "completed") {
               throw new Error("Session retitle was not completed");
             }
+            // Tell the windows. `session.retitle` reaches the ledger without
+            // the runtime publish, and no renderer moved a label on the way
+            // in (the CLI door has no window at all), so this is the only
+            // thing that makes the model's title appear before an unrelated
+            // refresh happens to re-read the projection.
+            broadcastSessionRetitled(sessionId, title);
           },
         })
       : null;

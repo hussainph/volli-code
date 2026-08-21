@@ -11,7 +11,7 @@ import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
-import { isUntitledChatSession, renameChatSession } from "./rename";
+import { applyRemoteChatTitle, isUntitledChatSession, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -221,6 +221,43 @@ describe("renameChatSession rollback", () => {
     await renameChatSession("chat-1", "Migration plan");
 
     expect(useTicketSessionRecordsStore.getState().byTicket).toEqual({});
+  });
+});
+
+describe("applyRemoteChatTitle", () => {
+  it("moves every label main retitled behind this window's back", () => {
+    // The auto-title path (VC-81) writes durably in main and never reaches a
+    // live subscriber, because session.retitle skips the runtime publish. This
+    // is what makes the model's title appear at all.
+    applyRemoteChatTitle("chat-1", "One short sentence request");
+
+    expect(useChatSessionsStore.getState().sessions["chat-1"]?.projection?.session.title).toBe(
+      "One short sentence request",
+    );
+    expect(cachedTitle("chat-1")).toBe("One short sentence request");
+  });
+
+  it("persists nothing — the durable write already happened before the push", () => {
+    applyRemoteChatTitle("chat-1", "One short sentence request");
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves every other row alone", () => {
+    applyRemoteChatTitle("chat-1", "One short sentence request");
+
+    expect(useTicketSessionRecordsStore.getState().byTicket["t1"]?.[0]).toEqual(terminalRow);
+    expect(cachedTitle("chat-2")).toBe("Plan");
+    expect(cachedTitle("chat-3", "t2")).toBe("Plan");
+  });
+
+  it("ignores a blank title rather than blanking a label", () => {
+    applyRemoteChatTitle("chat-1", "   ");
+    expect(cachedTitle("chat-1")).toBe("Plan");
+  });
+
+  it("trims, so a label never carries the model's stray whitespace", () => {
+    applyRemoteChatTitle("chat-1", "  Parser fix  ");
+    expect(cachedTitle("chat-1")).toBe("Parser fix");
   });
 });
 

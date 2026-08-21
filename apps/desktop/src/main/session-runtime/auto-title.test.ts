@@ -139,6 +139,8 @@ describe("createAutoTitler().refine", () => {
       expect.objectContaining({
         model: { providerId: UTILITY.providerId, modelId: UTILITY.modelId, reasoningLevel: "off" },
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
+        // `off` here because the harness catalog offers it; the cheapest-level
+        // fallback has its own case below.
         user: autoTitlePrompt("The login button is broken", TICKET),
       }),
     );
@@ -297,12 +299,32 @@ describe("createAutoTitler().refine", () => {
     expect(h.retitle).not.toHaveBeenCalled();
   });
 
-  it("keeps the heuristic when the chosen model cannot run reasoning off", async () => {
+  it("titles anyway on a model that cannot be turned off, at its cheapest level", async () => {
     const h = harness({
       inspectModelAccess: async () => ({
         observedAt: 0,
         providers: [],
         models: [catalogEntry(UTILITY, { off: false })],
+      }),
+    });
+    await h.refine({});
+    // Most of the OpenAI reasoning tier, and claude-fable-5, map off to null.
+    // Refusing them left auto-titling inert on those profiles; the reasoning
+    // is paid for but thrown away, so cheapest-first is what bounds it.
+    expect(h.completeUtility).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({ reasoningLevel: "low" }),
+      }),
+    );
+    expect(h.retitle).toHaveBeenCalled();
+  });
+
+  it("keeps the heuristic when the chosen model offers no reasoning level at all", async () => {
+    const h = harness({
+      inspectModelAccess: async () => ({
+        observedAt: 0,
+        providers: [],
+        models: [{ ...catalogEntry(UTILITY), reasoningLevels: [] }],
       }),
     });
     await h.refine({});

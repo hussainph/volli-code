@@ -112,6 +112,24 @@ function titlesOf(sessionId: string): ChatTitleSites {
   return { slice, rows };
 }
 
+/**
+ * Applies a retitle main performed on its own (VC-81 auto-titling) to every
+ * label this process is holding.
+ *
+ * No optimistic write and no rollback, because this is not this window's
+ * mutation: the durable write already succeeded before the push was sent, so
+ * there is nothing to be optimistic about and nothing to put back. It exists
+ * because the write happened somewhere with no renderer behind it — the CLI
+ * door has no window at all — and `session.retitle` bypasses the runtime
+ * publish (see this file's header), so no live subscriber would otherwise
+ * learn the title changed until an unrelated refresh.
+ */
+export function applyRemoteChatTitle(sessionId: string, title: string): void {
+  const trimmed = title.trim();
+  if (trimmed.length === 0) return;
+  writeTitle(sessionId, trimmed, titlesOf(sessionId));
+}
+
 /** Writes `title` to every site {@link titlesOf} found. */
 function writeTitle(sessionId: string, title: string, sites: ChatTitleSites): void {
   useChatSessionsStore.getState().retitle(sessionId, title);

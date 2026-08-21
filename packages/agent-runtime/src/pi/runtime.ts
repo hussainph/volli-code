@@ -282,6 +282,11 @@ async function runUtilityCompletion(
   if (hasFailedStopReason(message)) {
     throw new Error(sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."));
   }
+  // Agent message tokens only. `thinking` blocks are dropped here rather than
+  // filtered downstream, because a caller that runs a model at a reasoning
+  // level it did not want (titling does, on every model that cannot be turned
+  // off) must never see the thinking at all — a reasoning span is not an
+  // answer, and the shape of one varies per provider.
   let text = "";
   for (const block of message.content) {
     if (block.type === "text") text += block.text;

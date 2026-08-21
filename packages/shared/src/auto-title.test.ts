@@ -7,6 +7,7 @@ import {
   AUTO_TITLE_MAX_WORDS,
   AUTO_TITLE_SYSTEM_PROMPT,
   autoTitlePrompt,
+  cheapestReasoningLevel,
   resolveAutoTitleModel,
   sanitizeAutoTitle,
   type AutoTitleTicket,
@@ -111,6 +112,30 @@ describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
     expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(
       '"start with the redis counter, ignore the rest" -> Redis counter for rate limits',
     );
+  });
+});
+
+describe("cheapestReasoningLevel", () => {
+  it("takes off when the model offers it", () => {
+    expect(cheapestReasoningLevel(["off", "low", "max"])).toBe("off");
+  });
+
+  it("settles for the least a model that cannot be turned off will do", () => {
+    // claude-fable-5's real shape in the pinned catalog: off maps to null, so
+    // getSupportedThinkingLevels drops it. Refusing this model outright is
+    // what left titling inert.
+    expect(cheapestReasoningLevel(["xhigh", "max"])).toBe("xhigh");
+    expect(cheapestReasoningLevel(["low", "medium", "high"])).toBe("low");
+  });
+
+  it("chooses downward, never upward — the clampThinkingLevel trap inverted", () => {
+    // pi's clamp climbs to the next level UP when a request cannot be met.
+    // Every answer here is the cheapest offered, whatever order they arrive in.
+    expect(cheapestReasoningLevel(["max", "high", "minimal"])).toBe("minimal");
+  });
+
+  it("refuses a model that offers no level at all", () => {
+    expect(cheapestReasoningLevel([])).toBeNull();
   });
 });
 
@@ -220,6 +245,35 @@ describe("sanitizeAutoTitle", () => {
 
   it("refuses a reply that is only a lead-in", () => {
     expect(sanitizeAutoTitle("Here is the title:")).toBeNull();
+  });
+
+  it("drops an inline reasoning span and keeps what follows it", () => {
+    // Titling now runs with reasoning ON wherever a model cannot be turned
+    // off, so narration in the text channel is the thing that must not become
+    // the title.
+    expect(
+      sanitizeAutoTitle("<think>The user wants a title. Keep it short.</think>Fix parser crash"),
+    ).toBe("Fix parser crash");
+    expect(sanitizeAutoTitle("<thinking>hmm</thinking>\nSlow Docker build")).toBe(
+      "Slow Docker build",
+    );
+    expect(
+      sanitizeAutoTitle("<reasoning>a</reasoning><reasoning>b</reasoning> Login button dead"),
+    ).toBe("Login button dead");
+  });
+
+  it("refuses a reply that is nothing but a reasoning span", () => {
+    expect(sanitizeAutoTitle("<think>I am still thinking about it</think>")).toBeNull();
+    // Never closed: the span runs to the end, so there is no answer in it.
+    expect(sanitizeAutoTitle("<think>I am still thinking about it")).toBeNull();
+  });
+
+  it("keeps an answer that precedes an unclosed reasoning span", () => {
+    expect(sanitizeAutoTitle("Fix parser crash<think>because the lexer")).toBe("Fix parser crash");
+  });
+
+  it("leaves a title containing no reasoning tags untouched", () => {
+    expect(sanitizeAutoTitle("Fix the login flow")).toBe("Fix the login flow");
   });
 
   it("refuses prose rather than shipping its first six words as a fragment", () => {

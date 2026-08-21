@@ -209,6 +209,20 @@ function sidebarRow(page, text) {
   return page.locator("[data-session-band] button", { hasText: text });
 }
 
+/**
+ * The one row in the Active band — whatever it is currently called.
+ *
+ * Deliberately NOT located by its first message. A chat names itself from that
+ * message and then, seconds later, renames itself again to the model's title
+ * (VC-81): here "Say hi before this ticket is deleted." becomes "Farewell
+ * before ticket deletion". A locator built from the prompt matches only the
+ * window between those two, which is a race this smoke used to win by
+ * accident — back when the model's retitle never reached the renderer at all.
+ */
+function chatRow(page) {
+  return page.locator("[data-session-band='active'] button");
+}
+
 async function main() {
   await ensurePiAuthInto(fakeHome);
 
@@ -291,7 +305,7 @@ async function main() {
       4,
       "the ticket-independent chat's sidebar row opens the SAME conversation, selected — its Session survived the delete",
       async () => {
-        const row = sidebarRow(page, ORPHAN_PROMPT);
+        const row = chatRow(page);
         await waitUntil(
           "the orphaned chat's sidebar row to appear",
           async () => (await row.count()) >= 1,

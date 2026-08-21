@@ -17,8 +17,35 @@
  * would drift the way the two `DEFAULT_KICKOFF_MESSAGE` copies are documented
  * never to.
  */
-import type { ModelSelection } from "./agent-runtime";
+import { REASONING_LEVELS, type ModelSelection, type ReasoningLevel } from "./agent-runtime";
 import { truncateSessionTitle } from "./session-title";
+
+/**
+ * The cheapest reasoning level a model actually offers, or `null` for a model
+ * that offers none.
+ *
+ * Titling wants `off` and settles for the least the model will do, because
+ * plenty of models cannot be turned off at all: in the pinned catalog,
+ * 16 of 38 OpenAI models and `claude-fable-5` map `off` to null. Refusing
+ * those outright left auto-titling inert on a large slice of real profiles,
+ * with nothing but a log line to say why.
+ *
+ * This is NOT pi's `clampThinkingLevel`, which is the thing VC-67 warned
+ * about: that one silently CLIMBS to the next level up when the request
+ * cannot be met, so a person who asked for cheap gets billed for expensive.
+ * This walks {@link REASONING_LEVELS} from the cheap end and picks what the
+ * catalog says is available — an explicit choice, downward, from validated
+ * data.
+ *
+ * It is not free: reasoning tokens are billed even though
+ * {@link sanitizeAutoTitle} throws the thinking away. Cheapest-first is what
+ * keeps that bounded, alongside a prompt that asks for six words.
+ */
+export function cheapestReasoningLevel(
+  supported: readonly ReasoningLevel[],
+): ReasoningLevel | null {
+  return REASONING_LEVELS.find((level) => supported.includes(level)) ?? null;
+}
 
 /**
  * The three rungs a titling call resolves through, in order.
@@ -167,6 +194,40 @@ export const AUTO_TITLE_SYSTEM_PROMPT = [
   'ticket VC-52 "Rate limit the public search endpoint" + "start with the redis counter, ignore the rest" -> Redis counter for rate limits',
 ].join("\n");
 
+/**
+ * The close of a reasoning span a model wrote into its TEXT channel.
+ *
+ * Providers that model thinking properly return it as a separate `thinking`
+ * block, which never reaches this function. Some models instead narrate
+ * inside the text itself and fence it with tags; since titling now runs with
+ * reasoning ON wherever a model cannot be turned off, that narration is
+ * exactly what must not become the title.
+ */
+const REASONING_CLOSE = /<\/(?:think|thinking|reasoning|scratchpad)>/gi;
+
+/** The open of the same span, for a model that never closed it. */
+const REASONING_OPEN = /<(?:think|thinking|reasoning|scratchpad)>/i;
+
+/**
+ * The answer with any inline reasoning span removed — the text half of "only
+ * take agent message tokens".
+ *
+ * What follows the LAST close tag is the answer; a span left open runs to the
+ * end of the reply, so what precedes it is the answer. Either way, an empty
+ * result means the model returned thinking and no title, which is a refusal
+ * rather than a title made of thinking.
+ */
+function withoutReasoning(raw: string): string {
+  let lastClose = -1;
+  for (const match of raw.matchAll(REASONING_CLOSE)) lastClose = match.index + match[0].length;
+  if (lastClose !== -1) {
+    const after = raw.slice(lastClose);
+    return after.trim().length > 0 ? after : "";
+  }
+  const open = raw.search(REASONING_OPEN);
+  return open === -1 ? raw : raw.slice(0, open);
+}
+
 /** One layer of surrounding quotes, in the three shapes a model reaches for. */
 function isQuote(char: string | undefined): boolean {
   return char === '"' || char === "'" || char === "`";
@@ -234,9 +295,13 @@ function withoutLeadIn(words: readonly string[]): readonly string[] {
  * reads as a whole thought.
  */
 export function sanitizeAutoTitle(raw: string): string | null {
-  // `split` always returns at least one element, so the first line exists
-  // even for an empty reply; `noUncheckedIndexedAccess` is off.
-  const firstLine = raw.split(/\r?\n/, 1)[0];
+  // The first line with anything on it, not simply the first: a stripped
+  // reasoning span leaves the answer on the line after the blank one it left
+  // behind, and `autoTitleFromMessage` skips blank lines for the same reason.
+  const firstLine =
+    withoutReasoning(raw)
+      .split(/\r?\n/)
+      .find((line) => line.trim().length > 0) ?? "";
   let title = firstLine.replace(/\s+/g, " ").trim();
   while (title.length >= 2 && isQuote(title[0]) && title[title.length - 1] === title[0]) {
     title = title.slice(1, -1).trim();
