@@ -12,7 +12,7 @@
  * here.
  */
 import { constants } from "node:fs";
-import { access, readdir, realpath } from "node:fs/promises";
+import { access, readdir, realpath, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -34,8 +34,15 @@ export interface DoctorEnvironment {
   realPathOf(path: string): Promise<string | null>;
 }
 
+/**
+ * Whether a path is executable the way a shell judges it: a REGULAR FILE
+ * with execute permission. `access(X_OK)` alone passes for a directory, and
+ * a directory named after a tool on some PATH entry must not be reported as
+ * the tool. `stat` follows symlinks, so a link to an executable still counts.
+ */
 export async function executableAt(path: string): Promise<boolean> {
   try {
+    if (!(await stat(path)).isFile()) return false;
     await access(path, constants.X_OK);
     return true;
   } catch {

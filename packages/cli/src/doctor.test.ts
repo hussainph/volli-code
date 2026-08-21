@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
@@ -255,6 +255,16 @@ describe("executableAt", () => {
     expect(await executableAt(runnable)).toBe(true);
     expect(await executableAt(plain)).toBe(false);
     expect(await executableAt(join(dir, "absent"))).toBe(false);
+  });
+
+  // access(X_OK) alone passes for a directory; a shell would not run one, so
+  // a directory named after a tool must not be reported as the tool.
+  it("refuses a directory, however executable its mode bits", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "volli-doctor-"));
+    const toolShapedDir = join(dir, "git");
+    await mkdir(toolShapedDir, { recursive: true });
+
+    expect(await executableAt(toolShapedDir)).toBe(false);
   });
 });
 

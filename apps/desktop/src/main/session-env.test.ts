@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildSessionEnvReport, executableAt } from "./session-env";
@@ -112,5 +116,22 @@ describe("buildSessionEnvReport", () => {
 describe("executableAt", () => {
   it("agrees with the filesystem about what a shell could run", async () => {
     expect(await executableAt("/definitely/not/a/tool")).toBe(false);
+  });
+
+  // access(X_OK) alone passes for a directory; a shell requires a regular
+  // file, so a directory named after a tool must not be reported as one.
+  it("refuses a directory and accepts an executable regular file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "volli-session-env-"));
+    try {
+      const toolShapedDir = join(dir, "git");
+      await mkdir(toolShapedDir, { recursive: true });
+      const runnable = join(dir, "gh");
+      await writeFile(runnable, "#!/bin/sh\n", { mode: 0o755 });
+
+      expect(await executableAt(toolShapedDir)).toBe(false);
+      expect(await executableAt(runnable)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

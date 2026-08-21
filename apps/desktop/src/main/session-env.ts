@@ -18,7 +18,7 @@
  * filesystem that does not exist.
  */
 import { constants, existsSync } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 
 import { resolveSessionEnvTools, workspaceDependenciesStatus } from "@volli/shared";
 import type {
@@ -27,9 +27,16 @@ import type {
   SessionEnvReport,
 } from "@volli/shared";
 
-/** Whether a path is executable — the same question a shell asks of PATH. */
+/**
+ * Whether a path is executable — the same question a shell asks of PATH,
+ * which requires a regular file: `access(X_OK)` alone passes for a
+ * directory, and a directory named `git` on a PATH entry is not a tool a
+ * session can run. `stat` follows symlinks, so a link to an executable file
+ * still counts, exactly as it does for a shell.
+ */
 export async function executableAt(path: string): Promise<boolean> {
   try {
+    if (!(await stat(path)).isFile()) return false;
     await access(path, constants.X_OK);
     return true;
   } catch {
