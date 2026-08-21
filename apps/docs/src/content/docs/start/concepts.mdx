@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: The terms Volli uses for projects, tickets, Sessions, worktrees, and local history.
+description: The terms Volli uses for Home, projects, tickets, chats, worktrees, and local history.
 sidebar:
   label: Concepts
 ---
@@ -13,6 +13,10 @@ These terms have the same meaning across the app and its documentation.
 
 **Project.** A tracked codebase folder. Removing it from Volli does not remove
 the folder from disk.
+
+**Home.** The project's tabbed workspace, and where a project opens. Its first
+tab is the Board and cannot be closed; project chats and Project Files open as
+tabs beside it. There is no separate Sessions page — chats live here.
 
 **Ticket.** A board card that holds a title, status, and Ticket Body. A ticket
 can provide the context for a Ticket Session and its worktree.
@@ -31,20 +35,30 @@ Files views.
 
 **Session.** A durable identity and locally ordered history for an agentic
 conversation. It exists before a runtime attaches and remains openable after
-its attachment, turn, or run ends.
+its attachment, turn, or run ends. A chat and a terminal are both Sessions.
 
-**Ticket Session.** A structured Pi-backed Session with one Ticket's context
-and worktree. Its runtime receives a generated Runtime Brief from the ticket.
+**Chat.** The structured Session, and what **Chat** starts. It runs on the
+Pi-backed Agent Runtime using the model you chose in Model Access, and Volli
+renders its turns, tool steps, and questions in the product. This is the
+default way work happens.
 
-**Project Session.** A structured Pi-backed Session for the project's main
-checkout. It has no Ticket context.
+**Ticket chat.** A chat scoped to one ticket. It carries that ticket's Body and
+resolved context, and works in the ticket's worktree. Its runtime receives a
+generated Runtime Brief from the ticket.
+
+**Project chat.** A chat scoped to the project's main checkout, started from
+Home. It has no ticket context, and it can create and edit tickets — which is
+what makes it the right place to start when the work is not yet shaped.
 
 **Model Access.** The accounts, subscriptions, credentials, and models that
 Volli can truthfully use. You select a default model here before opening a
 structured Session. Credentials do not enter Session history.
 
 **Terminal companion.** A manual terminal or external TUI harness you open for
-work in a project or worktree. It is separate from structured Session execution.
+work in a project or worktree — Claude Code, Codex, OpenCode, or your own. You
+ask for it explicitly from the caret beside **Chat**. It is separate from
+structured execution, and Volli never opens one as a fallback when a chat
+fails.
 
 ## Git work
 

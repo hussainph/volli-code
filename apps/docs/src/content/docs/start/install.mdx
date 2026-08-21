@@ -1,28 +1,169 @@
 ---
 title: Install Volli Code
-description: Download the signed Apple silicon build for macOS or run Volli Code from source, then choose a default model for Sessions.
+description: Install the Volli Code alpha on an Apple silicon Mac, choose a model, and start your first chat.
 sidebar:
   label: Install
 ---
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-Volli Code ships as a signed, notarized macOS app for Apple silicon. You can
-also run the development build from source.
+Volli Code is a local-first macOS workspace for code projects. This page is the
+install contract for the alpha: what runs, on what, and what to expect.
 
-## Download the app
+<Aside type="caution" title="This is an alpha">
+  Volli Code is in early alpha. Builds are published as prereleases, features
+  move between them, and behavior you depend on can change. Use it on work you
+  can afford to have interrupted, and keep your own backups and branches.
+</Aside>
 
-Open [volli.app/download](https://volli.app/download/) and download the latest
-DMG. Stable releases appear when available; Canary builds contain newer,
-less-tested changes. Open the DMG and move Volli Code to Applications.
+## What you need
 
-Packaged builds check GitHub Releases for updates. Volli downloads an available
-update in the background and installs it when you quit the app.
+| | |
+| --- | --- |
+| **Mac** | Apple silicon (M1 or later). There is no Intel or universal build yet. |
+| **macOS** | A macOS version that runs current Electron builds. If the app refuses to open on your version, [tell us](https://github.com/hussainph/volli-code/issues). |
+| **Git** | A local [git](https://git-scm.com) install. Volli works on git repositories on disk. |
+| **A model** | An account with a model provider you configure in Model Access, after first launch. |
+
+Volli itself needs no account. You sign in to a *model provider*, not to Volli.
+
+## Download and open it
+
+<Steps>
+
+1. **Get the build.**
+
+   Open [volli.app/download](https://volli.app/download/) and download the
+   `.dmg`. There is one build — the current alpha. Older canary builds stay
+   available on [GitHub Releases](https://github.com/hussainph/volli-code/releases)
+   if you need to go back to one.
+
+2. **Move it to Applications.**
+
+   Open the `.dmg` and drag **Volli Code** to Applications, then eject the
+   disk image.
+
+3. **Open it.**
+
+   Builds are signed with a Developer ID and notarized by Apple, so Gatekeeper
+   opens them normally — you should not need to right-click → Open, and you
+   should not be told the app is damaged or from an unidentified developer.
+
+   <Aside type="tip">
+     If macOS *does* block the app, that usually means the download was
+     corrupted or altered in transit. Delete it, download again, and if it
+     happens twice [open an issue](https://github.com/hussainph/volli-code/issues)
+     rather than working around the warning.
+   </Aside>
+
+</Steps>
+
+## Updates
+
+The app checks GitHub Releases for newer builds, downloads one in the
+background, and installs it when you quit. During the alpha this means you move
+forward roughly as fast as builds ship.
+
+To pin yourself to a specific build instead, download that release's `.dmg`
+directly from [GitHub Releases](https://github.com/hussainph/volli-code/releases)
+and replace the app in Applications.
+
+## First run
+
+<Steps>
+
+1. **Add a project.**
+
+   Select **+** in the project rail and pick a git repository. That folder
+   becomes the project's main checkout. Volli derives a ticket prefix from the
+   folder name, so a project called `harbor` gets tickets like `HB-1`.
+
+2. **Choose a model.**
+
+   Open **Settings → Model Access** and pick a default model. Sign in to the
+   provider you want to use. Volli does not pick a provider for you, does not
+   fall back to a different model silently, and does not put provider
+   credentials in the renderer or in chat history.
+
+3. **Start a chat.**
+
+   Press **Chat**. On **Home**, that starts a project chat working from your
+   main checkout. Inside a ticket, it starts a ticket chat carrying that
+   ticket's body and scoped context.
+
+</Steps>
+
+Continue with the [Quickstart](/start/quickstart/) for the full path from an
+empty board to a reviewed change.
+
+## Chats and terminals are different things
+
+A **chat** is Volli's structured session. It runs on the Pi-backed agent
+runtime with the model you chose in Model Access, and Volli renders its turns,
+tool steps, and questions as product surfaces.
+
+A **terminal** is a manual companion. It opens a shell — in the ticket's
+worktree when a ticket has one — where you can drive Claude Code, Codex,
+OpenCode, or any TUI yourself. It sits under the caret beside **Chat**, and you
+have to ask for it. Volli never falls back to a terminal when a chat fails.
+
+## The `volli` CLI
+
+Volli installs a local `volli` command in the background. Terminals that Volli
+opens already have it on `PATH`. Open **Settings → CLI** to check the
+installation or run Doctor.
+
+From a terminal Volli opened, this reports what that terminal is attached to:
+
+```sh
+volli identify
+```
+
+See the [CLI reference](/reference/cli/) for the full command set.
+
+## Where your data lives
+
+Volli keeps its data on your Mac:
+
+- Projects, tickets, labels, and history: a SQLite database in Electron's
+  `userData` directory (`~/Library/Application Support/Volli Code/`).
+- Ticket worktrees: `~/.volli/worktrees/`.
+- Chat transcripts: on disk, indexed locally.
+
+Model requests leave your machine for the provider you selected in Model
+Access. Nothing else is sent anywhere.
+
+Removing a project from Volli does not delete its folder from disk.
+
+## Uninstall
+
+<Steps>
+
+1. Quit Volli Code and drag it from Applications to the Trash.
+
+2. Remove its application data:
+
+   ```sh
+   rm -rf ~/Library/Application\ Support/Volli\ Code
+   ```
+
+3. Remove any worktrees Volli created. These are git worktrees inside your own
+   repositories, so remove them through git rather than deleting the folder:
+
+   ```sh
+   ls ~/.volli/worktrees/
+   ```
+
+   For each one you no longer want, run `git worktree remove <path>` from the
+   repository it belongs to. Your project folders themselves are untouched by
+   uninstalling.
+
+</Steps>
 
 ## Build from source
 
-You need a Mac, [git](https://git-scm.com), Node `^24.13.0`, and pnpm
-`11.10.0`. The repository pins the Node and pnpm versions it uses.
+You can also run the development build. You need a Mac, [git](https://git-scm.com),
+Node `^24.13.0`, and pnpm `11.10.0` — the repository pins both.
 
 <Steps>
 
@@ -43,7 +184,7 @@ You need a Mac, [git](https://git-scm.com), Node `^24.13.0`, and pnpm
    This runs the renderer with hot reload and relaunches Electron after main
    process changes.
 
-3. To run a built copy instead, build first.
+3. To run a built copy instead:
 
    ```sh
    pnpm run build
@@ -53,47 +194,17 @@ You need a Mac, [git](https://git-scm.com), Node `^24.13.0`, and pnpm
 </Steps>
 
 <Aside type="tip">
-  If a native dependency fails to build, run
-  `pnpm -C apps/desktop run rebuild:native`. This rebuilds the native modules
-  for Electron.
+  If a native dependency fails to build, run `pnpm -C apps/desktop run
+  rebuild:native`. This rebuilds the native modules against Electron's ABI.
 </Aside>
 
-## Choose Model Access
+## Getting help
 
-Before you start a structured Session, open **Settings** and choose a default
-model in **Model Access**. Model Access shows the accounts and models available
-to Volli without exposing credentials in the app's Session history.
-
-If a provider needs sign-in or a refresh, use the recovery action shown there.
-Volli does not silently switch to a different model or account.
-
-## The `volli` CLI
-
-Volli installs its local `volli` command in the background. Terminal companions
-opened by the app already receive it on `PATH`. Open **Settings → CLI** to check
-the installation or run Doctor.
-
-Run this from a supported terminal companion to confirm its context:
-
-```sh
-volli identify
-```
-
-See the [CLI reference](/reference/cli/) for commands and connection details.
-
-## Local data
-
-Volli keeps its data on your Mac:
-
-- Projects, tickets, labels, and history live in a SQLite database in
-  Electron's `userData` directory.
-- Ticket worktrees live under `~/.volli/worktrees/`.
-- Session transcripts are stored on disk and indexed locally.
-
-Model requests leave the app for the provider you select through Model Access.
-Volli does not expose provider credentials in the renderer or Session history.
-
-Removing a project from Volli does not remove its folder from disk.
+- Something broken or confusing: [open an issue](https://github.com/hussainph/volli-code/issues).
+- Something security-sensitive: use [private vulnerability reporting](https://github.com/hussainph/volli-code/security/advisories/new)
+  instead of a public issue.
+- Something not working on your machine: start with
+  [Troubleshooting](/reference/troubleshooting/).
 
 ## Next steps
 
@@ -101,11 +212,16 @@ Removing a project from Volli does not remove its folder from disk.
   <LinkCard
     title="Quickstart"
     href="/start/quickstart/"
-    description="Add a project and open your first Ticket Session."
+    description="Go from an empty board to a reviewed change."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/start/concepts/"
+    description="The terms Volli uses for Home, tickets, chats, and worktrees."
   />
   <LinkCard
     title="Troubleshooting"
     href="/reference/troubleshooting/"
-    description="Resolve source-build, Model Access, and CLI connection problems."
+    description="Model Access, CLI connection, and source-build problems."
   />
 </CardGrid>

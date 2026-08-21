@@ -1,12 +1,12 @@
 ---
 title: Volli Code
-description: Documentation for Volli Code, a local-first macOS workspace for planning code work and running durable coding Sessions.
+description: Documentation for Volli Code, a local-first macOS workspace for code projects — a ticket board, chats that carry your project or ticket context, isolated worktrees, and changes you review.
 template: splash
 head:
   - tag: title
     content: Volli Code documentation
 hero:
-  tagline: Plan work on a board, then run durable coding Sessions with the context that work needs.
+  tagline: Plan the work on a board, chat it through with the context it needs, and read what changed before it lands.
   actions:
     - text: Install Volli Code
       link: /start/install/
@@ -17,11 +17,18 @@ hero:
       variant: minimal
 ---
 
-import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli Code is a local-first macOS app. It stores projects, tickets, Session
-history, and worktrees on your machine. Volli itself requires no account;
-model requests go to the provider you select through Model Access.
+Volli Code is a local-first macOS app for code projects. Projects, tickets, chat
+history, and worktrees stay on your machine. Volli itself needs no account — you
+sign in to a model provider through Model Access, and model requests go there.
+
+<Aside type="caution" title="Alpha">
+  Volli Code is in early alpha, for Apple silicon Macs. Features move between
+  builds. See [Install](/start/install/) for what that means in practice, and
+  [open an issue](https://github.com/hussainph/volli-code/issues) when something
+  is wrong.
+</Aside>
 
 ## Start here
 
@@ -29,22 +36,22 @@ model requests go to the provider you select through Model Access.
   <LinkCard
     title="Install Volli Code"
     href="/start/install/"
-    description="Download the Apple silicon app or run the development build from source."
+    description="What the alpha supports, how to install it, and where your data lives."
   />
   <LinkCard
     title="Quickstart"
     href="/start/quickstart/"
-    description="Add a project, choose a model, and start a Ticket Session."
+    description="Go from an empty board to a reviewed change."
   />
   <LinkCard
     title="Concepts"
     href="/start/concepts/"
-    description="Learn the terms Volli uses for tickets, Sessions, and worktrees."
+    description="The terms Volli uses for Home, tickets, chats, and worktrees."
   />
   <LinkCard
     title="CLI reference"
     href="/reference/cli/"
-    description="Use the local CLI to inspect projects and work from a supported terminal companion."
+    description="The local `volli` command, and what a terminal Volli opened is attached to."
   />
 </CardGrid>
 
@@ -54,27 +61,29 @@ model requests go to the provider you select through Model Access.
   <LinkCard
     title="Plan on the board"
     href="/guides/board/"
-    description="Keep work visible in five fixed columns and open the ticket that needs attention."
-  />
-  <LinkCard
-    title="Sessions and worktrees"
-    href="/guides/agents-and-worktrees/"
-    description="Use Pi-backed Sessions for structured execution and worktrees for ticket isolation."
+    description="Home opens on the board: five fixed columns, and the ticket that needs you."
   />
   <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
-    description="Read the ticket, inspect its files and changes, and return to its Sessions."
+    description="A ticket's body, its chats, its files, and its change set."
   />
   <LinkCard
-    title="Make it yours"
-    href="/guides/theming/"
-    description="Set the canvas for the app and, when needed, override it for a project."
+    title="Sessions and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="Project chats, ticket chats, isolated worktrees, and optional terminal companions."
+  />
+  <LinkCard
+    title="Settings"
+    href="/guides/settings/"
+    description="Model Access, web search, worktrees, terminal harnesses, and the CLI."
   />
 </CardGrid>
 
-## In development
+## Getting help
 
-**Automations** are being built as saved board triggers. They will open Sessions
-with defined instructions and recorded outcomes. They are not a setup option in
-the current app.
+Bugs and confusion belong in [GitHub issues](https://github.com/hussainph/volli-code/issues).
+Anything security-sensitive should go through
+[private vulnerability reporting](https://github.com/hussainph/volli-code/security/advisories/new)
+instead. If something is misbehaving on your machine, start with
+[Troubleshooting](/reference/troubleshooting/).

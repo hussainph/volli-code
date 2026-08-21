@@ -1,83 +1,161 @@
 ---
 title: Quickstart
-description: Add a project, choose a model, create a ticket, and start a Pi-backed Ticket Session in its worktree.
+description: Go from an empty board to a reviewed change — add a project, start a chat, create a ticket, and read what changed.
 sidebar:
   label: Quickstart
 ---
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-Start a Ticket Session that has the ticket's scope and an isolated git worktree.
-You need Volli [running](/start/install/), a git repository on disk, and a
-default model selected in **Settings → Model Access**.
+This is the whole path through Volli: add a project, talk to it, turn that into
+tickets, let a ticket do its work in isolation, and read the change before you
+accept it.
+
+You need Volli [installed](/start/install/), a git repository on disk, and about
+fifteen minutes.
+
+## 1. Meet Home
+
+When you open a project, you land on **Home**.
+
+Home is a tabbed workspace. Its first tab is the **Board** and it never closes.
+Beside it, chats and files open as further tabs. There is no separate "Sessions"
+page to navigate to — a chat is a tab, right next to the board it came from.
+
+The left rails: your projects on the far left, then **Home / Files /
+Configure**, with **Settings** at the bottom.
+
+<Aside type="note" title="If you haven't added a project yet">
+  Select **+** in the project rail and choose a git repository. That folder is
+  the project's main checkout. Volli derives a ticket prefix from the folder
+  name — a folder called `harbor` gives you `HB-1`, `HB-2`, and so on.
+</Aside>
+
+## 2. Start a project chat
 
 <Steps>
 
-1. **Add a project.**
+1. **Press Chat** on Home's tab strip.
 
-   Select **+** in the project rail and choose a repository. That folder is
-   the project's main checkout. Volli derives a display-ID prefix from its
-   name, such as `VC-12`.
+   This starts a *project chat*. It works from your main checkout and it opens
+   as a tab beside the Board.
 
-2. **Create a ticket.**
+2. **Describe what you want, loosely.**
 
-   Give the ticket a short title and a body. The body is the ticket's canonical
-   Markdown scope. State what should change and how you will judge the result.
+   A project chat is the right place to be vague. Something like:
 
-3. **Open the ticket workspace.**
+   > We need to move billing off the nightly job and onto Stripe webhooks. Break
+   > that into tickets for me.
 
-   Create the ticket, then open it from the board. Move it to **Doing** when
-   that is the right state for the work. The board state and Session creation
-   are separate actions.
+3. **Let it turn that into tickets.**
 
-4. **Start a Ticket Session.**
-
-   Select **New chat** in the ticket workspace. Volli prepares the ticket
-   worktree and starts a Ticket Session through the Pi-backed Agent Runtime.
-   The Session receives the Ticket Body and the ticket's resolved context.
-
-5. **Work with the Session.**
-
-   Read the Session history, answer its questions, and inspect the ticket's
-   files and change set from the workspace. A Ticket Session remains available
-   after its live attachment stops, so you can reopen its history later.
-
-6. **Review the branch.**
-
-   Use the ticket's **Changes** view to compare its worktree with the base
-   branch. Move the ticket when you are ready; the board records the change.
+   A project chat can create and edit tickets on the board. Switch to the
+   **Board** tab and watch them land.
 
 </Steps>
 
-<Aside type="note">
-  Moving a ticket to **Doing** organizes work on the board. It does not choose
-  a model or start structured execution. Start a Ticket Session from the ticket
-  workflow after Model Access is configured.
+<Aside type="tip">
+  Project chat, ticket chat — the difference is scope, not power. A project chat
+  sees your main checkout and the whole board, which is what you want when the
+  work isn't shaped yet. A ticket chat sees one ticket and works in that
+  ticket's own checkout.
 </Aside>
 
-## Use a terminal when you need one
+## 3. Write the ticket body
 
-Manual terminals and external or bring-your-own TUI harnesses are terminal
-companions. They can work in the ticket's worktree, but they are separate from
-the structured Pi-backed Ticket Session. Choose the companion explicitly; it
-does not become a Session fallback.
+Open a ticket from the board.
+
+The first tab is its **body** — the ticket's canonical Markdown. This is the
+brief. Write what should change, what must not, and how you will judge the
+result. Anything vague here comes back as a vague change later.
+
+The body is the starting context for every chat on this ticket, so it is worth
+the two minutes.
+
+## 4. Start a ticket chat
+
+<Steps>
+
+1. **Press Chat inside the ticket.**
+
+   Volli prepares the ticket's isolated git worktree and starts a chat that
+   already carries the ticket body and the ticket's resolved context.
+
+2. **Watch it work, and answer it.**
+
+   The chat shows its turns and its tool steps as it goes. When it needs a
+   decision from you, it asks in the chat rather than guessing. You can
+   interrupt it at any point.
+
+3. **Leave and come back.**
+
+   Close the tab, switch projects, quit the app. The chat keeps its identity and
+   its ordered history — reopen it from the ticket's **Chats** rail, the
+   sidebar, or <kbd>⌘K</kbd>.
+
+</Steps>
+
+<Aside type="note" title="Moving a ticket does not start anything">
+  Board columns record where work *is*. Dragging a ticket to **Doing** organizes
+  your board; it does not choose a model or start a chat. Starting work is
+  always an explicit press of **Chat**. These are two separate actions on
+  purpose.
+</Aside>
+
+## 5. Read what changed
+
+A ticket's implementation work happens in its own git worktree — a separate
+checkout on its own branch, beside your main one. Your main checkout is not
+touched.
+
+In the ticket:
+
+- **Changes** shows the change set against the base branch: which files, and
+  what moved in each.
+- **Files** opens the ticket's files as they are *in the worktree*, not in your
+  main checkout.
+
+Read the change yourself. Volli shows you what happened; it does not certify
+that the work is correct, and it does not run your test suite and declare
+victory. That judgment is yours.
+
+## 6. Deliver it
+
+From the ticket's repository summary you can commit, push, and open or view a
+pull request, then move the ticket to the column that reflects reality. When
+you're finished with the ticket, clean up its worktree from the same place.
+
+## Using a terminal instead
+
+Everything above uses Volli's structured chat. If you would rather drive a CLI
+yourself, open the caret beside **Chat** and choose **Terminal**.
+
+That gives you a shell — in the ticket's worktree, when a ticket has one — where
+you can run Claude Code, Codex, OpenCode, or any TUI you like. It is a companion
+you ask for explicitly. Volli will never open one for you as a fallback when a
+chat fails.
 
 ## Next steps
 
 <CardGrid>
   <LinkCard
-    title="Sessions and worktrees"
-    href="/guides/agents-and-worktrees/"
-    description="See how Ticket Sessions, project Sessions, worktrees, and terminal companions differ."
+    title="The board"
+    href="/guides/board/"
+    description="Columns, priorities, filtering, and what the board does and doesn't control."
   />
   <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
-    description="Find a ticket's Sessions, files, properties, and change set."
+    description="The ticket's body, chats, files, and change set."
+  />
+  <LinkCard
+    title="Sessions and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="How chats, worktrees, and terminal companions relate."
   />
   <LinkCard
     title="Concepts"
     href="/start/concepts/"
-    description="Look up the terms used across the app."
+    description="Look up any term used across the app."
   />
 </CardGrid>
