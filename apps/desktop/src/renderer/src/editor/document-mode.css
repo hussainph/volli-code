@@ -89,6 +89,13 @@
   --vscode-scrollbarSlider-activeBackground: var(--muted-foreground);
 }
 
+/* Chromium can paint the focused EditContext element's native caret at the
+   editor origin even though Monaco puts it behind the editor. Monaco's cursor
+   layer is the cursor that follows the actual document selection. */
+.volli-document-mode .monaco-editor .native-edit-context {
+  caret-color: transparent;
+}
+
 /* The caret is the one editor color Monaco emits as a literal rule instead of a
    variable (its `viewCursors` theming participant), so it takes a rule of its
    own. Ink, not `--primary` as the terminal's cursor is: a block cursor is a

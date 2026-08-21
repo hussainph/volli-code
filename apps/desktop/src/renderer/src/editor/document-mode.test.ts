@@ -74,6 +74,15 @@ describe("document-mode.css surface", () => {
     expect(surface).not.toContain("#");
   });
 
+  it("hides EditContext's native caret so Monaco renders the only caret", () => {
+    // Chromium can paint the focused native-edit-context caret at the editor's
+    // origin even though Monaco puts the element behind the editor. Monaco's
+    // cursor layer is the one that tracks the model selection.
+    expect(surface).toMatch(
+      /\.volli-document-mode \.monaco-editor \.native-edit-context\s*\{[^}]*caret-color:\s*transparent;/,
+    );
+  });
+
   it("keeps every block's box paint on the whole-line element alone", () => {
     // A line class reaches BOTH the whole-line element and every glyph span in
     // the line (document-decorations.ts). A box property left on the bare class
