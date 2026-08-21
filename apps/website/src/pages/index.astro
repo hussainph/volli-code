@@ -10,7 +10,7 @@ const releasesUrl = `${repositoryUrl}/releases`;
 const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
 const description =
-  "A local-first Mac app for running coding agents you can actually review. Plan work as tickets, chat with full context, and keep every change in its own branch.";
+  "A local-first macOS workspace for Tickets, structured chats, isolated Git worktrees, and live code review.";
 ---
 
 <!doctype html>
@@ -22,14 +22,14 @@ const description =
     <link rel="canonical" href="https://volli.app/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://volli.app/" />
-    <meta property="og:title" content="Volli Code | Run coding agents you can actually review" />
+    <meta property="og:title" content="Volli Code | Plan and run coding agents" />
     <meta property="og:description" content={description} />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Volli Code | Run coding agents you can actually review" />
+    <meta name="twitter:title" content="Volli Code | Plan and run coding agents" />
     <meta name="twitter:description" content={description} />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli Code | Run coding agents you can actually review</title>
+    <title>Volli Code | Plan and run coding agents</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -52,10 +52,22 @@ const description =
           whether their Mac is supported before meeting an interactive fake UI. */}
       <section class="hero" id="top">
         <span class="alpha-pill">Alpha · Apple silicon</span>
-        <h1 class="hero-headline">Run coding agents without losing track of what they did.</h1>
+        <h1 class="hero-headline">
+          <span class="headline-lead">The ticket is</span>
+          <MorphingText
+            client:load
+            texts={[
+              "the plan",
+              "the starting context",
+              "a focused workspace",
+              "the review surface",
+              "the project history",
+            ]}
+          />
+        </h1>
         <p class="hero-lede">
-          A local-first Mac app. Plan work as tickets, start a chat that already has the context,
-          and let it work in its own branch. Nothing lands in your main checkout until you say so.
+          Volli is a local-first macOS workspace for Tickets, structured chats, isolated Git
+          worktrees, and live Change Sets.
         </p>
 
         <div class="cta-row hero-cta">
@@ -80,8 +92,9 @@ const description =
         </div>
 
         <p class="hero-alpha-note">
-          Apple silicon, M1 and later. <a href={`${docsUrl}/start/install/`}>Install guide</a> ·
-          <a href={releasesUrl}>Release notes</a> ·
+          <span>Apple silicon, M1 and later.</span>
+          <a href={`${docsUrl}/start/install/`}>Install guide</a>
+          <a href={releasesUrl}>Release notes</a>
           <a href={issuesUrl}>Report a problem</a>
         </p>
       </section>
@@ -101,36 +114,24 @@ const description =
           </div>
 
           <div class="statement-copy">
-            <h2 class="statement-headline">
-              <span class="headline-lead">The ticket is</span>
-              <MorphingText
-                client:load
-                texts={[
-                  "the plan",
-                  "the starting context",
-                  "a focused workspace",
-                  "the review surface",
-                  "the project history",
-                ]}
-              />
-            </h2>
+            <h2 class="statement-headline">From Ticket to review</h2>
 
             <div class="body-copy">
               <p>
-                Home is where a project opens: a board of tickets on its own permanent tab, with
-                project chats and project files as tabs beside it. Nothing to navigate away to.
+                Home opens on the board, with project chats and Project Files as tabs beside it.
+                Plan the work in a Ticket, then start a project or Ticket chat with its context and
+                history intact.
               </p>
               <p>
-                A chat is the thing you start. A project chat works from your main checkout — good
-                for turning a vague idea into a set of tickets. A ticket chat gets that ticket's
-                body and scoped context, and its implementation work happens in an isolated Git
-                worktree that stays a separate checkout, never a replacement for the ticket itself.
+                When a Ticket needs implementation, its Git worktree stays an explicit, isolated
+                checkout&mdash;not a replacement for the Ticket itself. Inspect the live Change Set
+                beside the chat history that produced it.
               </p>
               <p>
-                Chats run on Volli's Pi-backed agent runtime, using the model you choose in <a
+                Pi powers Volli’s structured runtime, using the model you choose in <a
                   href={`${docsUrl}/guides/settings/`}>Model Access</a
-                >. A terminal is there when you want to drive a CLI harness yourself — an explicit
-                companion you ask for, never a silent fallback.
+                >. External and bring-your-own CLI harnesses stay available as manual terminal
+                companions, while the board, chats, and review remain a coherent product surface.
               </p>
             </div>
 

@@ -164,13 +164,28 @@ a:focus-visible {
 
 .hero-headline {
   max-width: 20ch;
-  margin: 0 auto 16px;
+  margin: 0 auto 18px;
   color: var(--text);
   font-size: clamp(32px, 3.9vw, 50px);
   font-weight: 420;
-  letter-spacing: -0.045em;
-  line-height: 1.08;
+  letter-spacing: -0.05em;
+  line-height: 1.13;
   text-wrap: balance;
+}
+
+/* The morphing word is absolutely positioned inside its own line box, so the
+   headline needs both lines reserved whether or not a word is mid-swap. */
+.hero-headline .headline-lead {
+  display: block;
+}
+
+.hero-headline .morphing-text {
+  text-align: center;
+}
+
+.hero-headline .morphing-text__word {
+  right: 0;
+  text-align: center;
 }
 
 .hero-lede {
@@ -189,20 +204,31 @@ a:focus-visible {
   padding-top: 22px;
 }
 
+/* A wrapping row, not a sentence with punctuation between links. The literal
+   "·" separators collapsed against the links and "Report a problem" broke
+   across lines mid-phrase; flex gaps space it and nowrap keeps each label
+   whole. */
 .hero-alpha-note {
-  max-width: 52ch;
-  margin: 14px auto 0;
+  display: flex;
+  max-width: 58ch;
+  margin: 16px auto 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px 18px;
   color: var(--quiet);
   font-size: 12.5px;
   font-weight: 380;
-  line-height: 1.7;
+  line-height: 1.5;
 }
 
 .hero-alpha-note a {
   color: #c98a63;
   text-decoration: underline;
-  text-decoration-color: rgb(201 138 99 / 34%);
-  text-underline-offset: 3px;
+  text-decoration-color: rgb(201 138 99 / 30%);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  white-space: nowrap;
   transition:
     color 180ms ease,
     text-decoration-color 180ms ease;
@@ -211,6 +237,18 @@ a:focus-visible {
 .hero-alpha-note a:hover {
   color: #ff966c;
   text-decoration-color: #ff966c;
+}
+
+/* On a phone the platform sentence takes its own line and the three links sit
+   under it, rather than one label orphaning onto a line of its own. */
+@media (max-width: 460px) {
+  .hero-alpha-note {
+    gap: 6px 14px;
+  }
+
+  .hero-alpha-note > span {
+    flex: 0 0 100%;
+  }
 }
 
 .hero-shell {
