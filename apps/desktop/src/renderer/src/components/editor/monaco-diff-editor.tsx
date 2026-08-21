@@ -308,11 +308,13 @@ export function MonacoDiffEditor({
   }, [dirty, saving, modifiedReadOnly, presentation]);
 
   return (
+    // `volli-source-mode`: same furniture stylesheet as the file editor, so a
+    // diff tab and a file tab read as the same surface (editor/source-mode.css).
     <div
       ref={hostRef}
       role="group"
       aria-label={ariaLabel}
-      className="min-h-0 w-full flex-1 overflow-hidden"
+      className="volli-source-mode min-h-0 w-full flex-1 overflow-hidden"
     />
   );
 }

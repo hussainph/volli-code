@@ -1,7 +1,7 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import { COMPACT_VERB } from "@volli/shared";
+import { COMPACT_VERB, COMPOSER_VERBS } from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
@@ -13,6 +13,7 @@ import { EffortPill } from "./composer-effort-ui";
 import { ComposerPicker } from "./composer-picker-ui";
 import {
   modelPillLabel,
+  ModelPill,
   SessionComposer,
   type ComposerModel,
   type SessionComposerProps,
@@ -393,6 +394,37 @@ function submitComposerWithResources(
   return sent;
 }
 
+/**
+ * The model pill under a controlled open — `/model`'s target. The pill keeps
+ * its own state when uncontrolled; the verb's press supplies `open`, and what
+ * is pinned here is that the caller's open is the popover's open: Radix
+ * marks the trigger `data-state="open"` the moment it is.
+ */
+describe("the model pill's controlled open", () => {
+  function pillMarkup(overrides: Partial<Parameters<typeof ModelPill>[0]> = {}): string {
+    return renderToStaticMarkup(
+      <ModelPill
+        models={MODELS}
+        selection={{ providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "" }}
+        disabled={false}
+        onChange={() => undefined}
+        {...overrides}
+      />,
+    );
+  }
+
+  it("takes the caller's open as the popover's own", () => {
+    expect(pillMarkup({ open: true })).toContain('data-state="open"');
+  });
+
+  it("stays uncontrolled when no open arrives", () => {
+    // No `open` prop — the internal state is the only opinion, exactly as
+    // before the verb existed.
+    expect(pillMarkup()).toContain('data-state="closed"');
+    expect(pillMarkup({ open: false })).toContain('data-state="closed"');
+  });
+});
+
 describe("what a composed message actually sends", () => {
   it("expands a staged command with its arguments before the submit path sees it", () => {
     expect(submitComposer({ value: "/review src/app.ts", promptTemplates: TEMPLATES })).toBe(
@@ -627,6 +659,34 @@ describe("the picker card", () => {
     expect(html).toContain(">Actions<");
     expect(html).toContain("/compact");
     expect(html.indexOf(">Actions<")).toBeLessThan(html.indexOf(">Commands<"));
+  });
+
+  it("draws a glyph for every verb there is, and never the same one twice", () => {
+    // The glyph names the act, so two verbs wearing one mark is the row
+    // saying less than it looks like it does. `VERB_ICONS` is keyed by the
+    // closed name union, so a verb with no glyph cannot compile — what this
+    // pins is the half the type cannot: that the six are distinct drawings,
+    // and that each verb actually reaches its own.
+    const paths = COMPOSER_VERBS.map((verb) => {
+      const html = renderPicker(
+        pickerState({
+          rows: [
+            {
+              kind: "verb",
+              value: `verb:${verb.name}`,
+              label: `/${verb.name}`,
+              detail: verb.description,
+              verb,
+            },
+          ],
+        }),
+      );
+      const path = /<svg[^>]*>(.*?)<\/svg>/s.exec(html)?.[1];
+      expect(path, `${verb.name} drew no glyph`).toBeTruthy();
+      return path;
+    });
+
+    expect(new Set(paths).size).toBe(COMPOSER_VERBS.length);
   });
 });
 

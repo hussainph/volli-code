@@ -1,43 +1,31 @@
 /**
- * Shipped Monaco/shiki editor theme catalog ids — the IPC-safe vocabulary for
- * `editorThemeId`. Renderer catalog metadata (labels, static importers) lives
- * in `apps/desktop/.../editor-theme-catalog.ts` and must assert the same set
- * so the guard and the picker cannot drift.
+ * The fixed Monaco/shiki Vitesse pair, chosen by resolved app appearance.
+ *
+ * There is no editor theme preference (VC-123). The editor wears light or dark
+ * because the app is light or dark — the same `ResolvedAppearance` preload
+ * stamps on `<html>` before the first frame and every other surface derives
+ * from. The old picker catalog asked which dark theme somebody preferred; it
+ * could not answer why a light app contained a dark editor.
+ *
+ * Vitesse ships both halves as a designed pair. Their static shiki imports live
+ * beside Monaco bootstrap in `apps/desktop/.../editor/monaco-runtime.ts`, so
+ * both are registered before an editor can paint.
  *
  * Pure: string ids only, no shiki / Electron / DOM imports.
  */
 
-/** Every catalog id Volli ships and will accept over IPC. */
-export const SHIPPED_EDITOR_THEME_IDS = [
-  "catppuccin-mocha",
-  "catppuccin-macchiato",
-  "catppuccin-frappe",
-  "tokyo-night",
-  "rose-pine",
-  "rose-pine-moon",
-  "nord",
-  "gruvbox-dark-medium",
-  "dracula",
-  "one-dark-pro",
-  "ayu-dark",
-  "ayu-mirage",
-  "solarized-dark",
-  "night-owl",
-  "github-dark",
-  "vitesse-dark",
-  "everforest-dark",
-  "kanagawa-wave",
-  "kanagawa-dragon",
-  "monokai",
-  "dark-plus",
-  "material-theme-palenight",
-] as const;
+import type { ResolvedAppearance } from "./canvas/types";
 
-export type ShippedEditorThemeId = (typeof SHIPPED_EDITOR_THEME_IDS)[number];
+/** The entire editor-theming decision: one Vitesse half for each resolved mode. */
+const EDITOR_THEME_BY_APPEARANCE = {
+  light: "vitesse-light",
+  dark: "vitesse-dark",
+} as const satisfies Record<ResolvedAppearance, string>;
 
-const SHIPPED_EDITOR_THEME_ID_SET: ReadonlySet<string> = new Set(SHIPPED_EDITOR_THEME_IDS);
+export type ShippedEditorThemeId =
+  (typeof EDITOR_THEME_BY_APPEARANCE)[keyof typeof EDITOR_THEME_BY_APPEARANCE];
 
-/** True when `id` is one of {@link SHIPPED_EDITOR_THEME_IDS}. */
-export function isShippedEditorThemeId(id: string): id is ShippedEditorThemeId {
-  return SHIPPED_EDITOR_THEME_ID_SET.has(id);
+/** The theme the editor wears at this resolved appearance. */
+export function editorThemeForAppearance(resolved: ResolvedAppearance): ShippedEditorThemeId {
+  return EDITOR_THEME_BY_APPEARANCE[resolved];
 }

@@ -128,11 +128,14 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/pages/web-access-model.ts",
+        // What the user is TOLD about a launch-wide environment fault — the
+        // same class of decision as cli-status-model, enrolled for the same
+        // reason (VC-94).
+        "src/components/session-environment-alert-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/edge-region.ts",
         "src/components/sidebar/listing.ts",
-        "src/components/theme/editor-settings-model.ts",
         "src/components/theme/project-appearance-model.ts",
         // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
         // as tab-focus.ts: the squiggle's geometry is arithmetic the view
@@ -154,6 +157,9 @@ export default defineConfig(({ mode }) => ({
         // gate can reach it; the `.tsx` glue that calls it stays outside.
         "src/components/ui/ai-elements/scroll-chaining.ts",
         "src/lib/boundary-timer.ts",
+        // Where a chat-named path opens (VC-120): the raw-tool-path translation
+        // both transcript surfaces trust before touching any store or IPC.
+        "src/lib/chat-open-target.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
@@ -175,7 +181,6 @@ export default defineConfig(({ mode }) => ({
         "src/editor/file-refs.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
-        "src/editor/editor-theme-catalog.ts",
         "src/editor/monaco-runtime.ts",
         "src/editor/monaco-theme.ts",
         "src/editor/reveal.ts",

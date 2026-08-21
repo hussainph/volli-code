@@ -54,6 +54,8 @@ import type {
   SessionActivityState,
   SessionProjection,
   SessionRecord,
+  SessionEnvRepair,
+  SessionEnvReport,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
@@ -226,6 +228,15 @@ export interface AgentCommandServiceOptions {
    */
   modelAccessTimeoutMs?: number;
   /**
+   * The `env` block `volli identify` reports (VC-94): the session's resolved
+   * PATH, its provenance, the contract tools resolved against it, and
+   * whether the workspace's dependencies are installed. Injected because
+   * main is the only process that knows HOW the PATH came to be — it ran the
+   * boot probe and owns the adoption outcome — and absent (tests) means
+   * identify answers without an env block rather than inventing one.
+   */
+  sessionEnv?: (cwd: string) => Promise<SessionEnvReport>;
+  /**
    * The product Session start route (VC-13) — the same facade the renderer's
    * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
    * so no parallel creation path can grow here. Raw `session.create` over
@@ -298,11 +309,11 @@ export interface AgentCommandServiceOptions {
    */
   doctorFacts?: () => Promise<DoctorFacts>;
   /**
-   * Regenerates everything regenerable: wrappers, harness configs, the shell
-   * integration. Idempotent by construction — it is the same work boot does —
-   * so `--fix` is never destructive and never needs confirming.
+   * Rebuilds the generated runtime and re-runs Session PATH adoption. Its
+   * report gives `doctor --fix` evidence for the PATH new Sessions will get;
+   * the calling Session's own observation remains intentionally unchanged.
    */
-  doctorRepair?: () => Promise<void>;
+  doctorRepair?: () => Promise<SessionEnvRepair>;
   /**
    * The skills index a fresh Session with no explicit skills would carry — the
    * SAME port `session start` composes through (`SessionSkillPorts.index` with
@@ -1278,6 +1289,10 @@ export function createAgentCommandService(
         }
       }
       if (request.cmd === "identify") {
+        // Measured at the moment the agent asks, like the worktree-
+        // misalignment warning below: main adopted the PATH once at boot, and
+        // this reports that outcome — never re-probes, never guesses.
+        const env = options.sessionEnv ? await options.sessionEnv(request.ctx.cwd) : undefined;
         if (envSessionId) {
           if (!envSession) {
             return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
@@ -1311,6 +1326,7 @@ export function createAgentCommandService(
               ...(warning === null ? {} : { warning }),
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
+              ...(env === undefined ? {} : { env }),
             },
           };
         }
@@ -1339,6 +1355,7 @@ export function createAgentCommandService(
             worktreePath: request.ctx.cwd,
             socket: request.ctx.env.socket ?? null,
             appVersion: options.appVersion,
+            ...(env === undefined ? {} : { env }),
           },
         };
       }
@@ -2167,9 +2184,10 @@ export function createAgentCommandService(
         if (observation === null) {
           return failure("INVALID_REQUEST", "doctor requires the caller's observed environment.");
         }
+        let pathRepair: SessionEnvRepair | undefined;
         if (request.args["fix"] === true && options.doctorRepair) {
           try {
-            await options.doctorRepair();
+            pathRepair = await options.doctorRepair();
           } catch (error) {
             return failure("MUTATION_FAILED", `Repair failed: ${errorMessage(error)}`);
           }
@@ -2178,7 +2196,11 @@ export function createAgentCommandService(
         return {
           v: 1,
           ok: true,
-          data: { checks, summary: doctorSummary(checks) },
+          data: {
+            checks,
+            summary: doctorSummary(checks),
+            ...(pathRepair === undefined ? {} : { pathRepair }),
+          },
         };
       }
       if (request.cmd === "ticket.list") {

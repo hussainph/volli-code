@@ -4,17 +4,18 @@
  *
  * It lives beside the picker rather than inside either page so neither page has
  * to import the other, and so the global and per-project rows cannot end up
- * listing different catalogs: "this project's editor theme" must be a choice
- * from exactly the set the app-wide row offers, or Custom would be able to pin
- * something Settings can never get back to.
+ * listing different catalogs.
+ *
+ * The EDITOR is not offered here any more (VC-123): it has one light theme and
+ * one dark theme, chosen by the resolved appearance, so there is nothing to
+ * list and nothing to open.
  */
 
 import { errorMessage } from "@volli/shared";
-import type { ResolvedAppearance, ShippedEditorThemeId } from "@volli/shared";
+import type { ResolvedAppearance } from "@volli/shared";
 import { listBuiltinThemeNames } from "restty";
 
 import type { ThemeComboBoxItem } from "@renderer/components/theme/theme-combo-box";
-import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { toastError } from "@renderer/lib/toast";
 import { TOKEN_THEME_NAMES } from "@renderer/terminal/appearance";
 
@@ -31,15 +32,6 @@ import { TOKEN_THEME_NAMES } from "@renderer/terminal/appearance";
  */
 export function fallbackTerminalThemeLabel(resolved: ResolvedAppearance): string {
   return TOKEN_THEME_NAMES[resolved];
-}
-
-/** The shipped Monaco/shiki catalog, with each theme's family folded into its search terms. */
-export function editorThemeItems(): ThemeComboBoxItem<ShippedEditorThemeId>[] {
-  return listEditorThemes().map((theme) => ({
-    value: theme.id,
-    label: theme.label,
-    keywords: [theme.label, theme.family ?? ""],
-  }));
 }
 
 /**

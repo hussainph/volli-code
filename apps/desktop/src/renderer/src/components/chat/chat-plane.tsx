@@ -16,6 +16,8 @@
  */
 import * as React from "react";
 import { toast } from "sonner";
+
+import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -31,7 +33,14 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
+import {
+  errorMessage,
+  offeredComposerVerbs,
+  readSkillResources,
+  type ComposerVerbMoment,
+  type ComposerVerbName,
+  type PromptResource,
+} from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -79,6 +88,7 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  lastAssistantText,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -91,6 +101,7 @@ import {
   steerQueuedMessage,
   settledHeldIds,
   withdrawInteraction,
+  type ComposerVerbPress,
   type CatalogState,
   type HeldDispatchOutcome,
   type SessionBlockerActs,
@@ -612,13 +623,51 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   pendingRef.current = pending;
   const answering = pending !== null && composerAnswerPrompt(pending) !== null;
 
+  // The Session's most recent reply — what `/copy` copies. Held in a ref as
+  // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
+  // prop of the memoized composer, so the press must read the latest text
+  // without the handler re-creating itself once per streamed frame.
+  const lastReply = React.useMemo(() => lastAssistantText(messages), [messages]);
+  const lastReplyRef = React.useRef<string | null>(lastReply);
+  lastReplyRef.current = lastReply;
+  // The facts every verb's offer rule reads, gathered once (`ComposerVerbMoment`).
+  //
+  // Memoized on the four booleans rather than on their sources, because the
+  // sources move far more often than the answers do: a streaming transcript
+  // re-renders this plane every frame, and re-ranking the picker each time
+  // would put a sort of the whole file index on the stream's clock. The
+  // booleans change only at turn boundaries — `hasReply` goes false again
+  // whenever a new user message is the newest row, and true when that turn
+  // speaks — which is a handful of changes per turn instead of hundreds.
+  const verbMoment = React.useMemo<ComposerVerbMoment>(
+    () => ({
+      working,
+      hasReply: lastReply !== null,
+      hasModels: composerModels.length > 0,
+      hasProject: projectId !== null,
+    }),
+    [composerModels.length, lastReply, projectId, working],
+  );
+  // Read by the press, which must judge the moment it happens in rather than
+  // the one the handler was built in.
+  const verbMomentRef = React.useRef(verbMoment);
+  verbMomentRef.current = verbMoment;
+  const verbSupply = React.useMemo(() => offeredComposerVerbs(verbMoment), [verbMoment]);
+  // `/model`'s target: the pill's own list, opened by typing instead of
+  // clicking. Lives here because the press that opens it is decided here.
+  const [modelPickerOpen, setModelPickerOpen] = React.useState(false);
+
   // What the composer's two caret-driven pickers rank over. All of it is
   // project-scoped: the file index is the one the editor's `@` already uses,
   // the templates are `.volli/commands/` over the global tier, and the skills
   // are `.agents/skills/` — explicit `/` references, never ambient injection.
   const fileIndex = useFileIndex(projectId);
   const files = fileIndex.getIndex();
-  const { templates: promptTemplates, skills } = usePromptTemplates(projectId);
+  const {
+    templates: promptTemplates,
+    skills,
+    reload: reloadPromptSupply,
+  } = usePromptTemplates(projectId);
 
   // The landing travels back to the card. A decision the harness never heard has
   // to say so where it was taken — the card is the only thing on screen at that
@@ -656,33 +705,113 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   );
 
   /**
-   * The press that sends nothing.
+   * What each verb DOES, keyed by name.
    *
-   * `/compact` is a request the runtime performs, so it takes none of
-   * {@link dispatch}'s road: there is no message to hold, nothing for the
-   * strip to hand back, and a durable copy of it already exists as the command
-   * itself. The words still leave the box on the press, because they have
-   * stopped being a draft — and they come back if nothing took them, which is
-   * the composer's standing promise and the reason a refusal here is never
-   * just a red line. Every way this does not happen is a refusal, including
-   * the two that are not failures: a turn still running, and a history with
-   * nothing left to summarize.
+   * A `Record` on the closed {@link ComposerVerbName} rather than a switch:
+   * add a verb and this table fails to compile, naming the one with no act.
+   * The switch it replaced could not do that — it sat in a void-returning
+   * callback, where TypeScript asks nothing of a missing arm, so a new verb
+   * would have been offered by the picker and then quietly done nothing.
    *
-   * Returned only over an empty box: a refusal that arrives after the reader
-   * has started typing again must not overwrite what they are writing.
+   * The return value answers one question: did it happen? `void` means yes,
+   * with nothing further to say. A promise resolving `false` is a refusal that
+   * only became knowable after the press — the clipboard saying no, the
+   * runtime declining a compaction only it can judge — and it is what
+   * {@link verbPress} restores the draft on. Each act owns its own words:
+   * whether a particular thing succeeded is not a sentence this table can
+   * write for all six.
    */
-  const compactNow = React.useCallback(
-    (instructions: string | null) => {
+  const verbActs = React.useMemo<
+    Record<ComposerVerbName, (instructions: string | null) => void | Promise<boolean>>
+  >(
+    () => ({
+      // The runtime performs this one, and it alone can see the refusal that
+      // is not a failure: a history with nothing left to summarize.
+      compact: (instructions) => compactContext(instructions),
+      copy: () => {
+        const text = lastReplyRef.current;
+        // Unreachable: `COPY_VERB.refusal` already required a settled reply,
+        // and the press checks it before reaching this table.
+        if (text === null) return;
+        return navigator.clipboard.writeText(text).then(
+          () => {
+            toast.success("Copied last reply");
+            return true;
+          },
+          () => {
+            toastError("Couldn't copy — the clipboard refused");
+            return false;
+          },
+        );
+      },
+      // The pill's own list, opened by typing instead of clicking.
+      model: () => setModelPickerOpen(true),
+      // The refresh reports itself: re-reading two directories is a round trip
+      // that can fail, and a toast fired beside the request rather than after
+      // its answer would be claiming a refresh that had not happened yet — or
+      // one that never did.
+      reload: () =>
+        reloadPromptSupply().then((refreshed) => {
+          if (refreshed) toast.success("Commands and skills refreshed");
+          return refreshed;
+        }),
+      settings: () => setSettingsOpen(true),
+      // Volli's credentials live in Model Access, not in a verb — the verb is
+      // the door, the page is the room.
+      login: () => setSettingsOpen(true, "model-access"),
+    }),
+    [compactContext, reloadPromptSupply, setSettingsOpen],
+  );
+
+  /**
+   * One verb press, and the contract all six keep.
+   *
+   * Every verb press lands here and none of them sends a message, which is the
+   * whole difference from the fallback arm. Three rules, in the order they are
+   * checked:
+   *
+   * **A refusal the press can see never takes the words.** Trailing words a
+   * verb does not read, or a moment the verb cannot act in, leave the draft
+   * exactly where it is and say why in a toast. Never a silent red line.
+   *
+   * **The moment is judged by the verb.** `verb.refusal` is the same function
+   * `offeredComposerVerbs` filtered the picker with, so a verb the list did
+   * not offer is a verb this refuses, in the words that row's absence meant.
+   * What the picker offers and what a press performs cannot disagree, because
+   * they are not two rules that agree — they are one function asked twice.
+   *
+   * **An act that runs takes the words with it, and hands them back if it did
+   * not happen.** They stopped being a draft the moment the act began. A
+   * refusal only knowable afterwards restores them — asynchronously, and only
+   * over an empty box, so a reader who started typing again is never
+   * overwritten. Every verb keeps this, not just the two that used to.
+   */
+  const verbPress = React.useCallback(
+    (press: ComposerVerbPress) => {
+      const { verb, instructions } = press;
+      if (instructions !== null && !verb.takesInstructions) {
+        // The words stay put rather than clearing first: this press never
+        // happened, and the toast is the sentence that says why.
+        toastError(`/${verb.name} takes no instructions`);
+        return;
+      }
+      const refusal = verb.refusal(verbMomentRef.current);
+      if (refusal !== null) {
+        toastError(refusal);
+        return;
+      }
       const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
       setDraft(sessionId, "");
-      void compactContext(instructions).then((accepted) => {
-        if (accepted) return;
+      const act = verbActs[verb.name](instructions);
+      if (act === undefined) return;
+      void act.then((happened) => {
+        if (happened) return;
         if ((useChatDraftsStore.getState().drafts[sessionId]?.text ?? "") === "") {
           setDraft(sessionId, typed);
         }
       });
     },
-    [compactContext, sessionId, setDraft],
+    [sessionId, setDraft, verbActs],
   );
 
   /**
@@ -701,10 +830,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     (text: string, intent: ComposerIntent) => {
       const press = composerPress(pendingRef.current, text);
       if (press.kind === "answer") answerTyped(press.interactionId, press.submission, text);
-      else if (press.kind === "compact") compactNow(press.instructions);
+      else if (press.kind === "verb") verbPress(press);
       else send(text, intent);
     },
-    [answerTyped, compactNow, send],
+    [answerTyped, send, verbPress],
   );
 
   const withdraw = React.useCallback(
@@ -899,6 +1028,9 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
               // controlled view the Lab can mount without a bridge.
               promptTemplates={promptTemplates}
               skills={skills}
+              verbs={verbSupply}
+              modelPickerOpen={modelPickerOpen}
+              onModelPickerOpenChange={setModelPickerOpen}
               files={files}
               onFilePickerOpen={fileIndex.refresh}
               // One thing parks above the composer at a time; a pending

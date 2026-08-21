@@ -14,6 +14,7 @@ import type {
   SessionInteractionPrompt,
   SessionInteractionResolution,
 } from "@volli/shared";
+import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -29,6 +30,7 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  lastAssistantText,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -818,12 +820,44 @@ describe("composerPress", () => {
   });
 
   it("is a compaction when the whole draft is the verb", () => {
-    expect(composerPress(null, "/compact")).toEqual({ kind: "compact", instructions: null });
+    expect(composerPress(null, "/compact")).toEqual({
+      kind: "verb",
+      verb: COMPACT_VERB,
+      instructions: null,
+    });
     // What the picker leaves in the box, and what someone types after it.
-    expect(composerPress(null, "/compact ")).toEqual({ kind: "compact", instructions: null });
+    expect(composerPress(null, "/compact ")).toEqual({
+      kind: "verb",
+      verb: COMPACT_VERB,
+      instructions: null,
+    });
     expect(composerPress(null, "/compact keep the API work")).toEqual({
-      kind: "compact",
+      kind: "verb",
+      verb: COMPACT_VERB,
       instructions: "keep the API work",
+    });
+  });
+
+  it("is a verb press for every verb in the registry, words and all", () => {
+    // Every verb is the same kind of press: the name decides what runs, and
+    // whether the trailing words mean anything is the presser's question, not
+    // the picker's. `/settings` with words is still claimed — dropping them
+    // silently to make it "just a settings open" is the trap the whole-draft
+    // rule exists to prevent.
+    expect(composerPress(null, "/copy")).toEqual({
+      kind: "verb",
+      verb: COPY_VERB,
+      instructions: null,
+    });
+    expect(composerPress(null, "/settings now")).toEqual({
+      kind: "verb",
+      verb: SETTINGS_VERB,
+      instructions: "now",
+    });
+    expect(composerPress(null, "/login")).toEqual({
+      kind: "verb",
+      verb: LOGIN_VERB,
+      instructions: null,
     });
   });
 
@@ -895,6 +929,100 @@ describe("messageCopyText", () => {
     ];
 
     expect(messageCopyText(messages)).toBeNull();
+  });
+});
+
+describe("lastAssistantText", () => {
+  it("returns the latest turn's words, tool work and all", () => {
+    const messages: readonly UIMessage[] = [
+      { id: "user-1", role: "user", parts: [{ type: "text", text: "What changed?" }] },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        // Tool work is not prose: the copy is the words, not the internals.
+        parts: [{ type: "reasoning", text: "Thinking it through", state: "done" }],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        parts: [{ type: "text", text: "The marker work." }],
+      },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("The marker work.");
+  });
+
+  it("joins several text parts with the feed's prose beat", () => {
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Two things." },
+          { type: "text", text: "Second thing." },
+        ],
+      },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("Two things.\n\nSecond thing.");
+  });
+
+  it("skips assistant messages that said nothing", () => {
+    // A turn can end on a tool call and then speak: the copy is the words,
+    // wherever in the turn they landed.
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Earlier answer." }],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "Thinking", state: "done" },
+          { type: "text", text: "   " },
+        ],
+      },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("Earlier answer.");
+  });
+
+  it("refuses to reach across a user message into an older turn", () => {
+    // A turn that has produced no words yet has no "last reply", and the
+    // previous turn's words would be a copy that looked right and pasted
+    // wrong.
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Older answer." }],
+      },
+      { id: "user-2", role: "user", parts: [{ type: "text", text: "And now?" }] },
+    ];
+
+    expect(lastAssistantText(messages)).toBeNull();
+  });
+
+  it("steps over bookkeeping rows without treating them as the turn's end", () => {
+    // A feed can close on a message that is neither side of the conversation
+    // (a system row). It is not a reply and not a new turn either — the words
+    // behind it are still the latest reply.
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "The marker work." }],
+      },
+      { id: "system-2", role: "system", parts: [{ type: "text", text: "bookkeeping" }] },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("The marker work.");
+  });
+
+  it("returns null for an empty transcript", () => {
+    expect(lastAssistantText([])).toBeNull();
   });
 });
 

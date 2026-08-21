@@ -841,8 +841,12 @@ const TICKET_BRIEF_SPEC: CommandSpec = {
 };
 
 const IDENTIFY_SPEC: CommandSpec = {
-  summary: "Resolve and print the active project, ticket, and session.",
+  summary: "Resolve and print the active project, ticket, session, and session environment.",
   example: "volli identify",
+  notes: [
+    "The env block reports the session PATH, how it was adopted, where each contract tool (git, gh, node, pnpm) resolves, and whether workspace dependencies are installed — read it before running tools to probe for them.",
+    "env.provenance is the boot adoption; env.interactiveProvenance is the later pass that picks up what your shell's interactive startup files export (nvm, bun, rbenv, pyenv, mise). `pending` there means that pass has not landed yet.",
+  ],
   options: {
     "--project": {
       kind: "value",
@@ -889,14 +893,14 @@ const DOCTOR_SPEC: CommandSpec = {
   notes: [
     "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
     "Run it inside a Volli terminal — several checks describe the shell it runs in.",
-    "--fix regenerates the wrappers, harness configs and shell integration. Idempotent; it is the same work a boot does.",
+    "--fix regenerates the wrappers, harness configs and shell integration, then re-runs both Session PATH adoption passes. It names the outcome and added directories for new Sessions; a Session already running keeps its startup environment.",
   ],
   options: {
     "--fix": {
       kind: "flag",
       key: "fix",
       value: true,
-      help: "Regenerate everything regenerable, then re-check.",
+      help: "Regenerate, re-run Session PATH adoption, then re-check.",
     },
   },
 };

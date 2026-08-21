@@ -83,9 +83,6 @@ function fakeHighlighter(
       bg: "#000",
     })),
     getLanguage: vi.fn(() => ({ tokenizeLine2 })),
-    loadTheme: vi.fn(async (theme: { name?: string }) => {
-      if (theme.name && !themes.includes(theme.name)) themes.push(theme.name);
-    }),
     loadLanguage: vi.fn(async () => undefined),
     setTheme: vi.fn(() => ({ colorMap: options.colorMap ?? ["#000000", "#ff0000"] })),
     _languages: languages,
@@ -171,7 +168,7 @@ describe("bootstrapShikiMonaco", () => {
 
     const { bootstrapShikiMonaco } = await import("./shiki-monaco");
 
-    await bootstrapShikiMonaco(monaco as never);
+    const session = await bootstrapShikiMonaco(monaco as never);
 
     expect(createJavaScriptRegexEngine).toHaveBeenCalledTimes(1);
     expect(createHighlighterCore).toHaveBeenCalledWith({
@@ -189,6 +186,7 @@ describe("bootstrapShikiMonaco", () => {
       }),
     );
     expect(setThemeSpy).toHaveBeenCalledWith("one-dark-pro");
+    expect(session).not.toHaveProperty("registerTheme");
   });
 
   it("skips initial setTheme when no themes were loaded at bootstrap", async () => {
@@ -200,59 +198,6 @@ describe("bootstrapShikiMonaco", () => {
     await bootstrapShikiMonaco(monaco as never);
 
     expect(setThemeSpy).not.toHaveBeenCalled();
-  });
-
-  it("registers a later theme into themeMap without re-wiring setTheme", async () => {
-    const highlighter = fakeHighlighter([], ["one-dark-pro"]);
-    const resolvedTheme = {
-      name: "catppuccin-mocha",
-      type: "dark" as const,
-      colors: { "editor.background": "#1e1e2e" },
-      settings: [],
-      fg: "#cdd6f4",
-      bg: "#1e1e2e",
-    };
-    highlighter.getTheme.mockImplementation((name: string) =>
-      name === "catppuccin-mocha"
-        ? resolvedTheme
-        : { name, type: "dark" as const, colors: {}, settings: [], fg: "#fff", bg: "#000" },
-    );
-    createHighlighterCore.mockResolvedValue(highlighter);
-    const monaco = fakeMonaco();
-    const monacoTheme = {
-      base: "vs-dark" as const,
-      inherit: false,
-      colors: { "editor.background": "#1e1e2e" },
-      rules: [{ token: "keyword", foreground: "#cba6f7", fontStyle: "bold" }],
-    };
-    textmateThemeToMonacoTheme.mockReturnValue(monacoTheme);
-
-    const { bootstrapShikiMonaco } = await import("./shiki-monaco");
-    const session = await bootstrapShikiMonaco(monaco as never);
-    const setThemeAfterBootstrap = monaco.editor.setTheme;
-    monaco.editor.defineTheme.mockClear();
-
-    await session.registerTheme(resolvedTheme);
-    monaco.editor.setTheme("catppuccin-mocha");
-
-    expect(highlighter.loadTheme).toHaveBeenCalledWith(resolvedTheme);
-    expect(textmateThemeToMonacoTheme).toHaveBeenCalledWith(resolvedTheme);
-    expect(monaco.editor.defineTheme).toHaveBeenCalledWith("catppuccin-mocha", monacoTheme);
-    expect(monaco.editor.setTheme).toBe(setThemeAfterBootstrap);
-    expect(highlighter.setTheme).toHaveBeenCalledWith("catppuccin-mocha");
-  });
-
-  it("does not reload a theme that the highlighter already has", async () => {
-    const highlighter = fakeHighlighter([], ["one-dark-pro", "nord"]);
-    createHighlighterCore.mockResolvedValue(highlighter);
-    const monaco = fakeMonaco();
-    const { bootstrapShikiMonaco } = await import("./shiki-monaco");
-    const session = await bootstrapShikiMonaco(monaco as never);
-
-    await session.registerTheme(highlighter.getTheme("nord"));
-
-    expect(highlighter.loadTheme).not.toHaveBeenCalled();
-    expect(monaco.editor.defineTheme).toHaveBeenCalledWith("nord", expect.anything());
   });
 
   it("installs a tokens provider for a language loaded after bootstrap", async () => {

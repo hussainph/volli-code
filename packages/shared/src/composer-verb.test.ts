@@ -3,9 +3,16 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   COMPACT_VERB,
   COMPOSER_VERBS,
+  COPY_VERB,
+  LOGIN_VERB,
+  MODEL_VERB,
+  RELOAD_VERB,
+  SETTINGS_VERB,
   findComposerVerb,
   isComposerVerbName,
+  offeredComposerVerbs,
   visiblePromptTemplates,
+  type ComposerVerbMoment,
 } from "./composer-verb";
 import type { PromptTemplate } from "./prompt-template";
 
@@ -14,16 +21,158 @@ function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
 }
 
 describe("the verbs there are", () => {
-  it("names compaction and nothing else", () => {
-    expect(COMPOSER_VERBS).toEqual([COMPACT_VERB]);
-    expect(isComposerVerbName("compact")).toBe(true);
+  it("names every built-in, once each", () => {
+    expect(COMPOSER_VERBS).toEqual([
+      COMPACT_VERB,
+      COPY_VERB,
+      MODEL_VERB,
+      RELOAD_VERB,
+      SETTINGS_VERB,
+      LOGIN_VERB,
+    ]);
+    for (const verb of COMPOSER_VERBS) {
+      expect(isComposerVerbName(verb.name)).toBe(true);
+    }
     expect(isComposerVerbName("review")).toBe(false);
+  });
+
+  it("records which verbs read free text and which refuse it", () => {
+    // `/compact` hands its words to a summarizer; every other verb runs a
+    // fixed operation with nothing for trailing words to mean. The press
+    // reads this flag rather than each handler deciding again.
+    expect(COMPACT_VERB.takesInstructions).toBe(true);
+    for (const entry of COMPOSER_VERBS.filter((verb) => verb.name !== "compact")) {
+      expect(entry.takesInstructions).toBe(false);
+    }
+  });
+});
+
+/** Everything available: the moment each test below spoils one fact of. */
+const READY: ComposerVerbMoment = {
+  working: false,
+  hasReply: true,
+  hasModels: true,
+  hasProject: true,
+};
+
+describe("what each verb refuses, and why", () => {
+  // The refusal string is the row's absence said out loud: the picker hides
+  // the verb, and a reader who types it anyway gets THIS sentence. So each
+  // cause is pinned to its own words — a verb that refused for the right
+  // reason in the wrong words would be a control lying about the app's state,
+  // which is the whole failure this rule exists to prevent.
+  it("lets every verb through when the moment is ready", () => {
+    for (const verb of COMPOSER_VERBS) {
+      expect(verb.refusal(READY)).toBeNull();
+    }
+  });
+
+  it("refuses the two a live turn owns, each for its own reason", () => {
+    const working = { ...READY, working: true };
+    expect(COMPACT_VERB.refusal(working)).toBe("Compaction can't run while a turn is live");
+    expect(MODEL_VERB.refusal(working)).toBe("The model can't change mid-turn");
+    // Mid-turn the newest reply is still arriving, and half a sentence under
+    // "Copied last reply" is a copy that looked right and pasted wrong.
+    expect(COPY_VERB.refusal(working)).toBe("Wait for the reply to finish");
+  });
+
+  it("refuses /copy with nothing said yet", () => {
+    expect(COPY_VERB.refusal({ ...READY, hasReply: false })).toBe("No reply to copy yet");
+  });
+
+  it("refuses /model on an empty catalog, and does not blame the turn", () => {
+    // The reachable one: a Session with no model access is exactly where
+    // someone types `/model`. Naming a mid-turn cause here would send them
+    // looking for a turn that is not running.
+    expect(MODEL_VERB.refusal({ ...READY, hasModels: false })).toBe(
+      "No models to choose from — try /login",
+    );
+  });
+
+  it("refuses /reload with no project to read", () => {
+    expect(RELOAD_VERB.refusal({ ...READY, hasProject: false })).toBe(
+      "No project to read commands from",
+    );
+  });
+
+  it("keeps the two doors open in every moment there is", () => {
+    // App chrome, and deliberately unconditional: the Session with nothing
+    // configured is the one that needs `/login` most.
+    for (const moment of [
+      READY,
+      { working: true, hasReply: false, hasModels: false, hasProject: false },
+    ]) {
+      expect(SETTINGS_VERB.refusal(moment)).toBeNull();
+      expect(LOGIN_VERB.refusal(moment)).toBeNull();
+    }
+  });
+});
+
+describe("offeredComposerVerbs", () => {
+  it("offers everything when nothing refuses", () => {
+    expect(offeredComposerVerbs(READY)).toEqual(COMPOSER_VERBS);
+  });
+
+  it("offers exactly the verbs whose refusal is null", () => {
+    // Not a second rule that agrees with `refusal` — the same one, asked of
+    // every verb. This is what makes "what the picker offers" and "what a
+    // press performs" incapable of disagreeing.
+    const moment = { working: true, hasReply: true, hasModels: true, hasProject: true };
+    expect(offeredComposerVerbs(moment)).toEqual(
+      COMPOSER_VERBS.filter((verb) => verb.refusal(moment) === null),
+    );
+  });
+
+  it("holds back the verbs a live turn would refuse", () => {
+    expect(offeredComposerVerbs({ ...READY, working: true })).toEqual([
+      RELOAD_VERB,
+      SETTINGS_VERB,
+      LOGIN_VERB,
+    ]);
+  });
+
+  it("holds back a verb with nothing to act on", () => {
+    expect(offeredComposerVerbs({ ...READY, hasReply: false })).toEqual([
+      COMPACT_VERB,
+      MODEL_VERB,
+      RELOAD_VERB,
+      SETTINGS_VERB,
+      LOGIN_VERB,
+    ]);
+  });
+
+  it("leaves a Session with no project and no catalog its two doors", () => {
+    // The emptiest moment there is, and the list is still honest rather than
+    // empty: what remains is exactly what still works.
+    expect(
+      offeredComposerVerbs({
+        working: false,
+        hasReply: false,
+        hasModels: false,
+        hasProject: false,
+      }),
+    ).toEqual([COMPACT_VERB, SETTINGS_VERB, LOGIN_VERB]);
   });
 });
 
 describe("findComposerVerb", () => {
   it("claims a draft that is the verb, with no instructions", () => {
     expect(findComposerVerb("/compact")).toEqual({ verb: COMPACT_VERB, instructions: null });
+  });
+
+  it("claims every verb the same way, words and all", () => {
+    // The grammar is the registry's, not compact's: whichever verb a draft
+    // names, the whole draft is the invocation and the words after the name
+    // travel unparsed. Whether they MEAN anything is `takesInstructions`, and
+    // that is the press's question, not this one's.
+    expect(findComposerVerb("/copy")).toEqual({ verb: COPY_VERB, instructions: null });
+    expect(findComposerVerb("/model")).toEqual({ verb: MODEL_VERB, instructions: null });
+    expect(findComposerVerb("/reload now please")).toEqual({
+      verb: RELOAD_VERB,
+      instructions: "now please",
+    });
+    expect(findComposerVerb("/settings\n")).toEqual({ verb: SETTINGS_VERB, instructions: null });
+    expect(findComposerVerb("/login")).toEqual({ verb: LOGIN_VERB, instructions: null });
   });
 
   it("ignores the whitespace a pick leaves behind", () => {
@@ -92,6 +241,19 @@ describe("visiblePromptTemplates", () => {
     // visible (the picker shows the verb where this row was) where the reverse
     // would be silent (a `/compact` that sends a prompt instead of compacting).
     expect(visiblePromptTemplates([own, other])).toEqual([other]);
+  });
+
+  it("drops a template spelled like any of the newer verbs, too", () => {
+    // `model` and `settings` are words a project plausibly used for a prompt
+    // before these verbs existed. The reservation is the same bargain the
+    // first test names: a visible cost beats an operation silently becoming
+    // a message.
+    const rows = [
+      template({ name: "model" }),
+      template({ name: "settings" }),
+      template({ name: "copy" }),
+    ];
+    expect(visiblePromptTemplates(rows)).toEqual([]);
   });
 
   it("leaves an ordinary list alone", () => {

@@ -1,7 +1,7 @@
 /**
- * The theming IPC surface: read the resolved terminal chain for a scope, persist
- * the canvas and appearance at either scope, set the editor theme, set a
- * project's per-surface override, and write terminal overlay edits.
+ * The theming IPC surface: read the resolved terminal chain for a scope,
+ * persist canvas and appearance at either scope, retain a project's terminal
+ * override, and write terminal overlay edits.
  *
  * Two shapes worth naming up front, because they are what keep the design's
  * rules true at the boundary rather than only inside it:
@@ -40,7 +40,6 @@ import type {
   TerminalOverlayWriteInput,
   TerminalOverlayWriteResult,
   ThemeIpcChannel,
-  ThemeSetGlobalEditorInput,
   ThemeSetProjectInput,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -54,13 +53,7 @@ import {
   updateProjectCanvas,
   updateProjectThemeOverride,
 } from "./db/projects-repo";
-import {
-  getGlobalEditorThemeId,
-  setFirstPaintHint,
-  setGlobalAppearance,
-  setGlobalCanvas,
-  setGlobalEditorThemeId,
-} from "./db/theme-repo";
+import { setFirstPaintHint, setGlobalAppearance, setGlobalCanvas } from "./db/theme-repo";
 import { readGhosttyAppearance } from "./ghostty-config";
 import type { FsDeps } from "./fs-deps";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
@@ -133,16 +126,10 @@ function buildThemeState(
 ): ThemeStateResult {
   let terminal: GhosttyAppearancePayload;
   let payload: ThemeStatePayload;
-  const editorThemeId = getGlobalEditorThemeId(db);
   const appearance = deps.appearance();
   if (projectId === null) {
     terminal = readGhosttyAppearance(deps.fs, appearance, null);
-    payload = {
-      editorThemeId,
-      projectOverride: null,
-      projectId: null,
-      terminal,
-    };
+    payload = { projectOverride: null, projectId: null, terminal };
     return { ok: true, value: payload };
   }
 
@@ -150,37 +137,11 @@ function buildThemeState(
   if (project === undefined) return { ok: false, error: "Unknown project" };
   terminal = readGhosttyAppearance(deps.fs, appearance, project.ticketPrefix);
   payload = {
-    editorThemeId,
     projectOverride: project.themeOverride ?? null,
     projectId,
     terminal,
   };
   return { ok: true, value: payload };
-}
-
-/**
- * The state a WRITE answers with: the scope the caller is in, not the scope the
- * write targeted (#123).
- *
- * A global write made while the window is showing a project used to answer with
- * `projectId: null`, and the renderer adopts that payload wholesale — so
- * picking an app-wide theme silently dropped the project scope and repainted
- * every overriding project to the global theme until you switched away and
- * back. The write is still global; only the answer is scoped.
- *
- * A `projectId` that no longer resolves degrades to the global scope instead of
- * failing: the write ALREADY succeeded, so a typed error here would make the
- * renderer roll back to a theme that is no longer what is stored. A project
- * that has gone has no scope left to describe, and global is what the window is
- * about to be told it is in anyway.
- */
-function stateForCaller(
-  db: Database.Database,
-  deps: ThemeIpcDeps,
-  projectId: string | null,
-): ThemeStateResult {
-  const scoped = buildThemeState(db, deps, projectId);
-  return scoped.ok ? scoped : buildThemeState(db, deps, null);
 }
 
 /**
@@ -203,12 +164,6 @@ export function registerThemeIpcHandlers(
   const handlers: IpcHandlerTable<ThemeIpcChannel> = {
     "volli:theme-state": (input: ThemeStateInput): ThemeStateResult =>
       buildThemeState(db, deps, input.projectId ?? null),
-
-    "volli:theme-set-global-editor": (input: ThemeSetGlobalEditorInput): ThemeStateResult => {
-      setGlobalEditorThemeId(db, input.editorThemeId, deps.now());
-      // The caller's scope, not the write's — see `stateForCaller`.
-      return stateForCaller(db, deps, input.projectId ?? null);
-    },
 
     "volli:theme-set-project": (input: ThemeSetProjectInput): ThemeSetProjectResult => {
       const project = updateProjectThemeOverride(db, input.projectId, input.override, deps.now());

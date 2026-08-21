@@ -1,6 +1,5 @@
 /**
- * The `app_state` keys theming writes, and the one codec small enough to live
- * beside them — the global editor theme id.
+ * The `app_state` keys theming writes.
  *
  * What is authoritative is `{canvas, appearance}`: the canvas under
  * {@link THEME_APP_STATE_KEY} and the appearance beside it, with each project's
@@ -14,10 +13,8 @@
  * of the bootstrap payload. Three hand-typed copies of a key string is two too
  * many.
  *
- * Pure: string constants and shape guards only, no Node/DOM.
+ * Pure: string constants only, no Node/DOM.
  */
-
-import { isShippedEditorThemeId, type ShippedEditorThemeId } from "./editor-themes";
 
 /** The `app_state` key the authored global canvas lives under (#29's kv table). */
 export const THEME_APP_STATE_KEY = "theme";
@@ -29,30 +26,12 @@ export const THEME_APP_STATE_KEY = "theme";
 export const APPEARANCE_APP_STATE_KEY = "appearance";
 
 /**
- * The `app_state` key for the global Monaco/shiki editor theme id.
- * Absent or null means the shipped default editor theme (One Dark Pro) —
- * appearance-independent, and never a resolved token set.
+ * There is deliberately no editor key here. VC-123 collapsed the editor to one
+ * light and one dark theme chosen by {@link APPEARANCE_APP_STATE_KEY}'s
+ * resolved value, so the editor has nothing of its own left to store.
+ *
+ * A database upgraded from an older build may still hold a `theme_editor` row
+ * naming a retired catalog id. Nothing reads it, and that IS the tolerant read:
+ * an id from a build that had a picker now means exactly what an absent row
+ * means — follow the app.
  */
-export const THEME_EDITOR_APP_STATE_KEY = "theme_editor";
-
-/**
- * The string stored under {@link THEME_EDITOR_APP_STATE_KEY}. Empty means the
- * shipped default editor theme (same as a missing row); a non-empty value is
- * the authored catalog id.
- */
-export function serializeGlobalEditorThemeId(editorThemeId: ShippedEditorThemeId | null): string {
-  return editorThemeId !== null && isShippedEditorThemeId(editorThemeId) ? editorThemeId : "";
-}
-
-/**
- * Reads the authored global editor theme id back out of `app_state`. Null for
- * absent, empty, “clear back to default”, or a non-catalog value (corrupt /
- * hand-edited row) — the renderer maps that through `resolveEditorThemeId`.
- * Only {@link isShippedEditorThemeId} values survive.
- */
-export function parseGlobalEditorThemeId(
-  raw: string | undefined | null,
-): ShippedEditorThemeId | null {
-  if (raw === undefined || raw === null || raw.length === 0) return null;
-  return isShippedEditorThemeId(raw) ? raw : null;
-}

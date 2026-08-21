@@ -17,7 +17,8 @@ import { buildHarnessInstallPlan, harnessAdapters, VOLLI_PATH_PROFILE_BLOCK } fr
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { applyHarnessInstallPlan } from "./harness-install";
-import { loginShellPath, resetLoginShellPathCache } from "./login-path";
+import { loginShellPath, resetLoginShellPathCache } from "./login-shell-path";
+import type { LoginShellRun } from "./login-shell-path";
 import {
   cleanupLegacyGlobalCliLink,
   detectHarnesses,
@@ -34,6 +35,11 @@ import {
 } from "./agent-tools";
 
 let root: string | undefined;
+
+/** A shell that printed this and exited on its own terms. */
+function printed(stdout: string): LoginShellRun {
+  return { stdout, exitCode: 0, signal: null };
+}
 
 afterEach(async () => {
   resetLoginShellPathCache();
@@ -113,7 +119,7 @@ describe("detectHarnesses", () => {
       env: launchd,
       // Marked, as the probe's own `printf` marks it: an interactive shell
       // talks on both sides of the command, so only the marked line counts.
-      runShell: async () => `__VOLLI_PATH__${bin}:${launchd.PATH}\n`,
+      runShell: async () => printed(`__VOLLI_PATH__${bin}:${launchd.PATH}\n`),
     });
 
     expect(detected).toEqual(["codex"]);
@@ -302,7 +308,7 @@ describe("login PATH wiring", () => {
     root = await mkdtemp(join(tmpdir(), "volli-path-wiring-"));
     const stale = await loginShellPath({
       env: { SHELL: "/bin/zsh" },
-      runShell: async () => "__VOLLI_PATH__/usr/bin:/bin",
+      runShell: async () => printed("__VOLLI_PATH__/usr/bin:/bin"),
     });
     expect(stale).toBe("/usr/bin:/bin");
 
@@ -313,7 +319,7 @@ describe("login PATH wiring", () => {
     const rewired = `${join(root, ".local/bin")}:/usr/bin:/bin`;
     const measured = await loginShellPath({
       env: { SHELL: "/bin/zsh" },
-      runShell: async () => `__VOLLI_PATH__${rewired}`,
+      runShell: async () => printed(`__VOLLI_PATH__${rewired}`),
     });
     expect(measured).toBe(rewired);
   });
@@ -327,7 +333,7 @@ describe("login PATH wiring", () => {
 
     const cached = await loginShellPath({
       env: { SHELL: "/bin/zsh" },
-      runShell: async () => "__VOLLI_PATH__/usr/bin:/bin",
+      runShell: async () => printed("__VOLLI_PATH__/usr/bin:/bin"),
     });
     expect(cached).toBe("/usr/bin:/bin");
 
@@ -338,7 +344,7 @@ describe("login PATH wiring", () => {
 
     const after = await loginShellPath({
       env: { SHELL: "/bin/zsh" },
-      runShell: async () => "__VOLLI_PATH__/changed",
+      runShell: async () => printed("__VOLLI_PATH__/changed"),
     });
     expect(after).toBe("/usr/bin:/bin"); // still the cached answer — no write, no drop
   });

@@ -1,8 +1,8 @@
-import { chmod, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import type { DoctorCheck } from "@volli/shared";
+import type { DoctorCheck, SessionEnvRepair } from "@volli/shared";
 import {
   entriesInDirectory,
   executableAt,
@@ -70,6 +70,20 @@ describe("observeEnvironment", () => {
     expect(resolved["claude"]).toBe("/ud/bin/claude");
     expect(resolved["codex"]).toBeNull();
     expect(observed["volliPath"]).toBe("/ud/bin/volli");
+  });
+
+  // VC-94: a machine with no harness installed still needs its contract tools
+  // audited, so the observation measures them with or without a bin dir — and
+  // a missing one is a measured null, not a key that never appeared.
+  it("resolves every contract tool, found or missing", async () => {
+    const observed = await observeEnvironment(
+      environment({ PATH: "/ud/bin" }, ["/ud/bin/volli", "/ud/bin/git"]),
+    );
+    const resolved = observed["resolved"] as Record<string, string | null>;
+    expect(resolved["git"]).toBe("/ud/bin/git");
+    expect(resolved["gh"]).toBeNull();
+    expect(resolved["node"]).toBeNull();
+    expect(resolved["pnpm"]).toBeNull();
   });
 
   it("reports ZDOTDIR as null when unset rather than omitting it", async () => {
@@ -197,6 +211,35 @@ describe("renderDoctorCheck", () => {
       "✓ Volli's bin is first on PATH\n    position 1 of 30\n\nAll 1 checks passed.\n",
     );
   });
+
+  it("reports the repair's two outcomes, exact additions, and its scope", () => {
+    const repair: SessionEnvRepair = {
+      path: "/volli/bin:/Users/x/.bun/bin:/opt/homebrew/bin:/usr/bin",
+      provenance: "adopted",
+      added: ["/opt/homebrew/bin"],
+      interactiveProvenance: "adopted",
+      interactiveAdded: ["/Users/x/.bun/bin"],
+    };
+
+    expect(renderDoctorReport([check()], "All 1 checks passed.", repair)).toContain(
+      "Session PATH repair\n" +
+        "    env.path  /volli/bin:/Users/x/.bun/bin:/opt/homebrew/bin:/usr/bin\n" +
+        "    env.provenance  adopted\n" +
+        "    env.added  /opt/homebrew/bin\n" +
+        "    env.interactiveProvenance  adopted\n" +
+        "    env.interactiveAdded  /Users/x/.bun/bin\n" +
+        "    Sessions started after this repair use this PATH. This running Session keeps the environment it started with.",
+    );
+    expect(
+      renderDoctorReport([check()], "All 1 checks passed.", {
+        ...repair,
+        added: [],
+        interactiveAdded: [],
+      }),
+    ).toContain(
+      "    env.added  -\n    env.interactiveProvenance  adopted\n    env.interactiveAdded  -",
+    );
+  });
 });
 
 describe("executableAt", () => {
@@ -212,6 +255,16 @@ describe("executableAt", () => {
     expect(await executableAt(runnable)).toBe(true);
     expect(await executableAt(plain)).toBe(false);
     expect(await executableAt(join(dir, "absent"))).toBe(false);
+  });
+
+  // access(X_OK) alone passes for a directory; a shell would not run one, so
+  // a directory named after a tool must not be reported as the tool.
+  it("refuses a directory, however executable its mode bits", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "volli-doctor-"));
+    const toolShapedDir = join(dir, "git");
+    await mkdir(toolShapedDir, { recursive: true });
+
+    expect(await executableAt(toolShapedDir)).toBe(false);
   });
 });
 

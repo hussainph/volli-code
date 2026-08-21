@@ -22,6 +22,7 @@ import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
+import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 
@@ -164,7 +165,6 @@ function ListSection({
   ticketPrefix,
   projectLabels,
   selectedId,
-  sessionActivity,
   onSelect,
   onOpen,
   dragActive,
@@ -175,13 +175,15 @@ function ListSection({
   ticketPrefix: string;
   projectLabels: readonly Label[];
   selectedId: string | null;
-  /** ticketId → what is running on it; absent means nothing is (VC-100). */
-  sessionActivity: Readonly<Record<string, TicketSessionActivity>>;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
   dragActive: boolean;
 }) {
+  // ticketId → what is running on it; absent means nothing is (VC-100). Read
+  // from context for the reason board-column.tsx gives — the derivation has to
+  // hang below the `DndContext`, never above it.
+  const sessionActivity = useBoardSessionActivityMap();
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
   // Memoized for the same reason as board-column.tsx's, and with the same
   // caveat about how far that invalidation actually travels — read the comment
@@ -296,12 +298,6 @@ interface BoardListViewProps {
   boardEmpty: boolean;
   dragActive: boolean;
   selectedId: string | null;
-  /**
-   * ticketId → what is running on it; absent means nothing is (VC-100). One map
-   * for the whole view, derived once by the board — see
-   * `hooks/use-board-session-activity.ts`.
-   */
-  sessionActivity: Readonly<Record<string, TicketSessionActivity>>;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
@@ -324,7 +320,6 @@ export function BoardListView({
   boardEmpty,
   dragActive,
   selectedId,
-  sessionActivity,
   onSelect,
   onOpen,
 }: BoardListViewProps) {
@@ -354,7 +349,6 @@ export function BoardListView({
               ticketPrefix={ticketPrefix}
               projectLabels={projectLabels}
               selectedId={selectedId}
-              sessionActivity={sessionActivity}
               onSelect={onSelect}
               onOpen={onOpen}
               dragActive={dragActive}

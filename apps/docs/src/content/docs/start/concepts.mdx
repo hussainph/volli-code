@@ -20,8 +20,10 @@ can provide the context for a Ticket Session and its worktree.
 **Ticket Body.** The ticket's canonical Markdown scope and starting instruction.
 It is part of the ticket record, not a repository file.
 
-**Ticket workspace.** The expanded working surface for one ticket. Its body,
-Sessions, files, properties, and change set appear together here.
+**Ticket workspace.** The expanded working surface for one ticket. Its main
+tabs hold the Ticket Body, Sessions, files, and diffs. The right rail groups
+repository state, properties, and Sessions under Now, with separate Diffs and
+Files views.
 
 **Display ID.** The project-local handle shown to people, such as `VC-12`.
 
@@ -48,7 +50,8 @@ work in a project or worktree. It is separate from structured Session execution.
 
 **Ticket worktree.** An isolated checkout for a ticket. Volli creates its
 branch as `volli/<DISPLAY-ID>-<slug>` and stores the checkout under
-`~/.volli/worktrees/`.
+`~/.volli/worktrees/`. A worktree is disposable checkout state. Volli can
+recreate it from the retained branch after cleanup.
 
 **Main checkout.** The repository folder you added as a project.
 

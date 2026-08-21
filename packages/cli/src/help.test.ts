@@ -83,9 +83,9 @@ describe("renderHelp command detail", () => {
   });
 
   it("renders a command that has options but no notes", () => {
-    const detail = renderHelp(["identify"]);
+    const detail = renderHelp(["ticket", "list"]);
     expect(detail).toContain("Options:");
-    expect(detail).toContain("--project <p>");
+    expect(detail).toContain("--status <column>");
     expect(detail).not.toContain("Notes:");
   });
 

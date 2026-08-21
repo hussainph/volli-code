@@ -119,12 +119,23 @@ describe("runCli", () => {
         VOLLI_SOCKET: "/profiles/volli.sock",
         VOLLI_SESSION: "session-7",
         VOLLI_TICKET: "VC-12",
+        PATH: "/opt/homebrew/bin:/usr/bin",
       },
       cwd: "/work/volli",
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
       readText: async () => "",
-      observe: async () => ({}),
+      // The degraded env block reuses the doctor observation's resolutions:
+      // measured here, in the environment under test, never reconstructed.
+      observe: async () => ({
+        resolved: {
+          git: "/usr/bin/git",
+          gh: "/opt/homebrew/bin/gh",
+          node: null,
+          pnpm: null,
+        },
+      }),
+      pathExists: (path) => path === "/work/volli/package.json",
       request: async () => {
         throw new AgentClientError("APP_UNREACHABLE", "not running");
       },
@@ -134,7 +145,7 @@ describe("runCli", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toEqual([]);
     expect(stdout).toEqual([
-      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"degraded":true}\n',
+      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"env":{"path":"/opt/homebrew/bin:/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":"/usr/bin/git","gh":"/opt/homebrew/bin/gh","node":null,"pnpm":null},"dependencies":"absent"},"degraded":true}\n',
     ]);
   });
 
@@ -311,6 +322,30 @@ describe("runCli", () => {
     expect(errors[0]).toContain("error[APP_UNREACHABLE]");
   });
 
+  // The one command that must answer without the app may not fail because the
+  // observation did: a degraded env block of unknowns is still an answer.
+  it("answers a degraded identify even when the observation rejects", async () => {
+    const output: string[] = [];
+    const exitCode = await runCli(["identify", "--json"], {
+      env: { PATH: "/usr/bin" },
+      cwd: "/work",
+      stdout: (text) => output.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => Promise.reject(new Error("environment gone")),
+      request: async () => ({ v: 1, ok: true, data: {} }),
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(exitCode).toBe(0);
+    // Both provenance fields null, and neither of them `pending`: a CLI with no
+    // app to ask never ran a pass, which is not the same fact as a pass that
+    // has yet to land.
+    expect(output[0]).toContain(
+      '"env":{"path":"/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":null,"gh":null,"node":null,"pnpm":null}',
+    );
+  });
+
   it("maps server failures and thrown client failures without writing stdout", async () => {
     const output: string[] = [];
     const errors: string[] = [];
@@ -447,6 +482,17 @@ describe("runCli — doctor", () => {
           data: {
             checks: [],
             summary: repaired["claude"] === null ? "1 failed of 1 checks." : "All 1 checks passed.",
+            ...(request.args["fix"] === true
+              ? {
+                  pathRepair: {
+                    path: "/ud/bin:/opt/homebrew/bin:/usr/bin",
+                    provenance: "adopted",
+                    added: ["/opt/homebrew/bin"],
+                    interactiveProvenance: "already-complete",
+                    interactiveAdded: [],
+                  },
+                }
+              : {}),
           },
         };
       },
@@ -461,7 +507,37 @@ describe("runCli — doctor", () => {
     expect(requests[1]).toBeDefined();
     expect(requests[1]?.args).not.toHaveProperty("fix");
     expect(requests[1]?.args["resolved"]).toEqual({ claude: "/ud/bin/claude" });
+    expect(stdout.join("")).toContain("Session PATH repair");
+    expect(stdout.join("")).toContain("env.added  /opt/homebrew/bin");
     expect(stdout.join("")).toContain("All 1 checks passed.");
+  });
+
+  it("surfaces a failed re-check after a successful repair", async () => {
+    const stderr: string[] = [];
+    let requests = 0;
+    const code = await runCli(["doctor", "--fix"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({ pathEntries: [], resolved: {} }),
+      request: async () => {
+        requests += 1;
+        return requests === 1
+          ? { v: 1, ok: true as const, data: { checks: [], summary: "All 0 checks passed." } }
+          : {
+              v: 1,
+              ok: false as const,
+              error: { code: "MUTATION_FAILED", message: "Re-check failed" },
+            };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(1);
+    expect(requests).toBe(2);
+    expect(stderr.join("")).toContain("Re-check failed");
   });
 
   it("does not re-check a doctor run that was not asked to repair", async () => {

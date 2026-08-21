@@ -1,4 +1,6 @@
-import { errorMessage } from "@volli/shared";
+import { existsSync } from "node:fs";
+
+import { errorMessage, SESSION_ENV_TOOLS, workspaceDependenciesStatus } from "@volli/shared";
 import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { AgentClientError } from "./client";
@@ -18,6 +20,12 @@ export interface RunCliDependencies {
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
   /** What this process sees of its own environment — `volli doctor`'s evidence. */
   observe(): Promise<Record<string, unknown>>;
+  /**
+   * Whether a path exists on disk — the degraded `identify` env block walks
+   * the cwd for a package workspace. Optional because most callers have no
+   * filesystem to script; defaults to the real one.
+   */
+  pathExists?(path: string): boolean;
 }
 
 function clientError(error: unknown): AgentError {
@@ -25,7 +33,33 @@ function clientError(error: unknown): AgentError {
   return { code: "MUTATION_FAILED", message: errorMessage(error) };
 }
 
-function writeDegradedIdentify(json: boolean, dependencies: RunCliDependencies): void {
+/**
+ * The degraded `identify` that answers without main. The CLI process lives in
+ * the session environment, so the env block it reports is measured, not
+ * synthesized — the same tool resolutions the doctor observation carries,
+ * extracted here so the census is one list in one place. BOTH provenance
+ * fields stay `null`: only main knows what its two adoption passes did, and a
+ * CLI claiming either would be the plausible wrong answer this whole feature
+ * exists to remove. `null` is not `pending` — one says nobody could ask, the
+ * other says the app asked and has not finished.
+ */
+async function writeDegradedIdentify(
+  json: boolean,
+  dependencies: RunCliDependencies,
+): Promise<void> {
+  let observed: Record<string, unknown> = {};
+  try {
+    observed = await dependencies.observe();
+  } catch {
+    // A broken observation degrades to an env block of unknowns, never to a
+    // failed identify — the one command that must answer without the app.
+  }
+  const observedResolved = (observed["resolved"] ?? {}) as Record<string, unknown>;
+  const tools = {} as Record<string, string | null>;
+  for (const tool of SESSION_ENV_TOOLS) {
+    const resolved = observedResolved[tool];
+    tools[tool] = typeof resolved === "string" ? resolved : null;
+  }
   dependencies.stdout(
     renderCliSuccess(
       "identify",
@@ -36,6 +70,16 @@ function writeDegradedIdentify(json: boolean, dependencies: RunCliDependencies):
         worktreePath: dependencies.cwd,
         socket: dependencies.env["VOLLI_SOCKET"] ?? null,
         appVersion: null,
+        env: {
+          path: dependencies.env["PATH"] ?? "",
+          provenance: null,
+          interactiveProvenance: null,
+          tools,
+          dependencies: workspaceDependenciesStatus(
+            dependencies.cwd,
+            dependencies.pathExists ?? existsSync,
+          ),
+        },
         degraded: true,
       },
       { json },
@@ -100,7 +144,7 @@ export async function runCli(
   const socketPath = dependencies.env["VOLLI_SOCKET"];
   if (socketPath === undefined) {
     if (command === "identify") {
-      writeDegradedIdentify(parsed.invocation.json, dependencies);
+      await writeDegradedIdentify(parsed.invocation.json, dependencies);
       return 0;
     }
     dependencies.stderr(
@@ -143,13 +187,24 @@ export async function runCli(
     // the wrappers to go and regenerate the wrappers. The second request
     // measures again, now that they exist, and carries no `fix`, so nothing is
     // repaired twice and what gets printed is the world the repair left behind.
-    const response =
-      first.ok && command === "doctor" && invocation.args["fix"] === true
-        ? await dependencies.request(socketPath, {
-            ...request,
-            args: { ...omitFix(invocation.args), ...(await dependencies.observe()) },
-          })
-        : first;
+    let response = first;
+    if (first.ok && command === "doctor" && invocation.args["fix"] === true) {
+      // The second request carries the calling Session's fresh observation, but
+      // the repair result exists only on the first. Preserve both facts: a
+      // Session already running still reports its startup PATH, while main's
+      // repair report names the PATH new Sessions will receive.
+      const pathRepair = (first.data as { pathRepair?: unknown }).pathRepair;
+      const rechecked = await dependencies.request(socketPath, {
+        ...request,
+        args: { ...omitFix(invocation.args), ...(await dependencies.observe()) },
+      });
+      response = rechecked.ok
+        ? {
+            ...rechecked,
+            data: { ...(rechecked.data as Record<string, unknown>), pathRepair },
+          }
+        : rechecked;
+    }
     if (!response.ok) {
       dependencies.stderr(renderCliError(response.error));
       return exitCodeForError(response.error.code);
@@ -164,7 +219,7 @@ export async function runCli(
       error instanceof AgentClientError &&
       error.code === "APP_UNREACHABLE"
     ) {
-      writeDegradedIdentify(parsed.invocation.json, dependencies);
+      await writeDegradedIdentify(parsed.invocation.json, dependencies);
       return 0;
     }
     const agentError = clientError(error);

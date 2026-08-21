@@ -6,12 +6,14 @@
  * and a keyboard-reachable button, and it hands back `File` objects that the
  * same code path handles whether they were picked, dropped or pasted.
  *
- * Distinct from the ticket composer's paperclip, which searches the repository
- * file index and inserts `@path`. That one reaches files already in the
- * project; this one reaches everything else. Both survive because they answer
- * different questions — and attaching a repository file through this button
- * still resolves to an `@` reference in main, so the two cannot disagree about
- * what a repository file is.
+ * The only attach affordance on every composer that has one — chat, the ticket
+ * Files panel, and the new-ticket composer (VC-115). The new-ticket footer used
+ * to carry a second paperclip that searched the project file index and inserted
+ * `@path`; it was removed because the description editor already completes `@`
+ * against that same index, so the second icon bought a duplicate path to a
+ * thing typing `@` does. A repository file attached here still resolves to an
+ * `@` reference in main, so the two routes cannot disagree about what a
+ * repository file is.
  */
 import * as React from "react";
 import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";

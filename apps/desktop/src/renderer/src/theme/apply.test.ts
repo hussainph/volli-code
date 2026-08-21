@@ -136,7 +136,14 @@ describe("resolveActiveTheme", () => {
     expect(active.canvas).toEqual({ value: DEFAULT_CANVAS, scope: "global" });
     expect(active.appearance).toEqual({ value: "dark", scope: "global" });
     expect(active.terminal).toEqual({ value: null, scope: "global" });
-    expect(active.editor).toEqual({ value: null, scope: "global" });
+  });
+
+  it("carries no editor surface — the editor is derived from `resolved`, not scoped", () => {
+    // VC-123. An editor theme that could be overridden per scope would be a
+    // second answer to "light or dark?", able to contradict `resolved`.
+    const active = resolveActiveTheme(DEFAULT_CANVAS, "dark", null, false);
+
+    expect(active).not.toHaveProperty("editor");
   });
 
   it("answers `auto` from the system preference, once, so nothing downstream re-derives it", () => {
@@ -195,39 +202,19 @@ describe("resolveActiveTheme", () => {
     expect(active.terminal).toEqual({ value: "Nord", scope: "project" });
     expect(active.canvas.scope).toBe("global");
     expect(active.appearance.scope).toBe("global");
-    expect(active.editor.scope).toBe("global");
   });
 
-  it("inherits the global editor theme id when the workspace does not override it", () => {
-    const active = resolveActiveTheme(DEFAULT_CANVAS, "dark", null, false, "nord");
-
-    expect(active.editor).toEqual({ value: "nord", scope: "global" });
-  });
-
-  it("keeps inheriting the global editor id when only another surface is overridden", () => {
+  it("gives a project that overrides only its appearance the matching editor mode", () => {
+    // How per-project editor theming survives its own retirement: the project
+    // overrides light/dark, and the editor follows that one answer.
     const active = resolveActiveTheme(
       DEFAULT_CANVAS,
       "dark",
-      { ...EMPTY_SURFACE_OVERRIDE, terminalThemeName: "Nord" },
-      false,
-      "dracula",
+      { ...EMPTY_SURFACE_OVERRIDE, appearance: "light" },
+      true,
     );
 
-    expect(active.editor).toEqual({ value: "dracula", scope: "global" });
-    expect(active.terminal).toEqual({ value: "Nord", scope: "project" });
-  });
-
-  it("overrides the editor independently of the other surfaces", () => {
-    const active = resolveActiveTheme(
-      DEFAULT_CANVAS,
-      "dark",
-      { ...EMPTY_SURFACE_OVERRIDE, editorThemeId: "catppuccin-mocha" },
-      false,
-    );
-
-    expect(active.editor).toEqual({ value: "catppuccin-mocha", scope: "project" });
-    expect(active.canvas.scope).toBe("global");
-    expect(active.terminal.scope).toBe("global");
+    expect(active.resolved).toBe("light");
   });
 
   it("hands back the SAME canvas reference it was given, every time", () => {

@@ -57,6 +57,7 @@ import {
   type SummaryTone,
 } from "@renderer/chat/activity";
 import { Button } from "@renderer/components/ui/button";
+import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
 /* ------------------------------------------------------------------- motion */
@@ -464,7 +465,9 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
       title={openPath}
       onClick={(event) => {
         event.stopPropagation();
-        onOpenFile(openPath);
+        // Tool-input spelling → what Pi actually resolved (leading `@`, Unicode
+        // spaces, dot segments) — the title above keeps the raw spelling.
+        onOpenFile(normalizeChatToolPath(openPath));
       }}
       className="min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >

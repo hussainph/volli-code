@@ -7,8 +7,8 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Shortcuts are grouped by the surface they act on. Global shortcuts work anywhere
-unless a terminal has focus.
+Shortcuts are grouped by the surface they act on. Terminals claim shell
+keystrokes first, but Session and terminal-layout shortcuts still work there.
 
 ## Global
 
@@ -18,7 +18,10 @@ unless a terminal has focus.
 | `C` | New ticket |
 | `⌘1` to `⌘9` | Switch to the first through ninth project in the rail |
 | `⌘B` | Toggle the sidebar |
-| `⌥⌘B` | Toggle the ticket detail rail |
+| `⌥⌘B` | Toggle the visible ticket or Home rail |
+| `⌘T` | Start a chat Session on the visible ticket or project |
+| `⌥⌘T` | Start a terminal companion on the visible ticket or project |
+| `⌥⌘Enter` | Enter or leave terminal focus mode for the visible terminal |
 | `⌘[` | Back |
 | `⌘]` | Forward |
 | `⌘+` / `⌘-` / `⌘0` | Zoom the app in, out, or back to actual size |
@@ -41,6 +44,7 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
 | Shortcut | Action | When |
 | --- | --- | --- |
 | `Esc` | Deselect the selected card | A card is selected |
+| `Enter` | Open a focused card | A card has keyboard focus |
 | `Enter` | Add the card and keep the composer open | The inline composer is open |
 | `Esc` | Close the inline composer | The inline composer is open |
 
@@ -62,6 +66,21 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
 `Esc` won't close the ticket while a terminal has focus. It goes to the
 terminal instead, where it usually means "interrupt".
 
+## Session composer
+
+| Shortcut | Action |
+| --- | --- |
+| `Enter` or `⌘Enter` | Send the message |
+| `⇧Enter` | Insert a new line |
+| `Enter` | Choose the active `@` or `/` picker item when a picker is open |
+| `Esc` | Close the active picker |
+
+## File editor
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘S` | Save the open file |
+
 ## Terminal
 
 | Shortcut | Action |
@@ -69,6 +88,7 @@ terminal instead, where it usually means "interrupt".
 | `⌘D` | Split the pane vertically |
 | `⇧⌘D` | Split the pane horizontally |
 | `⌘⌥←` `⌘⌥→` `⌘⌥↑` `⌘⌥↓` | Move focus to the adjacent pane |
+| `⌥⌘Enter` | Enter or leave terminal focus mode |
 | `⌘+` / `⌘-` | Change the terminal font size |
 | `⌘0` | Reset the terminal font size |
 

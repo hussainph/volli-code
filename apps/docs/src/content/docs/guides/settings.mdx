@@ -17,17 +17,21 @@ Open **Settings** from the gear icon in the sidebar footer.
 
 ### General
 
-**Settings → General → Archive Done tickets after** sets the Done TTL. A ticket
-with no open pull request that has sat in Done for this many days becomes
-eligible for archive-and-clean. It defaults to 14 days and accepts whole
-numbers of 1 or more.
+**Settings → General → Done worktree retention** sets how long Volli keeps a
+finished ticket's checkout. It defaults to 14 days and accepts whole numbers of
+1 or more.
+
+After a ticket has spent that long in Done, Volli can remove its clean worktree
+folder when no pull request is open and no work is running there. The ticket,
+branch, commits, and pull-request URL remain, and you can recreate the worktree
+from the branch. The same setting controls when clean orphaned worktree folders
+become eligible for cleanup.
 
 ### Appearance
 
-**Settings → Appearance** has four sections. **App theme** holds the canvas
-editor and **Light & dark** the light/dark/auto choice; see
-[Theming](/guides/theming/) for both. **Editor** and **Terminal** are covered
-here.
+**Settings → Appearance** has three sections. **App theme** holds the
+light/dark/auto mode and the canvas editor; see [Theming](/guides/theming/) for
+both. **Editor** and **Terminal** are covered here.
 
 **Editor.** The syntax-highlighting theme for the editor Volli uses for files
 and documents. It doesn't follow your canvas. Leave it alone and the row shows
@@ -47,10 +51,19 @@ Ghostty config and Volli's overlay file in Finder.
 **Settings → Model Access** holds the model policy for structured Sessions.
 Choose separate defaults for **Project chats**, **Ticket Sessions**, and
 **Utility** work; Ticket Sessions and Utility inherit the Project chats default
-until you choose one explicitly. **Visible models** controls which available
-models appear in every composer and picker. The Accounts section shows which
-providers are available and gives you a recovery action when sign-in is
-required. Volli never silently substitutes a different model or account.
+until you choose one explicitly. **Automatic compaction** controls whether
+Sessions compact before their context window fills, and each visible model can
+set its own reserve. **Visible models** controls which available models appear
+in every composer and picker. The Accounts section shows which providers are
+available and gives you a recovery action when sign-in is required. Volli never
+silently substitutes a different model or account.
+
+### Web
+
+**Settings → Web** selects the provider used by structured Sessions for web
+search. Choose **Off**, **Brave**, **Exa**, or **SearXNG**. Brave and Exa store
+the API key in your macOS keychain and never read it back into the renderer.
+SearXNG stores the instance URL you provide.
 
 ### Harness Runtimes
 
@@ -58,6 +71,12 @@ required. Volli never silently substitutes a different model or account.
 **Claude Code**, **Codex**, **Cursor**, and **OpenCode**, plus registered custom
 harnesses. These settings describe manual terminal integrations, not the
 Pi-backed structured runtime configured under Model Access.
+
+### CLI
+
+**Settings → CLI** shows which `volli` executable and shell integration are in
+use. **Run Doctor** checks the live installation. **Fix & Re-run** regenerates
+wrappers, harness configuration, and shell integration before checking again.
 
 ### Worktrees
 
@@ -92,8 +111,9 @@ open so you can fix it by hand.
 ### Appearance
 
 **Configure → Appearance** lets this project override the app-wide canvas, the
-light/dark choice, the editor theme, and the terminal theme, each on its own.
-Covered in [Theming](/guides/theming/#use-a-different-theme-for-one-project).
+light/dark choice, and the terminal theme, each on its own. The editor follows
+the resolved light/dark choice automatically. Covered in
+[Theming](/guides/theming/#use-a-different-theme-for-one-project).
 
 ### Worktrees
 

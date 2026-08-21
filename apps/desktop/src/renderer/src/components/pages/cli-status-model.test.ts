@@ -1,12 +1,37 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { CliToolStatus } from "../../../../ipc/contract";
-import { cliNeedsAttention, cliStatusRows } from "./cli-status-model";
+import { cliNeedsAttention, cliStatusRows, sessionPathComparison } from "./cli-status-model";
+
+function session(
+  overrides: Partial<CliToolStatus["environment"]["session"]> = {},
+): CliToolStatus["environment"]["session"] {
+  return {
+    path: "/volli/bin:/usr/bin:/home/me/.local/bin",
+    provenance: "adopted",
+    interactiveProvenance: "already-complete",
+    tools: {
+      git: "/usr/bin/git",
+      gh: "/opt/homebrew/bin/gh",
+      node: "/opt/homebrew/bin/node",
+      pnpm: "/opt/homebrew/bin/pnpm",
+    },
+    dependencies: null,
+    installCommand: null,
+    ...overrides,
+  };
+}
 
 function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
   return {
     link: { path: "/home/me/.local/bin/volli", state: "ours", target: "/shim/volli" },
     path: { binDir: "/home/me/.local/bin", state: "reachable" },
+    environment: {
+      loginPath: "/usr/bin:/home/me/.local/bin",
+      session: session(),
+      systemPathIssues: [],
+      credentialHelperIssues: [],
+    },
     socket: { path: "/profiles/volli.sock", live: true },
     wrappers: { commands: ["claude", "codex"] },
     shell: { name: "zsh", supported: true, chainActive: true },
@@ -21,6 +46,121 @@ function row(rows: ReturnType<typeof cliStatusRows>, key: string) {
   if (!found) throw new Error(`no row ${key}`);
   return found;
 }
+
+describe("sessionPathComparison", () => {
+  it("keeps expected Session-only entries quiet while preserving their full path", () => {
+    const loginPath = "/usr/bin:/opt/homebrew/bin:/Users/me/.local/bin";
+    const sessionOnly = "/Users/me/Library/Application Support/Volli Code/bin";
+
+    const comparison = sessionPathComparison(
+      status({
+        environment: {
+          loginPath,
+          session: session({ path: `${sessionOnly}:${loginPath}` }),
+          systemPathIssues: [],
+          credentialHelperIssues: [],
+        },
+      }),
+    );
+
+    expect(comparison).toMatchObject({
+      state: "matching",
+      missingFromSession: [],
+      sessionOnly: [sessionOnly],
+      sharedEntryCount: 3,
+      sharedOrderMatches: true,
+    });
+  });
+
+  it("makes a missing, deeply nested directory explicit instead of reducing the paths to strings", () => {
+    const missing = "/Users/me/Library/Application Support/Acme Toolchains/current/bin";
+    const comparison = sessionPathComparison(
+      status({
+        environment: {
+          loginPath: `/usr/bin:${missing}:/opt/homebrew/bin`,
+          session: session({
+            path: "/Users/me/Library/Application Support/Volli Code/bin:/usr/bin:/opt/homebrew/bin",
+            provenance: "probe-failed",
+            interactiveProvenance: "pending",
+          }),
+          systemPathIssues: [],
+          credentialHelperIssues: [],
+        },
+      }),
+    );
+
+    expect(comparison).toMatchObject({
+      state: "diverged",
+      missingFromSession: [missing],
+      sharedOrderMatches: true,
+    });
+  });
+
+  it("names the brief interactive adoption gap without presenting it as a permanent mismatch", () => {
+    const comparison = sessionPathComparison(
+      status({
+        environment: {
+          loginPath: "/usr/bin:/Users/me/.bun/bin:/opt/homebrew/bin",
+          session: session({
+            path: "/volli/bin:/usr/bin:/opt/homebrew/bin",
+            interactiveProvenance: "pending",
+          }),
+          systemPathIssues: [],
+          credentialHelperIssues: [],
+        },
+      }),
+    );
+
+    expect(comparison).toMatchObject({
+      state: "pending",
+      missingFromSession: ["/Users/me/.bun/bin"],
+    });
+  });
+
+  it("treats a changed shared order as divergence because it can resolve another command", () => {
+    const comparison = sessionPathComparison(
+      status({
+        environment: {
+          loginPath: "/usr/bin:/opt/homebrew/bin:/Users/me/.local/bin",
+          session: session({
+            path: "/volli/bin:/opt/homebrew/bin:/usr/bin:/Users/me/.local/bin",
+          }),
+          systemPathIssues: [],
+          credentialHelperIssues: [],
+        },
+      }),
+    );
+
+    expect(comparison).toMatchObject({
+      state: "diverged",
+      missingFromSession: [],
+      sharedOrderMatches: false,
+    });
+  });
+
+  it("does not claim a match when the login shell never answered", () => {
+    const comparison = sessionPathComparison(
+      status({
+        environment: {
+          loginPath: null,
+          session: session({
+            path: "/volli/bin:/usr/bin",
+            provenance: "probe-failed",
+            interactiveProvenance: "pending",
+          }),
+          systemPathIssues: [],
+          credentialHelperIssues: [],
+        },
+      }),
+    );
+
+    expect(comparison).toMatchObject({
+      state: "unknown",
+      loginEntries: [],
+      sessionEntries: ["/volli/bin", "/usr/bin"],
+    });
+  });
+});
 
 describe("cliStatusRows", () => {
   it("reads a healthy install as all-ok with no legacy row and no attention", () => {

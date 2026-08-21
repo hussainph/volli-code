@@ -116,7 +116,7 @@ describe("fileEditorConstructionOptions", () => {
       lineNumbers: "on",
       fontFamily: "var(--font-mono)",
       minimap: { enabled: false },
-      theme: "one-dark-pro",
+      theme: "vitesse-dark",
       readOnly: false,
       domReadOnly: false,
       ariaLabel: "notes.md",
@@ -150,16 +150,16 @@ describe("fileEditorConstructionOptions", () => {
     expect(
       fileEditorConstructionOptions({ readOnly: true, ariaLabel: "notes.md", overrides: hostile }),
     ).toMatchObject({
-      theme: "one-dark-pro",
+      theme: "vitesse-dark",
       readOnly: true,
       domReadOnly: true,
       ariaLabel: "notes.md",
     });
   });
 
-  it("uses the active catalog theme so remounts do not clobber Appearance", () => {
-    refreshMonacoEditorTheme("nord");
-    expect(fileEditorConstructionOptions(base)).toMatchObject({ theme: "nord" });
+  it("uses the active Vitesse half so remounts do not clobber Appearance", () => {
+    refreshMonacoEditorTheme("vitesse-light");
+    expect(fileEditorConstructionOptions(base)).toMatchObject({ theme: "vitesse-light" });
   });
 });
 

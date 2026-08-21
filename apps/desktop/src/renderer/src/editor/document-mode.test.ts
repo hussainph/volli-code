@@ -69,7 +69,7 @@ describe("document-mode.css surface", () => {
     expect(surface).toContain("--vscode-editor-placeholder-foreground: var(--muted-foreground);");
     expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--foreground\)/);
     expect(surface).toMatch(/--vscode-scrollbarSlider-background:\s*var\(--border\);/);
-    // The catalog theme's `#282c34` and friends enter as hex; nothing on this
+    // Vitesse theme colors enter as hex; nothing on this
     // surface may be one (`#` also catches a stray id selector in the block).
     expect(surface).not.toContain("#");
   });

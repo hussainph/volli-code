@@ -12,11 +12,17 @@
  * here.
  */
 import { constants } from "node:fs";
-import { access, readdir, realpath } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, readdir, realpath, stat } from "node:fs/promises";
+import { dirname } from "node:path";
 
-import { harnessAdapters, isBareHarnessCommand, VOLLI_BIN_DIR_ENV } from "@volli/shared";
-import type { DoctorCheck } from "@volli/shared";
+import {
+  harnessAdapters,
+  isBareHarnessCommand,
+  resolveOnPath,
+  SESSION_ENV_TOOLS,
+  VOLLI_BIN_DIR_ENV,
+} from "@volli/shared";
+import type { DoctorCheck, SessionEnvRepair } from "@volli/shared";
 
 export interface DoctorEnvironment {
   env: Record<string, string | undefined>;
@@ -28,8 +34,15 @@ export interface DoctorEnvironment {
   realPathOf(path: string): Promise<string | null>;
 }
 
+/**
+ * Whether a path is executable the way a shell judges it: a REGULAR FILE
+ * with execute permission. `access(X_OK)` alone passes for a directory, and
+ * a directory named after a tool on some PATH entry must not be reported as
+ * the tool. `stat` follows symlinks, so a link to an executable still counts.
+ */
 export async function executableAt(path: string): Promise<boolean> {
   try {
+    if (!(await stat(path)).isFile()) return false;
     await access(path, constants.X_OK);
     return true;
   } catch {
@@ -63,22 +76,15 @@ export function processEnvironment(): DoctorEnvironment {
 }
 
 /**
- * The first executable named `command` on `pathEntries` — what this shell would
- * pick, resolved without invoking one. Volli's own bin dir is NOT skipped here,
- * unlike everywhere else: finding our wrapper first is the answer we are
- * looking for, not an obstacle to seeing past.
+ * The first executable named `command` on `pathEntries` — what this shell
+ * would pick, resolved without invoking one. Defined once in `@volli/shared`
+ * (`resolveOnPath`) so doctor's resolution and `volli identify`'s env block
+ * share one notion of "found"; re-exported under its doctor name for the
+ * callers and tests that already use it. Volli's own bin dir is deliberately
+ * NOT skipped here, unlike everywhere else: finding our wrapper first is the
+ * answer we are looking for, not an obstacle to seeing past.
  */
-export async function resolveHere(
-  pathEntries: readonly string[],
-  command: string,
-  environment: DoctorEnvironment,
-): Promise<string | null> {
-  for (const directory of pathEntries) {
-    const candidate = join(directory, command);
-    if (await environment.isExecutable(candidate)) return candidate;
-  }
-  return null;
-}
+export { resolveOnPath as resolveHere };
 
 /**
  * Volli's own bin dir, as a process living outside main can find it. The shell
@@ -147,11 +153,18 @@ export async function observeEnvironment(
   environment: DoctorEnvironment = processEnvironment(),
 ): Promise<Record<string, unknown>> {
   const pathEntries = (environment.env["PATH"] ?? "").split(":").filter(Boolean);
-  const volliPath = await resolveHere(pathEntries, "volli", environment);
+  const volliPath = await resolveOnPath(pathEntries, "volli", environment);
   const binDir = await volliBinDir(volliPath, environment);
   const resolved: Record<string, string | null> = {};
   for (const command of await commandsToResolve(binDir, environment)) {
-    resolved[command] = await resolveHere(pathEntries, command, environment);
+    resolved[command] = await resolveOnPath(pathEntries, command, environment);
+  }
+  // The session contract tools are measured on every run, with or without
+  // harnesses: a machine with no agent installed still needs `git` audited.
+  // They share the `resolved` map with harness commands — a harness that would
+  // take a system tool's name is refused, so the keys never collide.
+  for (const tool of SESSION_ENV_TOOLS) {
+    resolved[tool] = await resolveOnPath(pathEntries, tool, environment);
   }
   return {
     pathEntries,
@@ -170,6 +183,33 @@ export function renderDoctorCheck(check: DoctorCheck): string {
   return lines.join("\n");
 }
 
-export function renderDoctorReport(checks: readonly DoctorCheck[], summary: string): string {
-  return `${checks.map(renderDoctorCheck).join("\n")}\n\n${summary}\n`;
+function repairedDirectories(entries: readonly string[]): string {
+  return entries.length === 0 ? "-" : entries.join(" ");
+}
+
+/**
+ * The repair is main's fact; the checks remain the calling Session's fact.
+ * Putting both in one report makes the boundary explicit instead of calling a
+ * stale running Session healthy after main repaired the environment new
+ * Sessions will inherit.
+ */
+export function renderSessionPathRepair(repair: SessionEnvRepair): string {
+  return [
+    "Session PATH repair",
+    `    env.path  ${repair.path}`,
+    `    env.provenance  ${repair.provenance}`,
+    `    env.added  ${repairedDirectories(repair.added)}`,
+    `    env.interactiveProvenance  ${repair.interactiveProvenance}`,
+    `    env.interactiveAdded  ${repairedDirectories(repair.interactiveAdded)}`,
+    "    Sessions started after this repair use this PATH. This running Session keeps the environment it started with.",
+  ].join("\n");
+}
+
+export function renderDoctorReport(
+  checks: readonly DoctorCheck[],
+  summary: string,
+  repair?: SessionEnvRepair,
+): string {
+  const repaired = repair === undefined ? "" : `${renderSessionPathRepair(repair)}\n\n`;
+  return `${repaired}${checks.map(renderDoctorCheck).join("\n")}\n\n${summary}\n`;
 }
