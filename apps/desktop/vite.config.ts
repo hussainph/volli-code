@@ -128,6 +128,10 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/pages/web-access-model.ts",
+        // What the user is TOLD about a launch-wide environment fault — the
+        // same class of decision as cli-status-model, enrolled for the same
+        // reason (VC-94).
+        "src/components/session-environment-alert-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/edge-region.ts",

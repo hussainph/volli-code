@@ -1,28 +1,57 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
-  BARE_LAUNCHD_PATH,
-  createLoginPathBootstrap,
-  currentPathIsIncomplete,
-  decideLoginPathAdoption,
-  loginPathLogLine,
+  ADOPTION_PROBE,
+  DETECTION_PROBE,
+  loginShellPath,
   parseLoginShellPathOutput,
-  resolveLoginShellPath,
+  probeLoginShellPath,
+  resetLoginShellPathCache,
+  type LoginShellRun,
 } from "./login-shell-path";
 
-type ShellResult = { stdout: string; exitCode: number | null; signal: NodeJS.Signals | null };
+afterEach(() => {
+  resetLoginShellPathCache();
+});
 
-function successful(stdout: string): ShellResult {
+/** What the shell prints for the PATH itself, marker included. */
+function marked(path: string): string {
+  return `__VOLLI_PATH__${path}\n`;
+}
+
+/**
+ * This host's real login `PATH` as VC-94 measured it, unexpanded tilde and all:
+ * `path_helper` appends the literal text of `/etc/paths.d/dotnet-cli-tools`,
+ * written there by Microsoft's .NET CLI installer, to every login shell on the
+ * machine.
+ */
+const MEASURED_HOST_PATH =
+  "/Users/phalasiya/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:" +
+  "/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:" +
+  "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:" +
+  "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:" +
+  "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:" +
+  "/pkg/env/global/bin:/Library/Apple/usr/bin:" +
+  "/Applications/Wireshark.app/Contents/MacOS:/usr/local/share/dotnet:~/.dotnet/tools:" +
+  "/Applications/quarto/bin:/Users/phalasiya/.vite-plus/bin:/Users/phalasiya/.cargo/bin:" +
+  "/Users/phalasiya/Library/Application Support/Volli Code/bin";
+
+/** A shell that printed this and exited on its own terms. */
+function successful(stdout: string): LoginShellRun {
   return { stdout, exitCode: 0, signal: null };
 }
 
-/** A scripted shell, recording what it was asked to run. */
-function shell(answer: () => Promise<ShellResult | null>) {
-  const calls: { file: string; args: readonly string[] }[] = [];
+/** A scripted shell, recording what it was asked to run and with what limits. */
+function shell(answer: () => Promise<LoginShellRun | null>) {
+  const calls: { file: string; args: readonly string[]; limits: unknown }[] = [];
   return {
     calls,
-    runShell: async (file: string, args: readonly string[]): Promise<ShellResult | null> => {
-      calls.push({ file, args });
+    runShell: async (
+      file: string,
+      args: readonly string[],
+      limits: unknown,
+    ): Promise<LoginShellRun | null> => {
+      calls.push({ file, args, limits });
       return answer();
     },
   };
@@ -49,6 +78,15 @@ describe("parseLoginShellPathOutput", () => {
     ).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
+  // An interactive shell talks on BOTH sides of the command: a TRAPEXIT, a
+  // "you have running jobs" warning. Reading the last non-empty line would
+  // report that chatter as the user's PATH.
+  it("ignores what a profile prints on its way out", () => {
+    expect(parseLoginShellPathOutput(`${marked("/opt/homebrew/bin")}trailing-noise\n`)).toBe(
+      "/opt/homebrew/bin",
+    );
+  });
+
   it("keeps a PATH entry that merely contains a space", () => {
     expect(parseLoginShellPathOutput("__VOLLI_PATH__/Applications/Volli Code/bin:/usr/bin")).toBe(
       "/Applications/Volli Code/bin:/usr/bin",
@@ -71,228 +109,258 @@ describe("parseLoginShellPathOutput", () => {
     expect(parseLoginShellPathOutput("/opt/homebrew/bin:/usr/bin")).toBeNull();
   });
 
-  it("reports null when the marked PATH has an empty entry", () => {
-    expect(parseLoginShellPathOutput("__VOLLI_PATH__/opt/homebrew/bin::/usr/bin")).toBeNull();
+  it("drops an empty entry instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__/opt/homebrew/bin::/usr/bin")).toBe(
+      "/opt/homebrew/bin:/usr/bin",
+    );
   });
 
-  it("reports null when the marked PATH has a relative entry", () => {
-    expect(parseLoginShellPathOutput("__VOLLI_PATH__bin:/usr/bin")).toBeNull();
+  it("drops a relative entry instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__bin:/usr/bin")).toBe("/usr/bin");
   });
 
-  it("reports null when the marked PATH has a non-absolute entry", () => {
-    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:/usr/bin")).toBeNull();
+  it("drops a non-absolute entry instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:/usr/bin")).toBe("/usr/bin");
+  });
+
+  // Colour codes are what put a control character on this stream, and they
+  // land on one entry, not on the list. Rejecting the whole PATH for them was
+  // the detection parser's old rule and cost 20 good entries the same way the
+  // all-or-nothing absolute rule did.
+  it("drops an entry carrying an escape sequence instead of discarding its neighbours", () => {
+    expect(parseLoginShellPathOutput(marked("\u001b[31m/opt/homebrew/bin:/usr/bin"))).toBe(
+      "/usr/bin",
+    );
+    expect(parseLoginShellPathOutput(marked("/usr/\u0007bin:/usr/bin"))).toBe("/usr/bin");
+  });
+
+  it("reports null when no entry survives", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:relative::")).toBeNull();
+    expect(parseLoginShellPathOutput(marked("\u001b[31m/opt/homebrew/bin"))).toBeNull();
+  });
+
+  // A shell in xtrace echoes the command — marker and all — before running it,
+  // and an rc file is free to print our own marker too. Ours runs last, so the
+  // last marker that yields anything usable is the one that ran.
+  it("prefers the marked value the shell ran to any marker printed ahead of it", () => {
+    const traced = `+ printf __VOLLI_PATH__; printenv PATH\n${marked("/opt/homebrew/bin")}`;
+    const decoy = `${marked("/decoy")}${marked("/opt/homebrew/bin")}`;
+    const inline = "[__VOLLI_PATH__] __VOLLI_PATH__/opt/homebrew/bin\n";
+    const emptyLast = `${marked("/opt/homebrew/bin")}${marked("")}`;
+
+    for (const stdout of [traced, decoy, inline, emptyLast]) {
+      expect(parseLoginShellPathOutput(stdout)).toBe("/opt/homebrew/bin");
+    }
+  });
+
+  // VC-94's live bug, reproduced from this host: the all-or-nothing rule this
+  // test guards against turned all 20 good entries into nothing because of the
+  // one tilde entry, leaving structured sessions on launchd's bare four.
+  it("keeps the rest of this host's measured login PATH when the dotnet tilde entry is present", () => {
+    expect(parseLoginShellPathOutput(`__VOLLI_PATH__${MEASURED_HOST_PATH}`)).toBe(
+      MEASURED_HOST_PATH.replace("~/.dotnet/tools:", ""),
+    );
   });
 });
 
-describe("resolveLoginShellPath", () => {
-  it("asks the user's own login shell, non-interactively", async () => {
-    const zsh = shell(async () => successful("__VOLLI_PATH__/opt/homebrew/bin:/usr/bin"));
+describe("probeLoginShellPath", () => {
+  it("asks the user's own login shell, the same one a PTY gets", async () => {
+    const fish = shell(async () => successful(marked("/opt/homebrew/bin:/usr/bin:/bin")));
 
-    const path = await resolveLoginShellPath({
-      env: { SHELL: "/bin/zsh" },
-      runShell: zsh.runShell,
+    const path = await probeLoginShellPath(DETECTION_PROBE, {
+      env: { SHELL: "/bin/fish" },
+      runShell: fish.runShell,
     });
 
-    expect(path).toBe("/opt/homebrew/bin:/usr/bin");
-    expect(zsh.calls[0]?.file).toBe("/bin/zsh");
-    // -l, never -i: an interactive flag is what can hang on a profile's prompt.
-    expect(zsh.calls[0]?.args).toEqual(["-l", "-c", "printf __VOLLI_PATH__; printenv PATH"]);
+    expect(path).toBe("/opt/homebrew/bin:/usr/bin:/bin");
+    expect(fish.calls[0]?.file).toBe("/bin/fish");
+    expect(fish.calls[0]?.args[0]).toBe("-l");
   });
 
   it("falls back to /bin/zsh when SHELL is unset", async () => {
-    const shellDouble = shell(async () => successful("__VOLLI_PATH__/usr/bin"));
+    const shellDouble = shell(async () => successful(marked("/usr/bin")));
 
-    await resolveLoginShellPath({ env: {}, runShell: shellDouble.runShell });
+    await probeLoginShellPath(ADOPTION_PROBE, { env: {}, runShell: shellDouble.runShell });
 
     expect(shellDouble.calls[0]?.file).toBe("/bin/zsh");
   });
 
-  it("reports null when the shell could not be run at all", async () => {
-    const broken = shell(async () => null);
+  // The PTY is a login shell on a tty, which is an INTERACTIVE login shell —
+  // and zsh reads .zshrc only when interactive. Asking without `-i` misses
+  // every PATH entry a user installs there.
+  it("asks detection's question interactively, because that is the shell the PTY runs", async () => {
+    const zsh = shell(async () => successful(marked("/opt/homebrew/bin")));
 
-    expect(await resolveLoginShellPath({ env: {}, runShell: broken.runShell })).toBeNull();
+    await probeLoginShellPath(DETECTION_PROBE, {
+      env: { SHELL: "/bin/zsh" },
+      runShell: zsh.runShell,
+    });
+
+    expect(zsh.calls[0]?.args).toEqual(["-l", "-i", "-c", "printf __VOLLI_PATH__; printenv PATH"]);
   });
 
-  it("reports null when the shell printed nothing usable", async () => {
-    const quiet = shell(async () => successful(""));
+  // -l, never -i: an interactive flag is what can hang on a profile's prompt,
+  // and adoption runs at boot with no window to answer one.
+  it("asks adoption's question non-interactively, because a boot cannot answer a prompt", async () => {
+    const zsh = shell(async () => successful(marked("/opt/homebrew/bin")));
 
-    expect(await resolveLoginShellPath({ env: {}, runShell: quiet.runShell })).toBeNull();
+    await probeLoginShellPath(ADOPTION_PROBE, {
+      env: { SHELL: "/bin/zsh" },
+      runShell: zsh.runShell,
+    });
+
+    expect(zsh.calls[0]?.args).toEqual(["-l", "-c", "printf __VOLLI_PATH__; printenv PATH"]);
   });
 
-  it("reports null when spawning the shell rejects", async () => {
-    await expect(
-      resolveLoginShellPath({
-        env: {},
-        runShell: async () => Promise.reject(new Error("shell not found")),
-      }),
-    ).resolves.toBeNull();
+  // The timeouts and output caps are the probes' own, not one converged pair:
+  // detection is re-askable and can wait a shorter time, adoption is on the
+  // boot path and gets one attempt.
+  it("hands each probe's own limits to the spawn", async () => {
+    const zsh = shell(async () => successful(marked("/usr/bin")));
+    const deps = { env: { SHELL: "/bin/zsh" }, runShell: zsh.runShell };
+
+    await probeLoginShellPath(DETECTION_PROBE, deps);
+    await probeLoginShellPath(ADOPTION_PROBE, deps);
+
+    expect(zsh.calls[0]?.limits).toMatchObject({ timeoutMs: 3000, maxOutputBytes: 1 << 20 });
+    expect(zsh.calls[1]?.limits).toMatchObject({ timeoutMs: 4000, maxOutputBytes: 1 << 16 });
   });
 
-  it("reports null when the shell exits nonzero", async () => {
-    const failed = shell(async () => ({
-      stdout: "__VOLLI_PATH__/opt/homebrew/bin:/usr/bin",
+  it("reports null rather than a PATH when the shell cannot be run", async () => {
+    const broken = shell(async () => {
+      throw new Error("no such file");
+    });
+    const missing = shell(async () => null);
+
+    for (const scripted of [broken, missing]) {
+      expect(
+        await probeLoginShellPath(DETECTION_PROBE, { env: {}, runShell: scripted.runShell }),
+      ).toBeNull();
+      expect(
+        await probeLoginShellPath(ADOPTION_PROBE, { env: {}, runShell: scripted.runShell }),
+      ).toBeNull();
+    }
+  });
+
+  it("reports null for a shell that printed nothing usable", async () => {
+    for (const output of ["  \n", "no marker here\n", marked("")]) {
+      const quiet = shell(async () => successful(output));
+      expect(
+        await probeLoginShellPath(DETECTION_PROBE, { env: {}, runShell: quiet.runShell }),
+      ).toBeNull();
+    }
+  });
+
+  // The marker vouches for the value, and a login shell exiting nonzero is
+  // ordinary — nothing detection does with the answer is worth losing a whole
+  // launch's PATH over.
+  it("believes a detection answer from a shell that left badly", async () => {
+    const untidy = shell(async () => ({
+      stdout: marked("/opt/homebrew/bin:/usr/bin"),
       exitCode: 1,
       signal: null,
     }));
-
-    expect(await resolveLoginShellPath({ env: {}, runShell: failed.runShell })).toBeNull();
-  });
-
-  it("reports null when the shell exits from a signal", async () => {
     const signaled = shell(async () => ({
-      stdout: "__VOLLI_PATH__/opt/homebrew/bin:/usr/bin",
+      stdout: marked("/opt/homebrew/bin:/usr/bin"),
       exitCode: null,
-      signal: "SIGTERM",
+      signal: "SIGKILL" as NodeJS.Signals,
     }));
 
-    expect(await resolveLoginShellPath({ env: {}, runShell: signaled.runShell })).toBeNull();
+    for (const scripted of [untidy, signaled]) {
+      expect(
+        await probeLoginShellPath(DETECTION_PROBE, { env: {}, runShell: scripted.runShell }),
+      ).toBe("/opt/homebrew/bin:/usr/bin");
+    }
+  });
+
+  // Adoption's answer becomes process.env.PATH for the whole app, so the same
+  // half-finished shell that detection believes is refused here.
+  it("refuses an adoption answer from a shell that exited nonzero or on a signal", async () => {
+    const nonzero = shell(async () => ({
+      stdout: marked("/opt/homebrew/bin:/usr/bin"),
+      exitCode: 1,
+      signal: null,
+    }));
+    const signaled = shell(async () => ({
+      stdout: marked("/opt/homebrew/bin:/usr/bin"),
+      exitCode: null,
+      signal: "SIGTERM" as NodeJS.Signals,
+    }));
+
+    for (const scripted of [nonzero, signaled]) {
+      expect(
+        await probeLoginShellPath(ADOPTION_PROBE, { env: {}, runShell: scripted.runShell }),
+      ).toBeNull();
+    }
+  });
+
+  // A2's one behaviour change: detection used to report this host's PATH with
+  // the unexpanded `~/.dotnet/tools` still in it, so the Settings pane named a
+  // directory no shell would ever search — and the two probes reported
+  // different environments for the same host. One parser, one answer.
+  it("drops a tilde entry from what detection reports, as adoption already did", async () => {
+    const dotnet = shell(async () => successful(marked(MEASURED_HOST_PATH)));
+    const deps = { env: { SHELL: "/bin/zsh" }, runShell: dotnet.runShell };
+    const expected = MEASURED_HOST_PATH.replace("~/.dotnet/tools:", "");
+
+    expect(await probeLoginShellPath(DETECTION_PROBE, deps)).toBe(expected);
+    expect(await probeLoginShellPath(ADOPTION_PROBE, deps)).toBe(expected);
   });
 });
 
-describe("currentPathIsIncomplete", () => {
-  it("is true for launchd's exact bare set", () => {
-    expect(currentPathIsIncomplete(BARE_LAUNCHD_PATH, "/opt/homebrew/bin:/usr/bin")).toBe(true);
+describe("loginShellPath", () => {
+  it("spawns the shell once per launch, however many detections ask", async () => {
+    const zsh = shell(async () => successful(marked("/opt/homebrew/bin")));
+    const deps = { env: { SHELL: "/bin/zsh" }, runShell: zsh.runShell };
+
+    expect(await loginShellPath(deps)).toBe("/opt/homebrew/bin");
+    expect(await loginShellPath(deps)).toBe("/opt/homebrew/bin");
+
+    expect(zsh.calls).toHaveLength(1);
   });
 
-  it("is true when the current PATH is missing", () => {
-    expect(currentPathIsIncomplete(undefined, "/opt/homebrew/bin")).toBe(true);
+  it("caches the detection probe's answer, interactive flag and all", async () => {
+    const zsh = shell(async () => successful(marked("/opt/homebrew/bin")));
+
+    await loginShellPath({ env: { SHELL: "/bin/zsh" }, runShell: zsh.runShell });
+
+    expect(zsh.calls[0]?.args).toEqual(["-l", "-i", "-c", "printf __VOLLI_PATH__; printenv PATH"]);
   });
 
-  it("is true when the current PATH lacks an entry the login shell has", () => {
-    expect(currentPathIsIncomplete("/usr/bin:/bin", "/opt/homebrew/bin:/usr/bin:/bin")).toBe(true);
-  });
-
-  it("is false when the current PATH already holds every entry the login shell has", () => {
-    // A dev boot's PATH: rich, script-local dirs the login shell knows nothing
-    // about, but not missing anything the login shell would add.
-    expect(
-      currentPathIsIncomplete(
-        "/repo/node_modules/.bin:/opt/homebrew/bin:/usr/bin",
-        "/opt/homebrew/bin:/usr/bin",
-      ),
-    ).toBe(false);
-  });
-
-  it("is false when the two paths hold the same entries in a different order", () => {
-    expect(
-      currentPathIsIncomplete("/usr/bin:/opt/homebrew/bin", "/opt/homebrew/bin:/usr/bin"),
-    ).toBe(false);
-  });
-});
-
-describe("decideLoginPathAdoption", () => {
-  it("keeps the current PATH when the login shell could not answer", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, null)).toEqual({ kind: "kept" });
-  });
-
-  it("keeps the current PATH when the login shell answered with nothing", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, "")).toEqual({ kind: "kept" });
-  });
-
-  it("unions a login PATH ahead of what launchd handed the app", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, "/opt/homebrew/bin:/usr/bin:/bin")).toEqual({
-      kind: "adopted",
-      path: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      entryCount: 5,
+  // One timed-out profile at boot used to latch "detection could not run" for
+  // the whole launch: no census, no reconciled wrappers, and `volli doctor
+  // --fix` unable to repair it because repair re-asked the same latched answer.
+  it("asks again after a failure, so one slow profile does not poison the launch", async () => {
+    let wedged = true;
+    const zsh = shell(async () => {
+      if (wedged) throw new Error("timed out");
+      return successful(marked("/opt/homebrew/bin"));
     });
+    const deps = { env: { SHELL: "/bin/zsh" }, runShell: zsh.runShell };
+
+    expect(await loginShellPath(deps)).toBeNull();
+    wedged = false;
+
+    expect(await loginShellPath(deps)).toBe("/opt/homebrew/bin");
+    expect(await loginShellPath(deps)).toBe("/opt/homebrew/bin");
+    expect(zsh.calls).toHaveLength(2);
   });
 
-  it("keeps the current PATH when the login shell reports the identical PATH", () => {
-    expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, BARE_LAUNCHD_PATH)).toEqual({ kind: "kept" });
-  });
-
-  it("puts a login shell's directories ahead of a dev boot without dropping its private bin", () => {
-    const rich = "/repo/node_modules/.bin:/opt/homebrew/bin:/usr/bin";
-    expect(decideLoginPathAdoption(rich, "/opt/homebrew/bin:/usr/bin")).toEqual({
-      kind: "adopted",
-      path: "/opt/homebrew/bin:/usr/bin:/repo/node_modules/.bin",
-      entryCount: 3,
+  it("shares one in-flight attempt, so the boot fan-out spawns one shell", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
-  });
-
-  it("deduplicates repeated directories while preserving login then current order", () => {
-    expect(
-      decideLoginPathAdoption(
-        "/repo/node_modules/.bin:/usr/bin:/repo/node_modules/.bin",
-        "/opt/homebrew/bin:/usr/bin:/opt/homebrew/bin",
-      ),
-    ).toEqual({
-      kind: "adopted",
-      path: "/opt/homebrew/bin:/usr/bin:/repo/node_modules/.bin",
-      entryCount: 3,
+    const zsh = shell(async () => {
+      await gate;
+      return successful(marked("/opt/homebrew/bin"));
     });
-  });
+    const deps = { env: { SHELL: "/bin/zsh" }, runShell: zsh.runShell };
 
-  it("adopts when the current PATH is entirely unset", () => {
-    expect(decideLoginPathAdoption(undefined, "/opt/homebrew/bin")).toEqual({
-      kind: "adopted",
-      path: "/opt/homebrew/bin",
-      entryCount: 1,
-    });
-  });
-});
+    const both = Promise.all([loginShellPath(deps), loginShellPath(deps)]);
+    release?.();
 
-describe("loginPathLogLine", () => {
-  it("names the entry count on adoption", () => {
-    expect(
-      loginPathLogLine({ kind: "adopted", path: "/opt/homebrew/bin:/usr/bin", entryCount: 2 }),
-    ).toBe("[volli] PATH adopted from login shell (2 entries)");
-  });
-
-  it("says kept when nothing changed", () => {
-    expect(loginPathLogLine({ kind: "kept" })).toBe("[volli] PATH kept");
-  });
-});
-
-describe("createLoginPathBootstrap", () => {
-  it("starts probing immediately but shares one deferred apply", async () => {
-    let resolveProbe: ((path: string | null) => void) | undefined;
-    let probeCount = 0;
-    const mutations: string[] = [];
-    const logs: string[] = [];
-    const bootstrap = createLoginPathBootstrap({
-      binDir: "/profile/bin",
-      readCurrentPath: () => BARE_LAUNCHD_PATH,
-      writePath: (path) => mutations.push(path),
-      resolveLoginPath: () => {
-        probeCount += 1;
-        return new Promise((resolve) => {
-          resolveProbe = resolve;
-        });
-      },
-      log: (line) => logs.push(line),
-    });
-
-    expect(probeCount).toBe(1);
-    expect(mutations).toEqual([]);
-    expect(logs).toEqual([]);
-
-    const firstApply = bootstrap.apply();
-    const secondApply = bootstrap.apply();
-    expect(secondApply).toBe(firstApply);
-
-    resolveProbe?.("/opt/homebrew/bin:/usr/bin:/bin");
-    await firstApply;
-
-    expect(mutations).toEqual(["/profile/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"]);
-    expect(logs).toEqual(["[volli] PATH adopted from login shell (5 entries)"]);
-  });
-
-  it("keeps a failed probe while deduplicating and re-prepending the profile bin", async () => {
-    const mutations: string[] = [];
-    const logs: string[] = [];
-    const bootstrap = createLoginPathBootstrap({
-      binDir: "/profile/bin",
-      readCurrentPath: () => "/usr/bin:/profile/bin:/bin:/profile/bin",
-      writePath: (path) => mutations.push(path),
-      resolveLoginPath: async () => Promise.reject(new Error("profile failed")),
-      log: (line) => logs.push(line),
-    });
-
-    await expect(bootstrap.apply()).resolves.toEqual({ kind: "kept" });
-    await bootstrap.apply();
-
-    expect(mutations).toEqual(["/profile/bin:/usr/bin:/bin"]);
-    expect(logs).toEqual(["[volli] PATH kept"]);
+    expect(await both).toEqual(["/opt/homebrew/bin", "/opt/homebrew/bin"]);
+    expect(zsh.calls).toHaveLength(1);
   });
 });

@@ -2,6 +2,28 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 
+/** One identify answer that differs only in what the second adoption pass reported. */
+const identifyWithInteractivePass = (interactiveProvenance: string): string =>
+  renderCliSuccess(
+    "identify",
+    {
+      project: null,
+      ticket: null,
+      session: null,
+      worktreePath: "/repo/volli",
+      socket: null,
+      appVersion: null,
+      env: {
+        path: "/profile/bin:/usr/bin",
+        provenance: "adopted",
+        interactiveProvenance,
+        tools: { git: null, gh: null, node: null, pnpm: null },
+        dependencies: null,
+      },
+    },
+    { json: false },
+  );
+
 describe("renderCliSuccess", () => {
   it("renders ticket lists as stable, untruncated non-TTY columns", () => {
     expect(
@@ -482,6 +504,133 @@ describe("renderCliSuccess", () => {
     );
   });
 
+  // VC-94's acceptance: an agent discovers its environment from this block,
+  // not from the first command that fails. A missing tool renders as `-` —
+  // measured and not found — rather than the line disappearing.
+  it("renders identify's env block with the tool census, found or missing", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          env: {
+            path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
+            provenance: "adopted",
+            interactiveProvenance: "adopted",
+            tools: {
+              git: "/usr/bin/git",
+              gh: "/opt/homebrew/bin/gh",
+              node: null,
+              pnpm: null,
+            },
+            dependencies: "absent",
+          },
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  -\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "worktreePath  /repo/volli\n" +
+        "socket  -\n" +
+        "appVersion  -\n" +
+        "env.path  /profile/bin:/opt/homebrew/bin:/usr/bin\n" +
+        "env.provenance  adopted\n" +
+        "env.interactiveProvenance  adopted\n" +
+        "env.tools.git  /usr/bin/git\n" +
+        "env.tools.gh  /opt/homebrew/bin/gh\n" +
+        "env.tools.node  -\n" +
+        "env.tools.pnpm  -\n" +
+        "env.dependencies  absent\n",
+    );
+  });
+
+  // The env renderer must survive an env block whose tools are not the
+  // expected record: a malformed reply degrades to dashes per tool, never to
+  // a crash that costs the agent the whole identity output.
+  it("renders the tool census as dashes when the tools record is missing", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          env: {
+            path: "/usr/bin",
+            provenance: "probe-failed",
+            interactiveProvenance: "pending",
+            tools: "unreadable",
+            dependencies: null,
+          },
+        },
+        { json: false },
+      ),
+    ).toContain("env.tools.git  -\nenv.tools.gh  -");
+  });
+
+  // The second adoption pass (VC-94's A3): a session that asked before it
+  // landed and one that asked after have genuinely different PATHs, so the
+  // block must not describe them with the same words.
+  it("renders the interactive pass beside the boot one, pending included", () => {
+    expect(identifyWithInteractivePass("pending")).toContain(
+      "env.provenance  adopted\nenv.interactiveProvenance  pending\n",
+    );
+    expect(identifyWithInteractivePass("adopted")).toContain(
+      "env.provenance  adopted\nenv.interactiveProvenance  adopted\n",
+    );
+  });
+
+  it("renders a degraded identify's null provenance as a dash, not a claim", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: null,
+          ticket: null,
+          session: null,
+          worktreePath: "/repo/volli",
+          socket: null,
+          appVersion: null,
+          env: {
+            path: "/usr/bin",
+            provenance: null,
+            interactiveProvenance: null,
+            tools: { git: null, gh: null, node: null, pnpm: null },
+            dependencies: null,
+          },
+          degraded: true,
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  -\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "worktreePath  /repo/volli\n" +
+        "socket  -\n" +
+        "appVersion  -\n" +
+        "env.path  /usr/bin\n" +
+        "env.provenance  -\n" +
+        "env.interactiveProvenance  -\n" +
+        "env.tools.git  -\n" +
+        "env.tools.gh  -\n" +
+        "env.tools.node  -\n" +
+        "env.tools.pnpm  -\n" +
+        "env.dependencies  -\n" +
+        "degraded  true\n",
+    );
+  });
+
   it("prints the worktree-misalignment warning right after the path it contradicts", () => {
     expect(
       renderCliSuccess(
@@ -816,6 +965,51 @@ describe("renderCliSuccess — doctor", () => {
     expect(text).toContain("position 20 of 30");
     expect(text).toContain("→ Run `volli doctor --fix`.");
     expect(text.trimEnd().endsWith("1 failed of 2 checks.")).toBe(true);
+  });
+
+  it("renders the path repair before this Session's stale checks", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      {
+        ...data,
+        pathRepair: {
+          path: "/volli/bin:/opt/homebrew/bin:/usr/bin",
+          provenance: "adopted",
+          added: ["/opt/homebrew/bin"],
+          interactiveProvenance: "already-complete",
+          interactiveAdded: [],
+        },
+      },
+      { json: false },
+    );
+
+    expect(text).toContain("Session PATH repair");
+    expect(text).toContain("env.added  /opt/homebrew/bin");
+    expect(text).toContain("env.interactiveProvenance  already-complete");
+    expect(text).toContain("This running Session keeps the environment it started with.");
+    expect(text.indexOf("Session PATH repair")).toBeLessThan(
+      text.indexOf("✗ Volli's bin is first on PATH"),
+    );
+  });
+
+  it("drops a malformed repair block rather than rendering a half-invented one", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      // `added` is missing: main never sends this, so nothing may render it.
+      {
+        ...data,
+        pathRepair: {
+          path: "/volli/bin:/usr/bin",
+          provenance: "adopted",
+          interactiveProvenance: "already-complete",
+          interactiveAdded: [],
+        },
+      },
+      { json: false },
+    );
+
+    expect(text).not.toContain("Session PATH repair");
+    expect(text).toContain("✗ Volli's bin is first on PATH");
   });
 
   it("passes the structured report straight through with --json", () => {

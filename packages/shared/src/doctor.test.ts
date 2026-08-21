@@ -9,7 +9,13 @@ function observation(overrides: Partial<DoctorObservation> = {}): DoctorObservat
     pathEntries: [BIN, "/usr/bin", "/bin"],
     sessionId: "s-1",
     zdotDir: "/ud/shell/zsh",
-    resolved: { claude: `${BIN}/claude` },
+    resolved: {
+      claude: `${BIN}/claude`,
+      git: "/usr/bin/git",
+      gh: "/opt/homebrew/bin/gh",
+      node: "/opt/homebrew/bin/node",
+      pnpm: "/opt/homebrew/bin/pnpm",
+    },
     volliPath: `${BIN}/volli`,
     ...overrides,
   };
@@ -101,6 +107,62 @@ describe("runDoctorChecks — resolution", () => {
   // the diagnostic inventing a negative about a harness that may work fine.
   it("says so when no resolution was reported, rather than calling it absent", () => {
     const check = find(runDoctorChecks(observation({ resolved: {} }), facts()), "resolves-claude");
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("no resolution was reported");
+    expect(check.detail).not.toContain("resolves to nothing");
+  });
+});
+
+describe("runDoctorChecks — contract tools", () => {
+  it("passes each tool that resolves on the reported PATH, with its absolute path", () => {
+    const check = find(runDoctorChecks(observation(), facts()), "tool-gh");
+    expect(check.status).toBe("ok");
+    expect(check.detail).toBe("/opt/homebrew/bin/gh");
+  });
+
+  // The check cannot distinguish "not installed" from "installed but the
+  // session PATH never adopted it", so the remedy must name both causes and
+  // the discriminator — never a bare "install gh".
+  it("fails a measured absence with a remedy naming both causes", () => {
+    const check = find(
+      runDoctorChecks(observation({ resolved: { gh: null } }), facts()),
+      "tool-gh",
+    );
+    expect(check.status).toBe("fail");
+    expect(check.detail).toContain("resolves to nothing");
+    expect(check.remedy).toContain("brew install gh");
+    expect(check.remedy).toContain("volli doctor --fix");
+    expect(check.remedy).toContain("volli identify");
+  });
+
+  it("points every missing contract tool at the same PATH repair", () => {
+    const base = observation();
+    for (const tool of ["git", "gh", "node", "pnpm"] as const) {
+      const check = find(
+        runDoctorChecks(observation({ resolved: { ...base.resolved, [tool]: null } }), facts()),
+        `tool-${tool}`,
+      );
+      expect(check.remedy).toContain("volli doctor --fix");
+    }
+  });
+
+  // VC-94's exact shape: git answers from the bare launchd PATH's /usr/bin
+  // while gh is gone, so the session looks operational — it can commit — and
+  // cannot merge. Both facts must be visible in the same report.
+  it("reports git present and gh missing together, which is the incident's shape", () => {
+    const base = observation();
+    const checks = runDoctorChecks(
+      observation({ resolved: { ...base.resolved, gh: null } }),
+      facts(),
+    );
+    expect(find(checks, "tool-git").status).toBe("ok");
+    expect(find(checks, "tool-gh").status).toBe("fail");
+  });
+
+  // A caller that never measured a tool is silence, not absence; reporting it
+  // as absent would be the diagnostic inventing a negative.
+  it("warns rather than failing when no resolution was reported", () => {
+    const check = find(runDoctorChecks(observation({ resolved: {} }), facts()), "tool-node");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("no resolution was reported");
     expect(check.detail).not.toContain("resolves to nothing");

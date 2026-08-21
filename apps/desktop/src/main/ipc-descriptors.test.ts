@@ -2191,15 +2191,19 @@ describe("HARNESS_IPC descriptor table", () => {
 });
 
 describe("CLI_IPC descriptor table", () => {
-  describe("volli:cli-status (no-arg request)", () => {
+  describe("volli:cli-status", () => {
     const { guard, invalidError } = CLI_IPC["volli:cli-status"];
 
-    it("accepts an empty args tuple", () => {
+    it("accepts a host-wide read or a project root", () => {
       expect(guard([])).toBe(true);
+      expect(guard([{ cwd: "/work/acme" }])).toBe(true);
+      expect(guard([{}])).toBe(true);
     });
 
-    it("rejects stray arguments", () => {
+    it("rejects a non-string project root or stray arguments", () => {
+      expect(guard([{ cwd: 42 }])).toBe(false);
       expect(guard(["junk"])).toBe(false);
+      expect(guard([{ cwd: "/work/acme" }, "extra"])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {

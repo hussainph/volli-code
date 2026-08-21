@@ -22,6 +22,21 @@ function deps(home: string, overrides: Partial<CliStatusDeps> = {}): CliStatusDe
     socketPath: join(home, "volli.sock"),
     socketLive: () => true,
     loginShellPath: async () => `/usr/bin:${join(home, ".local", "bin")}`,
+    sessionEnvironment: async () => ({
+      path: `/volli/bin:/usr/bin:${join(home, ".local", "bin")}`,
+      provenance: "adopted",
+      interactiveProvenance: "already-complete",
+      tools: {
+        git: "/usr/bin/git",
+        gh: "/opt/homebrew/bin/gh",
+        node: "/opt/homebrew/bin/node",
+        pnpm: "/opt/homebrew/bin/pnpm",
+      },
+      dependencies: null,
+      installCommand: null,
+    }),
+    systemPathIssues: async () => [],
+    credentialHelperIssues: async () => [],
     wrapperCommands: () => ["claude", "codex"],
     shellFile: "/bin/zsh",
     shellChainActive: () => true,
@@ -47,11 +62,90 @@ describe("readCliStatus", () => {
       target: d.shimPath(),
     });
     expect(status.path).toEqual({ binDir: join(root, ".local", "bin"), state: "reachable" });
+    expect(status.environment).toEqual({
+      loginPath: `/usr/bin:${join(root, ".local", "bin")}`,
+      session: {
+        path: `/volli/bin:/usr/bin:${join(root, ".local", "bin")}`,
+        provenance: "adopted",
+        interactiveProvenance: "already-complete",
+        tools: {
+          git: "/usr/bin/git",
+          gh: "/opt/homebrew/bin/gh",
+          node: "/opt/homebrew/bin/node",
+          pnpm: "/opt/homebrew/bin/pnpm",
+        },
+        dependencies: null,
+        installCommand: null,
+      },
+      systemPathIssues: [],
+      credentialHelperIssues: [],
+    });
     expect(status.socket).toEqual({ path: join(root, "volli.sock"), live: true });
     expect(status.wrappers.commands).toEqual(["claude", "codex"]);
     expect(status.shell).toEqual({ name: "zsh", supported: true, chainActive: true });
     expect(status.legacy).toEqual({ path: join(root, "legacy-volli"), state: "absent" });
     expect(status.installSuppressed).toBe(false);
+  });
+
+  it("carries an immutable system PATH diagnosis alongside the Session facts", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-cli-status-"));
+    const issue = {
+      kind: "dotnet-cli-tools-literal-tilde" as const,
+      file: "/etc/paths.d/dotnet-cli-tools",
+      entry: "~/.dotnet/tools",
+    };
+
+    const status = await readCliStatus(deps(root, { systemPathIssues: async () => [issue] }));
+
+    expect(status.environment.systemPathIssues).toEqual([issue]);
+  });
+
+  it("carries a project-scoped credential-helper diagnosis beside the Session facts", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-cli-status-"));
+    const seen: Array<string | null> = [];
+    const issue = {
+      kind: "osxkeychain-may-prompt-gui" as const,
+      helper: "osxkeychain" as const,
+      scope: "global" as const,
+      location: "/Users/me/.gitconfig",
+    };
+
+    const status = await readCliStatus(
+      deps(root, {
+        credentialHelperIssues: async (cwd) => {
+          seen.push(cwd);
+          return [issue];
+        },
+      }),
+      "/work/acme",
+    );
+
+    expect(seen).toEqual(["/work/acme"]);
+    expect(status.environment.credentialHelperIssues).toEqual([issue]);
+  });
+
+  it("passes the selected project's root into the existing Session environment report", async () => {
+    root = await mkdtemp(join(tmpdir(), "volli-cli-status-"));
+    const seen: Array<string | null> = [];
+
+    await readCliStatus(
+      deps(root, {
+        sessionEnvironment: async (cwd) => {
+          seen.push(cwd);
+          return {
+            path: "/volli/bin:/usr/bin",
+            provenance: "adopted",
+            interactiveProvenance: "already-complete",
+            tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
+            dependencies: "absent",
+            installCommand: "pnpm install",
+          };
+        },
+      }),
+      "/work/acme",
+    );
+
+    expect(seen).toEqual(["/work/acme"]);
   });
 
   it("reports a surviving legacy /usr/local/bin link, ours and foreign alike", async () => {
@@ -99,6 +193,9 @@ describe("readCliStatus", () => {
     const status = await readCliStatus(deps(root, { loginShellPath: async () => null }));
 
     expect(status.path.state).toBe("unknown");
+    // The Session value remains a separate measured fact: a failed comparison
+    // must not erase the PATH commands will actually inherit.
+    expect(status.environment.session.path).toContain("/volli/bin");
   });
 
   it("reports a missing PATH entry, an unsupported shell, and the removal tombstone", async () => {

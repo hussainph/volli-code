@@ -13,8 +13,9 @@
  * so there is no spawned server whose PATH could be wrong. What survives is the
  * part that was never OpenCode-specific and still guards a shipping feature:
  * harness wrapper generation for the TERMINAL companions, which walks the LOGIN
- * SHELL's PATH (`apps/desktop/src/main/login-path.ts`, `zsh -l -i -c 'printenv
- * PATH'`) precisely because `process.env.PATH` is this useless under launchd.
+ * SHELL's PATH (`apps/desktop/src/main/login-shell-path.ts`, `zsh -l -i -c
+ * 'printenv PATH'`) precisely because `process.env.PATH` is this useless under
+ * launchd.
  *
  * A lab/dev-mode run cannot catch a regression here — `pnpm dev`'s Vite
  * process inherits a terminal's already-full PATH — only a BUILT app launch
@@ -44,7 +45,7 @@ const { attempt, summarize } = createRunner();
 
 // The launchd/Finder/Dock approximation this probe simulates: no user dirs,
 // no homebrew, nothing a shell rc would have added — only what
-// main/login-path.ts's interactive-login-shell walk can recover. SHELL stays
+// main/login-shell-path.ts's interactive-login-shell walk can recover. SHELL stays
 // inherited (a real launchd launch still sets it; resolveShell needs it to
 // know which shell to ask).
 const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -55,7 +56,7 @@ const WRAPPER_FAILURE_MARKER = "[volli] failed to generate harness wrappers";
 /** What main logs only after the boot-time wrapper/config/shell-init pass settles. */
 const WRAPPER_READY_MARKER = "[volli] harness runtime ready";
 
-/** The one boot-time report from main/login-shell-path.ts. */
+/** The one boot-time report from main/login-path-adoption.ts. */
 const LOGIN_PATH_MARKER = /\[volli\] PATH (?:adopted from login shell \([1-9]\d* entries\)|kept)/;
 
 const WAIT_TIMEOUT_MS = 12_000;

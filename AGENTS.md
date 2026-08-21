@@ -62,6 +62,12 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 
 The global `vp` toolchain CLI is used by this repository. Node and pnpm versions are pinned in the root `package.json`.
 
+## Session environment
+
+Every Volli session — ticket or project, PTY or structured — starts with the same `PATH`: Volli's bin dir first, then the login shell's exported `PATH` merged with what the app already had. Do not discover tools by running them and reading command-not-found failures: run `volli identify` first. Its `env` block reports the resolved `PATH`, where each contract tool (`git`, `gh`, `node`, `pnpm`) resolves or that it does not, and whether the workspace's dependencies are installed — run `pnpm install` if they are absent. `volli doctor` audits the same facts and names remedies. A tool that is installed but missing from `volli identify` is a `PATH` adoption failure, not a missing install: run `volli doctor --fix` first. It re-runs adoption for new Sessions and names what changed; the Session already running keeps its startup environment. If the tool remains absent, report it rather than working around it with absolute paths.
+
+The `PATH` is built in two passes, and the `env` block reports each separately — a session that asked before the second one landed and a session that asked after do not have the same `PATH`, so one word could not describe both. `env.provenance` is the non-interactive pass, normally run at boot (`adopted` / `already-complete` / `probe-failed`). `env.interactiveProvenance` is the later pass, normally run once after the first window, which asks an _interactive_ login shell and picks up whatever the user's `.zshrc` exports — nvm, bun, rbenv, pyenv, mise. It reports the same three values, or `pending` before it has run. `volli doctor --fix` re-runs both passes and refreshes both fields. `pending` is not a failure: it means those toolchain directories may not be on the `PATH` yet. A repair affects only Sessions started after it; a Session already running keeps the environment it started with.
+
 ## Retained foundations
 
 - **Data:** local SQLite via better-sqlite3, WAL mode, owned by the main process. Store transcripts as indexed files on disk. The product is local-first and single-player.

@@ -4,6 +4,7 @@ export * from "./file-workspace";
 export * from "./board";
 export * from "./ticket";
 export * from "./doctor";
+export * from "./session-env";
 export * from "./harness-command";
 export * from "./harness";
 export * from "./agent-surface";

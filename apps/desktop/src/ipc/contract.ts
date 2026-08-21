@@ -47,6 +47,9 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
+  SessionEnvInteractiveProvenance,
+  SessionEnvProvenance,
+  SessionEnvTool,
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
@@ -62,6 +65,7 @@ import type {
   TicketStatus,
   TicketStatusEntry,
   VenueSnapshot,
+  WorkspaceDependenciesStatus,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -658,7 +662,56 @@ export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
  * by `src/main/cli-status.ts`. Every field is detection, not configuration:
  * the pane this feeds exists because the install is silent, and a silent
  * install with no truthful surface is indistinguishable from a broken one.
+ *
+ * `CliSessionPathStatus` keeps Session PATH separate from the interactive
+ * login-shell PATH: the two paths must be comparable in Settings because one
+ * is what a person's shell says and the other is what Session commands inherit.
  */
+/** One known malformed entry in macOS's system login-PATH configuration. */
+export interface CliSystemPathIssue {
+  kind: "dotnet-cli-tools-literal-tilde";
+  /** The root-owned `/etc/paths.d/*` file containing the entry. */
+  file: string;
+  /** The literal value `path_helper` appends to every login PATH. */
+  entry: string;
+}
+
+/** A known Git credential helper that can hang a headless Session on a GUI prompt. */
+export interface CliCredentialHelperIssue {
+  kind: "osxkeychain-may-prompt-gui";
+  helper: "osxkeychain";
+  /**
+   * Git's `local` and `worktree` scopes both mean this project's
+   * configuration. `unknown` is Git's own word for a source it does not
+   * classify — Apple's `/usr/bin/git` reports its Xcode-bundled gitconfig,
+   * the file that enables `osxkeychain` on a stock Mac, exactly this way.
+   */
+  scope: "system" | "global" | "repo-local" | "command" | "unknown";
+  /** The config file or command source Git itself reported for the helper. */
+  location: string;
+}
+
+export interface CliSessionPathStatus {
+  /** The exact colon-delimited PATH a Session command inherits. */
+  path: string;
+  /** What the non-interactive boot adoption could establish. */
+  provenance: SessionEnvProvenance;
+  /** What the later interactive pass could establish, if it has landed. */
+  interactiveProvenance: SessionEnvInteractiveProvenance;
+  /** Where each tool a Session contract requires resolves, or `null` when it does not. */
+  tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /** Project-scoped dependency state; `null` when no project workspace was supplied. */
+  dependencies: WorkspaceDependenciesStatus;
+  /**
+   * The command that installs the scoped workspace's dependencies, judged by
+   * its lockfile (`@volli/shared`'s `workspaceInstallCommand`); `null` when
+   * no project workspace was supplied or none encloses it. Settings/alert
+   * vocabulary only — `volli identify`'s env block deliberately stays the
+   * exact field set the contract published.
+   */
+  installCommand: string | null;
+}
+
 export interface CliToolStatus {
   /** `~/.local/bin/volli`: `ours` links this app's shim; `foreign`/`not-symlink` were left alone. */
   link: {
@@ -668,6 +721,19 @@ export interface CliToolStatus {
   };
   /** Whether the login shell reaches `~/.local/bin`; `unknown` means the shell could not be asked. */
   path: { binDir: string; state: "reachable" | "missing" | "unknown" };
+  /**
+   * Both PATH facts the app can otherwise accidentally conflate: the login
+   * shell's current answer and the PATH Session commands will actually get.
+   * `loginPath: null` means that shell could not be asked, never an empty PATH.
+   */
+  environment: {
+    loginPath: string | null;
+    session: CliSessionPathStatus;
+    /** A read-only diagnosis of known malformed system PATH entries. */
+    systemPathIssues: CliSystemPathIssue[];
+    /** A read-only diagnosis of GUI-capable credential helpers for the scoped project. */
+    credentialHelperIssues: CliCredentialHelperIssue[];
+  };
   /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
   /** Harness wrapper command names the last runtime regeneration produced. */
@@ -681,6 +747,11 @@ export interface CliToolStatus {
 }
 
 export type CliStatusResult = { ok: true; status: CliToolStatus } | { ok: false; error: string };
+
+/** A project root for the Session environment and Git credential reports, when one is in scope. */
+export interface CliStatusInput {
+  cwd?: string;
+}
 
 /** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
 export interface CliDoctorInput {
@@ -697,7 +768,7 @@ export type CliDoctorResult =
 
 /** The Settings → CLI surface (`src/main/cli-ipc.ts`). */
 export interface VolliCliIpcContract {
-  "volli:cli-status": { args: []; result: CliStatusResult };
+  "volli:cli-status": { args: [input?: CliStatusInput]; result: CliStatusResult };
   "volli:cli-doctor": { args: [input: CliDoctorInput]; result: CliDoctorResult };
 }
 

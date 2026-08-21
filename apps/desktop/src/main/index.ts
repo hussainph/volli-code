@@ -32,8 +32,9 @@ import {
   skillsIndexResource,
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
+  workspaceInstallCommand,
 } from "@volli/shared";
-import type { PromptResource, SessionEvent, SessionInput } from "@volli/shared";
+import type { PromptResource, SessionEnvRepair, SessionEvent, SessionInput } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
@@ -146,8 +147,16 @@ import {
   registerAgentSocketWillQuit,
   startAgentSocket,
 } from "./agent-socket";
-import { loginShellPath } from "./login-path";
-import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
+import { createLoginPathBootstrap } from "./login-path-adoption";
+import {
+  ADOPTION_PROBE,
+  loginShellPath,
+  probeLoginShellPath,
+  resetLoginShellPathCache,
+} from "./login-shell-path";
+import { buildSessionEnvReport } from "./session-env";
+import { credentialHelperIssues as readCredentialHelperIssues } from "./credential-helper-diagnostics";
+import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
 import {
   cleanupLegacyGlobalCliLink,
   detectHarnesses,
@@ -505,7 +514,7 @@ app.whenReady().then(async () => {
   // registration below rather than in front of them. Its result is observed
   // only after the first window loads, or by a Pi execution environment that
   // genuinely needs it first.
-  const loginShellPathAttempt = resolveLoginShellPath();
+  const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
   protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
@@ -643,8 +652,36 @@ app.whenReady().then(async () => {
       process.env.PATH = path;
     },
     resolveLoginPath: () => loginShellPathAttempt,
+    // The second pass's shell (VC-94's A3), and deliberately the SAME one
+    // detection asks: `loginShellPath()` caches the interactive answer for the
+    // launch, so by the time the first window has loaded this is normally a
+    // cache read rather than a spawn. Called only when `applyInteractive` runs.
+    resolveInteractiveLoginPath: () => loginShellPath(),
     log: (line) => console.info(line),
   });
+  /**
+   * The same Session-environment measurement for agents, Settings, and project
+   * onboarding. `null` means the caller has no project root — it must not turn
+   * main's own cwd into a pretend workspace dependency answer.
+   */
+  const readSessionEnvironment = async (cwd: string | null) => {
+    const outcome = await loginPathBootstrap.apply();
+    const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
+    const report = await buildSessionEnvReport({
+      // Read after apply: the bootstrap is the one writer that puts binDir
+      // first even when the login shell could not be reached.
+      path: process.env.PATH ?? "",
+      provenance: outcome.kind,
+      interactiveProvenance,
+      // A host-wide read has no project dependency fact to infer from main's
+      // own cwd, so the report leaves that one field unmeasured.
+      cwd: cwd ?? undefined,
+    });
+    // `SessionEnvReport` also serves a standalone CLI fallback, where those
+    // fields can be unknown. Main just ran both passes, so Settings can retain
+    // their concrete facts instead of widening them to that fallback shape.
+    return { ...report, provenance: outcome.kind, interactiveProvenance };
+  };
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.
@@ -1418,6 +1455,15 @@ app.whenReady().then(async () => {
     void loginPathBootstrap.apply().catch((error) => {
       console.error("[volli] failed to apply login PATH:", errorMessage(error));
     });
+    // The second, INTERACTIVE pass (VC-94's A3), which is what recovers the
+    // directories a user's `.zshrc` exports — nvm, bun, rbenv, pyenv, mise.
+    // Here rather than on the boot path because an rc file may prompt, and a
+    // prompt before the first window is a hang nobody can answer; here rather
+    // than awaited because nothing may wait on it. If it wedges for its whole
+    // timeout, the app is exactly as usable as it was before this existed.
+    void loginPathBootstrap.applyInteractive().catch((error) => {
+      console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
+    });
   });
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
@@ -1637,6 +1683,28 @@ app.whenReady().then(async () => {
     }
   };
 
+  /**
+   * Doctor's explicit repair is the one place a stale PATH answer may be
+   * discarded on purpose. The installer can write `~/.zprofile`; resetting
+   * only after it finishes makes the two fresh probes describe that new shell,
+   * rather than preserving the answer that justified the write.
+   */
+  const repairSessionEnvironment = async (): Promise<SessionEnvRepair> => {
+    if (dbHandle.ok && agentToolsRemoved()) {
+      // A repair is an explicit request for working tools. Lift suppression
+      // before touching the filesystem, or fail instead of leaving an install
+      // present on disk yet silently skipped on every later boot.
+      setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
+    }
+    await regenerateHarnessRuntime();
+    await installAgentToolsQuietly();
+    resetLoginShellPathCache();
+    return loginPathBootstrap.repair(
+      () => probeLoginShellPath(ADOPTION_PROBE),
+      () => loginShellPath(),
+    );
+  };
+
   // Menu action: the same quiet installer, but loud about failure (a click
   // deserves an answer) — and it clears the removal tombstone, which is the
   // one thing that distinguishes "install again" from every boot's refresh.
@@ -1755,36 +1823,40 @@ app.whenReady().then(async () => {
   // Every dep reads at CALL time — `shimPath` and the wrapper set are
   // reassigned once generation runs.
   registerCliIpcHandlers({
-    status: () =>
-      readCliStatus({
-        home: agentToolsHome,
-        shimPath: () => shimPath,
-        managedTargets: managedSiblingShims,
-        socketPath: runtimePaths.socketPath,
-        socketLive: () => agentSocket.live(),
-        loginShellPath: () => loginShellPath(),
-        wrapperCommands: () =>
-          [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
-            (wrapperPath) => basename(wrapperPath),
-          ),
-        shellFile: resolveShell(process.env).file,
-        shellChainActive: () =>
-          agentRuntime.shellEnv?.["ZDOTDIR"] !== undefined &&
-          existsSync(join(runtimePaths.zdotDir, ".zlogin")),
-        installSuppressed: agentToolsRemoved,
-      }),
+    status: (input) =>
+      readCliStatus(
+        {
+          home: agentToolsHome,
+          shimPath: () => shimPath,
+          managedTargets: managedSiblingShims,
+          socketPath: runtimePaths.socketPath,
+          socketLive: () => agentSocket.live(),
+          loginShellPath: () => loginShellPath(),
+          // Settings speaks one extra word identify does not: which command
+          // installs the scoped workspace, judged by its lockfile. Computed
+          // here so `volli identify`'s env block keeps the exact field set
+          // the contract published.
+          sessionEnvironment: async (cwd) => ({
+            ...(await readSessionEnvironment(cwd)),
+            installCommand: cwd === null ? null : workspaceInstallCommand(cwd, existsSync),
+          }),
+          systemPathIssues: () => readSystemPathIssues(),
+          credentialHelperIssues: (cwd) => readCredentialHelperIssues(cwd),
+          wrapperCommands: () =>
+            [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>()).values()].map(
+              (wrapperPath) => basename(wrapperPath),
+            ),
+          shellFile: resolveShell(process.env).file,
+          shellChainActive: () =>
+            agentRuntime.shellEnv?.["ZDOTDIR"] !== undefined &&
+            existsSync(join(runtimePaths.zdotDir, ".zlogin")),
+          installSuppressed: agentToolsRemoved,
+        },
+        input?.cwd ?? null,
+      ),
     doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
     repair: async () => {
-      // Fix is as explicit a request for working tools as File → Install, so it
-      // clears the removal tombstone the same way — otherwise a repaired
-      // install would sit in a half-state: present on disk, still suppressed
-      // at every boot. Cleared FIRST: if the write fails, the repair fails
-      // loudly rather than reinstalling behind a tombstone it could not lift.
-      if (dbHandle.ok && agentToolsRemoved()) {
-        setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
-      }
-      await regenerateHarnessRuntime();
-      await installAgentToolsQuietly();
+      await repairSessionEnvironment();
     },
   });
 
@@ -1871,6 +1943,13 @@ app.whenReady().then(async () => {
           // that IT is what is now running in that terminal. Fired only on a
           // change, so this is never chatter.
           onSessionHarness: (notice) => broadcastSessionHarness(notice),
+          // The `env` block `volli identify` prints (VC-94): the PATH main
+          // adopted, its latest non-interactive provenance, the contract tools
+          // resolved against it, and the workspace dependency state. It awaits
+          // the one current pass — boot normally, a fresh pass after repair —
+          // so the report never describes a PATH from before adoption finished
+          // and is read at CALL time, never captured.
+          sessionEnv: (cwd) => readSessionEnvironment(cwd),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.
@@ -1908,7 +1987,7 @@ app.whenReady().then(async () => {
             // user's dotfiles as a side effect of being asked a question.
             skillConflicts: [],
           }),
-          doctorRepair: regenerateHarnessRuntime,
+          doctorRepair: repairSessionEnvironment,
         }).execute
       : async () =>
           ({

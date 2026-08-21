@@ -18,11 +18,12 @@ import {
   type HarnessUninstallResult,
 } from "./harness-install";
 import {
+  DETECTION_PROBE,
   loginShellPath,
-  readLoginShellPath,
+  probeLoginShellPath,
   resetLoginShellPathCache,
-  type LoginShellDeps,
-} from "./login-path";
+  type LoginShellProbeDeps,
+} from "./login-shell-path";
 
 /**
  * The first executable named `executable` on `pathValue`, absolute — what a
@@ -78,8 +79,10 @@ export async function detectInstalledHarnesses(pathValue: string): Promise<Harne
  * an empty host, and nothing may treat it as one — an install whose PATH failed
  * to resolve once still has every harness it had a minute ago.
  */
-export async function detectHarnesses(deps?: LoginShellDeps): Promise<HarnessId[] | null> {
-  const pathValue = deps ? await readLoginShellPath(deps) : await loginShellPath();
+export async function detectHarnesses(deps?: LoginShellProbeDeps): Promise<HarnessId[] | null> {
+  const pathValue = deps
+    ? await probeLoginShellPath(DETECTION_PROBE, deps)
+    : await loginShellPath();
   if (pathValue === null) return null;
   return detectInstalledHarnesses(pathValue);
 }
