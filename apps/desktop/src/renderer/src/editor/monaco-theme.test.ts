@@ -1,6 +1,14 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * The renderer test project runs under `node` by default, and most of its
+ * tests take a recording stand-in rather than a DOM. This one cannot: the
+ * appearance fallback reads the class preload stamps on `<html>` from INSIDE
+ * `activeMonacoEditorThemeId`, so there is no root to hand in — and the whole
+ * point of the fallback is that it agrees with what is on the document.
+ */
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { DEFAULT_EDITOR_THEME_ID } from "./editor-theme-catalog";
 import {
   activeMonacoEditorThemeId,
   applyMonacoThemeForDiffEditor,
@@ -10,102 +18,98 @@ import {
   ensureMonacoEditorThemeLoaded,
   refreshMonacoEditorTheme,
   resetMonacoEditorThemeForTests,
-  restoreEditorThemeFromState,
 } from "./monaco-theme";
+
+const LIGHT = "vitesse-light";
+const DARK = "vitesse-dark";
+
+/** Stamp the appearance class preload writes on `<html>`, as the paint path does. */
+function stampAppearance(resolved: "light" | "dark"): void {
+  document.documentElement.classList.toggle("light", resolved === "light");
+}
 
 afterEach(() => {
   resetMonacoEditorThemeForTests();
+  document.documentElement.classList.remove("light");
 });
 
-describe("restoreEditorThemeFromState", () => {
-  it("paints and returns the committed catalog id after a successful store commit", async () => {
-    const setTheme = vi.fn();
-    bindMonacoEditorThemeHost({ editor: { setTheme } });
-    // Preview of something else must not win: restore reads live store inputs.
-    refreshMonacoEditorTheme("dracula");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
-    setTheme.mockClear();
+describe("activeMonacoEditorThemeId", () => {
+  it("follows the appearance stamped on the document when nothing is pending", () => {
+    stampAppearance("dark");
+    expect(activeMonacoEditorThemeId()).toBe(DARK);
 
-    const painted = restoreEditorThemeFromState({ editorThemeId: "nord" });
-
-    expect(painted).toBe("nord");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("nord"));
-    expect(activeMonacoEditorThemeId()).toBe("nord");
+    stampAppearance("light");
+    expect(activeMonacoEditorThemeId()).toBe(LIGHT);
   });
 
-  it("restores the shipped default when nothing is pinned", async () => {
-    const setTheme = vi.fn();
-    bindMonacoEditorThemeHost({ editor: { setTheme } });
-    refreshMonacoEditorTheme("dracula");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
-    setTheme.mockClear();
-
-    const painted = restoreEditorThemeFromState({ editorThemeId: null });
-
-    expect(painted).toBe("one-dark-pro");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("one-dark-pro"));
+  it("returns the pending id so create() construction options do not clobber it", () => {
+    stampAppearance("dark");
+    refreshMonacoEditorTheme(LIGHT);
+    expect(activeMonacoEditorThemeId()).toBe(LIGHT);
   });
 });
 
 describe("refreshMonacoEditorTheme", () => {
   it("no-ops safely before Monaco is bound and remembers the pending id", async () => {
-    expect(() => refreshMonacoEditorTheme("nord")).not.toThrow();
+    expect(() => refreshMonacoEditorTheme(LIGHT)).not.toThrow();
 
     const setTheme = vi.fn();
     bindMonacoEditorThemeHost({ editor: { setTheme } });
 
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("nord"));
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(LIGHT));
   });
 
-  it("awaits ensure then setThemes when a host is already bound", async () => {
+  it("awaits ensure then setTheme when a host is already bound", async () => {
     const ensure = vi.fn(async () => undefined);
     const setTheme = vi.fn();
     bindMonacoEditorThemeEnsure(ensure);
     bindMonacoEditorThemeHost({ editor: { setTheme } });
 
-    refreshMonacoEditorTheme("dracula");
+    refreshMonacoEditorTheme(LIGHT);
 
     await vi.waitFor(() => {
-      expect(ensure).toHaveBeenCalledWith("dracula");
-      expect(setTheme).toHaveBeenCalledWith("dracula");
+      expect(ensure).toHaveBeenCalledWith(LIGHT);
+      expect(setTheme).toHaveBeenCalledWith(LIGHT);
     });
     expect(ensure.mock.invocationCallOrder[0]!).toBeLessThan(setTheme.mock.invocationCallOrder[0]!);
   });
 
   it("applies the latest pending id when Monaco binds after several refreshes", async () => {
-    refreshMonacoEditorTheme("nord");
-    refreshMonacoEditorTheme("dracula");
+    refreshMonacoEditorTheme(DARK);
+    refreshMonacoEditorTheme(LIGHT);
 
     const setTheme = vi.fn();
     bindMonacoEditorThemeHost({ editor: { setTheme } });
 
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
-    expect(setTheme).not.toHaveBeenCalledWith("nord");
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(LIGHT));
+    expect(setTheme).not.toHaveBeenCalledWith(DARK);
   });
 
   it("does not paint a superseded theme after a slower ensure", async () => {
-    let resolveNord!: () => void;
-    let nordEnsureFinished = false;
-    const nordGate = new Promise<void>((resolve) => {
-      resolveNord = resolve;
+    // A light↔dark flip mid-load is exactly this race: the outgoing theme must
+    // never land on top of the incoming one.
+    let releaseSlow!: () => void;
+    let slowEnsureFinished = false;
+    const gate = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
     });
     const ensure = vi.fn(async (id: string) => {
-      if (id === "nord") {
-        await nordGate;
-        nordEnsureFinished = true;
+      if (id === DARK) {
+        await gate;
+        slowEnsureFinished = true;
       }
     });
     const setTheme = vi.fn();
     bindMonacoEditorThemeEnsure(ensure);
     bindMonacoEditorThemeHost({ editor: { setTheme } });
 
-    refreshMonacoEditorTheme("nord");
-    refreshMonacoEditorTheme("dracula");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
+    refreshMonacoEditorTheme(DARK);
+    refreshMonacoEditorTheme(LIGHT);
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(LIGHT));
     setTheme.mockClear();
-    resolveNord();
-    await vi.waitFor(() => expect(nordEnsureFinished).toBe(true));
-    expect(setTheme).not.toHaveBeenCalledWith("nord");
+    releaseSlow();
+    await vi.waitFor(() => expect(slowEnsureFinished).toBe(true));
+    expect(setTheme).not.toHaveBeenCalledWith(DARK);
   });
 
   it("reports a lazy theme-load failure without an unhandled rejection or stale paint", async () => {
@@ -115,12 +119,12 @@ describe("refreshMonacoEditorTheme", () => {
     bindMonacoEditorThemeEnsure(vi.fn(async () => Promise.reject(failure)));
     bindMonacoEditorThemeHost({ editor: { setTheme } });
 
-    refreshMonacoEditorTheme("nord");
+    refreshMonacoEditorTheme(LIGHT);
 
     await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith('[volli] failed to load Monaco theme "nord":', failure),
+      expect(warn).toHaveBeenCalledWith(`[volli] failed to load Monaco theme "${LIGHT}":`, failure),
     );
-    expect(setTheme).not.toHaveBeenCalledWith("nord");
+    expect(setTheme).not.toHaveBeenCalledWith(LIGHT);
   });
 });
 
@@ -129,84 +133,75 @@ describe("ensureMonacoEditorThemeLoaded", () => {
     const ensure = vi.fn(async () => undefined);
     bindMonacoEditorThemeEnsure(ensure);
 
-    await ensureMonacoEditorThemeLoaded("nord");
+    await ensureMonacoEditorThemeLoaded(LIGHT);
 
-    expect(ensure).toHaveBeenCalledWith("nord");
+    expect(ensure).toHaveBeenCalledWith(LIGHT);
+  });
+
+  it("no-ops when no ensure seam is bound", async () => {
+    await expect(ensureMonacoEditorThemeLoaded(LIGHT)).resolves.toBeUndefined();
   });
 });
 
 describe("ensureMonacoEditorTheme", () => {
-  it("activates the fallback only when nothing is pending", async () => {
+  it("activates the appearance's theme only when nothing is pending", async () => {
+    stampAppearance("light");
     const setTheme = vi.fn();
     bindMonacoEditorThemeHost({ editor: { setTheme } });
 
-    ensureMonacoEditorTheme("one-dark-pro");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("one-dark-pro"));
+    ensureMonacoEditorTheme();
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(LIGHT));
 
-    refreshMonacoEditorTheme("nord");
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("nord"));
+    // A store refresh that already landed must not be clobbered by bootstrap.
+    refreshMonacoEditorTheme(DARK);
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(DARK));
     setTheme.mockClear();
-    ensureMonacoEditorTheme("one-dark-pro");
+    ensureMonacoEditorTheme();
     await Promise.resolve();
     expect(setTheme).not.toHaveBeenCalled();
   });
 });
 
 describe("applyMonacoThemeForDiffEditor", () => {
-  it("always setThemes an explicit catalog id on the handed-in monaco (DiffEditor ignores construction theme)", async () => {
-    const setTheme = vi.fn();
-    const monaco = { editor: { setTheme } };
-
-    applyMonacoThemeForDiffEditor(monaco, "nord");
-
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("nord"));
-    expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
-  });
-
-  it("uses the pending refresh id when no themeId is passed", async () => {
-    refreshMonacoEditorTheme("dracula");
+  it("setThemes the appearance's theme on the handed-in monaco (DiffEditor ignores construction theme)", async () => {
+    stampAppearance("light");
     const setTheme = vi.fn();
 
     applyMonacoThemeForDiffEditor({ editor: { setTheme } });
 
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith("dracula"));
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(LIGHT));
+    expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
   });
 
-  it("falls back to DEFAULT_EDITOR_THEME_ID when nothing is pending", async () => {
+  it("uses the pending refresh id when one is already queued", async () => {
+    stampAppearance("light");
+    refreshMonacoEditorTheme(DARK);
     const setTheme = vi.fn();
 
     applyMonacoThemeForDiffEditor({ editor: { setTheme } });
 
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(DEFAULT_EDITOR_THEME_ID));
-  });
-
-  it("never activates volli-dark even when asked — maps through the catalog", async () => {
-    const setTheme = vi.fn();
-
-    applyMonacoThemeForDiffEditor({ editor: { setTheme } }, "volli-dark");
-
-    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(DEFAULT_EDITOR_THEME_ID));
-    expect(setTheme.mock.calls.some((call) => call[0] === "volli-dark")).toBe(false);
+    await vi.waitFor(() => expect(setTheme).toHaveBeenCalledWith(DARK));
   });
 
   it("skips the handed-in setTheme when a newer pending id supersedes the target", async () => {
-    let resolveEnsure!: () => void;
+    let releaseEnsure!: () => void;
     const gate = new Promise<void>((resolve) => {
-      resolveEnsure = resolve;
+      releaseEnsure = resolve;
     });
     bindMonacoEditorThemeEnsure(async () => gate);
     const setTheme = vi.fn();
     bindMonacoEditorThemeHost({ editor: { setTheme } });
+    stampAppearance("light");
     setTheme.mockClear();
 
-    applyMonacoThemeForDiffEditor({ editor: { setTheme } }, "nord");
-    refreshMonacoEditorTheme("dracula");
-    resolveEnsure();
+    applyMonacoThemeForDiffEditor({ editor: { setTheme } });
+    refreshMonacoEditorTheme(DARK);
+    releaseEnsure();
 
     await vi.waitFor(() => {
-      expect(setTheme.mock.calls.some((call) => call[0] === "dracula")).toBe(true);
+      expect(setTheme.mock.calls.some((call) => call[0] === DARK)).toBe(true);
     });
-    expect(setTheme.mock.calls.some((call) => call[0] === "nord")).toBe(false);
+    expect(setTheme.mock.calls.some((call) => call[0] === LIGHT)).toBe(false);
   });
 
   it("reports a lazy load failure and leaves the DiffEditor on its current theme", async () => {
@@ -215,19 +210,9 @@ describe("applyMonacoThemeForDiffEditor", () => {
     const setTheme = vi.fn();
     bindMonacoEditorThemeEnsure(vi.fn(async () => Promise.reject(failure)));
 
-    applyMonacoThemeForDiffEditor({ editor: { setTheme } }, "nord");
+    applyMonacoThemeForDiffEditor({ editor: { setTheme } });
 
-    await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith('[volli] failed to load Monaco theme "nord":', failure),
-    );
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
     expect(setTheme).not.toHaveBeenCalled();
-  });
-});
-
-describe("activeMonacoEditorThemeId", () => {
-  it("returns the pending catalog id so create() construction options do not clobber it", () => {
-    expect(activeMonacoEditorThemeId()).toBe(DEFAULT_EDITOR_THEME_ID);
-    refreshMonacoEditorTheme("nord");
-    expect(activeMonacoEditorThemeId()).toBe("nord");
   });
 });

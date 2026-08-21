@@ -6,11 +6,7 @@ import {
   type SequenceEditStep,
   STANDARD_SEQUENCE_DIFF_BUDGET,
 } from "./bounded-sequence-diff";
-import {
-  DEFAULT_EDITOR_THEME_ID,
-  editorThemeImporterFor,
-  resolveEditorThemeId,
-} from "./editor-theme-catalog";
+import { editorThemeImporterFor } from "./editor-theme-catalog";
 import { DocumentRegistry, type RegistryModelFactory } from "./document-registry";
 import { allShikiLanguageIds } from "./shiki-langs";
 import {
@@ -20,6 +16,7 @@ import {
   type ShikiMonacoBootstrap,
 } from "./shiki-monaco";
 import {
+  activeMonacoEditorThemeId,
   bindMonacoEditorThemeEnsure,
   bindMonacoEditorThemeHost,
   ensureMonacoEditorTheme,
@@ -445,12 +442,12 @@ export function createShikiBackedModelFactory(
 }
 
 /**
- * Wire shiki once with the default catalog theme and empty langs, then register
+ * Wire shiki once with the appearance's theme and empty langs, then register
  * every document language id as an empty Monaco shell so late providers can
  * attach. Call `wireShikiToMonaco` / bootstrap exactly once — late langs use
  * `registerLanguage`, late themes use `registerTheme` (shared themeMap/colorMap).
- * Catalog themes beyond the default load via the theme-ensure seam before
- * `setTheme` (no flash of an undefined theme).
+ * The OTHER of the two themes loads via the theme-ensure seam before `setTheme`
+ * (no flash of an undefined theme on a light↔dark flip).
  */
 export async function prepareMonacoEditorThemes(
   monaco: typeof Monaco,
@@ -459,9 +456,12 @@ export async function prepareMonacoEditorThemes(
   // see every document-identity id in monaco.languages.getLanguages().
   ensureMonacoLanguagesRegistered(monaco, allShikiLanguageIds());
 
-  const defaultThemeLoad = editorThemeImporterFor(DEFAULT_EDITOR_THEME_ID);
+  // Boot into the mode the window is ALREADY wearing (preload stamped it before
+  // the first frame), so the very first editor is built light in a light app
+  // rather than correcting itself once the theme store hydrates.
+  const bootThemeLoad = editorThemeImporterFor(activeMonacoEditorThemeId());
   const shiki = await bootstrapShikiMonaco(monaco, {
-    themes: defaultThemeLoad === null ? [] : [defaultThemeLoad],
+    themes: bootThemeLoad === null ? [] : [bootThemeLoad],
     langs: [],
   });
 
@@ -474,8 +474,8 @@ export async function prepareMonacoEditorThemes(
   });
   bindMonacoEditorThemeHost(monaco);
   // If the theme store already refreshed before runtime init, bind applied it.
-  // Otherwise activate the shipped default so the first editor isn't unthemed.
-  ensureMonacoEditorTheme(resolveEditorThemeId({ editorThemeId: null }));
+  // Otherwise activate the appearance's theme so the first editor isn't unthemed.
+  ensureMonacoEditorTheme();
   return shiki;
 }
 

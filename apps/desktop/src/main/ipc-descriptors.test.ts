@@ -1690,65 +1690,34 @@ describe("THEME_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:theme-set-global-editor", () => {
-    const { guard, invalidError } = THEME_IPC["volli:theme-set-global-editor"];
-
-    it("accepts an authored catalog id or null to derive from the app theme", () => {
-      expect(guard([{ editorThemeId: "nord" }])).toBe(true);
-      expect(guard([{ editorThemeId: null }])).toBe(true);
-    });
-
-    it("accepts the caller's project scope and rejects a non-string one", () => {
-      expect(guard([{ editorThemeId: "nord", projectId: "p1" }])).toBe(true);
-      expect(guard([{ editorThemeId: "nord", projectId: 7 }])).toBe(false);
-    });
-
-    it("rejects a missing or non-nullable-string editorThemeId", () => {
-      expect(guard([{}])).toBe(false);
-      expect(guard([{ editorThemeId: 7 }])).toBe(false);
-      expect(guard([])).toBe(false);
-    });
-
-    it("rejects a non-catalog string id", () => {
-      expect(guard([{ editorThemeId: "volli-dark" }])).toBe(false);
-      expect(guard([{ editorThemeId: "not-a-theme" }])).toBe(false);
-      expect(guard([{ editorThemeId: "" }])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid editor theme");
+  describe("the retired volli:theme-set-global-editor channel", () => {
+    it("is absent from the descriptor table", () => {
+      // VC-123: the editor has no persisted theme, so it has no write channel.
+      // A guard left behind would keep an unreachable id reachable over IPC.
+      expect(THEME_IPC).not.toHaveProperty("volli:theme-set-global-editor");
     });
   });
 
   describe("volli:theme-set-project", () => {
     const { guard, invalidError } = THEME_IPC["volli:theme-set-project"];
-    const override = {
-      terminalThemeName: "Nord",
-      editorThemeId: null,
-    };
+    const override = { terminalThemeName: "Nord" };
 
     it("accepts a per-surface override and a null (clear-to-inherit)", () => {
       expect(guard([{ projectId: "p1", override }])).toBe(true);
       expect(guard([{ projectId: "p1", override: null }])).toBe(true);
     });
 
-    it("rejects a partial override shape or a missing project", () => {
-      expect(guard([{ projectId: "p1", override: { terminalThemeName: "x" } }])).toBe(false);
+    it("rejects a missing project or a non-string terminal name", () => {
       expect(guard([{ override }])).toBe(false);
+      expect(guard([{ projectId: "p1", override: { terminalThemeName: 7 } }])).toBe(false);
+      expect(guard([{ projectId: "p1", override: {} }])).toBe(false);
     });
 
-    it("accepts a shipped catalog editorThemeId and rejects a non-catalog id", () => {
+    it("ignores a stale editorThemeId from an older renderer", () => {
+      // Rejecting the whole override for a field nothing reads would turn a
+      // retired picker into a broken terminal theme (VC-123).
       expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "nord" } }])).toBe(
         true,
-      );
-      expect(
-        guard([{ projectId: "p1", override: { ...override, editorThemeId: "volli-dark" } }]),
-      ).toBe(false);
-      expect(
-        guard([{ projectId: "p1", override: { ...override, editorThemeId: "not-a-theme" } }]),
-      ).toBe(false);
-      expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "" } }])).toBe(
-        false,
       );
     });
 
@@ -1918,9 +1887,8 @@ describe("THEME_IPC descriptor table", () => {
     });
 
     it("covers the whole theme surface", () => {
-      expect(THEME_CHANNELS).toHaveLength(9);
+      expect(THEME_CHANNELS).toHaveLength(8);
       expect(THEME_CHANNELS).toContain("volli:theme-state");
-      expect(THEME_CHANNELS).toContain("volli:theme-set-global-editor");
       expect(THEME_CHANNELS).toContain("volli:theme-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
       expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-global");

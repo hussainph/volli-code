@@ -1,6 +1,5 @@
 import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
@@ -11,7 +10,6 @@ import { getBuiltinTheme } from "restty";
 
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import {
-  editorThemeItems,
   fallbackTerminalThemeLabel,
   revealPath,
   terminalThemeItems,
@@ -23,13 +21,7 @@ import {
   type TerminalSettingKey,
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
-import {
-  buildEditorThemeDisplay,
-  planEditorThemePreview,
-  type EditorThemeDisplay,
-} from "@renderer/components/theme/editor-settings-model";
 import { Button } from "@renderer/components/ui/button";
-import { listEditorThemes } from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
@@ -37,8 +29,12 @@ import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model"
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
 
 /**
- * Settings → Appearance: the canvas editor, the light/dark choice, the Monaco
- * editor theme, and the terminal's.
+ * Settings → Appearance: the canvas editor, the light/dark choice, and the
+ * terminal's theme.
+ *
+ * There is no Editor row. The editor wears one light theme or one dark one,
+ * decided by the light/dark choice above it (VC-123) — so the control that
+ * would have gone here already exists, one section up.
  *
  * Handoff: UI slop pass stripped tutorial descriptions/tooltips from this pane
  * (Terminal keeps one Ghostty trust line). Don't add helper text back —
@@ -91,10 +87,6 @@ export function AppearanceSettings() {
   return (
     <>
       <AppThemeSection />
-
-      <SettingsSection title="Editor" icon={BracketsCurlyIcon}>
-        <EditorThemeRow />
-      </SettingsSection>
 
       <SettingsSection
         title="Terminal"
@@ -193,81 +185,6 @@ export function CanvasShadowedNote() {
     </p>
   );
 }
-
-/** Provenance chip for the Editor theme row, plus reset when explicitly pinned. */
-function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
-  return (
-    <span className="flex items-center gap-1">
-      <ThemeOriginPill emphasized={display.source !== "automatic"}>
-        {display.sourceLabel}
-      </ThemeOriginPill>
-      {display.resettable ? (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Reset editor theme to the default"
-          title="Reset to the default"
-          onClick={() => void useThemeStore.getState().setEditorTheme(null)}
-        >
-          <ArrowCounterClockwiseIcon />
-        </Button>
-      ) : null}
-    </span>
-  );
-}
-
-/**
- * Monaco/shiki theme picker over the shipped catalog.
- *
- * Apply-then-revert preview (same contract as TerminalThemeRow): highlighting
- * a row paints Monaco via {@link useThemeStore.startEditorPreview} and writes
- * nothing; picking one persists through {@link useThemeStore.setEditorTheme};
- * closing the menu any other way restores through
- * {@link useThemeStore.endEditorPreview} — never a stale closure over the
- * pre-commit resolved id, and never a direct Monaco call that would desync
- * `paintedEditor`.
- */
-function EditorThemeRow() {
-  const editorThemeId = useThemeStore((state) => state.editorThemeId);
-  const themes = React.useMemo(() => listEditorThemes(), []);
-  const items = React.useMemo(() => editorThemeItems(), []);
-
-  const display = React.useMemo(
-    () => buildEditorThemeDisplay({ editorThemeId, themes }),
-    [editorThemeId, themes],
-  );
-
-  return (
-    <SettingsRow label="Theme">
-      <EditorThemeOriginBadge display={display} />
-      <ThemeComboBox
-        ariaLabel="Editor theme"
-        searchLabel="Search editor themes"
-        buttonLabel={display.label}
-        empty="No matching theme."
-        items={items}
-        activeValue={display.resolvedId}
-        onPreview={(selection) => {
-          const plan = planEditorThemePreview({ selection, resolvedId: display.resolvedId });
-          if (plan.kind === "restore") endEditorPreview();
-          else useThemeStore.getState().startEditorPreview(plan.themeId);
-        }}
-        onEndPreview={endEditorPreview}
-        onSelect={(id) => useThemeStore.getState().setEditorTheme(id)}
-      />
-    </SettingsRow>
-  );
-}
-
-/**
- * Puts Monaco back on the theme implied by the **current** theme store — the
- * committed editorThemeId, or the shipped default. Module-level
- * so the unmount-only effect stays exhaustive-deps clean (mirrors
- * TerminalThemeRow's `endPreview`).
- */
-const endEditorPreview = (): void => {
-  useThemeStore.getState().endEditorPreview();
-};
 
 /**
  * Writes overlay keys and adopts the freshly-resolved appearance main hands

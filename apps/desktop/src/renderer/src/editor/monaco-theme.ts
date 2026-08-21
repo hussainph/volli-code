@@ -2,17 +2,20 @@
  * Monaco editor theme application — the editor half of the theming choke
  * point, mirroring {@link refreshTerminalTokenTheme} for terminals.
  *
- * Theme *catalog* resolution lives in `editor-theme-catalog.ts`. This module
- * only remembers the desired catalog id and pushes it into Monaco once the
+ * Which theme that is lives in `editor-theme-catalog.ts`, keyed on appearance.
+ * This module only remembers the desired id and pushes it into Monaco once the
  * runtime is bound. Calls before bootstrap are safe no-ops that queue the id
  * for the next {@link bindMonacoEditorThemeHost}.
  *
- * Catalog themes beyond the bootstrap default load on demand: refresh queues
- * the id, awaits {@link ensureMonacoEditorThemeLoaded}, then `setTheme` so
- * Appearance preview never flashes an undefined theme.
+ * The queue/generation machinery survives the collapse to two themes because it
+ * is about ASYNC LOADING, not about choosing: a light↔dark flip still has to
+ * load a theme before activating it, and a flip back mid-load must not let the
+ * outgoing theme paint over the incoming one.
  */
 
-import { DEFAULT_EDITOR_THEME_ID, resolveEditorThemeId } from "./editor-theme-catalog";
+import { resolvedAppearance } from "@renderer/lib/resolved-appearance";
+
+import { resolveEditorThemeId } from "./editor-theme-catalog";
 
 /** Narrow host: only what we need to activate a registered shiki theme. */
 export interface MonacoEditorThemeHost {
@@ -77,27 +80,12 @@ export function refreshMonacoEditorTheme(themeId: string): void {
 }
 
 /**
- * End an Appearance Editor preview by resolving from the **live** committed
- * `editorThemeId` and painting that id. Callers must read the store at call
- * time — never close over a stale resolved id — so a successful commit then
- * restore lands on the committed catalog theme.
- *
- * @returns the catalog id painted into Monaco
+ * Activate the appearance's theme only when nothing has asked for one yet —
+ * used at Monaco bootstrap so a pre-hydrate store refresh is not clobbered.
  */
-export function restoreEditorThemeFromState(input: { editorThemeId: string | null }): string {
-  const themeId = resolveEditorThemeId(input);
-  refreshMonacoEditorTheme(themeId);
-  return themeId;
-}
-
-/**
- * Activate `fallbackId` only when nothing has asked for a theme yet — used at
- * Monaco bootstrap so a pre-hydrate store refresh is not clobbered by the
- * shipped default.
- */
-export function ensureMonacoEditorTheme(fallbackId: string): void {
+export function ensureMonacoEditorTheme(): void {
   if (pendingThemeId === null) {
-    refreshMonacoEditorTheme(fallbackId);
+    refreshMonacoEditorTheme(activeMonacoEditorThemeId());
   }
 }
 
@@ -115,30 +103,18 @@ export function bindMonacoEditorThemeHost(monaco: MonacoEditorThemeHost): void {
 /**
  * DiffEditor ignores construction-time `theme` (`createDiffEditor` is not
  * patched by the shiki adapter). Always call this before `createDiffEditor` so
- * the active catalog id is applied via `setTheme` — never pass `theme` in
- * options, and never `"volli-dark"` (#109 / #122).
+ * the active id is applied via `setTheme` — never pass `theme` in options, and
+ * never `"volli-dark"` (#109 / #122).
  *
- * Uses `themeId` when provided (unknown ids fall through
- * {@link resolveEditorThemeId}); otherwise the pending refresh id, else
- * {@link DEFAULT_EDITOR_THEME_ID} via {@link ensureMonacoEditorTheme}.
+ * Takes no theme id: there is nothing to choose. It uses the pending refresh id
+ * when the store has already spoken, and the appearance's theme otherwise.
  *
  * Kick ensure+setTheme on both the module host and the handed-in monaco so a
  * DiffEditor created before the theme chunk lands still receives the id.
  */
-export function applyMonacoThemeForDiffEditor(
-  monaco: MonacoEditorThemeHost,
-  themeId?: string,
-): void {
-  let resolved: string;
-  if (themeId !== undefined && themeId.length > 0) {
-    resolved = resolveEditorThemeId({ editorThemeId: themeId });
-    refreshMonacoEditorTheme(resolved);
-  } else {
-    ensureMonacoEditorTheme(DEFAULT_EDITOR_THEME_ID);
-    resolved = activeMonacoEditorThemeId();
-  }
-
-  const target = resolved;
+export function applyMonacoThemeForDiffEditor(monaco: MonacoEditorThemeHost): void {
+  ensureMonacoEditorTheme();
+  const target = activeMonacoEditorThemeId();
   void (async () => {
     try {
       await ensureMonacoEditorThemeLoaded(target);
@@ -152,12 +128,15 @@ export function applyMonacoThemeForDiffEditor(
 }
 
 /**
- * Catalog id for `editor.create` construction options. The shiki adapter
- * patches `create` to honor `theme`, so hardcoding {@link DEFAULT_EDITOR_THEME_ID}
- * would clobber a committed Appearance selection on every remount.
+ * Theme id for `editor.create` construction options.
+ *
+ * Falls back to the appearance stamped on `<html>` rather than to a constant.
+ * Preload writes that class before the first frame, so an editor created before
+ * the theme store hydrates is already built in the right mode instead of
+ * flashing dark inside a light app and correcting a moment later.
  */
 export function activeMonacoEditorThemeId(): string {
-  return pendingThemeId ?? DEFAULT_EDITOR_THEME_ID;
+  return pendingThemeId ?? resolveEditorThemeId({ resolvedAppearance: resolvedAppearance() });
 }
 
 /** Test-only: clear module state between cases. */

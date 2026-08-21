@@ -48,7 +48,6 @@ import type {
   Project,
   ProjectThemeOverride,
   ResolvedAppearance,
-  ShippedEditorThemeId,
 } from "@volli/shared";
 import type {
   ProjectCanvasWriteResult,
@@ -60,10 +59,6 @@ import type {
 import { create } from "zustand";
 
 import { toastError } from "@renderer/lib/toast";
-import {
-  withProjectEditorChoice,
-  type ProjectEditorChoice,
-} from "@renderer/components/theme/project-appearance-model";
 import {
   resolveActiveTheme,
   type ActiveTheme,
@@ -120,11 +115,6 @@ export interface ThemeGateway {
    * cache, never an authority — `{canvas, appearance}` stays the pair.
    */
   setFirstPaint(hint: { appearance: ResolvedAppearance; background: string }): Promise<Result>;
-  /** The editor twin of the global writes — same rule about whose scope the answer describes (#123). */
-  setGlobalEditor(
-    editorThemeId: ShippedEditorThemeId | null,
-    projectId: string | null,
-  ): Promise<ThemeStateResult>;
   setProject(
     projectId: string,
     override: ProjectThemeOverride | null,
@@ -190,8 +180,6 @@ const defaultDeps: ThemeStoreDeps = {
     setProjectAppearance: (projectId, appearance) =>
       window.api.theme.setProjectAppearance(projectId, appearance),
     setFirstPaint: (hint) => window.api.theme.setFirstPaint(hint),
-    setGlobalEditor: (editorThemeId, projectId) =>
-      window.api.theme.setGlobalEditor(editorThemeId, projectId),
     setProject: (projectId, override) => window.api.theme.setProject(projectId, override),
   },
   // Point-free on purpose. An arrow re-listing the parameters is how the
@@ -208,14 +196,14 @@ interface ThemeState {
   hydrated: boolean;
   /** The authored global canvas — authoritative, never a resolved token set. */
   globalCanvas: Canvas;
-  /** The authored global light/dark/auto choice. */
-  globalAppearance: Appearance;
   /**
-   * Global Monaco/shiki theme id from `app_state`. `null` means the shipped
-   * editor default — the canvas does NOT derive one (decision 6: the editor is
-   * the one surface that will not match).
+   * The authored global light/dark/auto choice.
+   *
+   * Since VC-123 this also decides the EDITOR's theme, resolved. There is no
+   * `editorThemeId` beside it any more: one row answers "light or dark?" for
+   * the canvas, the terminal fallback and Monaco alike.
    */
-  editorThemeId: ShippedEditorThemeId | null;
+  globalAppearance: Appearance;
   /** The workspace the current override belongs to; null for the global scope. */
   projectId: string | null;
   /** That workspace's per-surface override, or null when it inherits everything. */
@@ -245,24 +233,12 @@ interface ThemeState {
   startAppearancePreview(appearance: Appearance): void;
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
-  /**
-   * Live Monaco preview for Settings → Editor — paints a catalog id and updates
-   * `paintedEditor`, writing nothing.
-   */
-  startEditorPreview(themeId: string): void;
-  /** End an Editor preview by restoring Monaco from the same resolution `repaint` uses. */
-  endEditorPreview(): void;
   setGlobalCanvas(canvas: Canvas): Promise<boolean>;
   setGlobalAppearance(appearance: Appearance): Promise<boolean>;
   /** One workspace's canvas; `null` puts it back to inheriting the global one. */
   setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<boolean>;
   /** One workspace's appearance; `null` puts it back to inheriting. */
   setProjectAppearance(projectId: string, appearance: Appearance | null): Promise<boolean>;
-  setEditorTheme(editorThemeId: ShippedEditorThemeId | null): Promise<boolean>;
-  setProjectEditorTheme(
-    projectId: string,
-    editorThemeId: ShippedEditorThemeId | null,
-  ): Promise<boolean>;
 }
 
 /** The inputs that decide what is on screen right now. */
@@ -274,7 +250,6 @@ type ActiveThemeInput = Pick<
   | "globalAppearance"
   | "projectOverride"
   | "systemPrefersDark"
-  | "editorThemeId"
 >;
 
 /**
@@ -294,7 +269,6 @@ export function activeTheme({
   globalAppearance,
   projectOverride,
   systemPrefersDark: prefersDark,
-  editorThemeId,
 }: ActiveThemeInput): ActiveTheme {
   // A preview outranks BOTH scopes: it is what the user is looking at, and the
   // whole point is that the window already wears it before anything is saved.
@@ -307,9 +281,8 @@ export function activeTheme({
           canvas: preview ?? projectOverride?.canvas ?? null,
           appearance: previewAppearance ?? projectOverride?.appearance ?? null,
           terminalThemeName: projectOverride?.terminalThemeName ?? null,
-          editorThemeId: projectOverride?.editorThemeId ?? null,
         };
-  return resolveActiveTheme(globalCanvas, globalAppearance, override, prefersDark, editorThemeId);
+  return resolveActiveTheme(globalCanvas, globalAppearance, override, prefersDark);
 }
 
 /**
@@ -353,16 +326,10 @@ function surfaceOverride(
   const canvas = scope?.canvas ?? null;
   const appearance = scope?.appearance ?? null;
   const terminalThemeName = legacy?.terminalThemeName ?? null;
-  const editorThemeId = legacy?.editorThemeId ?? null;
-  if (
-    canvas === null &&
-    appearance === null &&
-    terminalThemeName === null &&
-    editorThemeId === null
-  ) {
+  if (canvas === null && appearance === null && terminalThemeName === null) {
     return null;
   }
-  return { canvas, appearance, terminalThemeName, editorThemeId };
+  return { canvas, appearance, terminalThemeName };
 }
 
 /**
@@ -394,8 +361,8 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * keep the palette they had before the drag until something else moved.
      */
     let paintedInFlight = false;
+    /** The last id handed to Monaco, so an unchanged mode does not re-theme it. */
     let paintedEditor: string | null = null;
-    let persistedEditorThemeId: ShippedEditorThemeId | null = null;
     /**
      * Which `hydrate` call is the current one. Scope reads overlap at boot
      * (main.tsx reads the global scope immediately; boot() reads the restored
@@ -403,8 +370,6 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * LAST call issued wins, whatever order the payloads come back in.
      */
     let hydrateGeneration = 0;
-    let editorWriteGeneration = 0;
-    let editorWriteQueue: Promise<void> = Promise.resolve();
 
     const repaint = (options: { eased?: boolean; transient?: boolean } = {}): void => {
       const state = get();
@@ -451,7 +416,12 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         }
       }
 
-      const editorId = resolveEditorThemeId({ editorThemeId: active.editor.value });
+      // Monaco rides the same choke point, one resolution later: the editor
+      // has no stored value of its own, so "which theme?" is entirely a
+      // restatement of the mode this paint just resolved. Guarded on the id
+      // rather than on the key above, because a canvas change at an unchanged
+      // mode must not make every open editor re-theme.
+      const editorId = resolveEditorThemeId({ resolvedAppearance: active.resolved });
       if (editorId !== paintedEditor) {
         paintedEditor = editorId;
         deps.refreshEditorTheme(editorId);
@@ -494,11 +464,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
     const accept = (value: ThemeStatePayload, scope: ThemeProjectScope | null): void => {
       const previous = get();
       const override = surfaceOverride(scope, value.projectOverride);
-      const next: ActiveThemeInput = {
-        ...previous,
-        projectOverride: override,
-        editorThemeId: value.editorThemeId,
-      };
+      const next: ActiveThemeInput = { ...previous, projectOverride: override };
       const eased = shouldEaseScopeRepaint({
         hydrated: previous.hydrated,
         from: previous.projectId,
@@ -506,9 +472,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         fromAppearance: activeTheme(previous).resolved,
         toAppearance: activeTheme(next).resolved,
       });
-      persistedEditorThemeId = value.editorThemeId;
       set({
-        editorThemeId: value.editorThemeId,
         projectId: value.projectId,
         projectOverride: override,
         terminal: value.terminal,
@@ -594,32 +558,23 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       repaint({ eased: ease && hadPainted && before !== after });
     };
 
-    /** The editor override the 013 row still owns, merged onto what this scope has. */
-    const legacyOverrideBaseFor = (projectId: string): ProjectThemeOverride | null => {
+    /**
+     * The migration-013 row for this scope — now just the terminal name.
+     *
+     * The canvas and appearance writes below rebuild the whole override, so
+     * without this they would drop the terminal half of a project that had one.
+     */
+    const legacyOverrideFor = (projectId: string): ProjectThemeOverride | null => {
       const state = get();
       if (state.projectId !== projectId) return null;
-      const editorThemeId = state.projectOverride?.editorThemeId ?? null;
       const terminalThemeName = state.projectOverride?.terminalThemeName ?? null;
-      if (editorThemeId === null && terminalThemeName === null) return null;
-      return { terminalThemeName, editorThemeId };
-    };
-
-    /** The scope descriptor a project-scoped write has to re-adopt afterwards. */
-    const scopeFor = (projectId: string): ThemeProjectScope | null => {
-      const state = get();
-      if (state.projectId !== projectId) return null;
-      return {
-        projectId,
-        canvas: state.projectOverride?.canvas ?? null,
-        appearance: state.projectOverride?.appearance ?? null,
-      };
+      return terminalThemeName === null ? null : { terminalThemeName };
     };
 
     return {
       hydrated: false,
       globalCanvas: DEFAULT_CANVAS,
       globalAppearance: "auto",
-      editorThemeId: null,
       projectId: null,
       projectOverride: null,
       terminal: null,
@@ -744,22 +699,6 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         setAndRepaint({ preview: null, previewAppearance: null });
       },
 
-      startEditorPreview(themeId) {
-        if (themeId.length === 0) {
-          get().endEditorPreview();
-          return;
-        }
-        paintedEditor = themeId;
-        deps.refreshEditorTheme(themeId);
-      },
-
-      endEditorPreview() {
-        // Always re-resolve and paint: a no-op skip on `paintedEditor` would
-        // leave Monaco stuck after a bypassed preview paint.
-        paintedEditor = null;
-        repaint();
-      },
-
       /** What was being previewed becomes what is stored, in the given scope. */
       async commitPreview(scope) {
         const { preview, previewAppearance } = get();
@@ -837,7 +776,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
             preview: null,
             projectOverride: surfaceOverride(
               { projectId, canvas, appearance: previous?.appearance ?? null },
-              legacyOverrideBaseFor(projectId),
+              legacyOverrideFor(projectId),
             ),
           });
         }
@@ -864,7 +803,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
             previewAppearance: null,
             projectOverride: surfaceOverride(
               { projectId, canvas: previous?.canvas ?? null, appearance },
-              legacyOverrideBaseFor(projectId),
+              legacyOverrideFor(projectId),
             ),
           });
         }
@@ -877,43 +816,6 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         }
         // Same reason as the canvas write above.
         projectRowSink?.(result.project);
-        return true;
-      },
-
-      async setEditorTheme(editorThemeId) {
-        const generation = ++editorWriteGeneration;
-        set({ editorThemeId });
-        repaint();
-        const write = editorWriteQueue.then(() =>
-          writeThrough("save the editor theme", () =>
-            // Read at SEND time, not at queue time: the scope this window is in
-            // when the write actually goes out is the one its answer has to
-            // describe (#123).
-            deps.gateway.setGlobalEditor(editorThemeId, get().projectId),
-          ),
-        );
-        editorWriteQueue = write.then(() => undefined);
-        const result = await write;
-        if (result !== null) persistedEditorThemeId = result.value.editorThemeId;
-        if (generation !== editorWriteGeneration) return result !== null;
-        if (result === null) {
-          set({ editorThemeId: persistedEditorThemeId });
-          repaint();
-          return false;
-        }
-        accept(result.value, scopeFor(result.value.projectId ?? ""));
-        return true;
-      },
-
-      async setProjectEditorTheme(projectId, editorThemeId) {
-        const choice: ProjectEditorChoice =
-          editorThemeId === null ? { kind: "inherit" } : { kind: "theme", themeId: editorThemeId };
-        const next = withProjectEditorChoice(legacyOverrideBaseFor(projectId), choice);
-        const result = await writeThrough("save the editor theme", () =>
-          deps.gateway.setProject(projectId, next),
-        );
-        if (result === null) return false;
-        accept(result.value, scopeFor(projectId));
         return true;
       },
     };

@@ -1,17 +1,10 @@
 import * as React from "react";
-import { BracketsCurlyIcon } from "@phosphor-icons/react/dist/csr/BracketsCurly";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import {
-  isShippedEditorThemeId,
-  resolveAppearance,
-  type Project,
-  type ShippedEditorThemeId,
-} from "@volli/shared";
+import { resolveAppearance, type Project } from "@volli/shared";
 
 import {
-  editorThemeItems,
   fallbackTerminalThemeLabel,
   revealPath,
   terminalThemeItems,
@@ -29,7 +22,6 @@ import {
 } from "@renderer/components/theme/canvas-editor-model";
 import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
 import {
-  projectEditorChoice,
   projectTerminalChoice,
   projectTerminalOverlayEdits,
   terminalCustomSeed,
@@ -40,13 +32,8 @@ import {
   type TerminalSettingKey,
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
-import { planEditorThemePreview } from "@renderer/components/theme/editor-settings-model";
 import { Button } from "@renderer/components/ui/button";
 import { Segmented, SURFACE_MODES, type SurfaceMode } from "@renderer/components/ui/segmented";
-import {
-  DEFAULT_EDITOR_THEME_ID,
-  resolveEditorThemeId,
-} from "@renderer/editor/editor-theme-catalog";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
@@ -119,7 +106,6 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   return (
     <>
       <ProjectAppThemeSection key={project.id} project={project} />
-      <ProjectEditorThemeSection key={project.id} projectId={project.id} />
       <ProjectTerminalThemeSection key={project.id} projectId={project.id} />
     </>
   );
@@ -248,88 +234,6 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
     </SettingsSection>
   );
 }
-
-/**
- * Editor surface: the shipped Monaco/shiki catalog, scoped to this project.
- *
- * Mirrors the global row exactly — same catalog, same apply-then-revert preview
- * through the theme store (never a direct Monaco call, or `paintedEditor`
- * desyncs) — with the inherited id resolved exactly as the global row resolves
- * it, so "Inherit" says what Monaco will actually wear here.
- */
-function ProjectEditorThemeSection({ projectId }: { projectId: string }) {
-  const override = useThemeStore((state) => state.projectOverride);
-  const globalEditorThemeId = useThemeStore((state) => state.editorThemeId);
-  const items = React.useMemo(() => editorThemeItems(), []);
-
-  const choice = projectEditorChoice(override);
-  const inherited = resolveEditorThemeId({ editorThemeId: globalEditorThemeId });
-  const resolvedId = choice.kind === "theme" ? choice.themeId : inherited;
-  const label = items.find((item) => item.value === resolvedId)?.label ?? resolvedId;
-
-  const write = (themeId: ShippedEditorThemeId | null): Promise<boolean> =>
-    useThemeStore.getState().setProjectEditorTheme(projectId, themeId);
-
-  return (
-    <SettingsSection
-      title="Editor"
-      icon={BracketsCurlyIcon}
-      action={
-        <Segmented
-          ariaLabel="Editor theme scope"
-          testId="project-appearance-editor-mode"
-          value={choice.kind === "inherit" ? "inherit" : "custom"}
-          options={SURFACE_MODES}
-          onChange={(mode: SurfaceMode) => {
-            // Custom pins the id currently resolved, so the switch changes what
-            // the choice MEANS without changing what is on screen.
-            void write(mode === "inherit" ? null : pinnableEditorThemeId(inherited));
-          }}
-        />
-      }
-    >
-      {choice.kind === "inherit" ? (
-        <InheritNote>
-          Following app-wide — <span className="text-foreground">{label}</span>.
-        </InheritNote>
-      ) : (
-        <SettingsRow label="Theme">
-          <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
-          <ThemeComboBox
-            ariaLabel="Project editor theme"
-            searchLabel="Search editor themes"
-            buttonLabel={label}
-            empty="No matching theme."
-            items={items}
-            activeValue={resolvedId}
-            onPreview={(selection) => {
-              const plan = planEditorThemePreview({ selection, resolvedId });
-              if (plan.kind === "restore") endEditorPreview();
-              else useThemeStore.getState().startEditorPreview(plan.themeId);
-            }}
-            onEndPreview={endEditorPreview}
-            onSelect={(themeId) => write(themeId)}
-          />
-        </SettingsRow>
-      )}
-    </SettingsSection>
-  );
-}
-
-/**
- * `resolveEditorThemeId` answers with a catalog id, but types it as a plain
- * string — narrow it back rather than casting, because main's IPC guard rejects
- * anything outside the shipped union and a silent rejection would read as
- * "Custom didn't stick".
- */
-function pinnableEditorThemeId(resolved: string): ShippedEditorThemeId {
-  return isShippedEditorThemeId(resolved) ? resolved : DEFAULT_EDITOR_THEME_ID;
-}
-
-/** Puts Monaco back on whatever the CURRENT store state resolves to, ending a preview. */
-const endEditorPreview = (): void => {
-  useThemeStore.getState().endEditorPreview();
-};
 
 /** Repaints every live terminal in `name`'s palette, writing nothing. */
 const previewTerminal = (name: string): void => previewTerminalTheme(getBuiltinTheme(name));

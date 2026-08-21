@@ -107,16 +107,11 @@ describe("buildExportDocument — populated db", () => {
     insertProject(ctx.db, project);
     // Migration 013's four columns. The GLOBAL theme rides `app_state` and so
     // survives an export for free; the per-project override lives only here.
-    // `theme_app_slug`/`theme_seed` are the two dead columns — no longer
-    // reachable through `ProjectThemeOverride`, so this write always lands
-    // `null` in both; the export below still has to carry a field for them
-    // (see "carries every projects column" further down).
-    updateProjectThemeOverride(
-      ctx.db,
-      project.id,
-      { terminalThemeName: "Nord", editorThemeId: "vs-dark" },
-      60,
-    );
+    // `theme_app_slug`/`theme_seed`/`theme_editor_id` are the three dead
+    // columns — no longer reachable through `ProjectThemeOverride`, so this
+    // write always lands `null` in all of them; the export below still has to
+    // carry a field for each (see "carries every projects column" below).
+    updateProjectThemeOverride(ctx.db, project.id, { terminalThemeName: "Nord" }, 60);
     // Migration 014's two. Carried as the STORED strings, like the global
     // canvas riding `app_state` — one hand-edited row must not be able to throw
     // an export that a user is running to rescue their data.
@@ -212,7 +207,7 @@ describe("buildExportDocument — populated db", () => {
         setupCommand: "pnpm install",
         themeAppSlug: null,
         themeTerminalName: "Nord",
-        themeEditorId: "vs-dark",
+        themeEditorId: null,
         themeSeed: null,
         themeCanvas: JSON.stringify(exportedCanvas),
         themeAppearance: "auto",

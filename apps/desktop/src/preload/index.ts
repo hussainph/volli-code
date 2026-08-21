@@ -39,7 +39,6 @@ import type {
   SessionRpcIpcEvent,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
-  ShippedEditorThemeId,
   TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -943,25 +942,12 @@ const api = {
    * reach the user's own ghostty config (#67).
    */
   theme: {
-    /** The resolved terminal chain for a scope, plus the editor id and the project's per-surface override. */
+    /** The resolved terminal chain for a scope, plus the project's per-surface override. */
     state: (input: ThemeStateInput = {}): Promise<ThemeStateResult> =>
       invoke("volli:theme-state", input),
     /**
-     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
-     * derives from the resolved appearance. Resolves with the fresh state FOR
-     * THE CALLER'S SCOPE (#123) — pass the project the window is showing, or
-     * `null` from the global scope. The write is global either way; the scope
-     * only decides what the answer describes.
+     * Persists one project's per-surface override; `null` clears it back to inheriting.
      */
-    setGlobalEditor: (
-      editorThemeId: ShippedEditorThemeId | null,
-      projectId: string | null = null,
-    ): Promise<ThemeStateResult> =>
-      invoke(
-        "volli:theme-set-global-editor",
-        projectId === null ? { editorThemeId } : { editorThemeId, projectId },
-      ),
-    /** Persists one project's per-surface override; `null` clears it back to inheriting. */
     setProject: (
       projectId: string,
       override: ProjectThemeOverride | null,

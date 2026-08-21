@@ -143,7 +143,6 @@ describe("volli:theme-state", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.editorThemeId).toBeNull();
     expect(result.value.projectOverride).toBeNull();
     expect(result.value.projectId).toBeNull();
   });
@@ -172,10 +171,7 @@ describe("volli:theme-state", () => {
     const { projectId } = setup();
     invoke("volli:theme-set-project", {
       projectId,
-      override: {
-        terminalThemeName: "Nord",
-        editorThemeId: null,
-      } satisfies ProjectThemeOverride,
+      override: { terminalThemeName: "Nord" } satisfies ProjectThemeOverride,
     });
 
     const result = invoke<ThemeStateResult>("volli:theme-state", { projectId });
@@ -198,69 +194,22 @@ describe("volli:theme-state", () => {
   });
 });
 
-describe("volli:theme-set-global-editor", () => {
-  it("persists an authored editor theme id and echoes it on theme-state", () => {
+describe("the retired volli:theme-set-global-editor channel", () => {
+  it("is not registered — there is no editor theme to persist", () => {
+    // VC-123. The editor follows the resolved appearance, which is written by
+    // `volli:theme-appearance-set-global`; a second write target for the same
+    // question is exactly what was removed.
     setup();
-
-    const written = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
-      editorThemeId: "nord",
-    });
-
-    expect(written.ok).toBe(true);
-    if (!written.ok) return;
-    expect(written.value.editorThemeId).toBe("nord");
-
-    const read = invoke<ThemeStateResult>("volli:theme-state", {});
-    expect(read.ok && read.value.editorThemeId).toBe("nord");
+    expect(() => invoke("volli:theme-set-global-editor" as never, {})).toThrow();
   });
 
-  // Global write, caller's scope in the answer (#123). A project that pinned its
-  // own editor theme must not have it dropped because the app-wide one changed.
-  it("writes globally but answers in the caller's project scope (#123)", () => {
-    const { projectId } = setup();
-    const override: ProjectThemeOverride = {
-      terminalThemeName: null,
-      editorThemeId: "dracula",
-    };
-    invoke("volli:theme-set-project", { projectId, override });
-
-    const result = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
-      editorThemeId: "nord",
-      projectId,
-    });
+  it("does not carry an editor id in the theme-state payload", () => {
+    setup();
+    const result = invoke<ThemeStateResult>("volli:theme-state", {});
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.editorThemeId).toBe("nord");
-    expect(result.value.projectId).toBe(projectId);
-    expect(result.value.projectOverride?.editorThemeId).toBe("dracula");
-  });
-
-  // A scope that has gone (the project was deleted while the window still
-  // showed it) must not fail a write that already landed — the renderer would
-  // roll back to a value that is no longer what is stored.
-  it("degrades a vanished caller scope to the global one, keeping the write", () => {
-    setup();
-
-    const result = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
-      editorThemeId: "nord",
-      projectId: "gone",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.ok && result.value.projectId).toBeNull();
-    expect(result.ok && result.value.editorThemeId).toBe("nord");
-  });
-
-  it("clears back to derive-from-app on null", () => {
-    setup();
-    invoke("volli:theme-set-global-editor", { editorThemeId: "nord" });
-
-    const result = invoke<ThemeStateResult>("volli:theme-set-global-editor", {
-      editorThemeId: null,
-    });
-
-    expect(result.ok && result.value.editorThemeId).toBeNull();
+    expect(result.value).not.toHaveProperty("editorThemeId");
   });
 });
 
@@ -270,23 +219,20 @@ describe("volli:theme-set-project", () => {
 
     const result = invoke<ThemeSetProjectResult>("volli:theme-set-project", {
       projectId,
-      override: {
-        terminalThemeName: "Nord",
-        editorThemeId: "dracula",
-      },
+      override: { terminalThemeName: "Nord" },
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.project.themeOverride?.terminalThemeName).toBe("Nord");
-    expect(result.value.projectOverride?.editorThemeId).toBe("dracula");
+    expect(result.value.projectOverride?.terminalThemeName).toBe("Nord");
   });
 
   it("clears back to inheriting on a null override", () => {
     const { projectId } = setup();
     invoke("volli:theme-set-project", {
       projectId,
-      override: { terminalThemeName: "Nord", editorThemeId: null },
+      override: { terminalThemeName: "Nord" },
     });
 
     const result = invoke<ThemeSetProjectResult>("volli:theme-set-project", {
@@ -312,7 +258,7 @@ describe("volli:theme-set-project", () => {
 
     const result = invoke<ThemeSetProjectResult>("volli:theme-set-project", {
       projectId,
-      override: { terminalThemeName: "Nord", editorThemeId: null },
+      override: { terminalThemeName: "Nord" },
     });
 
     expect(result).toEqual({ ok: false, error: "Unknown project" });

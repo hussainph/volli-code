@@ -12,10 +12,13 @@
  *    theming bug is auto-switching writing the *resolved* theme back over the
  *    user's authored intent.)
  *  - **Resolution is per surface, never per token.** A workspace overrides the
- *    canvas, the appearance, the terminal, or the editor as whole units, so
- *    "what is overridden here" is always answerable — and
- *    {@link ResolvedThemeSurface} carries the answer to the UI instead of
- *    making it re-derive one.
+ *    canvas, the appearance, or the terminal as whole units, so "what is
+ *    overridden here" is always answerable — and {@link ResolvedThemeSurface}
+ *    carries the answer to the UI instead of making it re-derive one.
+ *
+ * The EDITOR is not among those surfaces (VC-123). It has no scoped value to
+ * resolve: it wears light or dark because {@link ActiveTheme.resolved} says so.
+ * A project that wants a light editor overrides its appearance.
  *
  * `globals.css` authors the default canvas's generated values verbatim, in both
  * modes, so the first paint already carries the right palette and this module's
@@ -111,10 +114,10 @@ export interface ResolvedThemeSurface<T> {
  * What one workspace overrides, as the RENDERER resolves it.
  *
  * Deliberately not `@volli/shared`'s `ProjectThemeOverride`, which is still the
- * live half of the migration-013 row (`terminalThemeName` / `editorThemeId`)
- * that the main process reads and writes. The two are assembled from different places — canvas and
- * appearance are migration-014 columns that ride in on the bootstrap payload's
- * `Project`, while the terminal and editor names come from the 013 row — and
+ * live half of the migration-013 row (`terminalThemeName`) that the main
+ * process reads and writes. The two are assembled from different places —
+ * canvas and appearance are migration-014 columns that ride in on the bootstrap
+ * payload's `Project`, while the terminal name comes from the 013 row — and
  * this is the shape the resolution below actually needs. Every field is
  * independently nullable, and `null` means "inherit the global choice".
  */
@@ -125,8 +128,6 @@ export interface ProjectSurfaceOverride {
   appearance: Appearance | null;
   /** Ghostty theme name, as written into the workspace's terminal overlay. */
   terminalThemeName: string | null;
-  /** Monaco/shiki theme id. */
-  editorThemeId: string | null;
 }
 
 /** Every surface inheriting — the state every workspace starts in (#72). */
@@ -134,17 +135,17 @@ export const EMPTY_SURFACE_OVERRIDE: ProjectSurfaceOverride = {
   canvas: null,
   appearance: null,
   terminalThemeName: null,
-  editorThemeId: null,
 };
 
 /**
- * The four surfaces as currently resolved, plus the one derived value every
+ * The three surfaces as currently resolved, plus the one derived value every
  * consumer would otherwise re-derive.
  *
  * `resolved` is `auto` already answered. It is carried rather than recomputed
  * downstream because recomputing it needs `matchMedia`, which makes every
  * consumer impure and gives the app as many opinions about "is it dark right
- * now" as there are readers.
+ * now" as there are readers — and since VC-123 the editor's theme is one of
+ * the things derived from it.
  */
 export interface ActiveTheme {
   /** The authored canvas to derive tokens from. */
@@ -155,8 +156,6 @@ export interface ActiveTheme {
   resolved: ResolvedAppearance;
   /** Ghostty theme name, or null to keep whatever the ghostty config chain resolves. */
   terminal: ResolvedThemeSurface<string | null>;
-  /** Monaco/shiki theme id, or null for the shipped editor default. */
-  editor: ResolvedThemeSurface<string | null>;
 }
 
 /** A surface the workspace did not override — it takes the global choice. */
@@ -201,7 +200,6 @@ export function resolveActiveTheme(
   globalAppearance: Appearance,
   projectOverride: ProjectSurfaceOverride | null,
   systemPrefersDark: boolean,
-  globalEditorThemeId: string | null = null,
 ): ActiveTheme {
   const override = projectOverride ?? EMPTY_SURFACE_OVERRIDE;
   const appearance = pick(override.appearance, globalAppearance);
@@ -210,6 +208,5 @@ export function resolveActiveTheme(
     appearance,
     resolved: resolveAppearance(appearance.value, systemPrefersDark),
     terminal: pick(override.terminalThemeName, null),
-    editor: pick(override.editorThemeId, globalEditorThemeId),
   };
 }
