@@ -51,6 +51,7 @@ import {
   ensureProjectArtifactsDir,
   ensureVolliDir,
   FileWatchManager,
+  fsFaultText,
   readFile as readFsFile,
   registerFileIpcHandlers,
   revealFile,
@@ -410,6 +411,37 @@ describe("readFile", () => {
     if (result.ok) return;
     expect(result.error).toContain("escapes");
   });
+
+  // The pane renders this string verbatim (VC-120): a chat can name a path
+  // that only exists in some other checkout, and the answer must be UI copy,
+  // never `ENOENT: no such file or directory, stat '/abs/path'`.
+  it("reports a missing file as 'File was not found', never raw errno text", async () => {
+    const project = makeTempProjectDir();
+    const result = await readFsFile(project, null, "missing.md");
+    expect(result).toEqual({ ok: false, error: "File was not found" });
+  });
+});
+
+// ---- fsFaultText -------------------------------------------------------------
+
+const errnoError = (code: string): Error => Object.assign(new Error(`${code}: boom`), { code });
+
+describe("fsFaultText", () => {
+  it.each([
+    ["ENOENT", "File was not found"],
+    ["ENOTDIR", "File was not found"],
+    ["EACCES", "Permission was denied"],
+    ["EPERM", "Permission was denied"],
+    ["EEXIST", "File already exists"],
+    ["EISDIR", "Not a file"],
+  ])("maps %s to %j", (code, expected) => {
+    expect(fsFaultText(errnoError(code))).toBe(expected);
+  });
+
+  it("falls back to the raw message for an unmapped code, and for a bare value", () => {
+    expect(fsFaultText(errnoError("EIO"))).toBe("EIO: boom");
+    expect(fsFaultText("exploded")).toBe("exploded");
+  });
 });
 
 // ---- writeFile ---------------------------------------------------------------
@@ -569,6 +601,17 @@ describe("writeFile", () => {
     expect(await readFile(join(project, ".volli", "artifacts", "notes.md"), "utf8")).toBe(
       "# recovered",
     );
+  });
+
+  it("maps a failed .volli self-heal to friendly copy, not a raw mkdir errno", async () => {
+    // `.volli` occupied by a regular FILE: ensureVolliDir's recursive mkdir of
+    // `.volli` throws EEXIST, and that fault reaches the same save toast the
+    // write itself would — so it takes the same fsFaultText mapping (VC-120
+    // review).
+    const project = makeTempProjectDir();
+    writeFileSync(join(project, ".volli"), "not a dir", "utf8");
+    const result = await writeFsFile(project, null, ".volli/artifacts/notes.md", "# x");
+    expect(result).toEqual({ ok: false, error: "File already exists" });
   });
 
   it("does not create parent dirs for a non-.volli path (never mkdirs arbitrary repo paths)", async () => {

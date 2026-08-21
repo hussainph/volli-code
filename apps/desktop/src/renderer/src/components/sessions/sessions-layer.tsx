@@ -20,7 +20,10 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
+import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { useBoardStore } from "@renderer/stores/board";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
 import { adjacentPaneId, type TerminalFocusDirection } from "@renderer/terminal/pane-navigation";
@@ -213,19 +216,48 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
   }, [terminalFocusTarget, projectSessionFocused, visible]);
 
   /**
-   * Where a file a chat names opens. A ticketless chat has no worktree, so
-   * there is no ticket workspace to route it to — Project Files reads the same
-   * path out of the project's main checkout, which is where this chat is
-   * running. Held across renders because {@link ChatPlane} hands it to every
-   * turn on screen: a fresh function here re-renders the whole transcript.
+   * Where a file a chat names opens (VC-120). The raw tool path is translated
+   * FIRST — `resolveChatOpenTarget` — because an orchestrating Project Session
+   * spends its life pointing at ticket worktrees, and the untranslated string
+   * used to resolve against the main checkout and render raw ENOENT text:
+   *
+   *  • absolute under a ticket's worktree → that ticket's file tab, and its
+   *    workspace brought to front (the transcript pointed there by name);
+   *  • absolute under the main checkout → relativized into Project Files;
+   *  • relative → this chat's own venue, the main checkout, as before;
+   *  • anything else → a toast, and NO navigation — never a pane whose only
+   *    content is an error.
+   *
+   * Held across renders because {@link ChatPlane} hands it to every turn on
+   * screen: a fresh function here re-renders the whole transcript. Ticket
+   * worktrees are read off the board store at CLICK time for the same reason —
+   * subscribing would retie this callback to every board refresh.
    */
+  const selectedPath = selected?.path ?? null;
   const openProjectFile = React.useCallback(
     (path: string) => {
-      if (selectedId === null) return;
-      previewProjectFile(selectedId, path);
+      if (selectedId === null || selectedPath === null) return;
+      const tickets = useBoardStore.getState().ticketsByProject[selectedId] ?? [];
+      const target = resolveChatOpenTarget({
+        path,
+        projectPath: selectedPath,
+        worktrees: chatWorktreeRefs(tickets),
+        scope: { kind: "project" },
+      });
+      if (target.kind === "outside") {
+        toastError(`${path} is outside this project.`);
+        return;
+      }
+      if (target.kind === "ticket-file") {
+        const workspace = useWorkspaceStore.getState();
+        workspace.openTicketFile(selectedId, target.ticketId, target.relPath);
+        workspace.openTicketWorkspace(selectedId, target.ticketId);
+        return;
+      }
+      previewProjectFile(selectedId, target.relPath);
       setNav(selectedId, "files");
     },
-    [previewProjectFile, selectedId, setNav],
+    [previewProjectFile, selectedId, selectedPath, setNav],
   );
 
   // ⌘D split, ⌘⌥arrow pane nav, ⌘+/-/0 font size — resolved off the focused
