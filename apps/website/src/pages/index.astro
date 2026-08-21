@@ -1,7 +1,6 @@
 ---
 import "@fontsource-variable/mona-sans/wght.css";
 import MorphingText from "../components/MorphingText";
-import HeroFlow from "../components/HeroFlow.astro";
 import LifecycleAccordion from "../components/LifecycleAccordion.astro";
 import VolliDemo from "../components/VolliDemo";
 import "../styles/global.css";
@@ -52,7 +51,6 @@ const description =
       {/* The promise before the picture: a visitor should know what this is and
           whether their Mac is supported before meeting an interactive fake UI. */}
       <section class="hero" id="top">
-        <div class="hero-copy">
         <span class="alpha-pill">Alpha · Apple silicon</span>
         <h1 class="hero-headline">Run coding agents without losing track of what they did.</h1>
         <p class="hero-lede">
@@ -86,9 +84,6 @@ const description =
           <a href={releasesUrl}>Release notes</a> ·
           <a href={issuesUrl}>Report a problem</a>
         </p>
-        </div>
-
-        <HeroFlow />
       </section>
 
       <section class="hero-shell" aria-label="Volli product preview">

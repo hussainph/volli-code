@@ -151,54 +151,49 @@ a:focus-visible {
   background: #161616;
 }
 
-/* Hero — the plain-language promise, the alpha contract, and the primary CTA,
-   ahead of the demo (VC-64 P0). Two columns: the copy carries the promise, the
-   flow vignette fills what would otherwise be dead space beside it. */
+/* Hero — one centered column, kept short so the demo below it climbs into the
+   fold. The promise, the alpha contract and the primary CTA still precede the
+   demo in the DOM (VC-64 P0); they just take far less vertical room doing it. */
 .hero {
-  display: grid;
   width: 100%;
-  max-width: 1312px;
+  max-width: 780px;
   margin: 0 auto;
-  padding: 60px 40px 4px;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
-  gap: clamp(40px, 6vw, 96px);
-  align-items: center;
-}
-
-.hero-copy {
-  min-width: 0;
+  padding: 46px 40px 0;
+  text-align: center;
 }
 
 .hero-headline {
-  max-width: 19ch;
-  margin: 0 0 18px;
+  max-width: 20ch;
+  margin: 0 auto 16px;
   color: var(--text);
-  font-size: clamp(35px, 4.1vw, 54px);
+  font-size: clamp(32px, 3.9vw, 50px);
   font-weight: 420;
   letter-spacing: -0.045em;
-  line-height: 1.07;
+  line-height: 1.08;
   text-wrap: balance;
 }
 
 .hero-lede {
-  max-width: 46ch;
-  margin: 0;
+  max-width: 54ch;
+  margin: 0 auto;
   color: var(--muted);
-  font-size: clamp(16px, 1.25vw, 17.5px);
+  font-size: clamp(15.5px, 1.2vw, 17px);
   font-weight: 360;
   letter-spacing: -0.012em;
-  line-height: 1.6;
+  line-height: 1.58;
+  text-wrap: pretty;
 }
 
 .hero-cta {
-  padding-top: 26px;
+  justify-content: center;
+  padding-top: 22px;
 }
 
 .hero-alpha-note {
   max-width: 52ch;
-  margin: 16px 0 0;
+  margin: 14px auto 0;
   color: var(--quiet);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 380;
   line-height: 1.7;
 }
@@ -219,7 +214,7 @@ a:focus-visible {
 }
 
 .hero-shell {
-  padding: 40px 40px 0;
+  padding: 26px 40px 0;
 }
 
 .hero-shell .volli-demo {
@@ -914,9 +909,7 @@ footer nav a:hover {
   }
 
   .hero {
-    padding: 44px 24px 4px;
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 370px);
-    gap: 44px;
+    padding: 36px 24px 0;
   }
 
   .statement-section {
@@ -930,19 +923,6 @@ footer nav a:hover {
 
   footer {
     width: calc(100% - 64px);
-  }
-}
-
-@media (max-width: 880px) {
-  /* The vignette is decorative and the interactive demo is directly below it.
-     Below this width the copy needs the whole column more than the page needs
-     a second illustration. */
-  .hero {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .hero-flow {
-    display: none;
   }
 }
 
@@ -996,11 +976,20 @@ footer nav a:hover {
   }
 
   .hero {
-    padding: 30px 20px 4px;
+    padding: 26px 20px 0;
   }
 
   .hero-headline {
-    max-width: none;
+    max-width: 18ch;
+    font-size: clamp(29px, 8.4vw, 36px);
+  }
+
+  .hero-lede {
+    font-size: 15px;
+  }
+
+  .hero-alpha-note {
+    font-size: 12px;
   }
 
   .download-main {
