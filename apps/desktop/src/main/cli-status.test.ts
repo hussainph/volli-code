@@ -33,6 +33,7 @@ function deps(home: string, overrides: Partial<CliStatusDeps> = {}): CliStatusDe
         pnpm: "/opt/homebrew/bin/pnpm",
       },
       dependencies: null,
+      installCommand: null,
     }),
     systemPathIssues: async () => [],
     credentialHelperIssues: async () => [],
@@ -74,6 +75,7 @@ describe("readCliStatus", () => {
           pnpm: "/opt/homebrew/bin/pnpm",
         },
         dependencies: null,
+        installCommand: null,
       },
       systemPathIssues: [],
       credentialHelperIssues: [],
@@ -136,6 +138,7 @@ describe("readCliStatus", () => {
             interactiveProvenance: "already-complete",
             tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: null },
             dependencies: "absent",
+            installCommand: "pnpm install",
           };
         },
       }),

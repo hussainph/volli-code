@@ -35,6 +35,7 @@ const STATUS: CliToolStatus = {
         pnpm: "/opt/homebrew/bin/pnpm",
       },
       dependencies: null,
+      installCommand: null,
     },
     systemPathIssues: [],
     credentialHelperIssues: [],

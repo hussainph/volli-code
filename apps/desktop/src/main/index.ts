@@ -32,6 +32,7 @@ import {
   skillsIndexResource,
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
+  workspaceInstallCommand,
 } from "@volli/shared";
 import type { PromptResource, SessionEnvRepair, SessionEvent, SessionInput } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
@@ -1831,7 +1832,14 @@ app.whenReady().then(async () => {
           socketPath: runtimePaths.socketPath,
           socketLive: () => agentSocket.live(),
           loginShellPath: () => loginShellPath(),
-          sessionEnvironment: readSessionEnvironment,
+          // Settings speaks one extra word identify does not: which command
+          // installs the scoped workspace, judged by its lockfile. Computed
+          // here so `volli identify`'s env block keeps the exact field set
+          // the contract published.
+          sessionEnvironment: async (cwd) => ({
+            ...(await readSessionEnvironment(cwd)),
+            installCommand: cwd === null ? null : workspaceInstallCommand(cwd, existsSync),
+          }),
           systemPathIssues: () => readSystemPathIssues(),
           credentialHelperIssues: (cwd) => readCredentialHelperIssues(cwd),
           wrapperCommands: () =>

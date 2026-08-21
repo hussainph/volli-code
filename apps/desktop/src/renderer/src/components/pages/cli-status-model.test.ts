@@ -17,6 +17,7 @@ function session(
       pnpm: "/opt/homebrew/bin/pnpm",
     },
     dependencies: null,
+    installCommand: null,
     ...overrides,
   };
 }
