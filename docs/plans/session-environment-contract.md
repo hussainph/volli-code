@@ -486,6 +486,37 @@ interactive credential path unreachable. VC-70 (GitHub in Settings) and VC-45
 (Volli holds the credential and Sessions request operations) remain the work
 that must establish that product guarantee.
 
+## Review fixes (2026-08-21)
+
+A pre-PR code review of the branch (run live on the reporting host) found one
+real detection gap and a set of edge/UX defects. All are fixed on the branch:
+
+- **Apple Git's `unknown` scope no longer hides the osxkeychain hazard.**
+  Measured: Apple Git-155 (`/usr/bin/git`) reports its Xcode-bundled
+  gitconfig — the file that enables `osxkeychain` on a stock Mac — with scope
+  `unknown`, which the detector silently dropped. Unclassified scopes are now
+  reported as `unknown` with Git's own origin naming the file, and the case is
+  pinned by test. Homebrew git reports `system` and was always caught.
+- **The workspace walk stops at the repository boundary.** A stray
+  `~/package.json` beside a `~/node_modules` could answer "installed" for a
+  worktree that had neither; `.git` (file or directory) now bounds both the
+  dependency walk and the new lockfile walk.
+- **Tool resolution requires a regular file.** `access(X_OK)` alone passes
+  for a directory, so a directory named `git` on a PATH entry counted as the
+  tool. Both resolvers (`packages/cli`, main) now stat first.
+- **The environment alert repairs its own UX debts.** The combined notice
+  states the `volli doctor --fix` hint once instead of twice, drops backticks
+  (they rendered literally), names the workspace's own install command from
+  its lockfile instead of a hardcoded `pnpm install` (`workspaceInstallCommand`
+  in `@volli/shared`; a bare manifest defaults to npm), re-measures when the
+  window regains focus so a repaired fault stops wearing its alert, and can be
+  dismissed per fault. The credential notice no longer ships internal ticket
+  IDs as product copy.
+- **`session-environment-alert-model.ts` joined the 100% coverage gate**, the
+  same enrollment its sibling `cli-status-model.ts` already had.
+- **`doctor`'s repair block is validated before rendering.** A malformed
+  `pathRepair` now renders as no repair rather than a half-invented one.
+
 ## What I did not verify
 
 - **Single-host evidence.** Every measurement is from one macOS host with one
