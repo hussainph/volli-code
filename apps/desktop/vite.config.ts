@@ -154,6 +154,9 @@ export default defineConfig(({ mode }) => ({
         // gate can reach it; the `.tsx` glue that calls it stays outside.
         "src/components/ui/ai-elements/scroll-chaining.ts",
         "src/lib/boundary-timer.ts",
+        // Where a chat-named path opens (VC-120): the raw-tool-path translation
+        // both transcript surfaces trust before touching any store or IPC.
+        "src/lib/chat-open-target.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",

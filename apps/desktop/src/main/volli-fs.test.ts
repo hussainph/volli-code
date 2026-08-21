@@ -51,6 +51,7 @@ import {
   ensureProjectArtifactsDir,
   ensureVolliDir,
   FileWatchManager,
+  fsFaultText,
   readFile as readFsFile,
   registerFileIpcHandlers,
   revealFile,
@@ -409,6 +410,36 @@ describe("readFile", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("escapes");
+  });
+
+  // The pane renders this string verbatim (VC-120): a chat can name a path
+  // that only exists in some other checkout, and the answer must be UI copy,
+  // never `ENOENT: no such file or directory, stat '/abs/path'`.
+  it("reports a missing file as 'File was not found', never raw errno text", async () => {
+    const project = makeTempProjectDir();
+    const result = await readFsFile(project, null, "missing.md");
+    expect(result).toEqual({ ok: false, error: "File was not found" });
+  });
+});
+
+// ---- fsFaultText -------------------------------------------------------------
+
+const errnoError = (code: string): Error => Object.assign(new Error(`${code}: boom`), { code });
+
+describe("fsFaultText", () => {
+  it.each([
+    ["ENOENT", "File was not found"],
+    ["ENOTDIR", "File was not found"],
+    ["EACCES", "Permission was denied"],
+    ["EPERM", "Permission was denied"],
+    ["EISDIR", "Not a file"],
+  ])("maps %s to %j", (code, expected) => {
+    expect(fsFaultText(errnoError(code))).toBe(expected);
+  });
+
+  it("falls back to the raw message for an unmapped code, and for a bare value", () => {
+    expect(fsFaultText(errnoError("EIO"))).toBe("EIO: boom");
+    expect(fsFaultText("exploded")).toBe("exploded");
   });
 });
 

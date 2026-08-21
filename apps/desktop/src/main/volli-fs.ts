@@ -92,6 +92,29 @@ function errnoCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+/**
+ * Friendly text for an fs fault the renderer renders VERBATIM (the file pane's
+ * error state, save toasts). The raw Node message (`ENOENT: no such file or
+ * directory, stat '/abs/path'`) is a debugging string, not UI copy — and it
+ * leaks the absolute path main resolved, which the renderer deliberately never
+ * handles. Codes outside the table fall back to the raw message: an exotic
+ * fault (EIO, ELOOP) is rare enough that a precise clue beats a vague blanket.
+ */
+export function fsFaultText(error: unknown): string {
+  switch (errnoCode(error)) {
+    case "ENOENT":
+    case "ENOTDIR":
+      return "File was not found";
+    case "EACCES":
+    case "EPERM":
+      return "Permission was denied";
+    case "EISDIR":
+      return "Not a file";
+    default:
+      return errorMessage(error);
+  }
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await fsp.access(path);
@@ -453,7 +476,7 @@ export async function readFile(
     const content = await readContent(filePath, relPath, stat.size);
     return { ok: true, source, kind, size: stat.size, mtime: stat.mtimeMs, content };
   } catch (error) {
-    return { ok: false, error: errorMessage(error) };
+    return { ok: false, error: fsFaultText(error) };
   }
 }
 
@@ -580,7 +603,7 @@ export async function writeFile(
     const stat = await fsp.stat(filePath);
     return { ok: true, mtime: stat.mtimeMs };
   } catch (error) {
-    return { ok: false, error: errorMessage(error) };
+    return { ok: false, error: fsFaultText(error) };
   }
 }
 
