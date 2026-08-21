@@ -478,15 +478,31 @@ function renderStableLines(command: string, data: unknown): string | null {
  * Renders server JSON directly or as the command's stable text contract.
  * See {@link RenderOptions} for the v1 TTY/pipe-identical output contract.
  */
+const isString = (field: unknown): field is string => typeof field === "string";
+const isStringArray = (field: unknown): boolean => Array.isArray(field) && field.every(isString);
+
+/**
+ * The repair block, believed only when every field it renders is present and
+ * shaped as main sends it. Anything else renders as no repair rather than as
+ * a half-invented one — the report speaks only measured facts.
+ */
+function sessionEnvRepair(value: unknown): SessionEnvRepair | undefined {
+  if (!isRecord(value)) return undefined;
+  return isString(value["path"]) &&
+    isString(value["provenance"]) &&
+    isString(value["interactiveProvenance"]) &&
+    isStringArray(value["added"]) &&
+    isStringArray(value["interactiveAdded"])
+    ? (value as unknown as SessionEnvRepair)
+    : undefined;
+}
+
 /** `doctor`'s reply is already a report; only its shape needs checking. */
 function doctorReport(data: unknown): string | null {
   if (!isRecord(data)) return null;
   const { checks, summary } = data;
   if (!Array.isArray(checks) || typeof summary !== "string") return null;
-  const pathRepair = isRecord(data["pathRepair"])
-    ? (data["pathRepair"] as unknown as SessionEnvRepair)
-    : undefined;
-  return renderDoctorReport(checks as DoctorCheck[], summary, pathRepair);
+  return renderDoctorReport(checks as DoctorCheck[], summary, sessionEnvRepair(data["pathRepair"]));
 }
 
 function renderCliTextSuccess(command: string, data: unknown): string {

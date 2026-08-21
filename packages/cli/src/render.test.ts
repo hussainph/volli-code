@@ -992,6 +992,26 @@ describe("renderCliSuccess — doctor", () => {
     );
   });
 
+  it("drops a malformed repair block rather than rendering a half-invented one", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      // `added` is missing: main never sends this, so nothing may render it.
+      {
+        ...data,
+        pathRepair: {
+          path: "/volli/bin:/usr/bin",
+          provenance: "adopted",
+          interactiveProvenance: "already-complete",
+          interactiveAdded: [],
+        },
+      },
+      { json: false },
+    );
+
+    expect(text).not.toContain("Session PATH repair");
+    expect(text).toContain("✗ Volli's bin is first on PATH");
+  });
+
   it("passes the structured report straight through with --json", () => {
     expect(JSON.parse(renderCliSuccess("doctor", data, { json: true }))).toEqual(data);
   });
