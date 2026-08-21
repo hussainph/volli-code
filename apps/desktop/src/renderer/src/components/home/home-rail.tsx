@@ -29,8 +29,6 @@
  * rail's does.
  */
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useShallow } from "zustand/react/shallow";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -46,6 +44,7 @@ import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { terminalTabDot, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { isFileTabId } from "@renderer/components/ticket/ticket-file-tab";
+import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
@@ -93,18 +92,34 @@ export function HomeRail({
       data-testid="home-rail"
       data-narrow="false"
     >
-      <HomeRailTabs mode={mode} onSelectMode={setMode} />
+      <RailModeTabs
+        modes={HOME_MODE_TABS}
+        active={mode}
+        label="Home rail pages"
+        idPrefix="home-rail"
+        onSelect={setMode}
+      />
+      {/* No overflow of its own: each page owns its scroll container, exactly as
+          the ticket rail's panel does. The navigator scrolls its own list under
+          a header that must not move, and Now/Sessions scroll as one column —
+          a rule here could only be one of those two, with the other spelled as
+          an exception to it. */}
       <section
         id={`home-rail-page-${mode}`}
         role="tabpanel"
         aria-labelledby={`home-rail-tab-${mode}`}
-        className={cn(
-          "flex min-h-0 flex-1 flex-col",
-          mode === "files" ? "overflow-hidden" : "overflow-y-auto pb-8",
-        )}
+        className="flex min-h-0 flex-1 flex-col"
       >
-        {mode === "now" ? <NowPage projectId={project.id} activeTabId={activeTabId} /> : null}
-        {mode === "sessions" ? <SessionsPage projectId={project.id} /> : null}
+        {mode === "now" ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-8">
+            <NowPage projectId={project.id} activeTabId={activeTabId} />
+          </div>
+        ) : null}
+        {mode === "sessions" ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-8">
+            <SessionsPage projectId={project.id} />
+          </div>
+        ) : null}
         {mode === "files" ? (
           <HomeFilesPanel
             project={project}
@@ -119,133 +134,16 @@ export function HomeRail({
   );
 }
 
-const HOME_MODE_ICONS: Record<HomeRailMode, PhosphorIcon> = {
-  now: ChatCircleDotsIcon,
-  sessions: ClockCounterClockwiseIcon,
-  files: FoldersIcon,
-};
-
 /**
- * The rail's header: the ticket rail's centred three-page pill. Only the
- * selected page wears its label, so all three remain legible at the 240px rail
- * floor without truncation; inactive icons carry labels and tooltips.
- *
- * The selected segment uses the ticket rail's same restrained layout spring:
- * its purpose is state indication and spatial continuity while the flex row
- * rearranges, not decoration. Keyboard traversal opts out so a held arrow key
- * never waits on motion, and reduced-motion removes both travel and crossfade.
+ * Home's pages, in pill order, as {@link RailModeTabs} takes them. Built once
+ * at module scope: the set is fixed, so rebuilding it per render would hand
+ * the pill a fresh array on every keystroke elsewhere in the app.
  */
-function HomeRailTabs({
-  mode,
-  onSelectMode,
-}: {
-  mode: HomeRailMode;
-  onSelectMode(next: HomeRailMode): void;
-}) {
-  const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
-  const [animateSelection, setAnimateSelection] = React.useState(true);
-  const reducedMotion = useReducedMotion() ?? false;
-  const animated = animateSelection && !reducedMotion;
-
-  function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const count = HOME_RAIL_MODES.length;
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? count - 1
-          : (index + (event.key === "ArrowRight" ? 1 : -1) + count) % count;
-    const nextMode = HOME_RAIL_MODES[next];
-    if (nextMode === undefined) return;
-    setAnimateSelection(false);
-    onSelectMode(nextMode);
-    refs.current[next]?.focus();
-  }
-
-  return (
-    <div
-      className={cn(
-        "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
-        RAIL_PANEL_INSET,
-      )}
-    >
-      <div
-        role="tablist"
-        aria-label="Home rail pages"
-        className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
-      >
-        {HOME_RAIL_MODES.map((key, index) => {
-          const Icon = HOME_MODE_ICONS[key];
-          const label = HOME_RAIL_MODE_LABELS[key];
-          const active = mode === key;
-          const tab = (
-            <motion.button
-              layout={animated}
-              transition={
-                animated ? { type: "spring", duration: 0.32, bounce: 0.1 } : { duration: 0 }
-              }
-              key={key}
-              ref={(node) => {
-                refs.current[index] = node;
-              }}
-              type="button"
-              role="tab"
-              id={`home-rail-tab-${key}`}
-              aria-controls={`home-rail-page-${key}`}
-              aria-selected={active}
-              aria-label={label}
-              tabIndex={active ? 0 : -1}
-              data-testid={`home-rail-tab-${key}`}
-              onClick={() => {
-                setAnimateSelection(true);
-                onSelectMode(key);
-              }}
-              onKeyDown={(event) => onKeyDown(event, index)}
-              className={cn(
-                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-full text-ui outline-none",
-                active ? "w-[84px]" : "w-8",
-                "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
-                !reducedMotion &&
-                  "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
-                active
-                  ? "bg-accent text-foreground shadow-raised"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-              )}
-            >
-              <motion.span layout="position" className="flex shrink-0 items-center">
-                <Icon className="size-3.5" />
-              </motion.span>
-              <AnimatePresence initial={false} mode="popLayout">
-                {active ? (
-                  <motion.span
-                    key={`${key}-label`}
-                    initial={animated ? { opacity: 0, transform: "translateX(-4px)" } : false}
-                    animate={{ opacity: 1, transform: "translateX(0)" }}
-                    exit={animated ? { opacity: 0, transform: "translateX(3px)" } : { opacity: 0 }}
-                    transition={{ duration: reducedMotion ? 0 : 0.14, ease: [0.23, 1, 0.32, 1] }}
-                    className="whitespace-nowrap"
-                  >
-                    {label}
-                  </motion.span>
-                ) : null}
-              </AnimatePresence>
-            </motion.button>
-          );
-          return (
-            <Tooltip key={key} open={active ? false : undefined}>
-              <TooltipTrigger asChild>{tab}</TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                {label}
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+const HOME_MODE_TABS: readonly RailModeTab<HomeRailMode>[] = HOME_RAIL_MODES.map((key) => ({
+  key,
+  label: HOME_RAIL_MODE_LABELS[key],
+  icon: { now: ChatCircleDotsIcon, sessions: ClockCounterClockwiseIcon, files: FoldersIcon }[key],
+}));
 
 /** Now: where this Session runs, and what it is. */
 function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: string }) {

@@ -8,6 +8,7 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
 import type { SkillReference } from "@volli/shared";
 
@@ -73,6 +74,8 @@ interface HomeTabStripProps {
   onRename(tab: HomeTabDescriptor, title: string): void;
   /** Double-click / Keep Open on a preview File tab. */
   onPinFile(relPath: string): void;
+  /** "Close Others" on a File tab — closes every OTHER File tab, guards included. */
+  onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
   /** The project's skills — the "Chat with skill" submenu's rows. */
@@ -119,6 +122,7 @@ export function HomeTabStrip({
   onClose,
   onRename,
   onPinFile,
+  onCloseOtherFiles,
   onNewSession,
   onNewChat,
   skills,
@@ -203,6 +207,7 @@ export function HomeTabStrip({
               onSelect={() => onSelect(descriptor)}
               onPin={() => onPinFile(descriptor.relPath)}
               onClose={() => onClose(descriptor)}
+              onCloseOthers={() => onCloseOtherFiles(descriptor.relPath)}
             />
           );
         }
@@ -279,7 +284,18 @@ function BoardTab({
   );
 }
 
-/** One Main-checkout File tab, sharing the ticket strip's preview/pin vocabulary. */
+/**
+ * One Main-checkout File tab.
+ *
+ * It speaks the PROJECT FILES strip's vocabulary rather than the ticket
+ * strip's, and that is the deliberate half of the choice: these are main
+ * checkout files, opened out of the same `FileWorkspaceState` the Files
+ * workbench reduces, so `file-tab-strip.tsx`'s menu is the one a person has
+ * already met on the same files — Keep Open (disabled once pinned, so the menu
+ * keeps one shape), Close, Close Others. The ticket strip differs because a
+ * pinned ticket File tab has no menu at all, which would leave Home's keyboard
+ * users with no route to Close.
+ */
 function HomeFileTab({
   tab,
   active,
@@ -287,6 +303,7 @@ function HomeFileTab({
   onSelect,
   onPin,
   onClose,
+  onCloseOthers,
 }: {
   tab: Extract<HomeTabDescriptor, { kind: "file" }>;
   active: boolean;
@@ -294,13 +311,16 @@ function HomeFileTab({
   onSelect(): void;
   onPin(): void;
   onClose(): void;
+  onCloseOthers(): void;
 }) {
   const inner = (
     <Tab
       data-testid="home-file-tab"
       data-rel-path={tab.relPath}
-      data-preview={tab.preview ? "true" : undefined}
-      data-dirty={tab.dirty ? "true" : undefined}
+      // Spelled both ways, as on the Files strip: a test and the smoke read
+      // "false" rather than having to tell an absent attribute from a stale one.
+      data-preview={tab.preview ? "true" : "false"}
+      data-dirty={tab.dirty ? "true" : "false"}
       label={tab.title}
       hint={tab.hint ?? undefined}
       active={active}
@@ -320,9 +340,11 @@ function HomeFileTab({
         <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>
-        <ContextMenuSeparator />
         <ContextMenuItem icon={XIcon} onSelect={onClose}>
           Close
+        </ContextMenuItem>
+        <ContextMenuItem icon={XSquareIcon} onSelect={onCloseOthers}>
+          Close Others
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

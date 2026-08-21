@@ -51,14 +51,20 @@ describe("HomeRail", () => {
     expect(markup).toContain("home-rail-tab-files");
   });
 
-  it("keeps three pages legible in the narrow rail with icon-only inactive tabs", () => {
+  // The narrow-rail contract, asserted as behaviour rather than as class
+  // strings: an inactive page drops its WORD (that is what lets three fit the
+  // pill at the 240px floor) but must keep its NAME, or the icon that replaces
+  // the word is unreadable to a screen reader and unnameable to a query.
+  it("names every page even where only the selected one wears its label", () => {
     const markup = draw("chat:s1");
 
     expect(markup).toContain('aria-label="Now"');
     expect(markup).toContain('aria-label="Sessions"');
     expect(markup).toContain('aria-label="Files"');
-    expect(markup).toContain("w-[84px]");
-    expect(markup).toContain("w-8");
+    // Resting page selected; the other two are icons, so their word is absent.
+    expect(markup).toContain(">Now<");
+    expect(markup).not.toContain(">Sessions<");
+    expect(markup).not.toContain(">Files<");
   });
 
   it("mounts the Main-checkout navigator on its Files page", () => {

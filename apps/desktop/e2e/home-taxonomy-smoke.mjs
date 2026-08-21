@@ -23,6 +23,10 @@
  *   3a. The Home rail's Files page lists and live-watches the Main checkout;
  *       click/double-click preview and pin a Home File tab, whose close returns
  *       to the previously visited Session tab.
+ *   3b. Opening a file from a nested folder LEAVES THE NAVIGATOR IN THAT
+ *       FOLDER. The rail is rendered from one position in the tree; from two it
+ *       would remount on the Session→File switch and reset itself to the
+ *       project root, so the click would undo its own browse.
  *   4. Selecting the Board tab returns to the board with the Session tab still
  *      on the strip — and the terminal under it is never unmounted.
  *   5. Opening a ticket HIDES the Home strip; leaving the ticket restores it,
@@ -229,6 +233,57 @@ try {
           panesAfter === panesBefore &&
           filesWorkbench === 0,
         detail: `return=${activeAfterClose} expected=${terminalLabel} panes=${panesBefore}→${panesAfter} topLevelFiles=${filesWorkbench}`,
+      };
+    },
+  );
+
+  await attempt(
+    "3b",
+    "opening a file from a nested folder leaves the Home navigator standing in it",
+    async () => {
+      await fs.mkdir(join(projectPath, "docs"), { recursive: true });
+      await fs.writeFile(join(projectPath, "docs", "guide.md"), "# guide\n", "utf8");
+
+      await page.getByTestId("home-rail-tab-files").click();
+      const filesPanel = page.getByTestId("home-files-panel");
+      const docsRow = filesPanel.locator('[data-testid="ticket-files-row"][data-path="docs"]');
+      await waitUntil("docs folder in Home Files", async () => (await docsRow.count()) === 1, {
+        timeout: 15000,
+      });
+
+      // Walk INTO the folder: the header's mono line becomes the way back out.
+      await docsRow.click();
+      const upOut = filesPanel.getByTestId("home-files-up");
+      await waitUntil(
+        "navigator inside docs/",
+        async () => (await upOut.getAttribute("aria-label")) === "Leave docs",
+      );
+
+      const guideRow = filesPanel.locator(
+        '[data-testid="ticket-files-row"][data-path="docs/guide.md"]',
+      );
+      await waitUntil("guide.md listed in docs/", async () => (await guideRow.count()) === 1);
+
+      // The regression this guards: opening the file switches the Home tab from
+      // a Session to a File, and the rail must survive that switch intact.
+      await guideRow.click();
+      const guideTab = page.locator('[data-testid="home-file-tab"][data-rel-path="docs/guide.md"]');
+      await waitUntil(
+        "guide.md Home preview tab",
+        async () =>
+          (await guideTab.count()) === 1 &&
+          (await guideTab.getAttribute("aria-selected")) === "true",
+      );
+
+      const stillInside = await upOut.getAttribute("aria-label");
+      const siblingStillListed = await guideRow.count();
+
+      await guideTab.getByTestId("tab-close").click();
+      await waitUntil("guide.md tab closed", async () => (await guideTab.count()) === 0);
+
+      return {
+        ok: stillInside === "Leave docs" && siblingStillListed === 1,
+        detail: `navigatorAfterOpen=${stillInside ?? "reset to root"} siblingRows=${siblingStillListed}`,
       };
     },
   );

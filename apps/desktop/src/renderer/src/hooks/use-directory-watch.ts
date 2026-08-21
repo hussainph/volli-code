@@ -47,7 +47,10 @@ function armWatch(input: DirPathInput): void {
     });
 }
 
-/** Re-arm a watcher main declared final, once for every renderer consumer. */
+/**
+ * Re-arm a watcher main declared final — ONCE for the level, not once per
+ * consumer, which mirrors the single hold {@link subscribeDirChanged} takes.
+ */
 function rearmFinalWatch(event: DirChangedEvent): void {
   const input: DirPathInput = { projectId: event.projectId, relPath: event.relPath };
   void rearmWatch<DirPathInput>(
@@ -69,9 +72,19 @@ function rearmFinalWatch(event: DirChangedEvent): void {
 
 /**
  * One `onDirChanged` IPC subscription for every renderer directory consumer,
- * fanned out by project + level. The first listener arms main's watcher and the
- * last listener tears it down, so the hidden primary tree and Home's Files page
- * can observe the same root without one consumer's cleanup silencing the other.
+ * fanned out by project + level.
+ *
+ * ONE SUBSCRIPTION because an expanded tree routinely holds a few dozen open
+ * levels, and a listener each on the same channel walks straight past Node's
+ * max-listeners threshold for a purely bookkeeping reason.
+ *
+ * ONE HOLD PER LEVEL — the first listener arms main's watcher, the last tears
+ * it down — because two surfaces now watch the same directory: the primary
+ * file tree's root and Home's Files navigator. Main refcounts (`DirWatchManager.watch`
+ * bumps, `unwatch` releases one hold), so a hold each would also be correct;
+ * what it would not be is cheap. Counting here spends one `watchDir` round trip
+ * per level instead of one per consumer, and leaves exactly one re-arm to run
+ * when main declares the watcher final rather than a thundering herd of them.
  */
 function subscribeDirChanged(
   projectId: string,

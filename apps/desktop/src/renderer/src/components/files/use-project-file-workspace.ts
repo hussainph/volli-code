@@ -249,6 +249,19 @@ export function useProjectFileWorkspace(
     [activeRelPath, projectId, setProjectFileViewState],
   );
 
+  const cancelClose = React.useCallback(() => setPending(null), []);
+  const chooseClose = React.useCallback(
+    (choice: TabCloseResolution["choice"]) => {
+      if (currentPending !== null) void resolvePending(currentPending, choice);
+    },
+    [currentPending, resolvePending],
+  );
+
+  // Every callback out of here is stable, so a consumer can depend on ONE of
+  // them without the whole controller's identity dragging its memo along.
+  // `handleClose` in `home-surface.tsx` is the case that matters: it also holds
+  // the terminal close guard, and a callback rebuilt on every render is a memo
+  // that never holds.
   return {
     files,
     viewStates,
@@ -258,9 +271,7 @@ export function useProjectFileWorkspace(
     handleDirtyChange,
     handleViewStateChange,
     pendingRelPath: currentPending?.relPath ?? null,
-    cancelClose: () => setPending(null),
-    chooseClose: (choice: TabCloseResolution["choice"]) => {
-      if (currentPending !== null) void resolvePending(currentPending, choice);
-    },
+    cancelClose,
+    chooseClose,
   };
 }

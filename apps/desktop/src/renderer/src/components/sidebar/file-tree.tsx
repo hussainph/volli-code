@@ -20,8 +20,8 @@ import {
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
 import { useDirectoryWatch } from "@renderer/hooks/use-directory-watch";
+import { useProjectRootsReady } from "@renderer/hooks/use-project-roots-sync";
 import { toProjectRelPath } from "@renderer/lib/project-rel-path";
-import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 import {
@@ -69,38 +69,22 @@ function loadListing(path: string, setListing: (listing: Listing) => void): void
  */
 export function FileTree({ project }: FileTreeProps) {
   const [root, setRoot] = React.useState<Listing>("loading");
-  // Gates the root WATCH on the same root-sync the root listing waits for.
-  // `watchDir` resolves its path against the main-process allowlist too, so
-  // arming it first would toast a spurious "live updates are unavailable" for a
-  // freshly added project and leave the level permanently unwatched — the watch
-  // effect has nothing that would retry it. Flipping this true re-runs that
-  // effect with a real relPath, which is what actually arms the watcher.
-  const [rootsSynced, setRootsSynced] = React.useState(false);
+  // Gates BOTH the root listing and the root watch: `listDirectory` and
+  // `watchDir` each resolve their path against the main-process allowlist, so
+  // arming either first would reject a freshly added project as "outside known
+  // projects" — and the watch has nothing that would retry it, leaving the
+  // level permanently unwatched behind a spurious "live updates are
+  // unavailable". Home's navigator waits on the same gate.
+  const rootsReady = useProjectRootsReady();
 
   React.useEffect(() => {
     // No run-once guard here: StrictMode's dev-only mount→cleanup→mount cycle
     // must re-fetch on the second run, because `cancelled` discards the first
     // run's result. A run-once ref alongside this cleanup deadlocks the tree
     // on its loading skeleton (the one fetch resolves already-cancelled).
+    if (!rootsReady) return;
     let cancelled = false;
     void (async () => {
-      // Register fs roots BEFORE the first listing. This effect runs in a
-      // descendant of AppShell, and React fires child effects before parent
-      // effects, so AppShell's root-sync would otherwise land AFTER this
-      // listDirectory — the main-process allowlist would still be stale and
-      // reject a freshly added project's path as "outside known projects".
-      // syncRoots is idempotent, so re-asserting the full current set is safe.
-      try {
-        await window.api.projects.syncRoots(
-          useProjectsStore.getState().projects.map((p) => p.path),
-        );
-      } catch {
-        // A failed sync just surfaces as the listing error below — nothing to do.
-      }
-      // Released even when the sync threw: AppShell mirrors the same roots, so
-      // the allowlist may well be current regardless. Arming the watch and
-      // reporting a real failure beats never watching at all.
-      if (!cancelled) setRootsSynced(true);
       try {
         const result = await window.api.fs.listDirectory(project.path);
         if (!cancelled) setRoot(toListing(result));
@@ -112,12 +96,12 @@ export function FileTree({ project }: FileTreeProps) {
     return () => {
       cancelled = true;
     };
-  }, [project.path]);
+  }, [project.path, rootsReady]);
 
   // The root level is always open, so it is always watched once the roots are
-  // synced. `""` is the root relPath the dir-watch API expects (main rejects
+  // ready. `""` is the root relPath the dir-watch API expects (main rejects
   // "."); `null` until then means "watch nothing yet".
-  useDirectoryWatch(project.id, rootsSynced ? "" : null, () => {
+  useDirectoryWatch(project.id, rootsReady ? "" : null, () => {
     loadListing(project.path, setRoot);
   });
 

@@ -7,7 +7,7 @@ import {
   type RegistryModelFactory,
 } from "@renderer/editor/document-registry";
 
-import { closeGuardExpectedMtime } from "./files-page";
+import { closeGuardExpectedMtime } from "./use-project-file-workspace";
 
 class FakeModel implements RegistryModel {
   private value: string;

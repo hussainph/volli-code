@@ -15,11 +15,9 @@
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
@@ -28,10 +26,11 @@ import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { type AttachmentsHandle, useAttachments } from "@renderer/hooks/use-attachments";
 
 import {
-  RAIL_PANEL_INSET,
   RailFaultBanner,
+  RailNavigatorHeader,
   RailPanelSkeleton,
   RailRowActions,
+  railNavigatorMatch,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketFilesNavigator,
@@ -39,11 +38,8 @@ import {
   type TicketFileRefRow,
   type TicketWorktreeEntry,
 } from "@renderer/components/ticket/ticket-files-model";
-import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
 
@@ -310,10 +306,8 @@ export function TicketFilesPanel({
     );
   }
 
-  const needle = query.trim().toLowerCase();
-  const match = (path: string) => needle === "" || path.toLowerCase().includes(needle);
-  const worktree = nav.worktree.filter((entry) => match(entry.relPath));
-  const referenced = nav.referenced.filter((row) => match(row.relPath));
+  const worktree = nav.worktree.filter((entry) => railNavigatorMatch(query, entry.relPath));
+  const referenced = nav.referenced.filter((row) => railNavigatorMatch(query, row.relPath));
 
   function navigateUp() {
     const slash = cwd.lastIndexOf("/");
@@ -328,75 +322,41 @@ export function TicketFilesPanel({
       {...fileAttachHandlers((picked) => void attachFiles(picked))}
       className="flex min-h-0 flex-1 flex-col"
     >
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <p className="text-ui font-medium">Ticket files</p>
-            {/* The scratch's mono sub-line names the branch, which is what the
-                worktree root IS. Once you walk into a folder it names the
-                folder instead, and becomes the way back out — the same line
-                doing the same job, one level down. */}
-            {cwd === "" ? (
-              <p className="truncate font-mono text-ui text-muted-foreground">
-                {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-              </p>
-            ) : (
-              <button
-                type="button"
-                data-testid="ticket-files-up"
-                onClick={navigateUp}
-                aria-label={`Leave ${cwd}`}
-                className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground hover:text-foreground"
-              >
-                <ArrowUUpLeftIcon className="size-3 shrink-0" />
-                <span className="truncate">{cwd}</span>
-              </button>
-            )}
-          </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Filter files"
-                aria-pressed={filtering}
-                onClick={() =>
-                  setFiltering((open) => {
-                    if (open) setQuery("");
-                    return !open;
-                  })
-                }
-              >
-                <MagnifyingGlassIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Filter files</TooltipContent>
-          </Tooltip>
-          {/* Attach lives beside Filter rather than in the list: it acts on the
-              Ticket, not on whatever row is under the cursor. Hidden when a
-              host supplied the attachments, because then this panel is a view
-              of someone else's list and must not mutate it. */}
-          {providedAttachments === undefined ? (
+      {/* The scratch's mono sub-line names the branch, which is what the
+          worktree root IS. Once you walk into a folder the shared header names
+          the folder instead, and it becomes the way back out. */}
+      <RailNavigatorHeader
+        title="Ticket files"
+        root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
+        cwd={cwd}
+        upTestId="ticket-files-up"
+        filtering={filtering}
+        query={query}
+        onToggleFilter={() =>
+          setFiltering((open) => {
+            if (open) setQuery("");
+            return !open;
+          })
+        }
+        onQueryChange={setQuery}
+        onNavigateUp={navigateUp}
+        // Attach lives beside Filter rather than in the list: it acts on the
+        // Ticket, not on whatever row is under the cursor. Hidden when a host
+        // supplied the attachments, because then this panel is a view of
+        // someone else's list and must not mutate it.
+        actions={
+          providedAttachments === undefined ? (
             <ComposerAttachButton onFiles={(picked) => void attachFiles(picked)} />
-          ) : null}
-        </div>
+          ) : null
+        }
+      >
         <AttachmentStrip
           attachments={loadedAttachments}
           {...(providedAttachments === undefined
             ? { onRemove: (attachment) => void removeAttachment(attachment) }
             : {})}
         />
-        {filtering ? (
-          <Input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Filter files"
-            placeholder="Filter files…"
-            className="h-7 text-ui"
-          />
-        ) : null}
-      </header>
+      </RailNavigatorHeader>
       {/* A listing can fail for ONE folder (permissions, a directory the agent
           deleted mid-browse) while the rest of the tree is fine, so the fault
           shows ABOVE the navigator rather than instead of it — the last good

@@ -31,8 +31,9 @@ import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
 
 interface SessionsLayerProps {
   /**
-   * A Home SESSION tab is in front. The layer stays MOUNTED regardless; this
-   * only toggles the Project-Session planes' visibility. Ticket terminals it
+   * Home's own plane box is in front — a Session tab OR a File tab, as against
+   * the Board, a ticket workspace or another nav page. The layer stays MOUNTED
+   * regardless; this only toggles the box's visibility. Ticket terminals it
    * also hosts are shown independently, overlaid on the ticket plane, even
    * while this is hidden — so no live terminal is ever unmounted incidentally.
    */
@@ -56,6 +57,19 @@ interface SessionsLayerProps {
    * narrow. Same seam the ticket rail's own navigators arrive through.
    */
   rail?: React.ReactNode;
+  /**
+   * The File editor, when a Home File tab is in front (VC-121), else null.
+   *
+   * It arrives as a node for the reason {@link SessionsLayerProps.rail} does,
+   * and it stands in the SAME column as the Session planes — which is the
+   * whole point. Rendered one level up it would need a second row of its own,
+   * and the rail would then live at two positions in the tree: React
+   * reconciles by POSITION, so every Session↔File switch would unmount and
+   * remount `HomeRail` and the Files navigator inside it would lose the folder
+   * it was standing in. Opening a file from that navigator would reset it to
+   * the project root — the click undoing its own browse.
+   */
+  plane?: React.ReactNode;
 }
 
 /**
@@ -87,7 +101,7 @@ interface SessionsLayerProps {
  * empty state (`board/board-empty.tsx`) — removing the Sessions page removed
  * the app's only proactive auth surface, and VC-52 shipped deliberately silent.
  */
-export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps) {
+export function SessionsLayer({ visible, activeTabId, rail, plane = null }: SessionsLayerProps) {
   const byOwner = useSessionsStore((state) => state.byOwner);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const setSplitRatio = useSessionsStore((state) => state.setSplitRatio);
@@ -191,6 +205,10 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
   // A chat in front covers the plane, so the terminals under it stand down.
   // They stay mounted — only their visibility flips (see the keep-alive below).
   const activeChatSessionId = parseChatTabId(activeTabId);
+  // A File tab covers the same column, and every Session pane stands down for
+  // it on exactly the same terms: mounted, not visible. The box itself stays on
+  // screen — it is what the File editor and the rail are standing in.
+  const panesVisible = visible && plane === null;
 
   // Terminal focus can land on THIS surface's terminals too, so this surface
   // owes the same invariant a ticket's detail view owes for its own: the target
@@ -210,9 +228,9 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
   // target is set, must never be left holding one around a terminal nobody can see.
   React.useEffect(() => {
     if (terminalFocusTarget === null || terminalFocusTarget.ticketId !== null) return;
-    if (visible && projectSessionFocused) return;
+    if (panesVisible && projectSessionFocused) return;
     useUiStore.getState().setTerminalFocusTarget(null);
-  }, [terminalFocusTarget, projectSessionFocused, visible]);
+  }, [terminalFocusTarget, projectSessionFocused, panesVisible]);
 
   /**
    * Where a file a chat names opens (VC-120). The raw tool path is translated
@@ -324,10 +342,12 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
 
   return (
     <>
-      {/* The Project Session planes and, beside them, Home's rail — flow
-          layout, hidden (not unmounted) when the Board tab or another page is
-          in front. The row is the outer box so the rail narrows the planes
-          rather than covering them. */}
+      {/* The Project Session planes — or the File editor standing in the same
+          column — and, beside them, Home's rail. Flow layout, hidden (not
+          unmounted) when the Board tab or another page is in front. The row is
+          the outer box so the rail narrows what is in the column rather than
+          covering it, and it is the ONE place the rail is rendered from: see
+          `plane` on the props for what a second position would cost. */}
       <div className={cn("flex min-h-0 flex-1", !visible && "hidden")}>
         <div
           className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
@@ -344,7 +364,7 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
                   ownerId={ownerId}
                   tab={tab}
                   visible={
-                    visible &&
+                    panesVisible &&
                     ownerId === selected?.id &&
                     tab.sessionId === container.activeSessionId &&
                     // A chat plane is `absolute inset-0` over this same box, and
@@ -373,7 +393,7 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
               Keyed by Session — the client, the fold and the queue are resident
               (chat/registry.ts), so a remount costs nothing and carries
               nothing over. */}
-          {selected && activeChatSessionId !== null && (
+          {selected && activeChatSessionId !== null && plane === null && (
             <div className="absolute inset-0 flex min-h-0 flex-col">
               <ChatPlane
                 key={activeChatSessionId}
@@ -387,6 +407,10 @@ export function SessionsLayer({ visible, activeTabId, rail }: SessionsLayerProps
               />
             </div>
           )}
+
+          {/* In flow above the panes, which are `hidden` behind it rather than
+              unmounted — the same treatment a chat gets, for the same reason. */}
+          {plane}
         </div>
         {rail}
       </div>

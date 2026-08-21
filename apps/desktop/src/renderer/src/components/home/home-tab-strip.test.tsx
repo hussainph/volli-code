@@ -17,6 +17,7 @@ function draw(tabs: readonly HomeTabDescriptor[], activeTabId: string): string {
         onClose={noop}
         onRename={noop}
         onPinFile={noop}
+        onCloseOtherFiles={noop}
         onNewSession={noop}
         onNewChat={noop}
         creating={false}
@@ -53,7 +54,20 @@ describe("HomeTabStrip file tabs", () => {
     const html = draw([HOME_BOARD_TAB, { ...file, preview: false, dirty: true }], file.id);
 
     expect(html).toContain('data-dirty="true"');
-    expect(html).not.toContain('data-preview="true"');
+    expect(html).toContain('data-preview="false"');
     expect(html).not.toContain("italic");
+  });
+
+  it("disambiguates two tabs that share a basename with the parent hint", () => {
+    const other: HomeTabDescriptor = {
+      ...file,
+      id: "file:docs/app.ts",
+      relPath: "docs/app.ts",
+      hint: "docs",
+    };
+    const html = draw([HOME_BOARD_TAB, { ...file, hint: "src" }, other], file.id);
+
+    expect(html).toContain(">src<");
+    expect(html).toContain(">docs<");
   });
 });

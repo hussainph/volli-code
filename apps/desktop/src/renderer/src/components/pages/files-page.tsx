@@ -21,8 +21,6 @@ import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-export { closeGuardExpectedMtime } from "@renderer/components/files/use-project-file-workspace";
-
 export function FilesPage() {
   const project = useSelectedProject();
   return project === null ? null : <FilesWorkbench key={project.id} project={project} />;

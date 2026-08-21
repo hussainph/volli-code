@@ -1,20 +1,15 @@
 import * as React from "react";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { errorMessage, type DirEntry, type Project } from "@volli/shared";
 
 import { useDirectoryWatch } from "@renderer/hooks/use-directory-watch";
+import { useProjectRootsReady } from "@renderer/hooks/use-project-roots-sync";
 import {
-  RAIL_PANEL_INSET,
   RailFaultBanner,
+  RailNavigatorHeader,
   RailPanelSkeleton,
+  railNavigatorMatch,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { TicketFilesList } from "@renderer/components/ticket/ticket-files-panel";
-import { Button } from "@renderer/components/ui/button";
-import { Input } from "@renderer/components/ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { cn } from "@renderer/lib/utils";
-import { useProjectsStore } from "@renderer/stores/projects";
 
 /** Join one Main-checkout listing entry to the current project-relative folder. */
 function joinRel(parent: string, name: string): string {
@@ -78,9 +73,13 @@ export function HomeFilesPanel({
   const [entries, setEntries] = React.useState<DirEntry[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
-  const [rootsSynced, setRootsSynced] = React.useState(false);
   const [filtering, setFiltering] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  // `volli:list-directory` answers only for a path main already knows as a
+  // project root, and child effects run before their parent's — so AppShell's
+  // own mirror would land AFTER this panel's first listing. The shared hook is
+  // the same gate the primary file tree waits on, spelled once.
+  const rootsReady = useProjectRootsReady();
   // A fast folder change can overtake an older listing read. Only the newest
   // request may name the current folder or replace its rows.
   const requestId = React.useRef(0);
@@ -111,39 +110,27 @@ export function HomeFilesPanel({
   );
 
   React.useEffect(() => {
-    let live = true;
+    if (!rootsReady) return;
     requestId.current += 1;
     setCwd("");
     setEntries([]);
     setError(null);
     setLoaded(false);
-    setRootsSynced(false);
-
-    void window.api.projects
-      .syncRoots(useProjectsStore.getState().projects.map((candidate) => candidate.path))
-      .catch(() => {
-        // The listing below carries the actionable failure. Root sync is
-        // idempotently repeated by AppShell, so it gets no second alert here.
-      })
-      .then(() => {
-        if (!live) return;
-        setRootsSynced(true);
-        void loadDir("", true);
-      });
+    void loadDir("", true);
 
     return () => {
-      live = false;
       requestId.current += 1;
     };
-  }, [project.id, loadDir]);
+  }, [project.id, loadDir, rootsReady]);
 
-  useDirectoryWatch(project.id, rootsSynced && loaded ? cwd : null, () => {
+  useDirectoryWatch(project.id, loaded ? cwd : null, () => {
     void loadDir(cwd);
   });
 
-  const needle = query.trim().toLowerCase();
-  const visibleEntries = entries.filter(
-    (entry) => needle === "" || entry.name.toLowerCase().includes(needle),
+  // On the whole project-relative path, like the ticket navigator: the same
+  // magnifier cannot mean two different things on two drawings of one panel.
+  const visibleEntries = entries.filter((entry) =>
+    railNavigatorMatch(query, joinRel(cwd, entry.name)),
   );
 
   function navigateUp() {
@@ -153,56 +140,25 @@ export function HomeFilesPanel({
 
   return (
     <div data-testid="home-files-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <p className="text-ui font-medium">Project files</p>
-            {cwd === "" ? (
-              <p className="truncate font-mono text-ui text-muted-foreground">{project.name}</p>
-            ) : (
-              <button
-                type="button"
-                data-testid="home-files-up"
-                onClick={navigateUp}
-                aria-label={`Leave ${cwd}`}
-                className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground hover:text-foreground"
-              >
-                <ArrowUUpLeftIcon className="size-3 shrink-0" />
-                <span className="truncate">{cwd}</span>
-              </button>
-            )}
-          </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Filter files"
-                aria-pressed={filtering}
-                onClick={() =>
-                  setFiltering((open) => {
-                    if (open) setQuery("");
-                    return !open;
-                  })
-                }
-              >
-                <MagnifyingGlassIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Filter files</TooltipContent>
-          </Tooltip>
-        </div>
-        {filtering ? (
-          <Input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Filter files"
-            placeholder="Filter files…"
-            className="h-7 text-ui"
-          />
-        ) : null}
-      </header>
+      {/* The mono sub-line names the project at the top level — the Main
+          checkout is what Home's navigator is rooted in, the way the ticket's
+          names its branch. */}
+      <RailNavigatorHeader
+        title="Project files"
+        root={project.name}
+        cwd={cwd}
+        upTestId="home-files-up"
+        filtering={filtering}
+        query={query}
+        onToggleFilter={() =>
+          setFiltering((open) => {
+            if (open) setQuery("");
+            return !open;
+          })
+        }
+        onQueryChange={setQuery}
+        onNavigateUp={navigateUp}
+      />
 
       {error !== null ? (
         <RailFaultBanner

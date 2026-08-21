@@ -170,6 +170,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     [closeHomeFile, selectedId],
   );
   const fileWorkspace = useProjectFileWorkspace(selectedId, closeFileFromHome);
+  const { requestClose: requestCloseFile, requestCloseOthers: requestCloseOtherFiles } =
+    fileWorkspace;
   const fileTabs = fileWorkspace.files.tabs;
   const tabIds = React.useMemo(
     () => [...sessionTabIds, ...fileTabs.map((tab) => fileTabId(tab.relPath))],
@@ -313,7 +315,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         return;
       }
       if (descriptor.kind === "file") {
-        void fileWorkspace.requestClose(descriptor.relPath);
+        void requestCloseFile(descriptor.relPath);
         return;
       }
       const liveIds = sessionPanes(descriptor.tab.layout)
@@ -321,7 +323,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         .map((pane) => pane.sessionId);
       closeGuard.guard(liveIds, () => closeTerminalSession(selectedId, descriptor.tab.sessionId));
     },
-    [closeGuard, fileWorkspace, selectedId],
+    // The controller's own callback, not the controller: its object identity
+    // moves whenever a tab, a dirty flag or a pending close does, and this memo
+    // also holds the terminal close guard.
+    [closeGuard, requestCloseFile, selectedId],
   );
 
   const handleRename = React.useCallback((descriptor: HomeTabDescriptor, title: string) => {
@@ -360,6 +365,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           onClose={handleClose}
           onRename={handleRename}
           onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
+          onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
           onNewChat={() => void startProjectChat(selectedId)}
           onNewChatWithSkill={(name) => void startProjectChat(selectedId, [name])}
           onNewSession={() => void startProjectTerminal(selectedId)}
@@ -370,17 +376,21 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       ) : null}
 
       {/* Always mounted, panes-only: it owns every live terminal in the app, so
-          it is never unmounted for a nav, project or tab change. Visible only
-          when a Home SESSION tab is in front — the board covers the same box. */}
-      <SessionsLayer
-        visible={visible && !boardTabActive && activeFileRelPath === null}
-        activeTabId={activeTabId}
-        rail={activeFileRelPath === null ? rail : null}
-      />
+          it is never unmounted for a nav, project or tab change. Visible when a
+          Home SESSION or FILE tab is in front — the board covers the same box.
 
-      {visible && selected !== null && activeFileRelPath !== null ? (
-        <div className="flex min-h-0 flex-1">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+          Both the rail and the File editor are handed DOWN rather than rendered
+          beside this layer, so each keeps ONE position in the tree across the
+          whole strip. React reconciles by position: a rail rendered from two
+          branches would remount on every Session↔File switch, and the Files
+          navigator inside it would lose the folder it was standing in — so
+          opening a file would reset the navigator that opened it. */}
+      <SessionsLayer
+        visible={visible && !boardTabActive}
+        activeTabId={activeTabId}
+        rail={rail}
+        plane={
+          selected !== null && activeFileRelPath !== null ? (
             <FileView
               key={`${selected.id}:${activeFileRelPath}`}
               projectId={selected.id}
@@ -389,10 +399,9 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               onViewStateChange={fileWorkspace.handleViewStateChange}
               onDirtyChange={fileWorkspace.handleDirtyChange}
             />
-          </div>
-          {rail}
-        </div>
-      ) : null}
+          ) : null
+        }
+      />
 
       {visible && selected !== null && boardTabActive ? (
         ticket !== undefined ? (
@@ -474,6 +483,7 @@ function HomeTabs({
   onClose,
   onRename,
   onPinFile,
+  onCloseOtherFiles,
   onNewSession,
   onNewChat,
   onNewChatWithSkill,
@@ -492,6 +502,7 @@ function HomeTabs({
   onClose(tab: HomeTabDescriptor): void;
   onRename(tab: HomeTabDescriptor, title: string): void;
   onPinFile(relPath: string): void;
+  onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
   onNewChatWithSkill(name: string): void;
@@ -548,6 +559,7 @@ function HomeTabs({
       onClose={onClose}
       onRename={onRename}
       onPinFile={onPinFile}
+      onCloseOtherFiles={onCloseOtherFiles}
       onNewSession={onNewSession}
       onNewChat={onNewChat}
       onNewChatWithSkill={onNewChatWithSkill}
