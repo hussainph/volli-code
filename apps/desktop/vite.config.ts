@@ -152,6 +152,10 @@ export default defineConfig(({ mode }) => ({
         // report as view glue, but the roving-tabindex arithmetic left a
         // component file precisely so the gate could reach it.
         "src/components/ui/tab-focus.ts",
+        // The mouse-wheel decision stays pure for the same reason: the
+        // component installs the listener, but this module owns when it may
+        // remap the gesture into horizontal travel.
+        "src/components/ui/tab-scroll.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.

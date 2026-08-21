@@ -44,6 +44,7 @@ import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
+import { scrollTabsWithWheel } from "./tab-scroll";
 
 export type TabVariant = "folder" | "pill";
 
@@ -131,6 +132,23 @@ export function TabStrip({
   ...props
 }: TabStripProps) {
   const folder = variant === "folder";
+  const scrollerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+
+    // Trackpads already produce a horizontal delta. A mouse needs Shift+wheel
+    // to reach clipped tabs; React's wheel listener is passive, so this must
+    // be a native listener for preventDefault to keep the gesture on the strip.
+    const onWheel = (event: WheelEvent) => {
+      scrollTabsWithWheel(scroller, event);
+    };
+
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, []);
+
   return (
     <div
       data-slot="tab-strip"
@@ -146,6 +164,8 @@ export function TabStrip({
       {...props}
     >
       <div
+        ref={scrollerRef}
+        data-slot="tab-scroll"
         className={cn(
           "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           folder ? "items-end px-2" : "items-center",
