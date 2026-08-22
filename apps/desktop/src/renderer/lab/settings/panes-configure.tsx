@@ -174,13 +174,7 @@ function SkillsPane() {
     <AsyncSection
       title="Skills"
       icon={BookOpenIcon}
-      hint={
-        <>
-          Skills in <code>.agents/skills</code> ship with the repo; personal ones come from your
-          home folder. A project skill wins over a personal one with the same name, and these
-          switches apply to this project only.
-        </>
-      }
+      hint={<>Project skills override personal ones. Switches apply here only.</>}
       action={<SectionAction label="Reveal folder" icon={FolderOpenIcon} />}
       state={ready(shown)}
       isEmpty={() => SKILLS.length === 0}
@@ -400,12 +394,7 @@ function CommandsPane() {
     <AsyncSection
       title="Commands"
       icon={CommandIcon}
-      hint={
-        <>
-          Type a command&rsquo;s name in any composer to run its prompt. A project command wins over
-          a personal one with the same name.
-        </>
-      }
+      hint={<>Type the name in any composer. Project overrides personal.</>}
       action={<NewCommandDialog />}
       state={ready(shown)}
       isEmpty={() => COMMANDS.length === 0}
@@ -614,12 +603,7 @@ function McpPane() {
     <AsyncSection
       title="Servers"
       icon={PlugsConnectedIcon}
-      hint={
-        <>
-          MCP servers give agents tools beyond the filesystem. Web search is configured once for
-          every project, in Settings.
-        </>
-      }
+      hint={<>Web search is separate — set it in Settings.</>}
       action={<AddServerDialog />}
       state={ready(shown)}
       isEmpty={() => SERVERS.length === 0}
@@ -707,9 +691,7 @@ function PluginsPane() {
     <AsyncSection
       title="Installed"
       icon={PuzzlePieceIcon}
-      hint={
-        <>A plugin is a bundle of skills and commands, installed together and updated together.</>
-      }
+      hint={<>A bundle of skills and commands, updated together.</>}
       action={<SectionAction label="Browse…" icon={PlusIcon} />}
       state={ready(shown)}
       isEmpty={() => PLUGINS.length === 0}
@@ -777,12 +759,7 @@ function SessionsPane() {
         icon={CpuIcon}
         // The precedence table, as one hint instead of a paragraph under the
         // header. Available to whoever wants it, invisible to everyone else.
-        hint={
-          <>
-            These override your app-wide defaults for this project. A session uses the model picked
-            in its own composer first, then this project&rsquo;s, then Settings.
-          </>
-        }
+        hint={<>Composer choice wins, then this project, then Settings.</>}
       >
         <PrefRow label="Harness" htmlFor="harness" overridden={harness !== null}>
           <OverrideControl
@@ -827,7 +804,7 @@ function SessionsPane() {
       <PrefSection
         title="Instructions"
         icon={BookOpenIcon}
-        hint={<>Every session in this project reads these files before its first turn.</>}
+        hint={<>Read before every session&rsquo;s first turn.</>}
         action={<SectionAction label="Open AGENTS.md" icon={ArrowSquareOutIcon} />}
       >
         <ItemRow name="AGENTS.md" meta="12 KB · repo root" />
@@ -845,11 +822,7 @@ function AppearancePane() {
   const [terminal, setTerminal] = React.useState<string | null>(null);
 
   return (
-    <PrefSection
-      title="Overrides"
-      icon={PaletteIcon}
-      hint={<>Anything left alone follows your app-wide theme in Settings.</>}
-    >
+    <PrefSection title="Overrides" icon={PaletteIcon} hint={<>Unset rows follow Settings.</>}>
       <PrefRow label="Mode" testId="project-appearance-mode" overridden={mode !== null}>
         <OverrideControl
           label="Mode"
@@ -938,13 +911,7 @@ function WorktreesPane() {
       <PrefSection
         title="Copied files"
         icon={TerminalWindowIcon}
-        hint={
-          <>
-            Untracked files worth carrying into every new worktree. This repo has no{" "}
-            <code>.worktreeinclude</code>, so Volli&rsquo;s defaults apply — creating one replaces
-            them entirely.
-          </>
-        }
+        hint={<>Creating .worktreeinclude replaces these defaults entirely.</>}
         action={<SectionAction label="Create .worktreeinclude" icon={PlusIcon} />}
       >
         <ItemRow name=".env*" badges={<Badge variant="outline">Default</Badge>} />

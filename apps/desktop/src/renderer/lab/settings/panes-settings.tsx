@@ -150,12 +150,7 @@ function StoragePane() {
       <AsyncSection
         title="Orphaned worktrees"
         icon={TreeStructureIcon}
-        hint={
-          <>
-            Folders left behind when a ticket&rsquo;s branch was deleted or its project was removed.
-            Volli won&rsquo;t sweep these automatically while they hold uncommitted work.
-          </>
-        }
+        hint={<>Never swept automatically while they hold uncommitted work.</>}
         action={<SectionIconAction label="Rescan orphaned worktrees" />}
         state={orphans}
         isEmpty={(list) => list.length === 0}
@@ -278,12 +273,7 @@ function AppearancePane() {
       <PrefSection
         title="Terminal"
         icon={TerminalWindowIcon}
-        hint={
-          <>
-            Volli reads your Ghostty config and only overrides what you set here. Anything marked{" "}
-            <em>Set by Volli</em> can be handed back.
-          </>
-        }
+        hint={<>Volli overrides only what you set here.</>}
       >
         <PrefRow label="Theme">
           <Provenance>From Ghostty</Provenance>
@@ -489,12 +479,7 @@ function ModelsPane() {
         <PrefRow
           label="Background jobs"
           testId="default-model-utility"
-          hint={
-            <>
-              Naming new chats and summarizing long conversations. Left unset, these run on whatever
-              model the chat itself is using — picking something inexpensive here keeps them cheap.
-            </>
-          }
+          hint={<>Naming chats and summarizing. Unset, they use the chat&rsquo;s own model.</>}
         >
           <ModelSelect value="a/haiku" />
           <ReasoningSelect value="off" />
@@ -508,12 +493,7 @@ function ModelsPane() {
         <PrefRow
           label="Compact automatically"
           testId="auto-compaction"
-          hint={
-            <>
-              When a conversation approaches the model&rsquo;s context limit, Volli summarizes the
-              earlier turns to make room. The reserve column below sets how much room to leave.
-            </>
-          }
+          hint={<>Summarizes earlier turns near the context limit. Reserve is per model, below.</>}
         >
           <Switch defaultChecked />
         </PrefRow>
@@ -699,11 +679,7 @@ function WebPane() {
   } as const;
 
   return (
-    <PrefSection
-      title="Web search"
-      icon={GlobeIcon}
-      hint={<>Applies to every project. Agents reach the web through this one provider.</>}
-    >
+    <PrefSection title="Web search" icon={GlobeIcon} hint={<>One provider, every project.</>}>
       {/* Was four pills. A Select is the right shape for one-of-N where the
           options aren't a mode and choosing one changes what's below. */}
       <PrefRow label="Provider" htmlFor="provider">
@@ -777,7 +753,7 @@ function IntegrationsPane() {
     <AsyncSection
       title="Open in…"
       icon={PlugsIcon}
-      hint={<>Only editors Volli found installed appear here.</>}
+      hint={<>Only installed editors appear.</>}
       state={ready(EDITORS)}
       isEmpty={(apps) => apps.length === 0}
       empty="None of the editors Volli knows are installed."
@@ -835,12 +811,7 @@ function UpdatesPane() {
         <PrefRow
           label="Channel"
           htmlFor="channel"
-          hint={
-            <>
-              Canary builds ship the newest work first and break more often. You can switch back,
-              but an installed canary won&rsquo;t downgrade itself.
-            </>
-          }
+          hint={<>Canary breaks more often, and won&rsquo;t downgrade itself.</>}
         >
           <Select
             value={channel}
@@ -927,11 +898,7 @@ function AboutPane() {
        * not a collection — so a table would be ceremony. The rule is that a
        * table is for a collection that grows; this one doesn't.
        */}
-      <PrefSection
-        title="Harnesses"
-        icon={CpuIcon}
-        hint={<>The agent binaries Volli can launch. Registered ones come from your PATH.</>}
-      >
+      <PrefSection title="Harnesses" icon={CpuIcon} hint={<>Agent binaries Volli can launch.</>}>
         <ItemRow name="Claude Code" meta="claude" badges={<Provenance>Built-in</Provenance>} />
         <ItemRow name="Codex" meta="codex" badges={<Provenance>Built-in</Provenance>} />
         <ItemRow

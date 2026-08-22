@@ -202,7 +202,7 @@ await hint.focus();
 await page.waitForTimeout(300);
 check(
   "the (i) opens on focus (keyboard-reachable)",
-  (await page.getByText(/Applies to every project/).count()) > 0,
+  (await page.getByText(/One provider, every project/).count()) > 0,
 );
 
 /* Tables: bounded height, sticky header, real semantics. */
@@ -328,7 +328,7 @@ await sessionHint.focus();
 await page.waitForTimeout(300);
 check(
   "§1.1 precedence is stated in the (i)",
-  (await page.getByText(/own composer first, then this project/).count()) > 0,
+  (await page.getByText(/Composer choice wins, then this project/).count()) > 0,
 );
 
 /* Revert restores inheritance. */
@@ -353,6 +353,38 @@ await base.fill("mian");
 await base.blur();
 await page.waitForTimeout(300);
 check("§1.5 base branch refuses an unknown ref", (await page.locator("#base-error").count()) > 0);
+
+/* Hints stay short. Google's rule: cut to what matters, stop before cryptic. */
+const hintLengths = [];
+for (const surfaceName of ["Settings", "Configure"]) {
+  await surface(surfaceName).click();
+  await page.waitForTimeout(500);
+  // By index, not by name: a rail button's textContent glues its count badge
+  // onto the label ("Models10") while its accessible name keeps the space.
+  const rail = page.locator("nav").first().getByRole("button");
+  const railCount = await rail.count();
+  for (let r = 0; r < railCount; r += 1) {
+    await rail.nth(r).click();
+    await page.waitForTimeout(250);
+    const hints = page.locator('[aria-label^="About "]');
+    for (let i = 0; i < (await hints.count()); i += 1) {
+      await hints.nth(i).focus();
+      await page.waitForTimeout(150);
+      const panel = page.locator('[data-slot="popover-content"]').first();
+      if (await panel.count()) {
+        hintLengths.push((await panel.innerText()).trim().split(/\s+/).length);
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(120);
+    }
+  }
+}
+const longest = Math.max(0, ...hintLengths);
+check(
+  "every hint is 12 words or fewer",
+  hintLengths.length >= 12 && longest <= 12,
+  `${hintLengths.length} hints, longest ${longest}w`,
+);
 
 check("no uncaught errors", thrown.length === 0, thrown.join("; "));
 
