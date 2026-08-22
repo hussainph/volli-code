@@ -9,6 +9,7 @@ the `panes-*.tsx` are content poured into it.
 | `docs/plans/settings-audit.md` | 31 findings against the surfaces as they ship today |
 | `docs/plans/settings-redesign-review.md` | independent adversarial review of the first prototype |
 | `docs/plans/settings-redesign-review-2.md` | second independent review, after the component pass |
+| `docs/plans/settings-implementation-notes.md` | **start here if you are implementing** |
 | `apps/desktop/e2e/vc111-review-fixes.mjs` | 55 checks, one per finding. Manual: needs `pnpm lab` running |
 | `apps/desktop/e2e/lab-boot-check.mjs` | the scratch is enrolled |
 
@@ -159,14 +160,18 @@ rather than rediscovering it.
   be judged. A new MCP server lands in `starting`, which is what the real
   connect will do.
 - **`DataTable` caps rendering** at `maxItems` with a footer, search first.
+- **`Copy report…` previews its payload** before anything reaches the clipboard.
+- **The canvas editor is a popover on Configure**, so nothing scrims the window
+  whose background is being edited.
+- **Keyword drift is guarded**, and the guard found nine real gaps.
 
 ## Still open
 
-- **`keywords` is hand-maintained** and will rot. Mitigation: a test asserting
-  keywords against rendered labels. Real fix: derive them.
-- **`Copy report…` needs a preview sheet** — designed as an intent, not built.
-- **Configure → Appearance's "Edit canvas…"** needs a non-modal design; a scrim
-  defeats the live preview it is judged against.
+- **`keywords` is hand-maintained.** Now guarded: the check walks every row
+  label on both surfaces and fails if one is unreachable from the rail search.
+  It caught real drift on its first run (`ticket`, `keep`, `install` and six
+  more matched nothing). The guard is the mitigation; deriving them is still the
+  real fix.
 - **Deep-link migration**: `stores/ui.ts`'s `settingsCategory` uses
   `model-access`; the new key is `models`. Needs an alias, plus the
   auto-sign-in flow the prototype does not draw.
