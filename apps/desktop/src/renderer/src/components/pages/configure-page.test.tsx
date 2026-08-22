@@ -83,6 +83,16 @@ describe("Configure → Sessions", () => {
     // exact vocabulary this redesign removed (see kit/override.tsx).
     expect(html).not.toContain("Inherit");
   });
+
+  it("keeps a disabled model picker visible while its catalogue loads", () => {
+    const html = renderConfigure("sessions");
+    const modelRow = html.slice(html.indexOf('data-testid="project-session-model"'));
+
+    expect(modelRow).toContain('id="project-session-model"');
+    expect(modelRow).toContain("Loading models");
+    expect(modelRow).toContain("disabled");
+    expect(modelRow).toContain('aria-label="Reasoning level"');
+  });
 });
 
 describe("Configure → MCP", () => {

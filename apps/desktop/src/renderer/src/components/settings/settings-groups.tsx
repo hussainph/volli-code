@@ -151,6 +151,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "reasoning",
             "sign in",
             "account",
+            "accounts",
             "project chats",
             "ticket sessions",
             "utility",

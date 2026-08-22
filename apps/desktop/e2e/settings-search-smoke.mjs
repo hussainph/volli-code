@@ -59,6 +59,9 @@ async function visibleRowLabels(page) {
     const selector = '[data-slot="pref-section-title"], [data-slot="pref-row-label"]';
     for (const node of document.querySelectorAll(selector)) {
       if (node.closest("[hidden]") !== null) continue;
+      // Provider names are catalogue data. The Accounts section title remains
+      // searchable; its unbounded rows do not belong in rail keywords.
+      if (node.closest('[data-slot="model-access-accounts"]') !== null) continue;
       const text = (node.textContent ?? "").trim();
       if (text.length >= 4 && text.length <= 40) texts.add(text);
     }
