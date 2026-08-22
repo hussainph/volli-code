@@ -183,6 +183,19 @@ function overlayOf(throughSequence: number, messageId: string, text: string): un
   };
 }
 
+function compactionProgressOf(
+  throughSequence: number,
+  state: "started" | "finished" = "started",
+): unknown {
+  return {
+    kind: "compaction",
+    sessionId: SESSION.id,
+    throughSequence,
+    state,
+    reason: "threshold",
+  };
+}
+
 function sliceOf(overrides: Partial<ChatSessionSlice> = {}): ChatSessionSlice {
   return {
     projection: null,
@@ -775,6 +788,21 @@ describe("stream folding", () => {
     scheduler.paint();
 
     expect(slice()!.transcript.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("folds a live compaction and clears it before reconnecting", async () => {
+    const { rpc, scheduler, slice, stream } = await adopted();
+
+    stream().send("0", compactionProgressOf(0));
+    scheduler.paint();
+    expect(slice()!.transcript.liveCompaction).toEqual({ throughSequence: 0, reason: "threshold" });
+
+    stream().start();
+    stream().fail(new Error("socket hang up"));
+    await settle();
+
+    expect(rpc.streams).toHaveLength(2);
+    expect(slice()!.transcript.liveCompaction).toBeNull();
   });
 
   it("ignores an emission that is neither a frame nor an overlay", async () => {

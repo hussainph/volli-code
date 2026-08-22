@@ -627,6 +627,7 @@ export interface SettledAssistantMessage {
 export type RuntimeObservation =
   | AttachmentObservation
   | TurnObservation
+  | CompactionProgressObservation
   | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
@@ -684,6 +685,21 @@ export interface TurnObservation {
 export const COMPACTION_REASONS = ["threshold", "overflow", "manual"] as const;
 
 export type CompactionReason = (typeof COMPACTION_REASONS)[number];
+
+/**
+ * The executor is currently preparing a context summary.
+ *
+ * This is deliberately transient. A summary that lands or fails has its own
+ * durable {@link CompactionObservation}; this only lets a live Session say why
+ * it is briefly not producing a reply. Keeping it out of recovery prevents a
+ * restarted attachment from reviving a spinner for work that was interrupted.
+ */
+export interface CompactionProgressObservation {
+  kind: "compaction-progress";
+  state: "started" | "finished";
+  reason: CompactionReason;
+  occurredAt?: number;
+}
 
 /**
  * The Session's context was summarized — or an attempt to summarize it failed.

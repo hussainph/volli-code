@@ -23,8 +23,44 @@ import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsI
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { compactionBoundaryCopy } from "@renderer/chat/compaction-boundary";
-import type { TranscriptCompaction } from "@renderer/chat/transcript";
+import type { LiveTranscriptCompaction, TranscriptCompaction } from "@renderer/chat/transcript";
 import { Separator } from "@renderer/components/ui/separator";
+import { Spinner } from "@renderer/components/ui/spinner";
+
+/**
+ * A live, intentionally temporary counterpart to {@link CompactionBoundary}.
+ *
+ * It is a card rather than a rule because nothing has been rewritten yet. The
+ * finished boundary remains the durable record; this only makes the otherwise
+ * silent wait obvious while the summary model is working.
+ *
+ * The reason is on the face of it, not in a tooltip: the two waits this exists
+ * to explain — "did my /compact land?" and "why has it stalled by itself?" —
+ * are told apart by exactly that word, and a hover answers neither for a
+ * keyboard or a touch.
+ */
+export const CompactionProgress = React.memo(function CompactionProgress({
+  compaction,
+}: {
+  compaction: LiveTranscriptCompaction;
+}) {
+  return (
+    <div
+      role="status"
+      className="not-prose flex min-w-0 items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-ui"
+    >
+      <Spinner aria-hidden role="presentation" className="size-4 shrink-0 text-primary" />
+      <div className="min-w-0">
+        <p className="font-medium text-foreground">
+          {compaction.reason === "manual"
+            ? "Compacting context…"
+            : "Compacting context on its own…"}
+        </p>
+        <p className="text-muted-foreground">Preparing a shorter working context</p>
+      </div>
+    </div>
+  );
+});
 
 export const CompactionBoundary = React.memo(function CompactionBoundary({
   compaction,
