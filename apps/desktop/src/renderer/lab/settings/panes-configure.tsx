@@ -761,7 +761,7 @@ function SessionsPane() {
         // header. Available to whoever wants it, invisible to everyone else.
         hint={<>Composer choice wins, then this project, then Settings.</>}
       >
-        <PrefRow label="Harness" htmlFor="harness" overridden={harness !== null}>
+        <PrefRow label="Harness" htmlFor="harness">
           <OverrideControl
             label="Harness"
             inheritedValue="Claude Code"
@@ -780,7 +780,7 @@ function SessionsPane() {
           </OverrideControl>
         </PrefRow>
 
-        <PrefRow label="Model" htmlFor="model" overridden={model !== null}>
+        <PrefRow label="Model" htmlFor="model">
           <OverrideControl
             label="Model"
             inheritedValue="claude-opus-4.6"
@@ -823,7 +823,7 @@ function AppearancePane() {
 
   return (
     <PrefSection title="Overrides" icon={PaletteIcon} hint={<>Unset rows follow Settings.</>}>
-      <PrefRow label="Mode" testId="project-appearance-mode" overridden={mode !== null}>
+      <PrefRow label="Mode" testId="project-appearance-mode">
         <OverrideControl
           label="Mode"
           inheritedValue="Dark"
@@ -846,7 +846,7 @@ function AppearancePane() {
         </OverrideControl>
       </PrefRow>
 
-      <PrefRow label="Canvas" testId="project-appearance-canvas" overridden={canvas !== null}>
+      <PrefRow label="Canvas" testId="project-appearance-canvas">
         <OverrideControl
           label="Canvas"
           inheritedValue="Ember"
@@ -859,11 +859,7 @@ function AppearancePane() {
         </OverrideControl>
       </PrefRow>
 
-      <PrefRow
-        label="Terminal theme"
-        testId="project-appearance-terminal"
-        overridden={terminal !== null}
-      >
+      <PrefRow label="Terminal theme" testId="project-appearance-terminal">
         <OverrideControl
           label="Terminal theme"
           inheritedValue="Rosé Pine"

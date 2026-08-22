@@ -318,8 +318,9 @@ check(
   (await page.getByRole("button", { name: /Reset Harness/ }).count()) === 0,
 );
 check(
-  "the overridden row is marked for screen readers too",
-  (await page.getByText("(overridden for this project)").count()) === 1,
+  "divergence is signalled once, by a control rather than a coloured mark",
+  (await page.locator("[data-overridden]").count()) === 0 &&
+    (await page.getByText("(overridden for this project)").count()) === 0,
 );
 
 /* §1.1 — precedence is published, now as a hint. */
@@ -336,8 +337,7 @@ await page.getByRole("button", { name: /Reset Model to the app-wide value/ }).cl
 await page.waitForTimeout(400);
 check(
   "revert clears the override",
-  (await page.getByRole("button", { name: /Reset Model/ }).count()) === 0 &&
-    (await page.getByText("(overridden for this project)").count()) === 0,
+  (await page.getByRole("button", { name: /Reset Model/ }).count()) === 0,
 );
 
 /* §2.6 — the .worktreeinclude trap stays gone. */

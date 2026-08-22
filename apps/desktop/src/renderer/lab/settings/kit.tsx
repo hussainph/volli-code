@@ -454,7 +454,6 @@ export function PrefRow({
   htmlFor,
   hint,
   description,
-  overridden = false,
   align = "center",
   testId,
   children,
@@ -469,11 +468,6 @@ export function PrefRow({
    * uses in the whole prototype, both about automatic deletion.
    */
   description?: string;
-  /**
-   * This project has diverged from the app-wide value. Draws the marker; the
-   * revert control comes from {@link OverrideControl}.
-   */
-  overridden?: boolean;
   align?: "center" | "start";
   testId?: string;
   children: React.ReactNode;
@@ -481,25 +475,17 @@ export function PrefRow({
   return (
     <div
       data-testid={testId}
-      data-overridden={overridden || undefined}
       className={cn(
         "relative flex justify-between gap-6 border-t border-border/50 py-4 first:border-t-0 first:pt-0 last:pb-0",
         align === "center" ? "items-center" : "items-start",
       )}
     >
-      {/* The override marker: a 2px accent bar in the gutter. One glyph, no
-          pill, no repeated word — and it is the ONLY thing on a Configure row
-          that says "this one differs". */}
-      {overridden ? (
-        <span aria-hidden className="absolute top-4 -left-2 h-4 w-0.5 rounded-full bg-primary" />
-      ) : null}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
           {/* The hint is a SIBLING of the label, never a child: a `<button>`
               inside a `<label htmlFor>` toggles the control it names. */}
           <label htmlFor={htmlFor} className="block text-sm font-medium">
             {label}
-            {overridden ? <span className="sr-only"> (overridden for this project)</span> : null}
           </label>
           {hint ? <InfoHint label={label}>{hint}</InfoHint> : null}
         </div>
@@ -567,10 +553,18 @@ export function ItemRow({
  *   - Inheriting? The control simply shows the inherited value. Touching it
  *     overrides — no mode to enter first, which was always the redundant step,
  *     since choosing a value *is* the act of overriding.
- *   - Overridden? A revert button appears, and `PrefRow` draws its gutter mark.
+ *   - Overridden? A revert button appears. That is the WHOLE signal.
  *
- * So the row is quiet until it has something to say, and the only new control
- * is one that appears exactly when it is actionable.
+ * There used to be a second one: a 2px accent bar in `PrefRow`'s gutter. It
+ * lasted exactly as long as it took someone to point at it and ask what it
+ * was — which is the answer, because a 2px tick means "overridden" only to
+ * whoever wrote it. It was also redundant. The revert button appears on
+ * precisely the same rows, sits in the same scannable right-hand column, and
+ * unlike a coloured mark it says what it is ("Reset Model to the app-wide
+ * value, claude-opus-4.6") and does something about it.
+ *
+ * So the row is quiet until it has something to say, and the only thing that
+ * says it is a control that is legible and actionable.
  */
 export function OverrideControl({
   label,
