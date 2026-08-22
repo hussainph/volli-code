@@ -36,6 +36,9 @@ import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
 import { cliStatusRows, type CliStatusRow } from "@renderer/components/pages/cli-status-model";
 
+import { buildAboutReport } from "./about-report";
+import { CopyReportDialog } from "./copy-report-dialog";
+
 export function AboutPane() {
   const listings = useHarnessListings();
   const projectCwd = useSelectedProject()?.path;
@@ -103,6 +106,10 @@ export function AboutPane() {
     [checks],
   );
 
+  const report = React.useMemo(
+    () => buildAboutReport({ rows, checks, listings }),
+    [checks, listings, rows],
+  );
   const healthy = faults.length === 0;
 
   return (
@@ -116,7 +123,7 @@ export function AboutPane() {
         }
         faults={faults}
         actions={
-          <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {faults.length > 0 ? (
               <Button
                 size="sm"
@@ -128,6 +135,7 @@ export function AboutPane() {
                 Fix
               </Button>
             ) : null}
+            <CopyReportDialog report={report} />
             <Button
               size="sm"
               variant="outline"
@@ -139,7 +147,7 @@ export function AboutPane() {
             >
               {running ? "Checking…" : "Re-check"}
             </Button>
-          </>
+          </div>
         }
       >
         {rows.map((row) => (
