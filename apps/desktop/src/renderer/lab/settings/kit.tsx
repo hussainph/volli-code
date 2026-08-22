@@ -1,5 +1,9 @@
 /**
- * VC-111 — the settings design kit. **Third pass.**
+ * VC-111 — the settings design kit.
+ *
+ * THE PROPOSAL, THE AUDIT AND BOTH INDEPENDENT REVIEWS LIVE ON TICKET VC-111
+ * (`volli ticket show VC-111 --comments 10`), not in `docs/`. This file is the
+ * design; the ticket is why it looks like this and what it must not go back to.
  *
  * The second pass was reviewed for correctness and passed. Then it was asked
  * the question it had never been asked: *are these the right components?* The
@@ -822,7 +826,8 @@ export interface TableFilter {
 /**
  * Roving tabindex over the rows.
  *
- * The audit's H1: every in-row control is individually reachable, so the table
+ * Review #2's H1 (ticket VC-111): every in-row control is individually
+ * reachable, so the table
  * meets SC 2.1.1 — but a hundred rows with two controls each is two hundred Tab
  * stops and no way past them. This is the standard remedy: the table holds ONE
  * tab stop, arrows move between rows, and Tab from a row goes to whatever
