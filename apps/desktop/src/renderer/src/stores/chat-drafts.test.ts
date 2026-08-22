@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { BlobLinkView } from "@volli/shared";
+
 import { createChatDraftsStore, MAX_DRAFTS, type ChatDraft } from "./chat-drafts";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
@@ -13,6 +15,20 @@ function createMemoryStorage() {
     removeItem: (name: string) => {
       data.delete(name);
     },
+  };
+}
+
+/** One staged file, distinguishable by hash — the strip's unit (VC-137). */
+function blobView(overrides: Partial<BlobLinkView> = {}): BlobLinkView {
+  const hash = overrides.blobHash ?? "ab".repeat(32);
+  return {
+    linkId: `link-${hash.slice(0, 4)}`,
+    blobHash: hash,
+    label: "shot.png",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 2048,
+    ...overrides,
   };
 }
 
@@ -37,7 +53,12 @@ describe("setDraft", () => {
 
     store.getState().setDraft("s1", "hello");
 
-    expect(store.getState().drafts.s1).toEqual({ text: "hello", held: [], touchedAt: 1000 });
+    expect(store.getState().drafts.s1).toEqual({
+      text: "hello",
+      attachments: [],
+      held: [],
+      touchedAt: 1000,
+    });
   });
 
   it("overwrites an existing draft's text and re-stamps touchedAt", () => {
@@ -51,6 +72,7 @@ describe("setDraft", () => {
 
     expect(store.getState().drafts.s1).toEqual({
       text: "hello world",
+      attachments: [],
       held: [],
       touchedAt: 2000,
     });
@@ -89,6 +111,7 @@ describe("holdMessage", () => {
 
     expect(store.getState().drafts.s1).toEqual({
       text: "",
+      attachments: [],
       held: [{ id: "m1", text: "hello", state: "sending" }],
       touchedAt: 3000,
     });
@@ -100,6 +123,31 @@ describe("holdMessage", () => {
     store.getState().holdMessage("s1", { id: "m2", text: "two" });
 
     expect(store.getState().drafts.s1?.held.map((entry) => entry.id)).toEqual(["m1", "m2"]);
+  });
+
+  // The message that left the box keeps its files (VC-137): a queued or
+  // steered copy must release with exactly what was attached at ⏎, and a
+  // relaunch must not silently drop a screenshot already committed to it.
+  it("carries the message's attachments onto the held copy", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const attachments = [blobView()];
+
+    store.getState().holdMessage("s1", { id: "m1", text: "look", attachments });
+
+    expect(store.getState().drafts.s1?.held[0]?.attachments).toEqual(attachments);
+  });
+
+  it("keeps the staged strip untouched when a message without files is held", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const staged = [blobView()];
+    store.getState().setDraftAttachments("s1", staged);
+
+    // An answer typed beside an open question holds no files — its hold must
+    // not eat the ones still staged for the next real message.
+    store.getState().holdMessage("s1", { id: "m1", text: "yes" });
+
+    expect(store.getState().drafts.s1?.attachments).toEqual(staged);
+    expect(store.getState().drafts.s1?.held[0]?.attachments).toBeUndefined();
   });
 
   it("records a message for a session with no draft yet", () => {
@@ -197,6 +245,68 @@ describe("beginQueuedSteer", () => {
       { id: "q1", text: "latest target", state: "sending" },
       { id: "q2", text: "latest neighbor", state: "queued" },
     ]);
+  });
+
+  // The displayed row is what this action persists back, so its files must
+  // survive the round trip exactly as its words do (VC-137) — otherwise the
+  // steer that follows would deliver a message that lost its screenshot.
+  it("carries the displayed rows' attachments onto the persisted held copies", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().holdMessage("s1", { id: "q1", text: "old copy" });
+    store.getState().markHeld("s1", "q1", "unsent");
+    const attachments = [blobView()];
+
+    store.getState().beginQueuedSteer(
+      "s1",
+      [
+        { id: "q1", text: "latest copy" },
+        { id: "q2", text: "neighbor", attachments },
+      ],
+      "q2",
+    );
+
+    expect(store.getState().drafts.s1?.held).toEqual([
+      { id: "q1", text: "latest copy", state: "unsent" },
+      { id: "q2", text: "neighbor", attachments, state: "sending" },
+    ]);
+  });
+});
+
+describe("setDraftAttachments", () => {
+  it("stores the staged strip beside the words and stamps touchedAt", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4000);
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "half a thought");
+    const staged = [blobView()];
+
+    store.getState().setDraftAttachments("s1", staged);
+
+    expect(store.getState().drafts.s1).toEqual({
+      text: "half a thought",
+      attachments: staged,
+      held: [],
+      touchedAt: 4000,
+    });
+  });
+
+  it("replaces the strip rather than appending, so a removal empties it durably", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraftAttachments("s1", [blobView()]);
+
+    store.getState().setDraftAttachments("s1", []);
+
+    expect(store.getState().drafts.s1?.attachments).toEqual([]);
+  });
+
+  it("keeps a strip-only draft at persist time — a dropped screenshot is content", () => {
+    const storage = createMemoryStorage();
+    const store = createChatDraftsStore(storage);
+
+    store.getState().setDraft("s1", "");
+    store.getState().setDraftAttachments("s1", [blobView()]);
+
+    expect(readPersisted(storage)!.state.drafts).toHaveProperty("s1");
   });
 });
 
@@ -318,6 +428,7 @@ describe("persistence", () => {
 
     expect(readPersisted(storage)!.state.drafts.s1).toEqual({
       text: "",
+      attachments: [],
       held: [{ id: "m1", text: "hello", state: "sending" }],
       touchedAt: expect.any(Number) as number,
     });
@@ -362,7 +473,12 @@ describe("persistence", () => {
     await reloaded.persist.rehydrate();
 
     expect(reloaded.getState().drafts).toEqual({
-      s1: { text: "hello", held: [], touchedAt: expect.any(Number) as number },
+      s1: {
+        text: "hello",
+        attachments: [],
+        held: [],
+        touchedAt: expect.any(Number) as number,
+      },
     });
   });
 
@@ -379,6 +495,71 @@ describe("persistence", () => {
 
     expect(reloaded.getState().drafts.s1?.held).toEqual([
       { id: "m1", text: "/logos a wordmark", resources, state: "unsent" },
+    ]);
+  });
+
+  // Same promise, one step wider (VC-137): the strip and every held message's
+  // files survive a relaunch, because they are part of the same half-composed
+  // prompt as the words.
+  it("round-trips the staged strip and held attachments through storage (VC-137)", async () => {
+    const storage = createMemoryStorage();
+    const staged = [blobView({ blobHash: "cd".repeat(32) })];
+    const carried = [blobView()];
+    const first = createChatDraftsStore(storage);
+    first.getState().setDraftAttachments("s1", staged);
+    first.getState().holdMessage("s1", { id: "m1", text: "look at this", attachments: carried });
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts.s1?.attachments).toEqual(staged);
+    expect(reloaded.getState().drafts.s1?.held).toEqual([
+      { id: "m1", text: "look at this", attachments: carried, state: "unsent" },
+    ]);
+  });
+
+  it("drops malformed stored attachments but keeps the message they rode with", async () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:chat-drafts",
+      JSON.stringify({
+        state: {
+          drafts: {
+            s1: {
+              text: "",
+              touchedAt: 1,
+              attachments: [blobView(), { blobHash: "not a hash" }, "not an object"],
+              held: [
+                { id: "m1", text: "kept", attachments: [blobView({ blobHash: "ef".repeat(32) })] },
+                { id: "m2", text: "no files", attachments: "not an array" },
+                {
+                  id: "m3",
+                  text: "junk only",
+                  attachments: ["not an object", { blobHash: "bad" }],
+                },
+              ],
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts.s1?.attachments).toEqual([blobView()]);
+    expect(reloaded.getState().drafts.s1?.held).toEqual([
+      {
+        id: "m1",
+        text: "kept",
+        attachments: [blobView({ blobHash: "ef".repeat(32) })],
+        state: "unsent",
+      },
+      { id: "m2", text: "no files", state: "unsent" },
+      // An attachments array present but with nothing valid in it reads the
+      // same as none at all — an empty list is not a fact worth carrying.
+      { id: "m3", text: "junk only", state: "unsent" },
     ]);
   });
 
@@ -491,7 +672,7 @@ describe("persistence", () => {
     );
 
     expect(createChatDraftsStore(storage).getState().drafts).toEqual({
-      good: { text: "hello", held: [], touchedAt: 1000 },
+      good: { text: "hello", attachments: [], held: [], touchedAt: 1000 },
     });
   });
 
@@ -521,8 +702,13 @@ describe("persistence", () => {
     );
 
     expect(createChatDraftsStore(storage).getState().drafts).toEqual({
-      s1: { text: "", held: [{ id: "m1", text: "kept", state: "unsent" }], touchedAt: 1000 },
-      s2: { text: "typing", held: [], touchedAt: 1000 },
+      s1: {
+        text: "",
+        attachments: [],
+        held: [{ id: "m1", text: "kept", state: "unsent" }],
+        touchedAt: 1000,
+      },
+      s2: { text: "typing", attachments: [], held: [], touchedAt: 1000 },
     });
   });
 });

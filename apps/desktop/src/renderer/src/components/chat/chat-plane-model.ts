@@ -7,6 +7,7 @@
  * streamed token is allowed to repaint.
  */
 import type {
+  BlobLinkView,
   ModelAccessModel,
   ModelAccessProvider,
   ModelAccessState,
@@ -416,6 +417,30 @@ export async function coordinateQueuedSteerStart(
 }
 
 /**
+ * The message a steer actually delivers, rebuilt from whichever of the two
+ * records name it.
+ *
+ * A queue-only row — no held copy at all — is exactly what the release queue
+ * already holds. A held row's own text and resources win over the queue's,
+ * and so do its attachments (VC-137): the held copy is the durable one, and
+ * the queue's serves only as a fallback for a held row this build wrote
+ * before attachments rode it at all.
+ */
+function steerMessage(
+  held: HeldMessage | undefined,
+  queued: QueuedMessage | undefined,
+): QueuedMessage | undefined {
+  if (held === undefined) return queued;
+  const attachments = held.attachments ?? queued?.attachments;
+  return {
+    id: held.id,
+    text: held.text,
+    ...(held.resources === undefined ? {} : { resources: held.resources }),
+    ...(attachments === undefined ? {} : { attachments }),
+  };
+}
+
+/**
  * Moves one existing strip row into the active turn without changing its id.
  *
  * A queue-only row gains its durable held copy before dequeue. An unsent
@@ -435,14 +460,7 @@ export async function steerQueuedMessage(
   if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
     return "stale";
   }
-  const message: QueuedMessage | undefined =
-    held === undefined
-      ? queued
-      : {
-          id: held.id,
-          text: held.text,
-          ...(held.resources === undefined ? {} : { resources: held.resources }),
-        };
+  const message: QueuedMessage | undefined = steerMessage(held, queued);
   if (message === undefined) return "stale";
   // A click cannot improve a queue while the Session cannot steer. In
   // particular, never manufacture a release-queue copy for a held-only row:
@@ -499,13 +517,75 @@ export function heldStrip(
       id: entry.id,
       text: entry.text,
       // The row is also what `beginQueuedSteer` persists back, so the skill
-      // resources riding the held copy must survive the round trip (VC-49).
+      // resources riding the held copy must survive the round trip (VC-49) —
+      // and so must the files (VC-137): a strip row that redraws without its
+      // attachments is a message the person believes still carries them.
       ...(entry.resources === undefined ? {} : { resources: entry.resources }),
+      ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
     });
   }
   for (const entry of queue)
     if (!drawn.has(entry.id) && !durableMessageIds.has(entry.id)) rows.push(entry);
   return rows;
+}
+
+/**
+ * The strip a pulled-back row rejoins, and the links that rejoin strands.
+ *
+ * Merged BY HASH: the strip may never draw one picture twice, and one link to
+ * a Blob serves either purpose. The row's own view wins a collision with a
+ * file staged for the NEXT message — the row is the thing being edited, so its
+ * link is the one a re-send should carry — which leaves the shadowed staged
+ * view holding a link nothing on screen names any more. {@link
+ * RestoredStrip.detach} is that list, and dropping it is what keeps an
+ * invisible link from being left behind.
+ *
+ * Pure and beside the plane rather than inside it: this rule and {@link
+ * detachableRowAttachments} are two halves of ONE invariant — the files come
+ * back BEFORE the row leaves the queue, and the removal reads the strip this
+ * returns to tell "came back" from "was deleted" — so they are worth the gate
+ * together, which a `.tsx` callback could not be.
+ */
+export interface RestoredStrip {
+  /** The strip after the row's files rejoined it, row's copies last. */
+  strip: readonly BlobLinkView[];
+  /** Staged views the row's copy shadowed; their links now name nothing. */
+  detach: readonly BlobLinkView[];
+}
+
+/** See {@link RestoredStrip}. Nothing coming back leaves the strip exactly as it was. */
+export function restoreStripAttachments(
+  staged: readonly BlobLinkView[],
+  incoming: readonly BlobLinkView[],
+): RestoredStrip {
+  if (incoming.length === 0) return { strip: staged, detach: [] };
+  const returning = new Set(incoming.map((entry) => entry.blobHash));
+  const kept: BlobLinkView[] = [];
+  const detach: BlobLinkView[] = [];
+  for (const entry of staged) {
+    if (returning.has(entry.blobHash)) detach.push(entry);
+    else kept.push(entry);
+  }
+  return { strip: [...kept, ...incoming], detach };
+}
+
+/**
+ * Which of a REMOVED row's files must also lose their links (VC-137).
+ *
+ * A removed row is the one queued-message ending that detaches: no message
+ * will ever name those files again — unlike a delivered turn, whose links the
+ * transcript's parts now reference. The exception is a Blob already back in
+ * the strip, which an edited row restored a moment ago and the next send still
+ * needs. Links are per row rather than per bytes, so a second link to the same
+ * Blob is a different link and survives either way.
+ */
+export function detachableRowAttachments(
+  row: readonly BlobLinkView[] | undefined,
+  staged: readonly BlobLinkView[],
+): readonly BlobLinkView[] {
+  if (row === undefined || row.length === 0) return [];
+  const stagedHashes = new Set(staged.map((view) => view.blobHash));
+  return row.filter((attachment) => !stagedHashes.has(attachment.blobHash));
 }
 
 /** Cold adoption is not reconciled until its first projection snapshot exists. */

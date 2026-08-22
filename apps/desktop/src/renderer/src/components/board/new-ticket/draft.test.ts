@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { BlobLinkView } from "@volli/shared";
 import type { SyncStateStorage } from "@renderer/lib/app-state-storage";
 
 import { clearDraft, type ComposerDraft, isEmptyDraft, loadDraft, saveDraft } from "./draft";
@@ -24,6 +25,19 @@ function draft(overrides: Partial<ComposerDraft> = {}): ComposerDraft {
     body: "Some body",
     labels: ["bug"],
     usesWorktree: true,
+    ...overrides,
+  };
+}
+
+/** One staged file, unowned until the Ticket exists (VC-137). */
+function blobView(overrides: Partial<BlobLinkView> = {}): BlobLinkView {
+  return {
+    linkId: null,
+    blobHash: "ab".repeat(32),
+    label: "shot.png",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 2048,
     ...overrides,
   };
 }
@@ -65,6 +79,44 @@ describe("saveDraft/loadDraft", () => {
     saveDraft(draft({ title: "", body: "only a body", labels: [] }), storage);
     expect(loadDraft(storage)?.body).toBe("only a body");
   });
+
+  // The attachments strip is content too (VC-137): a dropped screenshot with
+  // no title yet is as much a half-written Ticket as a sentence is, and it
+  // must survive the same Escape / overlay-click / quit the words survive.
+  it("round-trips a staged attachment, and keeps a draft whose only content is one", () => {
+    const storage = fakeStorage();
+    const attachments = [blobView()];
+    saveDraft(draft({ title: "", body: "", labels: [], attachments }), storage);
+
+    expect(loadDraft(storage)?.attachments).toEqual(attachments);
+  });
+
+  it("reads a pre-attachments draft as carrying none", () => {
+    const storage = fakeStorage();
+    storage.setItem("volli:new-ticket-draft", JSON.stringify({ version: 1, draft: draft() }));
+    expect(loadDraft(storage)?.attachments).toBeUndefined();
+  });
+
+  it("drops a malformed stored attachment but keeps the well-shaped ones beside it", () => {
+    const storage = fakeStorage();
+    storage.setItem(
+      "volli:new-ticket-draft",
+      JSON.stringify({
+        version: 1,
+        draft: {
+          ...draft(),
+          attachments: [blobView(), { blobHash: "not a hash" }, "not an object"],
+        },
+      }),
+    );
+
+    // A malformed entry inside `attachments` fails the whole-draft shape guard
+    // rather than being sifted field by field — the same stance every other
+    // field in this validator takes (a bad label fails the draft, not silently
+    // drops itself). Loading falls back to "no draft" rather than a strip with
+    // a hole in it.
+    expect(loadDraft(storage)).toBeNull();
+  });
 });
 
 describe("clearDraft", () => {
@@ -94,6 +146,17 @@ describe("loadDraft validation", () => {
     ["missing field", JSON.stringify({ version: 1, draft: { title: "x" } })],
     ["non-string baseBranch", JSON.stringify({ version: 1, draft: { ...draft(), baseBranch: 7 } })],
     [
+      "non-array attachments",
+      JSON.stringify({ version: 1, draft: { ...draft(), attachments: "bogus" } }),
+    ],
+    [
+      "malformed attachment entry",
+      JSON.stringify({
+        version: 1,
+        draft: { ...draft(), attachments: [{ blobHash: "not a hash" }] },
+      }),
+    ],
+    [
       "valid but content-empty draft",
       JSON.stringify({ version: 1, draft: draft({ title: " ", body: "", labels: [] }) }),
     ],
@@ -105,10 +168,14 @@ describe("loadDraft validation", () => {
 });
 
 describe("isEmptyDraft", () => {
-  it("is true only when title, body, and labels are all empty", () => {
+  it("is true only when title, body, labels, and attachments are all empty", () => {
     expect(isEmptyDraft(draft({ title: " ", body: "", labels: [] }))).toBe(true);
     expect(isEmptyDraft(draft({ title: "t", body: "", labels: [] }))).toBe(false);
     expect(isEmptyDraft(draft({ title: "", body: "b", labels: [] }))).toBe(false);
     expect(isEmptyDraft(draft({ title: "", body: "", labels: ["l"] }))).toBe(false);
+    expect(
+      isEmptyDraft(draft({ title: " ", body: "", labels: [], attachments: [blobView()] })),
+    ).toBe(false);
+    expect(isEmptyDraft(draft({ title: " ", body: "", labels: [], attachments: [] }))).toBe(true);
   });
 });

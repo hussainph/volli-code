@@ -2,6 +2,11 @@
  * Half-typed chat messages, keyed by sessionId — and every message that has
  * left the box without anything durable taking it yet.
  *
+ * The word “message” includes its files (VC-137): the staged attachment strip
+ * and every held message's attachments persist here too, because a
+ * half-composed prompt is words AND a screenshot, and surviving a tab switch
+ * or a relaunch must not eat one half of it.
+ *
  * The composer's `input` state used to live in `ChatPlane` itself — gone the
  * moment a tab switch unmounted it. A Session is durable and its half-typed
  * message is part of it (CLAUDE.md: "A Session is durable and owns identity ...
@@ -30,7 +35,12 @@
  * eviction into, so the cap is what keeps an abandoned draft from lingering
  * indefinitely — it just isn't named as the *reason* a draft goes away.
  */
-import { isPromptResource, type PromptResource } from "@volli/shared";
+import {
+  isBlobLinkView,
+  isPromptResource,
+  type BlobLinkView,
+  type PromptResource,
+} from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -70,6 +80,15 @@ export interface HeldMessage {
    * resolved to when it was written, not lose the body silently.
    */
   resources?: readonly PromptResource[];
+  /**
+   * The files this message carried when it left the box (VC-137). Same rule as
+   * `resources`: a queued or steered copy must release with exactly what was
+   * attached at ⏎, and a relaunch must not silently drop a screenshot a
+   * person already committed to the message. The links themselves live in
+   * main, owned by the Session — this is the pointer the queue's renderer
+   * memory cannot be.
+   */
+  attachments?: readonly BlobLinkView[];
   state: HeldMessageState;
 }
 
@@ -78,10 +97,19 @@ export interface HeldMessageInput {
   id: string;
   text: string;
   resources?: readonly PromptResource[];
+  attachments?: readonly BlobLinkView[];
 }
 
 export interface ChatDraft {
   text: string;
+  /**
+   * The files staged on the message being written (VC-137) — the strip above
+   * the box, persisted beside the words for the same reason they are: a
+   * half-composed message is part of the Session, files and all, and a tab
+   * switch or a relaunch must not eat one half of it. The bytes and links
+   * live in main, owned by the Session; this is the list the strip draws.
+   */
+  attachments: readonly BlobLinkView[];
   /** Messages out of the box that nothing durable has taken. Oldest first. */
   held: readonly HeldMessage[];
   /** `Date.now()` at the most recent `setDraft` — the cap's eviction order. */
@@ -92,6 +120,12 @@ interface ChatDraftsState {
   drafts: Readonly<Record<string, ChatDraft>>;
   /** Sets (or overwrites) a session's draft text, stamping `touchedAt` to now. */
   setDraft(sessionId: string, text: string): void;
+  /**
+   * Sets (or overwrites) a session's staged attachment strip. The composer's
+   * attach/remove gestures write through here, so the strip survives a tab
+   * switch and a relaunch exactly as the words do — one list, one owner.
+   */
+  setDraftAttachments(sessionId: string, attachments: readonly BlobLinkView[]): void;
   /**
    * The box's message leaves the box — in one write, so no instant exists in
    * which this store is the only thing that held it and no longer does.
@@ -131,9 +165,11 @@ interface ChatDraftsState {
 
 type PersistedChatDraftsState = Pick<ChatDraftsState, "drafts">;
 
-/** True for a draft with nothing left in it — no text, nothing held. */
+/** True for a draft with nothing left in it — no text, no files, nothing held. */
 function isEmptyDraft(draft: ChatDraft): boolean {
-  return draft.text.trim().length === 0 && draft.held.length === 0;
+  return (
+    draft.text.trim().length === 0 && draft.attachments.length === 0 && draft.held.length === 0
+  );
 }
 
 /** True for a value that is a plain object (not null, not an array). */
@@ -158,6 +194,18 @@ function readHeldResources(value: unknown): readonly PromptResource[] | undefine
 }
 
 /**
+ * A hydrated held message's attachments, or nothing. Read defensively like the
+ * rest of the blob: a malformed entry drops the files rather than the message —
+ * the words are the person's, and a link main no longer has would only fail to
+ * detach when the row is removed.
+ */
+function readHeldAttachments(value: unknown): readonly BlobLinkView[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.filter(isBlobLinkView);
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+/**
  * A hydrated draft's held messages, every one of them read back as `unsent`.
  *
  * The stored `state` is deliberately not trusted: it describes this renderer's
@@ -170,19 +218,32 @@ function readHeldMessages(value: unknown): HeldMessage[] {
   return value.flatMap((entry) => {
     if (!isHeldMessage(entry)) return [];
     const resources = readHeldResources((entry as Record<string, unknown>).resources);
+    const attachments = readHeldAttachments((entry as Record<string, unknown>).attachments);
     return [
       {
         id: entry.id,
         text: entry.text,
         ...(resources === undefined ? {} : { resources }),
+        ...(attachments === undefined ? {} : { attachments }),
         state: "unsent" as const,
       },
     ];
   });
 }
 
+/** A hydrated draft's attachment strip — malformed entries dropped, never fatal. */
+function readDraftAttachments(value: unknown): readonly BlobLinkView[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isBlobLinkView);
+}
+
 /** True for a hydrated draft entry with the fields this store actually reads. */
-function isChatDraft(value: unknown): value is { text: string; touchedAt: number; held?: unknown } {
+function isChatDraft(value: unknown): value is {
+  text: string;
+  touchedAt: number;
+  attachments?: unknown;
+  held?: unknown;
+} {
   if (!isPlainRecord(value)) return false;
   return (
     typeof value.text === "string" &&
@@ -203,6 +264,7 @@ function readPersistedDrafts(value: unknown): Record<string, ChatDraft> {
     if (!isChatDraft(entry)) continue;
     drafts[sessionId] = {
       text: entry.text,
+      attachments: readDraftAttachments(entry.attachments),
       held: readHeldMessages(entry.held),
       touchedAt: entry.touchedAt,
     };
@@ -225,7 +287,7 @@ function sanitizeDrafts(drafts: Readonly<Record<string, ChatDraft>>): Record<str
 
 /** The draft a session already has, or the empty one every action starts from. */
 function draftFor(drafts: Readonly<Record<string, ChatDraft>>, sessionId: string): ChatDraft {
-  return drafts[sessionId] ?? { text: "", held: [], touchedAt: 0 };
+  return drafts[sessionId] ?? { text: "", attachments: [], held: [], touchedAt: 0 };
 }
 
 /**
@@ -264,6 +326,17 @@ export function createChatDraftsStore(storage?: StateStorage) {
                 [sessionId]: { ...draftFor(state.drafts, sessionId), text, touchedAt: Date.now() },
               },
             })),
+          setDraftAttachments: (sessionId, attachments) =>
+            set((state) => ({
+              drafts: {
+                ...state.drafts,
+                [sessionId]: {
+                  ...draftFor(state.drafts, sessionId),
+                  attachments,
+                  touchedAt: Date.now(),
+                },
+              },
+            })),
           holdMessage: (sessionId, message) =>
             set((state) => {
               const draft = draftFor(state.drafts, sessionId);
@@ -271,8 +344,24 @@ export function createChatDraftsStore(storage?: StateStorage) {
                 drafts: {
                   ...state.drafts,
                   [sessionId]: {
+                    // The strip stays as it is: only the FILES the message
+                    // took move with it (passed in `message.attachments`), and
+                    // the caller clears those from the strip in the same write
+                    // window. An answer typed beside an open question holds no
+                    // files — its hold must not eat the ones still staged for
+                    // the next real message.
+                    ...draft,
                     text: "",
-                    held: [...draft.held, { ...message, state: "sending" }],
+                    held: [
+                      ...draft.held,
+                      {
+                        ...message,
+                        ...(message.attachments === undefined || message.attachments.length === 0
+                          ? {}
+                          : { attachments: message.attachments }),
+                        state: "sending" as const,
+                      },
+                    ],
                     touchedAt: Date.now(),
                   },
                 },
@@ -291,6 +380,12 @@ export function createChatDraftsStore(storage?: StateStorage) {
                 return {
                   ...entry,
                   text: displayed.text,
+                  // The row is also what `beginQueuedSteer` persists back, so
+                  // the files riding the displayed copy must survive the
+                  // round trip — the same rule `resources` follows (VC-49).
+                  ...(displayed.attachments === undefined || displayed.attachments.length === 0
+                    ? {}
+                    : { attachments: displayed.attachments }),
                   state: entry.id === targetId ? "sending" : entry.state,
                 };
               });

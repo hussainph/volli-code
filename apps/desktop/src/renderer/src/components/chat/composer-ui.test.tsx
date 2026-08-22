@@ -5,6 +5,7 @@ import { COMPACT_VERB, COMPOSER_VERBS } from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
+import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import type { ComposerPickerState } from "@renderer/chat/composer-picker";
 import { Button } from "@renderer/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
@@ -178,6 +179,43 @@ describe("the queued message row", () => {
     expect(focusRequests).toBe(0);
   });
 
+  // Unqueue and edit are the same gesture, and neither may lose the file the
+  // row carried: the files go back to the strip BEFORE the row leaves the
+  // queue, because the removal path reads the strip to tell "came back" from
+  // "deleted" — restoring after would read as a delete and drop the links.
+  it("hands an edited row's attachments back to the strip before it leaves the queue", () => {
+    const acts: string[] = [];
+    const attachments = [
+      {
+        linkId: "link-1",
+        blobHash: "ab".repeat(32),
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: 2048,
+      },
+    ];
+    const tree = composerTree(
+      composerProps({
+        queued: [{ id: "m1", text: "look", attachments }],
+        onQueuedChange: () => {
+          acts.push("queue");
+          return true;
+        },
+        onValueChange: () => acts.push("draft"),
+        onComposerFocusRequest: () => acts.push("focus"),
+        onRestoreAttachments: (restored) => {
+          acts.push("restore");
+          expect(restored).toEqual(attachments);
+        },
+      }),
+    );
+
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+
+    expect(acts).toEqual(["restore", "queue", "draft", "focus"]);
+  });
+
   it("wires direct Steer and removal before handing focus to the composer", () => {
     let steered: string | undefined;
     let nextQueue: readonly { id: string; text: string }[] | undefined;
@@ -269,6 +307,41 @@ function effortPill(
 ): React.ReactElement<InspectableProps> | undefined {
   return findElements(composerTree(footerProps(overrides)), EffortPill)[0];
 }
+
+describe("the attachment strip's place in the box", () => {
+  const ATTACHMENT = {
+    linkId: "link-1",
+    blobHash: "ab".repeat(32),
+    label: "shot.png",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 2048,
+  } as const;
+
+  function stripElement(overrides: Partial<SessionComposerProps> = {}) {
+    const tree = composerTree(composerProps({ attachments: [ATTACHMENT], ...overrides }));
+    return findElements(tree, AttachmentStrip)[0];
+  }
+
+  // `PromptInputBody` is `display:contents`, so the strip is a flex child of
+  // the vendored `InputGroup` — `items-center`, and a column once the footer
+  // mounts. Without a width of its own the strip sat mid-composer while the
+  // words and the controls ran edge to edge: one thumbnail floating over the
+  // textarea's centre. It starts from the left (VC-137).
+  it("fills the box's width, so the thumbnails start from the left", () => {
+    const strip = stripElement();
+
+    expect(strip).toBeDefined();
+    expect(strip?.props.className).toContain("w-full");
+  });
+
+  it("stays left-anchored in its own row, never centring its items", () => {
+    const strip = stripElement();
+
+    expect(strip?.props.className).not.toContain("justify-center");
+    expect(strip?.props.className).not.toContain("items-center");
+  });
+});
 
 describe("the effort control's place in the footer", () => {
   it("stands beside the model pill rather than inside its popover", () => {
