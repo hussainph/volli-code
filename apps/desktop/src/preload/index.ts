@@ -96,8 +96,12 @@ import type {
   ProjectCreateResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectSessionDefaultsInput,
+  ProjectSkillModesInput,
   ProjectUpdateInput,
   ProjectUpdateResult,
+  PromptTemplateCreateInput,
+  PromptTemplateCreateResult,
   PromptTemplateIndexInput,
   PromptTemplateIndexResult,
   Result,
@@ -136,6 +140,8 @@ import type {
   TicketsResult,
   UiZoomCommand,
   UnsavedDocumentsReport,
+  UpdateChannel,
+  UpdateChannelResult,
   UpdateLiveWorkResult,
   UpdateStateResult,
   UpdateUiState,
@@ -327,6 +333,12 @@ const api = {
     /** Updates the project's pinned automation base branch and/or worktree setup command. */
     update: (input: ProjectUpdateInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-update", input),
+    /** Replaces this project's per-skill rules wholesale — the Configure Skills table (VC-111). */
+    setSkillModes: (input: ProjectSkillModesInput): Promise<ProjectUpdateResult> =>
+      invoke("volli:project-skill-modes", input),
+    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
+      invoke("volli:project-session-defaults", input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -666,6 +678,9 @@ const api = {
     /** The composer `/` picker's prompt templates: the project's `.volli/commands/` over the global `<userData>/commands/`. A missing directory is an empty list, not an error. */
     promptTemplates: (input: PromptTemplateIndexInput): Promise<PromptTemplateIndexResult> =>
       invoke("volli:prompt-templates", input),
+    /** Creates one `<name>.md` prompt template, refusing rather than clobbering (VC-111). */
+    createPromptTemplate: (input: PromptTemplateCreateInput): Promise<PromptTemplateCreateResult> =>
+      invoke("volli:prompt-template-create", input),
     /** Reveals the resolved file in Finder. */
     reveal: (input: FilePathInput): Promise<Result> => invoke("volli:file-reveal", input),
     /** The installed subset of the allowlisted external-editor catalogue. */
@@ -866,6 +881,11 @@ const api = {
     install: (): Promise<Result> => invoke("volli:update-install"),
     /** The live work the install dialog must name: busy PTYs, open agent Sessions, unsaved drafts. */
     liveWork: (): Promise<UpdateLiveWorkResult> => invoke("volli:update-live-work"),
+    /** Which release line this install follows (VC-111). */
+    channel: (): Promise<UpdateChannelResult> => invoke("volli:update-channel-get"),
+    /** Moves this install between release lines; takes effect on the next check. */
+    setChannel: (channel: UpdateChannel): Promise<UpdateChannelResult> =>
+      invoke("volli:update-channel-set", channel),
     /** Subscribes to updater state transitions; returns the unsubscribe function. */
     onState: (callback: (state: UpdateUiState) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: UpdateUiState) =>

@@ -39,6 +39,7 @@ import type {
   LegacyProject,
   ManifestError,
   ModelAccessSignInType,
+  ModelSelection,
   Project,
   ProjectThemeOverride,
   PromptTemplate,
@@ -86,6 +87,29 @@ export interface ProjectUpdateInput {
   baseBranch: string | null;
   /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
   setupCommand?: string | null;
+}
+
+/**
+ * One project's per-skill rules (VC-111, migration 023). The WHOLE map every
+ * time, not a delta: the surface holds every switch on screen at once, so a
+ * per-slug channel would turn one visible state into N writes that can land
+ * out of order and half-fail.
+ */
+export interface ProjectSkillModesInput {
+  id: string;
+  /** Slug → `"manual"` / `"off"`. Only departures; an empty map clears the column. */
+  modes: Record<string, string>;
+}
+
+/**
+ * One project's defaults for new Sessions (VC-111, migration 023). Both fields
+ * every time, `null` meaning inherit — see `updateProjectSessionDefaults` for
+ * why these two travel together where the theme pair does not.
+ */
+export interface ProjectSessionDefaultsInput {
+  id: string;
+  harness: string | null;
+  model: ModelSelection | null;
 }
 
 /** `{ projectId }` — shared by every project-scoped read (session list, worktree branches). */
@@ -416,6 +440,16 @@ export interface VolliDataIpcContract {
   "volli:project-create": { args: [input: ProjectCreateInput]; result: ProjectCreateResult };
   /** Updates the project's pinned automation base branch and/or worktree setup command. */
   "volli:project-update": { args: [input: ProjectUpdateInput]; result: ProjectUpdateResult };
+  /** Replaces this project's per-skill rules wholesale (VC-111). */
+  "volli:project-skill-modes": {
+    args: [input: ProjectSkillModesInput];
+    result: ProjectUpdateResult;
+  };
+  /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+  "volli:project-session-defaults": {
+    args: [input: ProjectSessionDefaultsInput];
+    result: ProjectUpdateResult;
+  };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
   /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -587,6 +621,11 @@ export interface VolliFileIpcContract {
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
   /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
+  /** Creates one `<name>.md` prompt template, refusing rather than clobbering (VC-111). */
+  "volli:prompt-template-create": {
+    args: [input: PromptTemplateCreateInput];
+    result: PromptTemplateCreateResult;
+  };
   /** Reveals the resolved file in Finder. */
   "volli:file-reveal": { args: [input: FilePathInput]; result: Result };
   /** The currently installed allowlisted editor and terminal applications. */
@@ -1226,6 +1265,21 @@ export interface UpdateUiState {
 export type UpdateStateResult = Result<{ state: UpdateUiState }>;
 
 /**
+ * The release line an install follows. `stable` sees full releases only;
+ * `canary` also sees the prerelease-tagged builds electron-builder marks as
+ * GitHub pre-releases.
+ *
+ * One-way by construction, and that is a property of the underlying toggle
+ * rather than of this type: `canary` FORCES prereleases on, while `stable`
+ * leaves electron-updater's own per-install default in place. Forcing stable
+ * onto a canary install would strand it reading a `releases/latest` feed that
+ * 404s while only prereleases exist — see `main/auto-update.ts`.
+ */
+export type UpdateChannel = "stable" | "canary";
+
+export type UpdateChannelResult = Result<{ channel: UpdateChannel }>;
+
+/**
  * What the explicit-install dialog counts before it may promise a restart
  * (`volli:update-live-work`): the dialog is the ONE prompt on the install path
  * — the native gates behind it stand down — so it must carry the whole warning
@@ -1259,6 +1313,13 @@ export interface VolliUpdateIpcContract {
   "volli:update-install": { args: []; result: Result };
   /** The live work the install dialog must name before promising a restart. */
   "volli:update-live-work": { args: []; result: UpdateLiveWorkResult };
+  /** Which release line this install follows (VC-111) — replaces the hand-run `sqlite3` INSERT. */
+  "volli:update-channel-get": { args: []; result: UpdateChannelResult };
+  /** Moves this install between release lines; takes effect on the next check. */
+  "volli:update-channel-set": {
+    args: [channel: UpdateChannel];
+    result: UpdateChannelResult;
+  };
 }
 
 export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
@@ -1753,6 +1814,26 @@ export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean 
 
 /** The installed subset of the allowlisted editor and terminal catalogue. */
 export type ExternalAppListResult = Result<{ apps: ExternalApp[] }>;
+
+/**
+ * A new `/command` (VC-111). `scope` picks which of the two directories the
+ * reader already merges it lands in — the same choice the Commands table's
+ * Source column reports back.
+ */
+export interface PromptTemplateCreateInput {
+  projectId: string;
+  scope: "project" | "personal";
+  name: string;
+  description: string;
+  body: string;
+}
+
+/**
+ * Where the template landed. The path is returned so the surface can offer to
+ * reveal the file it just made — the file, not this dialog, is the real
+ * interface to a command.
+ */
+export type PromptTemplateCreateResult = Result<{ path: string }>;
 
 /** The composer's `/` picker is project-scoped, exactly like the file index. */
 export interface PromptTemplateIndexInput {

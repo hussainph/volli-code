@@ -26,6 +26,7 @@ import type Database from "better-sqlite3";
 import { errorMessage } from "@volli/shared";
 
 import type { UpdateUiState } from "../ipc/contract";
+import { setAppState } from "./db/app-state-repo";
 import { prepared } from "./db/prepared";
 
 /**
@@ -33,13 +34,12 @@ import { prepared } from "./db/prepared";
  * releases are prerelease-suffixed tags (`v0.2.0-canary.3`) that
  * electron-builder auto-marks as GitHub pre-releases, so with the toggle off
  * a public install only ever sees full releases; the dogfood install flips
- * this on once to absorb canaries too. No Settings UI yet (that is its own
- * slice) — until then the row is set by hand:
+ * this on once to absorb canaries too.
  *
- *   sqlite3 "~/Library/Application Support/Volli Code/volli.db" \
- *     "INSERT INTO app_state (key, value, updated_at)
- *      VALUES ('volli:update-allow-prerelease', 'true', 0)
- *      ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
+ * Settings → Updates owns this now (VC-111). It used to say "no UI yet" and
+ * print a `sqlite3` INSERT to run by hand against the app's own live database
+ * — which is not a setting, it is a workaround, and it asked people to write
+ * to a WAL-mode db underneath a running process.
  *
  * The toggle only ever WIDENS the update surface, so it is applied one-way:
  * `true` forces prereleases on, `false`/absent leaves electron-updater's own
@@ -69,6 +69,40 @@ export function readAllowPrerelease(db: Database.Database): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The two release lines, as the setting names them. `UpdateChannel` in the IPC
+ * contract is the same vocabulary; this is where it meets the one-way boolean
+ * the updater actually consumes.
+ */
+export type UpdateChannelName = "stable" | "canary";
+
+/** Which line this install follows, read back off the same key the updater uses. */
+export function readUpdateChannel(db: Database.Database): UpdateChannelName {
+  return readAllowPrerelease(db) ? "canary" : "stable";
+}
+
+/**
+ * Moves this install between release lines, and returns where it landed.
+ *
+ * Writes the EXACT `true`/`false` JSON {@link readAllowPrerelease} tests for.
+ * That reader fails closed on anything else — `"1"`, `"yes"`, a bare `true`
+ * with whitespace — so a writer that produced any of them would be a switch
+ * that moves on screen and changes nothing, which is the specific failure the
+ * round-trip test above exists to prevent.
+ *
+ * Takes effect on the NEXT check, not this instant: `allowPrerelease` is read
+ * onto the updater at startup. Nothing here downgrades an install that is
+ * already on a canary build (see the note above on why that is one-way).
+ */
+export function writeUpdateChannel(
+  db: Database.Database,
+  channel: UpdateChannelName,
+  now: number,
+): UpdateChannelName {
+  setAppState(db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, JSON.stringify(channel === "canary"), now);
+  return channel;
 }
 
 const INITIAL_CHECK_DELAY_MS = 30_000;

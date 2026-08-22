@@ -18,9 +18,14 @@ import {
 } from "./ipc-descriptors";
 
 describe("UPDATE_IPC descriptor table", () => {
-  // Every update request is argument-less: the state is main's to own and the
-  // commands carry no caller data, so each guard only refuses stray payloads.
-  for (const channel of UPDATE_CHANNELS) {
+  /**
+   * The release-channel WRITE is the one update request that carries caller
+   * data (VC-111). Everything else on this surface is argument-less — the
+   * state is main's to own — so the loop below still holds for the rest.
+   */
+  const CHANNELS_WITH_ARGS: readonly string[] = ["volli:update-channel-set"];
+
+  for (const channel of UPDATE_CHANNELS.filter((c) => !CHANNELS_WITH_ARGS.includes(c))) {
     describe(`${channel} (no-arg request)`, () => {
       const { guard, invalidError } = UPDATE_IPC[channel];
 
@@ -50,7 +55,28 @@ describe("UPDATE_IPC descriptor table", () => {
         "volli:update-check",
         "volli:update-install",
         "volli:update-live-work",
+        "volli:update-channel-get",
+        "volli:update-channel-set",
       ]);
+    });
+  });
+
+  describe("volli:update-channel-set", () => {
+    const { guard, invalidError } = UPDATE_IPC["volli:update-channel-set"];
+
+    it("accepts exactly the two release lines", () => {
+      expect(guard(["stable"])).toBe(true);
+      expect(guard(["canary"])).toBe(true);
+    });
+
+    it("rejects any other line, and a missing one", () => {
+      expect(guard(["nightly"])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ channel: "canary" }])).toBe(false);
+    });
+
+    it("names the release channel in its refusal", () => {
+      expect(invalidError).toBe("Invalid release channel");
     });
   });
 });
@@ -136,6 +162,60 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid project");
+    });
+  });
+
+  describe("volli:project-skill-modes", () => {
+    const { guard } = DATA_IPC["volli:project-skill-modes"];
+
+    it("accepts an empty map — the shape that clears every rule", () => {
+      expect(guard([{ id: "p1", modes: {} }])).toBe(true);
+    });
+
+    it("accepts the two storable modes", () => {
+      expect(guard([{ id: "p1", modes: { tdd: "manual", mintlify: "off" } }])).toBe(true);
+    });
+
+    it("rejects a mode outside the vocabulary", () => {
+      expect(guard([{ id: "p1", modes: { tdd: "sideways" } }])).toBe(false);
+      // `auto` is the absence of a rule, so it is never on the wire.
+      expect(guard([{ id: "p1", modes: { tdd: "auto" } }])).toBe(false);
+    });
+
+    it("rejects a slug the `/name` grammar cannot spell", () => {
+      expect(guard([{ id: "p1", modes: { "not a slug": "off" } }])).toBe(false);
+    });
+
+    it("rejects a missing id or a non-object map", () => {
+      expect(guard([{ modes: {} }])).toBe(false);
+      expect(guard([{ id: "p1", modes: null }])).toBe(false);
+      expect(guard([{ id: "p1", modes: ["tdd"] }])).toBe(false);
+    });
+  });
+
+  describe("volli:project-session-defaults", () => {
+    const { guard } = DATA_IPC["volli:project-session-defaults"];
+    const model = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
+
+    it("accepts both fields null — the shape that clears both overrides", () => {
+      expect(guard([{ id: "p1", harness: null, model: null }])).toBe(true);
+    });
+
+    it("accepts a harness and a full model selection", () => {
+      expect(guard([{ id: "p1", harness: "codex", model }])).toBe(true);
+    });
+
+    it("rejects a model missing a field or carrying an unknown reasoning level", () => {
+      expect(guard([{ id: "p1", harness: null, model: { providerId: "a", modelId: "b" } }])).toBe(
+        false,
+      );
+      expect(
+        guard([{ id: "p1", harness: null, model: { ...model, reasoningLevel: "extreme" } }]),
+      ).toBe(false);
+    });
+
+    it("rejects a non-string harness", () => {
+      expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
     });
   });
 
@@ -1449,8 +1529,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 53 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(53);
+    it("covers all 55 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(55);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
@@ -1728,8 +1808,8 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 14 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(14);
+    it("covers all 15 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(15);
       expect(FILE_CHANNELS).toContain("volli:prompt-templates");
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");

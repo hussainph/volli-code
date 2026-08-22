@@ -4,6 +4,7 @@ import { rm } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import {
+  parseSkillModes,
   derivePrefix,
   errorMessage,
   LEGACY_BACKUP_APP_STATE_KEY,
@@ -41,6 +42,8 @@ import type {
   ProjectCreateResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectSessionDefaultsInput,
+  ProjectSkillModesInput,
   ProjectUpdateInput,
   ProjectUpdateResult,
   Result,
@@ -104,7 +107,9 @@ import {
   nextSortOrder,
   reorderProjects,
   updateProjectBaseBranch,
+  updateProjectSessionDefaults,
   updateProjectSetupCommand,
+  updateProjectSkillModes,
 } from "./db/projects-repo";
 import { createDesktopSessionEngine, sessionListingRows } from "./session-control";
 import { prepared } from "./db/prepared";
@@ -478,6 +483,36 @@ export function registerDataIpcHandlers(
         project = updateProjectSetupCommand(db, input.id, normalized, now);
         if (!project) return { ok: false, error: "Unknown project" };
       }
+      return { ok: true, project };
+    },
+
+    /**
+     * Replaces this project's per-skill rules (VC-111). The whole map, because
+     * the surface holds every switch at once — see `ProjectSkillModesInput`.
+     * `updateProjectSkillModes` normalises, so an unknown mode or unspellable
+     * slug that somehow cleared the guard still cannot reach the column.
+     */
+    "volli:project-skill-modes": (input: ProjectSkillModesInput): ProjectUpdateResult => {
+      const project = updateProjectSkillModes(
+        db,
+        input.id,
+        parseSkillModes(input.modes),
+        Date.now(),
+      );
+      if (!project) return { ok: false, error: "Unknown project" };
+      return { ok: true, project };
+    },
+
+    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    "volli:project-session-defaults": (input: ProjectSessionDefaultsInput): ProjectUpdateResult => {
+      const harness = input.harness === null ? null : input.harness.trim();
+      const project = updateProjectSessionDefaults(
+        db,
+        input.id,
+        { harness: harness === "" ? null : harness, model: input.model },
+        Date.now(),
+      );
+      if (!project) return { ok: false, error: "Unknown project" };
       return { ok: true, project };
     },
 
