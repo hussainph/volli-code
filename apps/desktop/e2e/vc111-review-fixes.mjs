@@ -419,6 +419,98 @@ check(
   describedBy ?? "(none)",
 );
 
+console.log("\n── lab pass: traversal, states, create loop ──");
+
+const dataMode = (m) =>
+  page.getByRole("group", { name: "Fixture data state" }).getByRole("button", { name: m });
+
+/* H1 — one tab stop for the table, arrows between rows. */
+await surface("Configure").click();
+await page.waitForTimeout(500);
+await nav("Skills").click();
+await page.waitForTimeout(500);
+const rows = page.locator("tbody tr");
+const tabStops = await rows.evaluateAll(
+  (els) => els.filter((el) => el.getAttribute("tabindex") === "0").length,
+);
+check(
+  "H1 the table is one tab stop, not one per row",
+  tabStops === 1,
+  `${await rows.count()} rows`,
+);
+await rows.first().focus();
+await page.keyboard.press("ArrowDown");
+await page.keyboard.press("ArrowDown");
+await page.waitForTimeout(200);
+check(
+  "H1 arrows move between rows",
+  await rows.nth(2).evaluate((el) => el === document.activeElement),
+);
+await page.keyboard.press("Enter");
+await page.waitForTimeout(200);
+check(
+  "H1 Enter steps into the row's controls",
+  await page.evaluate(
+    () =>
+      document.activeElement?.closest("tr") !== null && document.activeElement?.tagName !== "TR",
+  ),
+);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200);
+check(
+  "H1 Escape steps back out to the row",
+  await page.evaluate(() => document.activeElement?.tagName === "TR"),
+);
+await page.keyboard.press("End");
+await page.waitForTimeout(200);
+check(
+  "H1 End jumps to the last row",
+  await rows.last().evaluate((el) => el === document.activeElement),
+);
+
+/* The three states that used to be unreachable. */
+await dataMode("Loading").click();
+await page.waitForTimeout(400);
+check("loading renders a skeleton and says so", (await page.getByText("Loading…").count()) > 0);
+
+await dataMode("Error").click();
+await page.waitForTimeout(400);
+check(
+  "error states its remedy",
+  (await page.getByRole("button", { name: "Try again" }).count()) === 1,
+);
+await page.getByRole("button", { name: "Try again" }).click();
+await page.waitForTimeout(400);
+check("retry actually recovers", (await page.locator("tbody tr").count()) > 0);
+
+await dataMode("Empty").click();
+await page.waitForTimeout(400);
+check(
+  "empty copy is the collection's own, not a generic",
+  (await page.getByText("No skills yet. Add one to .agents/skills.").count()) === 1,
+);
+await dataMode("Ready").click();
+await page.waitForTimeout(400);
+
+/* The create loop, end to end. */
+await nav("Commands").click();
+await page.waitForTimeout(400);
+const before = await page.locator("tbody tr").count();
+await page.getByRole("button", { name: "New command" }).click();
+await page.waitForTimeout(400);
+await page.locator("#cmd-name").fill("ship");
+await page.locator("#cmd-desc").fill("Open a PR");
+await page.locator("#cmd-body").fill("Read the ticket and open a PR.");
+await page.getByRole("button", { name: "Create" }).click();
+await page.waitForTimeout(500);
+const after = await page.locator("tbody tr").count();
+const named = await page.locator("tbody tr").first().innerText();
+check(
+  "creating a command adds it to the table",
+  after === before + 1 && named.includes("/ship"),
+  `${before} -> ${after}, first row "${named.split("\n")[0]}"`,
+);
+
 check("no uncaught errors", thrown.length === 0, thrown.join("; "));
 
 await browser.close();

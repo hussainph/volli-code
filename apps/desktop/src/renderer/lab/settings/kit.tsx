@@ -819,6 +819,79 @@ export interface TableFilter {
  * The sticky header is `position: sticky` on the `<th>`s, which works inside an
  * `overflow-auto` ancestor without JS.
  */
+/**
+ * Roving tabindex over the rows.
+ *
+ * The audit's H1: every in-row control is individually reachable, so the table
+ * meets SC 2.1.1 — but a hundred rows with two controls each is two hundred Tab
+ * stops and no way past them. This is the standard remedy: the table holds ONE
+ * tab stop, arrows move between rows, and Tab from a row goes to whatever
+ * follows the table.
+ *
+ * Enter/Space steps INTO a row: focus moves to its first control, and Escape
+ * comes back out to the row. So the controls stay reachable without every one
+ * of them being on the Tab path.
+ */
+function useRovingRows(count: number) {
+  const [active, setActive] = React.useState(0);
+  const bodyRef = React.useRef<HTMLTableSectionElement>(null);
+
+  // A filter that shortens the list must not strand the cursor past the end.
+  React.useEffect(() => {
+    setActive((current) => (current >= count ? Math.max(0, count - 1) : current));
+  }, [count]);
+
+  const focusRow = (index: number) => {
+    setActive(index);
+    bodyRef.current?.querySelectorAll<HTMLTableRowElement>("tr")[index]?.focus();
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>, index: number) => {
+    const row = event.currentTarget;
+    const controls = row.querySelectorAll<HTMLElement>(
+      'button, [role="switch"], [role="combobox"], input, a[href]',
+    );
+
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusRow(Math.min(index + 1, count - 1));
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusRow(Math.max(index - 1, 0));
+        break;
+      case "Home":
+        event.preventDefault();
+        focusRow(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusRow(count - 1);
+        break;
+      case "Enter":
+      case " ":
+        // Only when the row ITSELF has focus — otherwise this would swallow
+        // the space that toggles a switch the user has already stepped into.
+        if (event.target === row && controls.length > 0) {
+          event.preventDefault();
+          controls[0].focus();
+        }
+        break;
+      case "Escape":
+        if (event.target !== row) {
+          event.preventDefault();
+          row.focus();
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
+  return { active, setActive, bodyRef, onKeyDown, focusRow };
+}
+
 export function DataTable<T>({
   items,
   keyOf,
@@ -859,6 +932,7 @@ export function DataTable<T>({
   // Cap AFTER filtering, so narrowing the search always reaches a withheld row.
   const shown = matched.length > maxItems ? matched.slice(0, maxItems) : matched;
   const withheld = matched.length - shown.length;
+  const roving = useRovingRows(shown.length);
 
   // 32px a row, PLUS the 28px sticky header, which lives inside the same scroll
   // box and would otherwise eat a row: `rows={8}` was showing seven.
@@ -939,11 +1013,19 @@ export function DataTable<T>({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {shown.map((item) => (
+          <tbody ref={roving.bodyRef}>
+            {shown.map((item, index) => (
               <tr
                 key={keyOf(item)}
-                className="border-t border-border/50 first:border-t-0 hover:bg-accent/40"
+                // One tab stop for the whole table; arrows do the rest.
+                tabIndex={index === roving.active ? 0 : -1}
+                onKeyDown={(event) => roving.onKeyDown(event, index)}
+                // Clicking a row makes it the tab stop, so returning by Tab
+                // lands where the pointer left off rather than back at row 0.
+                onFocus={(event) => {
+                  if (event.target === event.currentTarget) roving.setActive(index);
+                }}
+                className="border-t border-border/50 outline-none first:border-t-0 hover:bg-accent/40 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-inset"
               >
                 {columns.map((column) => (
                   <td

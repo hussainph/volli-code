@@ -5,40 +5,48 @@
  *
  * ── WHAT TO LOOK AT, IN ORDER ─────────────────────────────────────────────
  *
- *  1. **Settings → Appearance.** Flip "Applies to" at the top of the pane.
- *     That one control is the answer to the ticket's headline complaint. At
- *     *All projects* the bar tells you what this project has overridden; at
- *     *volli-code* every scopeable row grows the SAME Inherit/Custom switch in
- *     the SAME place, and Inherit names the value it inherits instead of going
- *     blank. Today that question is asked three different ways within one page
- *     (per-row, per-section-header, and not at all), across two surfaces.
+ *  1. **Configure → Skills / Commands / MCP / Plugins.** The brief's ask, and
+ *     the reason the redesign exists. Skills and Commands are not speculative:
+ *     `main/skills.ts` and `main/prompt-templates.ts` already read those
+ *     directories and merge them project-over-personal. They have simply never
+ *     been visible. Each is a bounded table with provenance as a COLUMN and one
+ *     filter, rather than a "This project" pill repeated down every row.
  *
- *  2. **Configure → Skills / Commands / MCP / Plugins.** The brief's ask.
- *     Skills and Commands are not speculative — `main/skills.ts` and
- *     `main/prompt-templates.ts` already read those directories on every
- *     composer open and merge them project-over-personal. They have simply
- *     never been visible. MCP and Plugins are the new plumbing.
+ *  2. **Configure → Sessions.** Divergence from the app-wide value is said once,
+ *     by a control: an inheriting row shows its value, an overridden one grows a
+ *     revert button that names what it would go back to. There is no scope mode
+ *     to enter first — choosing a value IS overriding. Precedence lives in the
+ *     header's (i).
  *
- *  3. **Settings → Updates.** One `Segmented` row replaces the `sqlite3`
- *     command that `main/auto-update.ts` currently tells you to run by hand.
+ *  3. **Settings → Models.** A hundred-model catalogue as a capped table, so
+ *     Accounts below it is still reachable. Provider is a column, which is what
+ *     tells the two `gpt-5.6-luna` rows apart.
  *
- *  4. **Settings → About.** All of diagnostics: one sentence, one button,
- *     internals behind a disclosure. Compare against today's CLI pane, which
- *     shows a socket path, a bin dir, a shell-chain boolean and a PATH table.
- *     The second card is the failure state, so the concise version can be
- *     judged against the case it actually has to survive.
+ *  4. **Settings → Updates.** One row replaces the `sqlite3` command that
+ *     `main/auto-update.ts` currently tells you to run by hand.
  *
- *  5. **The rail.** Grouped, searchable, and the group labels are where the
+ *  5. **Settings → About.** All of diagnostics: a headline, and a row per fault
+ *     ACTUALLY PRESENT, each with its own remedy. Healthy machines get one
+ *     sentence; this fixture is deliberately broken so the concise version can
+ *     be judged against the case it has to survive.
+ *
+ *  6. **The rail.** Grouped and searchable, and the group labels are where the
  *     Settings-vs-Configure relationship is finally written down.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * The switcher below is LAB CHROME, not a proposal. In the app these stay two
- * entry points — the sidebar-footer gear and the project nav tab. It is here so
- * the two can be compared without leaving the page, which is the whole reason
- * to prototype them together.
+ * TWO CONTROLS BELOW ARE LAB CHROME, not proposals:
+ *
+ *  - The **surface switch**. In the app these stay two entry points — the
+ *    sidebar-footer gear and the project nav tab. It is here so the two can be
+ *    compared without leaving the page.
+ *  - The **data state**. Every collection is asynchronous, failable and empty
+ *    before it is full, and `AsyncSection` exists to say so — but with every
+ *    pane passing `ready(...)` those branches never rendered once. This drives
+ *    all four through every table on both surfaces, which is the only way to
+ *    judge whether the empty copy reads well and the error is actionable.
  *
  * No stores and no bridge: every value is local state, so nothing here can
- * repaint the real app or be mistaken for wired-up behaviour.
+ * write to the real app.
  */
 import * as React from "react";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
@@ -50,6 +58,7 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 import { PrefShell } from "../settings/kit";
 import { CONFIGURE_GROUPS } from "../settings/panes-configure";
+import { FixtureProvider, type FixtureMode } from "../settings/fixtures";
 import { SETTINGS_GROUPS } from "../settings/panes-settings";
 
 type Surface = "settings" | "configure";
@@ -93,6 +102,7 @@ export default function SettingsRedesign() {
   const [surface, setSurface] = React.useState<Surface>("settings");
   const [settingsKey, setSettingsKey] = React.useState("appearance");
   const [configureKey, setConfigureKey] = React.useState("skills");
+  const [dataMode, setDataMode] = React.useState<FixtureMode>("ready");
 
   const isSettings = surface === "settings";
 
@@ -115,17 +125,30 @@ export default function SettingsRedesign() {
             ]}
             onChange={(key) => setSurface(key as Surface)}
           />
+          <Segmented
+            ariaLabel="Fixture data state"
+            value={dataMode}
+            options={[
+              { key: "ready", label: "Ready" },
+              { key: "loading", label: "Loading" },
+              { key: "error", label: "Error" },
+              { key: "empty", label: "Empty" },
+            ]}
+            onChange={(key) => setDataMode(key as FixtureMode)}
+          />
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <PrefShell
-            key={surface}
-            header={<Masthead surface={surface} />}
-            surfaceLabel={isSettings ? "Settings" : "Configure"}
-            groups={isSettings ? SETTINGS_GROUPS : CONFIGURE_GROUPS}
-            activeKey={isSettings ? settingsKey : configureKey}
-            onSelect={isSettings ? setSettingsKey : setConfigureKey}
-          />
+          <FixtureProvider mode={dataMode}>
+            <PrefShell
+              key={surface}
+              header={<Masthead surface={surface} />}
+              surfaceLabel={isSettings ? "Settings" : "Configure"}
+              groups={isSettings ? SETTINGS_GROUPS : CONFIGURE_GROUPS}
+              activeKey={isSettings ? settingsKey : configureKey}
+              onSelect={isSettings ? setSettingsKey : setConfigureKey}
+            />
+          </FixtureProvider>
         </div>
       </div>
     </TooltipProvider>

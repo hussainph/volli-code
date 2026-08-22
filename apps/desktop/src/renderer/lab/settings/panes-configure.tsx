@@ -56,6 +56,7 @@ import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
 import { Textarea } from "@renderer/components/ui/textarea";
 
+import { useFixture } from "./fixtures";
 import {
   AsyncSection,
   Cell,
@@ -68,13 +69,11 @@ import {
   PrefRow,
   PrefSection,
   SectionAction,
-  type AsyncState,
   type PrefGroup,
 } from "./kit";
 
-function ready<T>(data: T): AsyncState<T> {
-  return { status: "ready", data };
-}
+/** The empty list every collection here falls back to in the lab's empty mode. */
+const EMPTY: readonly never[] = [];
 
 /** The Source column's value. A quiet word, aligned — never a pill. */
 function Source({ scope }: { scope: "project" | "personal" }) {
@@ -176,7 +175,7 @@ function SkillsPane() {
       icon={BookOpenIcon}
       hint={<>Project skills override personal ones. Switches apply here only.</>}
       action={<SectionAction label="Reveal folder" icon={FolderOpenIcon} />}
-      state={ready(shown)}
+      state={useFixture(shown, EMPTY)}
       isEmpty={() => SKILLS.length === 0}
       empty="No skills yet. Add one to .agents/skills."
     >
@@ -279,7 +278,7 @@ const COMMANDS: readonly Command[] = [
  * the invocation), and the Source select is what decides which of the two
  * folders it lands in — the same choice the table's Source column reports.
  */
-function NewCommandDialog() {
+function NewCommandDialog({ onCreate }: { onCreate: (command: Command) => void }) {
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -289,6 +288,13 @@ function NewCommandDialog() {
   const slug = name.trim().replace(/^\//, "");
   const invalid = slug.length > 0 && !/^[a-z0-9-]+$/.test(slug);
   const canSave = slug.length > 0 && !invalid && body.trim().length > 0;
+
+  const reset = () => {
+    setName("");
+    setDescription("");
+    setBody("");
+    setScope("project");
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -376,7 +382,22 @@ function NewCommandDialog() {
               Cancel
             </Button>
           </DialogClose>
-          <Button size="sm" disabled={!canSave} onClick={() => setOpen(false)}>
+          <Button
+            size="sm"
+            disabled={!canSave}
+            onClick={() => {
+              // The lab writes to local state so the whole loop can be judged:
+              // create, see it in the table, search for it, see its Source.
+              // Production writes a markdown file — see the plan's "still open".
+              onCreate({
+                name: `/${slug}`,
+                description: description.trim() || "No description",
+                scope: scope === "project" ? "project" : "personal",
+              });
+              reset();
+              setOpen(false);
+            }}
+          >
             Create
           </Button>
         </DialogFooter>
@@ -387,16 +408,17 @@ function NewCommandDialog() {
 
 function CommandsPane() {
   const [filter, setFilter] = React.useState("all");
-  const shown = bySource(COMMANDS, filter);
+  const [commands, setCommands] = React.useState<readonly Command[]>(COMMANDS);
+  const shown = bySource(commands, filter);
 
   return (
     <AsyncSection
       title="Commands"
       icon={CommandIcon}
       hint={<>Type the name in any composer. Project overrides personal.</>}
-      action={<NewCommandDialog />}
-      state={ready(shown)}
-      isEmpty={() => COMMANDS.length === 0}
+      action={<NewCommandDialog onCreate={(c) => setCommands((list) => [c, ...list])} />}
+      state={useFixture(shown, EMPTY)}
+      isEmpty={() => commands.length === 0}
       empty="No commands yet."
     >
       {(list) => (
@@ -454,7 +476,7 @@ interface Server {
   transport: string;
   tools: string;
   scope: "project" | "personal";
-  state: "ready" | "error" | "idle";
+  state: "ready" | "error" | "idle" | "starting";
   status: string;
 }
 
@@ -501,7 +523,7 @@ const SERVERS: readonly Server[] = [
  * a command plus args, an http one is a URL. So the form switches on it rather
  * than showing every field and letting four of them be irrelevant.
  */
-function AddServerDialog() {
+function AddServerDialog({ onAdd }: { onAdd: (server: Server) => void }) {
   const [open, setOpen] = React.useState(false);
   const [transport, setTransport] = React.useState("stdio");
   const [name, setName] = React.useState("");
@@ -584,7 +606,22 @@ function AddServerDialog() {
           {/* Adding a server means starting a process. Connecting first and
               reporting the result is the difference between this and a config
               file — otherwise a typo shows up as a silent absence later. */}
-          <Button size="sm" disabled={name.trim().length === 0} onClick={() => setOpen(false)}>
+          <Button
+            size="sm"
+            disabled={name.trim().length === 0}
+            onClick={() => {
+              onAdd({
+                name: name.trim(),
+                transport,
+                tools: "checking…",
+                scope: "project",
+                state: "starting",
+                status: "Connecting",
+              });
+              setName("");
+              setOpen(false);
+            }}
+          >
             Connect &amp; add
           </Button>
         </DialogFooter>
@@ -595,16 +632,17 @@ function AddServerDialog() {
 
 function McpPane() {
   const [filter, setFilter] = React.useState("all");
-  const shown = bySource(SERVERS, filter);
+  const [servers, setServers] = React.useState<readonly Server[]>(SERVERS);
+  const shown = bySource(servers, filter);
 
   return (
     <AsyncSection
       title="Servers"
       icon={PlugsConnectedIcon}
       hint={<>Web search is separate — set it in Settings.</>}
-      action={<AddServerDialog />}
-      state={ready(shown)}
-      isEmpty={() => SERVERS.length === 0}
+      action={<AddServerDialog onAdd={(s) => setServers((list) => [s, ...list])} />}
+      state={useFixture(shown, EMPTY)}
+      isEmpty={() => servers.length === 0}
       empty="No MCP servers yet."
     >
       {(list) => (
@@ -690,7 +728,7 @@ function PluginsPane() {
       icon={PuzzlePieceIcon}
       hint={<>A bundle of skills and commands, updated together.</>}
       action={<SectionAction label="Browse…" icon={PlusIcon} />}
-      state={ready(shown)}
+      state={useFixture(shown, EMPTY)}
       isEmpty={() => PLUGINS.length === 0}
       empty="No plugins installed."
     >

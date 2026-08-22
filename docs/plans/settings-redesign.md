@@ -8,7 +8,8 @@ the `panes-*.tsx` are content poured into it.
 |---|---|
 | `docs/plans/settings-audit.md` | 31 findings against the surfaces as they ship today |
 | `docs/plans/settings-redesign-review.md` | independent adversarial review of the first prototype |
-| `apps/desktop/e2e/vc111-review-fixes.mjs` | 43 checks, one per finding. Manual: needs `pnpm lab` running |
+| `docs/plans/settings-redesign-review-2.md` | second independent review, after the component pass |
+| `apps/desktop/e2e/vc111-review-fixes.mjs` | 55 checks, one per finding. Manual: needs `pnpm lab` running |
 | `apps/desktop/e2e/lab-boot-check.mjs` | the scratch is enrolled |
 
 ---
@@ -140,6 +141,25 @@ unbounded — before reaching for pagination.
 
 ---
 
+## Sorted out in the lab
+
+Everything below was closed in the prototype, so implementation inherits it
+rather than rediscovering it.
+
+- **Keyboard traversal (`useRovingRows`).** A table is one tab stop. Arrows move
+  between rows, Home/End jump, Enter steps into a row's controls, Escape steps
+  back out. Two hundred tab stops became one.
+- **All four data states are drivable.** `AsyncSection` existed but every pane
+  passed `ready(...)`, so loading, error and empty had never rendered. The lab
+  chrome now switches every collection through them (`lab/settings/fixtures.tsx`
+  — lab-only; production gets its state from IPC). The error's Try again really
+  recovers, so the affordance is tested rather than drawn.
+- **The creation loops close.** New command and Add MCP server write to local
+  state, so create → appears in the table → searchable → correct Source can all
+  be judged. A new MCP server lands in `starting`, which is what the real
+  connect will do.
+- **`DataTable` caps rendering** at `maxItems` with a footer, search first.
+
 ## Still open
 
 - **`keywords` is hand-maintained** and will rot. Mitigation: a test asserting
@@ -161,10 +181,6 @@ unbounded — before reaching for pagination.
   `DataTable` caps rendering at `maxItems` (500) with a footer that says what it
   withheld; search runs before the cap, so a withheld row stays reachable. Past
   ~1,000, switch to Virtuoso rather than raising the cap.
-- **`DataTable` has no roving tabindex.** Every in-row control is reachable, so
-  it meets SC 2.1.1, but 100 rows × 2 controls is 200 Tab stops with no
-  shortcut. Remedy: `tabIndex` on rows, up/down arrow handling, Enter to
-  activate — standard for a table with in-row actions.
 - **`Column.width` takes a CSS length or percentage, never a grid track.** Three
   columns passed `minmax(0,1fr)`; React drops it as invalid, so they sized by
   `table-layout: fixed`'s remainder rule and looked correct by accident.
