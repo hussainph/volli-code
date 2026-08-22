@@ -224,15 +224,9 @@ a:focus-visible {
   text-decoration-color: #ff966c;
 }
 
-/* On a phone the platform sentence takes its own line and the three links sit
-   under it, rather than one label orphaning onto a line of its own. */
 @media (max-width: 460px) {
   .hero-alpha-note {
     gap: 6px 14px;
-  }
-
-  .hero-alpha-note > span {
-    flex: 0 0 100%;
   }
 }
 
