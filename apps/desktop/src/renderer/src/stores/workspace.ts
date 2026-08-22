@@ -241,21 +241,26 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
  */
 const RETIRED_NAV_KEYS: ReadonlyMap<string, NavKey> = new Map([["files", "home"]]);
 
-function isNavKey(value: unknown): value is NavKey {
-  return value === "home" || value === "configure";
-}
-
 /**
- * Rehydrate a persisted `nav` value: a key this build still offers stands, a
- * retired one maps onto its successor page ({@link RETIRED_NAV_KEYS}), and
- * anything else — absent, malformed, or unrecognized — falls back to {@link
- * DEFAULT_WORKSPACE_UI}'s `nav`. `nav` itself is not part of what this store
- * persists going forward (see the module doc); this exists as the same
- * defensive tolerant-read every other persisted field here gets, in case a
- * foreign or hand-edited `volli:workspace` blob carries one anyway.
+ * Rehydrate a persisted `nav` value onto the page this build should open.
+ *
+ * There is deliberately NO "a key this build still offers stands" branch, and
+ * that is the one place this parts company with `ticket-rail-model.ts`'s
+ * `resolvePersistedRailMode`, the idiom it otherwise mirrors. `railMode` is
+ * genuinely persisted, so keeping a still-valid key is the whole point there.
+ * `nav` is session-only and "nav resets to Home on relaunch" is a settled
+ * decision (see the module doc), so a stored value must never be able to
+ * choose the landing page — honouring a `"configure"` here would quietly
+ * reverse that decision for exactly the hand-edited blob this read exists to
+ * survive.
+ *
+ * So every input lands on Home today: a retired key through {@link
+ * RETIRED_NAV_KEYS}, everything else through {@link DEFAULT_WORKSPACE_UI}. The
+ * map still earns its place by recording WHERE a retired page went, so a key
+ * that ever retires onto something other than the default resolves correctly
+ * rather than silently stranding on it.
  */
 export function resolvePersistedNav(stored: { nav?: unknown }): NavKey {
-  if (isNavKey(stored.nav)) return stored.nav;
   if (typeof stored.nav === "string") {
     const landing = RETIRED_NAV_KEYS.get(stored.nav);
     if (landing !== undefined) return landing;

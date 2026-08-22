@@ -103,19 +103,26 @@ describe("setNav", () => {
 
 /**
  * `nav` is session-only — no shipped build ever persisted one (see the
- * `NavKey` doc in workspace.ts) — so these are pure insurance: the same
- * tolerant-read `ticket-rail-model.test.ts` gives `resolvePersistedRailMode`,
- * exercised directly rather than through a round trip because nothing in this
- * store's own `partialize` output could ever carry a `nav` field to rehydrate.
+ * `NavKey` doc in workspace.ts) — so these are pure insurance against a foreign
+ * or hand-edited blob, exercised directly rather than through a round trip
+ * because nothing in this store's own `partialize` output could ever carry a
+ * `nav` field to rehydrate. Deliberately NOT the whole of the tolerant-read
+ * `ticket-rail-model.test.ts` gives `resolvePersistedRailMode`: that one keeps
+ * a still-valid stored key, which is right for a persisted field and wrong for
+ * this one.
  */
 describe("resolvePersistedNav", () => {
-  it("keeps a key this build still offers", () => {
-    expect(resolvePersistedNav({ nav: "home" })).toBe("home");
-    expect(resolvePersistedNav({ nav: "configure" })).toBe("configure");
-  });
-
   it('maps the retired "files" nav key onto "home"', () => {
     expect(resolvePersistedNav({ nav: "files" })).toBe("home");
+  });
+
+  it("never lets a stored value choose the landing page", () => {
+    // The settled decision is that nav RESETS to Home on relaunch, so unlike
+    // `resolvePersistedRailMode` (whose railMode really is persisted) there is
+    // no "still-valid key stands" branch: honouring a stored "configure" would
+    // reverse that decision for the one blob this read exists to survive.
+    expect(resolvePersistedNav({ nav: "configure" })).toBe("home");
+    expect(resolvePersistedNav({ nav: "home" })).toBe("home");
   });
 
   it("falls back to the default for anything absent, malformed, or unrecognized", () => {

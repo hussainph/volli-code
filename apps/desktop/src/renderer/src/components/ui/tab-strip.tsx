@@ -5,7 +5,8 @@
  * (`files/file-tab-strip.tsx`, retired with the Files page — VC-122), the
  * ticket detail (`ticket/ticket-tabs.tsx`) and Home's own strip
  * (`home/home-tab-strip.tsx`, which absorbed Project Files' tab vocabulary
- * when that page retired). Large stretches of the three were byte-identical — the same transition string, the same
+ * when that page retired). Large stretches of the three were byte-identical —
+ * the same transition string, the same
  * hover-revealed close, the same unsaved dot, the same strip container, the
  * same roving-tabindex helper written out three times — and the comments in all
  * three admitted it ("same technique as…", "mirroring the ticket tab strip…").

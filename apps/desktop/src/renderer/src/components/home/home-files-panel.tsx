@@ -61,7 +61,8 @@ export function HomeFilesList({
  * This is the ticket Files navigator one scope up: one current-folder listing,
  * an inline filter, Up in the path line, and preview/pin file gestures. Reads
  * the Main checkout through `volli:list-directory`; the current level stays
- * live through the same non-recursive dir-watch seam as the primary file tree.
+ * live through the non-recursive dir-watch seam in
+ * `hooks/use-directory-watch.ts` — one level at a time, never a subtree.
  */
 export function HomeFilesPanel({
   project,
