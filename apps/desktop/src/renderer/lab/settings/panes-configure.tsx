@@ -1,31 +1,23 @@
 /**
- * VC-111 — the proposed **Configure** surface. Second pass.
+ * VC-111 — the **Configure** surface. Third pass.
  *
- * Configure is this project, always. Every row here is scoped to the selected
- * project, and any row that can defer to the app-wide value carries the one
- * `InheritControl` idiom naming what it would inherit (kit rule 2).
+ * Configure is this project, always. Divergence from the app-wide value is
+ * marked once per row by `OverrideControl` plus `PrefRow`'s gutter bar.
  *
- * WHAT CHANGED AFTER REVIEW:
- *  - **Three inheritance vocabularies became one.** The first pass had a
- *    `Segmented` in Appearance, a "Same as Project chats" option inside a
- *    Select in Models and a "Same as Settings — …" option inside another Select
- *    in Sessions — while its own rule said scope lives in one place
- *    (review §1.1, §1.3). All of it is `InheritControl` now.
- *  - **Precedence is published.** Review §1.1's sharpest finding was that the
- *    proposal put models on both surfaces and stated no precedence — rebuilding
- *    the desync in the commit claiming to fix it. `ResolutionNote` says the
- *    order out loud, on every pane where two tiers meet.
- *  - **The skill switch got a scope.** Toggling a personal skill from inside
- *    one project could not say whether it was off here or off everywhere. Now
- *    a personal skill can only be disabled FOR THIS PROJECT from here, and the
- *    row says so.
- *  - **Appearance came back** under a Project group. It is only three rows, and
- *    sending someone to Settings to theme one project is the confusion the
- *    ticket was about. Settings' `OverrideNote` is the other half.
- *  - **The `.worktreeinclude` trap is gone.** A `Textarea` seeded with the
- *    built-in defaults and blur-saved would have MATERIALIZED a tracked file
- *    that did not exist, freezing today's defaults into the repo (review §2.6).
- *  - **No section descriptions**, per CLAUDE.md.
+ * WHAT THE COMPONENT PASS CHANGED HERE:
+ *  - **Skills, Commands, MCP and Plugins are tables.** They are homogeneous
+ *    collections with shared attributes, which is the definition of tabular,
+ *    and they were unbounded stacks of two-line rows. A skills folder can hold
+ *    two hundred entries; that was a page with no bottom.
+ *  - **The `Tier` pill is gone.** Provenance is a `Source` column, and one
+ *    filter in the toolbar replaces N repeated pills. This is the single
+ *    biggest reduction in visual noise on the surface.
+ *  - **`InheritControl`'s two pills per row became `OverrideControl`** — a
+ *    revert button that exists only when there is something to revert.
+ *  - **Every `ResolutionNote` paragraph became an `(i)`.**
+ *  - **The new features got designed rather than gestured at**: New command and
+ *    Add MCP server are real dialogs with real fields, and the skill switch now
+ *    says what it writes.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -43,6 +35,17 @@ import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure"
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@renderer/components/ui/dialog";
+import { Input } from "@renderer/components/ui/input";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -51,19 +54,20 @@ import {
 } from "@renderer/components/ui/select";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
+import { Textarea } from "@renderer/components/ui/textarea";
 
 import {
   AsyncSection,
+  Cell,
   CommitField,
   CONTROL_W,
+  DataTable,
   Health,
-  InheritControl,
-  ItemList,
   ItemRow,
+  OverrideControl,
   PrefRow,
   PrefSection,
   SectionAction,
-  Tier,
   type AsyncState,
   type PrefGroup,
 } from "./kit";
@@ -72,20 +76,30 @@ function ready<T>(data: T): AsyncState<T> {
   return { status: "ready", data };
 }
 
-/**
- * The precedence sentence.
- *
- * Review §1.1: the audit praised Claude Code for publishing a precedence table
- * and then the proposal shipped none, while putting the same setting on two
- * surfaces. This is the smallest honest version — the resolution order, stated
- * where the two tiers actually meet, rather than in a doc nobody opens.
- *
- * It is the one sanctioned prose exception on this surface, and it earns it on
- * the same grounds CLAUDE.md grants a trust boundary: a value that resolves
- * through layers is not self-describing, and getting it wrong costs money.
- */
-function ResolutionNote({ children }: { children: React.ReactNode }) {
-  return <p className="border-t border-border/50 py-2 text-ui text-muted-foreground">{children}</p>;
+/** The Source column's value. A quiet word, aligned — never a pill. */
+function Source({ scope }: { scope: "project" | "personal" }) {
+  return <Cell muted>{scope === "project" ? "This project" : "Personal"}</Cell>;
+}
+
+/** The filter that replaces a pill on every row. */
+function sourceFilter(value: string, onChange: (next: string) => void) {
+  return {
+    label: "Filter by source",
+    value,
+    onChange,
+    options: [
+      { value: "all", label: "All sources" },
+      { value: "project", label: "This project" },
+      { value: "personal", label: "Personal" },
+    ],
+  };
+}
+
+function bySource<T extends { scope: "project" | "personal" }>(
+  items: readonly T[],
+  filter: string,
+) {
+  return filter === "all" ? items : items.filter((item) => item.scope === filter);
 }
 
 /* -------------------------------- Skills ---------------------------------- */
@@ -95,7 +109,6 @@ interface Skill {
   description: string;
   scope: "project" | "personal";
   enabled: boolean;
-  /** A personal skill a same-named project skill shadows. */
   shadowed?: boolean;
 }
 
@@ -133,58 +146,112 @@ const SKILLS: readonly Skill[] = [
     scope: "personal",
     enabled: true,
   },
+  {
+    slug: "handoff",
+    description: "Compact a conversation for another agent",
+    scope: "personal",
+    enabled: true,
+  },
+  {
+    slug: "domain-modeling",
+    description: "Sharpen a project's domain model",
+    scope: "personal",
+    enabled: false,
+  },
+  {
+    slug: "prototype",
+    description: "Throwaway prototype to answer a design question",
+    scope: "personal",
+    enabled: true,
+  },
 ];
 
 function SkillsPane() {
+  const [filter, setFilter] = React.useState("all");
+  const shown = bySource(SKILLS, filter);
+
   return (
     <AsyncSection
       title="Skills"
       icon={BookOpenIcon}
+      hint={
+        <>
+          Skills in <code>.agents/skills</code> ship with the repo; personal ones come from your
+          home folder. A project skill wins over a personal one with the same name, and these
+          switches apply to this project only.
+        </>
+      }
       action={<SectionAction label="Reveal folder" icon={FolderOpenIcon} />}
-      state={ready(SKILLS)}
-      isEmpty={(list) => list.length === 0}
-      // Review §2.4: a project with no skills is not a search that matched
-      // nothing, and the first pass rendered the same string for both.
+      state={ready(shown)}
+      isEmpty={() => SKILLS.length === 0}
       empty="No skills yet. Add one to .agents/skills."
     >
       {(list) => (
-        <>
-          <ItemList
-            items={list}
-            keyOf={(skill) => `${skill.scope}/${skill.slug}`}
-            search={(skill) => `${skill.slug} ${skill.description}`}
-            placeholder="Search skills"
-            noResults="No skills match."
-            render={(skill) => (
-              <ItemRow
-                name={skill.slug}
-                meta={skill.shadowed ? "Shadowed by this project's own copy" : skill.description}
-                badges={<Tier scope={skill.scope} />}
-              >
+        <DataTable
+          label="Skills available to this project"
+          items={list}
+          keyOf={(skill) => `${skill.scope}/${skill.slug}`}
+          rows={8}
+          search={(skill) => `${skill.slug} ${skill.description}`}
+          placeholder="Search skills"
+          filter={sourceFilter(filter, setFilter)}
+          empty="No skills yet. Add one to .agents/skills."
+          noResults="No skills match."
+          columns={[
+            {
+              key: "name",
+              header: "Skill",
+              width: "minmax(0, 1fr)",
+              cell: (skill) => <Cell>{skill.slug}</Cell>,
+            },
+            {
+              key: "description",
+              header: "Description",
+              width: "minmax(0, 1.4fr)",
+              cell: (skill) => (
+                <Cell muted>
+                  {skill.shadowed ? "Shadowed by this project's own copy" : skill.description}
+                </Cell>
+              ),
+            },
+            {
+              key: "source",
+              header: "Source",
+              width: "7rem",
+              cell: (skill) => <Source scope={skill.scope} />,
+            },
+            {
+              key: "open",
+              header: "Open",
+              width: "2.5rem",
+              align: "end",
+              headerHidden: true,
+              cell: (skill) => (
                 <Button size="icon-xs" variant="ghost" aria-label={`Open ${skill.slug}`}>
                   <ArrowSquareOutIcon />
                 </Button>
-                {/*
-                 * Review §1.1: a bare switch on a personal skill could not say
-                 * whether it was off HERE or off EVERYWHERE. The switch on this
-                 * per-project page always means "in this project", and the
-                 * label says so — a personal skill's global state is its own
-                 * frontmatter (`isUserInvokeOnly`), reachable via the row's
-                 * open button.
-                 */}
+              ),
+            },
+            {
+              key: "enabled",
+              header: "Enabled",
+              width: "3.5rem",
+              align: "end",
+              headerHidden: true,
+              cell: (skill) => (
                 <Switch
                   defaultChecked={skill.enabled}
                   disabled={skill.shadowed}
+                  // The switch names its own scope, because a personal skill
+                  // toggled from a project page is otherwise ambiguous: off
+                  // here, or off everywhere? This one writes to the project.
                   aria-label={`Enable ${skill.slug} in this project`}
+                  data-testid={`skill-${skill.slug}`}
                 />
-              </ItemRow>
-            )}
-          />
-          <ResolutionNote>
-            A project skill wins over a personal one with the same name. Switches here apply to this
-            project only.
-          </ResolutionNote>
-        </>
+              ),
+            },
+          ]}
+        />
       )}
     </AsyncSection>
   );
@@ -209,40 +276,185 @@ const COMMANDS: readonly Command[] = [
   { name: "/grill", description: "Stress-test a plan", scope: "personal" },
 ];
 
+/**
+ * New command — one of the features this redesign *adds*, so it owes a real
+ * design rather than a button that goes nowhere.
+ *
+ * A command is a markdown file: frontmatter with a description, then a prompt
+ * body. So the dialog is three fields and it writes the file. The name field
+ * enforces the one rule the loader has (a slug, because the filename becomes
+ * the invocation), and the Source select is what decides which of the two
+ * folders it lands in — the same choice the table's Source column reports.
+ */
+function NewCommandDialog() {
+  const [open, setOpen] = React.useState(false);
+  const [name, setName] = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const [body, setBody] = React.useState("");
+  const [scope, setScope] = React.useState("project");
+
+  const slug = name.trim().replace(/^\//, "");
+  const invalid = slug.length > 0 && !/^[a-z0-9-]+$/.test(slug);
+  const canSave = slug.length > 0 && !invalid && body.trim().length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="xs" variant="ghost">
+          <PlusIcon />
+          New command
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>New command</DialogTitle>
+          <DialogDescription>
+            Commands are markdown files. Typing the name in a composer runs the prompt below.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="cmd-name" className="text-ui">
+              Name
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="text-ui text-muted-foreground">/</span>
+              <Input
+                id="cmd-name"
+                value={name}
+                placeholder="ship"
+                aria-invalid={invalid}
+                aria-describedby={invalid ? "cmd-name-error" : undefined}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </div>
+            {invalid ? (
+              <p id="cmd-name-error" role="alert" className="text-ui text-destructive">
+                Lowercase letters, numbers and dashes only — it becomes the filename.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="cmd-desc" className="text-ui">
+              Description
+            </label>
+            <Input
+              id="cmd-desc"
+              value={description}
+              placeholder="Open a PR with the ticket body as description"
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="cmd-body" className="text-ui">
+              Prompt
+            </label>
+            <Textarea
+              id="cmd-body"
+              value={body}
+              rows={6}
+              placeholder="Read the ticket, open a PR against main, and paste the ticket body as the description."
+              onChange={(event) => setBody(event.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <label htmlFor="cmd-scope" className="text-ui">
+              Save to
+            </label>
+            <Select value={scope} onValueChange={setScope}>
+              <SelectTrigger id="cmd-scope" className={CONTROL_W.lg}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="project">This project — .volli/commands</SelectItem>
+                <SelectItem value="personal">Personal — available everywhere</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm">
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button size="sm" disabled={!canSave} onClick={() => setOpen(false)}>
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CommandsPane() {
+  const [filter, setFilter] = React.useState("all");
+  const shown = bySource(COMMANDS, filter);
+
   return (
     <AsyncSection
       title="Commands"
       icon={CommandIcon}
-      action={<SectionAction label="New command" icon={PlusIcon} />}
-      state={ready(COMMANDS)}
-      isEmpty={(list) => list.length === 0}
-      empty="No commands yet. Add a .md file to .volli/commands."
+      hint={
+        <>
+          Type a command&rsquo;s name in any composer to run its prompt. A project command wins over
+          a personal one with the same name.
+        </>
+      }
+      action={<NewCommandDialog />}
+      state={ready(shown)}
+      isEmpty={() => COMMANDS.length === 0}
+      empty="No commands yet."
     >
       {(list) => (
-        <>
-          <ItemList
-            items={list}
-            keyOf={(command) => `${command.scope}${command.name}`}
-            search={(command) => `${command.name} ${command.description}`}
-            placeholder="Search commands"
-            noResults="No commands match."
-            render={(command) => (
-              <ItemRow
-                name={command.name}
-                meta={command.description}
-                badges={<Tier scope={command.scope} />}
-              >
+        <DataTable
+          label="Commands available to this project"
+          items={list}
+          keyOf={(command) => `${command.scope}${command.name}`}
+          rows={8}
+          search={(command) => `${command.name} ${command.description}`}
+          placeholder="Search commands"
+          filter={sourceFilter(filter, setFilter)}
+          empty="No commands yet."
+          noResults="No commands match."
+          columns={[
+            {
+              key: "name",
+              header: "Command",
+              width: "10rem",
+              cell: (command) => <Cell>{command.name}</Cell>,
+            },
+            {
+              key: "description",
+              header: "Description",
+              width: "minmax(0, 1fr)",
+              cell: (command) => <Cell muted>{command.description}</Cell>,
+            },
+            {
+              key: "source",
+              header: "Source",
+              width: "7rem",
+              cell: (command) => <Source scope={command.scope} />,
+            },
+            {
+              key: "edit",
+              header: "Edit",
+              width: "2.5rem",
+              align: "end",
+              headerHidden: true,
+              cell: (command) => (
                 <Button size="icon-xs" variant="ghost" aria-label={`Edit ${command.name}`}>
                   <ArrowSquareOutIcon />
                 </Button>
-              </ItemRow>
-            )}
-          />
-          <ResolutionNote>
-            A project command wins over a personal one with the same name.
-          </ResolutionNote>
-        </>
+              ),
+            },
+          ]}
+        />
       )}
     </AsyncSection>
   );
@@ -252,7 +464,8 @@ function CommandsPane() {
 
 interface Server {
   name: string;
-  meta: string;
+  transport: string;
+  tools: string;
   scope: "project" | "personal";
   state: "ready" | "error" | "idle";
   status: string;
@@ -261,78 +474,213 @@ interface Server {
 const SERVERS: readonly Server[] = [
   {
     name: "linear",
-    meta: "12 tools · issues, projects, cycles",
+    transport: "stdio",
+    tools: "12 tools",
     scope: "project",
     state: "ready",
     status: "Connected",
   },
   {
     name: "sentry",
-    meta: "6 tools · issues, releases",
+    transport: "http",
+    tools: "6 tools",
     scope: "project",
     state: "ready",
     status: "Connected",
   },
   {
     name: "postgres",
-    meta: "Couldn't start — check the connection string",
+    transport: "stdio",
+    tools: "—",
     scope: "personal",
     state: "error",
     status: "Failed",
   },
   {
     name: "figma",
-    meta: "4 tools · files, comments",
+    transport: "http",
+    tools: "4 tools",
     scope: "personal",
     state: "idle",
     status: "Off",
   },
 ];
 
+/**
+ * Add MCP server — the other genuinely new feature, and the one with the most
+ * plumbing behind it.
+ *
+ * The transport choice is the fork everything else hangs off: a stdio server is
+ * a command plus args, an http one is a URL. So the form switches on it rather
+ * than showing every field and letting four of them be irrelevant.
+ */
+function AddServerDialog() {
+  const [open, setOpen] = React.useState(false);
+  const [transport, setTransport] = React.useState("stdio");
+  const [name, setName] = React.useState("");
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="xs" variant="ghost">
+          <PlusIcon />
+          Add server
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add MCP server</DialogTitle>
+          <DialogDescription>
+            Volli starts the server and offers its tools to agents in this project.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="mcp-name" className="text-ui">
+              Name
+            </label>
+            <Input
+              id="mcp-name"
+              value={name}
+              placeholder="linear"
+              onChange={(event) => setName(event.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <label htmlFor="mcp-transport" className="text-ui">
+              Transport
+            </label>
+            <Select value={transport} onValueChange={setTransport}>
+              <SelectTrigger id="mcp-transport" className={CONTROL_W.md}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stdio">Local command</SelectItem>
+                <SelectItem value="http">Remote URL</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {transport === "stdio" ? (
+            <>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="mcp-command" className="text-ui">
+                  Command
+                </label>
+                <Input id="mcp-command" placeholder="npx -y @linear/mcp-server" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="mcp-env" className="text-ui">
+                  Environment
+                </label>
+                <Textarea id="mcp-env" rows={3} placeholder={"LINEAR_API_KEY=…\nLOG_LEVEL=info"} />
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <label htmlFor="mcp-url" className="text-ui">
+                URL
+              </label>
+              <Input id="mcp-url" placeholder="https://mcp.example.com/sse" />
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm">
+              Cancel
+            </Button>
+          </DialogClose>
+          {/* Adding a server means starting a process. Connecting first and
+              reporting the result is the difference between this and a config
+              file — otherwise a typo shows up as a silent absence later. */}
+          <Button size="sm" disabled={name.trim().length === 0} onClick={() => setOpen(false)}>
+            Connect &amp; add
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function McpPane() {
+  const [filter, setFilter] = React.useState("all");
+  const shown = bySource(SERVERS, filter);
+
   return (
     <AsyncSection
       title="Servers"
       icon={PlugsConnectedIcon}
-      action={<SectionAction label="Add server" icon={PlusIcon} />}
-      state={ready(SERVERS)}
-      isEmpty={(list) => list.length === 0}
+      hint={
+        <>
+          MCP servers give agents tools beyond the filesystem. Web search is configured once for
+          every project, in Settings.
+        </>
+      }
+      action={<AddServerDialog />}
+      state={ready(shown)}
+      isEmpty={() => SERVERS.length === 0}
       empty="No MCP servers yet."
     >
       {(list) => (
-        <>
-          {list.map((server) => (
-            <ItemRow
-              key={server.name}
-              name={server.name}
-              meta={server.meta}
-              badges={<Tier scope={server.scope} />}
-            >
-              <Health state={server.state}>{server.status}</Health>
-              {server.state === "error" ? (
-                <Button size="sm" variant="outline">
-                  Fix
-                </Button>
-              ) : (
-                <Switch
-                  defaultChecked={server.state === "ready"}
-                  aria-label={`Enable ${server.name} in this project`}
-                />
-              )}
-            </ItemRow>
-          ))}
-          {/*
-           * Review §1.1: web search is agent tooling filed under Settings while
-           * MCP — also "tools the agent can reach" — is filed here, and the
-           * split gave a user no way to guess which page holds what. Under the
-           * scope rule the answer is consistent (web search is one account, so
-           * it is app-wide; servers are per-project), but consistent is not the
-           * same as discoverable. So this pane says where the other one is.
-           */}
-          <ResolutionNote>
-            Web search is configured once for every project, in Settings.
-          </ResolutionNote>
-        </>
+        <DataTable
+          label="MCP servers"
+          items={list}
+          keyOf={(server) => `${server.scope}/${server.name}`}
+          rows={8}
+          search={(server) => `${server.name} ${server.transport}`}
+          placeholder="Search servers"
+          filter={sourceFilter(filter, setFilter)}
+          empty="No MCP servers yet."
+          noResults="No servers match."
+          columns={[
+            {
+              key: "name",
+              header: "Server",
+              width: "minmax(0, 1fr)",
+              cell: (server) => <Cell>{server.name}</Cell>,
+            },
+            {
+              key: "tools",
+              header: "Tools",
+              width: "6rem",
+              cell: (server) => <Cell muted>{server.tools}</Cell>,
+            },
+            {
+              key: "source",
+              header: "Source",
+              width: "7rem",
+              cell: (server) => <Source scope={server.scope} />,
+            },
+            {
+              key: "status",
+              header: "Status",
+              width: "8rem",
+              cell: (server) => <Health state={server.state}>{server.status}</Health>,
+            },
+            {
+              key: "enabled",
+              header: "Enabled",
+              width: "4.5rem",
+              align: "end",
+              headerHidden: true,
+              cell: (server) =>
+                server.state === "error" ? (
+                  <Button size="xs" variant="outline">
+                    Fix
+                  </Button>
+                ) : (
+                  <Switch
+                    defaultChecked={server.state === "ready"}
+                    aria-label={`Enable ${server.name} in this project`}
+                  />
+                ),
+            },
+          ]}
+        />
       )}
     </AsyncSection>
   );
@@ -340,39 +688,75 @@ function McpPane() {
 
 /* ------------------------------- Plugins ---------------------------------- */
 
+interface Plugin {
+  name: string;
+  contents: string;
+  scope: "project" | "personal";
+}
+
+const PLUGINS: readonly Plugin[] = [
+  { name: "matt-pocock-engineering", contents: "9 skills · 3 commands", scope: "project" },
+  { name: "emil-design-eng", contents: "4 skills · 1 command", scope: "personal" },
+];
+
 function PluginsPane() {
+  const [filter, setFilter] = React.useState("all");
+  const shown = bySource(PLUGINS, filter);
+
   return (
     <AsyncSection
       title="Installed"
       icon={PuzzlePieceIcon}
+      hint={
+        <>A plugin is a bundle of skills and commands, installed together and updated together.</>
+      }
       action={<SectionAction label="Browse…" icon={PlusIcon} />}
-      state={ready([
-        {
-          name: "matt-pocock-engineering",
-          meta: "9 skills · 3 commands",
-          scope: "project" as const,
-        },
-        { name: "emil-design-eng", meta: "4 skills · 1 command", scope: "personal" as const },
-      ])}
-      isEmpty={(list) => list.length === 0}
+      state={ready(shown)}
+      isEmpty={() => PLUGINS.length === 0}
       empty="No plugins installed."
     >
       {(list) => (
-        <>
-          {list.map((plugin) => (
-            <ItemRow
-              key={plugin.name}
-              name={plugin.name}
-              meta={plugin.meta}
-              badges={<Tier scope={plugin.scope} />}
-            >
-              <Button size="sm" variant="outline">
-                Manage
-              </Button>
-              <Switch defaultChecked aria-label={`Enable ${plugin.name} in this project`} />
-            </ItemRow>
-          ))}
-        </>
+        <DataTable
+          label="Installed plugins"
+          items={list}
+          keyOf={(plugin) => `${plugin.scope}/${plugin.name}`}
+          rows={6}
+          search={(plugin) => plugin.name}
+          placeholder="Search plugins"
+          filter={sourceFilter(filter, setFilter)}
+          empty="No plugins installed."
+          noResults="No plugins match."
+          columns={[
+            {
+              key: "name",
+              header: "Plugin",
+              width: "minmax(0, 1fr)",
+              cell: (plugin) => <Cell>{plugin.name}</Cell>,
+            },
+            {
+              key: "contents",
+              header: "Contents",
+              width: "11rem",
+              cell: (plugin) => <Cell muted>{plugin.contents}</Cell>,
+            },
+            {
+              key: "source",
+              header: "Source",
+              width: "7rem",
+              cell: (plugin) => <Source scope={plugin.scope} />,
+            },
+            {
+              key: "enabled",
+              header: "Enabled",
+              width: "3.5rem",
+              align: "end",
+              headerHidden: true,
+              cell: (plugin) => (
+                <Switch defaultChecked aria-label={`Enable ${plugin.name} in this project`} />
+              ),
+            },
+          ]}
+        />
       )}
     </AsyncSection>
   );
@@ -381,21 +765,34 @@ function PluginsPane() {
 /* ------------------------------- Sessions --------------------------------- */
 
 function SessionsPane() {
-  const [harnessInherited, setHarnessInherited] = React.useState(true);
-  const [modelInherited, setModelInherited] = React.useState(false);
+  // `null` means inherit. The override IS the presence of a value — there is no
+  // separate mode flag, which is what let the last pass's two pills disappear.
+  const [harness, setHarness] = React.useState<string | null>(null);
+  const [model, setModel] = React.useState<string | null>("sonnet");
 
   return (
     <>
-      <PrefSection title="New sessions" icon={CpuIcon}>
-        <PrefRow label="Harness">
-          <InheritControl
-            ariaLabel="Harness scope"
-            inherited={harnessInherited}
+      <PrefSection
+        title="New sessions"
+        icon={CpuIcon}
+        // The precedence table, as one hint instead of a paragraph under the
+        // header. Available to whoever wants it, invisible to everyone else.
+        hint={
+          <>
+            These override your app-wide defaults for this project. A session uses the model picked
+            in its own composer first, then this project&rsquo;s, then Settings.
+          </>
+        }
+      >
+        <PrefRow label="Harness" htmlFor="harness" overridden={harness !== null}>
+          <OverrideControl
+            label="Harness"
             inheritedValue="Claude Code"
-            onChange={setHarnessInherited}
+            overridden={harness !== null}
+            onRevert={() => setHarness(null)}
           >
-            <Select value="codex">
-              <SelectTrigger className={CONTROL_W.md} aria-label="Harness">
+            <Select value={harness ?? "claude-code"} onValueChange={setHarness}>
+              <SelectTrigger id="harness" className={CONTROL_W.md}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -403,44 +800,38 @@ function SessionsPane() {
                 <SelectItem value="codex">Codex</SelectItem>
               </SelectContent>
             </Select>
-          </InheritControl>
+          </OverrideControl>
         </PrefRow>
-        <PrefRow label="Model">
-          <InheritControl
-            ariaLabel="Model scope"
-            inherited={modelInherited}
+
+        <PrefRow label="Model" htmlFor="model" overridden={model !== null}>
+          <OverrideControl
+            label="Model"
             inheritedValue="claude-opus-4.6"
-            onChange={setModelInherited}
+            overridden={model !== null}
+            onRevert={() => setModel(null)}
           >
-            <Select value="sonnet">
-              <SelectTrigger className={CONTROL_W.lg} aria-label="Model">
+            <Select value={model ?? "opus"} onValueChange={setModel}>
+              <SelectTrigger id="model" className={CONTROL_W.lg}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="opus">claude-opus-4.6 · Anthropic</SelectItem>
                 <SelectItem value="sonnet">claude-sonnet-4.6 · Anthropic</SelectItem>
+                <SelectItem value="codex">gpt-5.6-luna · OpenAI Codex</SelectItem>
               </SelectContent>
             </Select>
-          </InheritControl>
+          </OverrideControl>
         </PrefRow>
-        {/*
-         * THE PRECEDENCE TABLE, as one sentence. This is the thing whose
-         * absence made the first pass's models-on-both-surfaces a rebuild of
-         * the very desync the ticket is about.
-         */}
-        <ResolutionNote>
-          A session uses the model picked in its own composer, then this project&rsquo;s, then the
-          default in Settings.
-        </ResolutionNote>
       </PrefSection>
 
       <PrefSection
         title="Instructions"
         icon={BookOpenIcon}
+        hint={<>Every session in this project reads these files before its first turn.</>}
         action={<SectionAction label="Open AGENTS.md" icon={ArrowSquareOutIcon} />}
       >
-        <ItemRow name="AGENTS.md" meta="12 KB · repo root" badges={<Tier scope="project" />} />
-        <ItemRow name="CLAUDE.md" meta="15 KB · repo root" badges={<Tier scope="project" />} />
+        <ItemRow name="AGENTS.md" meta="12 KB · repo root" />
+        <ItemRow name="CLAUDE.md" meta="15 KB · repo root" />
       </PrefSection>
     </>
   );
@@ -448,66 +839,70 @@ function SessionsPane() {
 
 /* ------------------------------ Appearance -------------------------------- */
 
-/**
- * This project's theming overrides.
- *
- * Back on Configure, against the first pass, which moved it wholesale to
- * Settings behind a scope switch. Two reasons: sending someone to the app-wide
- * page to theme one project is the confusion the ticket opened with, and the
- * pane-level scope switch that made it possible was itself the thing review
- * §1.2 took apart. Three rows, one idiom, and Settings carries the
- * `OverrideNote` that points here.
- */
 function AppearancePane() {
-  const [modeInherited, setModeInherited] = React.useState(false);
-  const [canvasInherited, setCanvasInherited] = React.useState(true);
-  const [terminalInherited, setTerminalInherited] = React.useState(true);
+  const [mode, setMode] = React.useState<string | null>("light");
+  const [canvas, setCanvas] = React.useState<string | null>(null);
+  const [terminal, setTerminal] = React.useState<string | null>(null);
 
   return (
-    <PrefSection title="Overrides" icon={PaletteIcon}>
-      <PrefRow label="Mode" testId="project-appearance-mode">
-        <InheritControl
-          ariaLabel="Appearance scope"
-          inherited={modeInherited}
+    <PrefSection
+      title="Overrides"
+      icon={PaletteIcon}
+      hint={<>Anything left alone follows your app-wide theme in Settings.</>}
+    >
+      <PrefRow label="Mode" testId="project-appearance-mode" overridden={mode !== null}>
+        <OverrideControl
+          label="Mode"
           inheritedValue="Dark"
-          onChange={setModeInherited}
+          overridden={mode !== null}
+          onRevert={() => setMode(null)}
         >
+          {/* The second and last Segmented in the prototype, and the same
+              three-way as Settings — the point of an override is that it is
+              the same control, not a different one. */}
           <Segmented
             ariaLabel="Appearance mode"
-            value="light"
+            value={mode ?? "dark"}
             options={[
               { key: "light", label: "Light" },
               { key: "dark", label: "Dark" },
               { key: "auto", label: "Auto" },
             ]}
-            onChange={() => {}}
+            onChange={setMode}
           />
-        </InheritControl>
+        </OverrideControl>
       </PrefRow>
-      <PrefRow label="Canvas" testId="project-appearance-canvas">
-        <InheritControl
-          ariaLabel="Canvas scope"
-          inherited={canvasInherited}
+
+      <PrefRow label="Canvas" testId="project-appearance-canvas" overridden={canvas !== null}>
+        <OverrideControl
+          label="Canvas"
           inheritedValue="Ember"
-          onChange={setCanvasInherited}
+          overridden={canvas !== null}
+          onRevert={() => setCanvas(null)}
         >
-          <Button size="sm" variant="outline">
-            Edit canvas…
+          <Button size="sm" variant="outline" onClick={() => setCanvas("custom")}>
+            {canvas === null ? "Ember" : "Custom"}
           </Button>
-        </InheritControl>
+        </OverrideControl>
       </PrefRow>
-      <PrefRow label="Terminal theme" testId="project-appearance-terminal">
-        <InheritControl
-          ariaLabel="Terminal theme scope"
-          inherited={terminalInherited}
+
+      <PrefRow
+        label="Terminal theme"
+        testId="project-appearance-terminal"
+        overridden={terminal !== null}
+      >
+        <OverrideControl
+          label="Terminal theme"
           inheritedValue="Rosé Pine"
-          onChange={setTerminalInherited}
+          overridden={terminal !== null}
+          onRevert={() => setTerminal(null)}
         >
-          <Button size="sm" variant="outline">
-            Tokyo Night
+          <Button size="sm" variant="outline" onClick={() => setTerminal("tokyo")}>
+            {terminal === null ? "Rosé Pine" : "Tokyo Night"}
           </Button>
-        </InheritControl>
+        </OverrideControl>
       </PrefRow>
+
       <PrefRow label="Config file">
         <Button size="sm" variant="outline">
           This project&rsquo;s overlay
@@ -528,9 +923,6 @@ function WorktreesPane() {
             id="base"
             value="main"
             placeholder="main"
-            // Review §1.5: neither version verifies the ref exists, so a typo
-            // surfaces later, at worktree creation, far from the field. A
-            // blur-commit is fine IF the field can refuse — so it does.
             onCommit={(next) =>
               ["main", "master", "develop"].includes(next.trim())
                 ? { ok: true, value: next.trim() }
@@ -543,18 +935,16 @@ function WorktreesPane() {
         </PrefRow>
       </PrefSection>
 
-      {/*
-       * Review §2.6: the first pass shipped a Textarea seeded with the BUILT-IN
-       * DEFAULTS and blur-saved. Since `.worktreeinclude` is a tracked repo file
-       * that usually does not exist, that would have materialized it — freezing
-       * today's defaults into the repo so future default changes stopped
-       * applying — and produced an uncommitted working-tree change from a
-       * settings page. So: read-only until someone opts in, the defaults are
-       * labelled as defaults, and creating the file is an explicit act.
-       */}
       <PrefSection
         title="Copied files"
         icon={TerminalWindowIcon}
+        hint={
+          <>
+            Untracked files worth carrying into every new worktree. This repo has no{" "}
+            <code>.worktreeinclude</code>, so Volli&rsquo;s defaults apply — creating one replaces
+            them entirely.
+          </>
+        }
         action={<SectionAction label="Create .worktreeinclude" icon={PlusIcon} />}
       >
         <ItemRow name=".env*" badges={<Badge variant="outline">Default</Badge>} />
@@ -562,11 +952,6 @@ function WorktreesPane() {
           name=".claude/settings.local.json"
           badges={<Badge variant="outline">Default</Badge>}
         />
-        <ResolutionNote>
-          This repo has no{" "}
-          <code className="rounded-sm bg-muted px-1 py-1 font-mono">.worktreeinclude</code>, so
-          Volli&rsquo;s defaults apply. Creating one replaces them.
-        </ResolutionNote>
       </PrefSection>
     </>
   );
@@ -584,7 +969,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         label: "Skills",
         icon: BookOpenIcon,
         keywords: ["skill", "agents", "capability", "shadow"],
-        trailing: <Badge variant="secondary">7</Badge>,
+        count: SKILLS.length,
         content: <SkillsPane />,
       },
       {
@@ -592,7 +977,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         label: "Commands",
         icon: CommandIcon,
         keywords: ["command", "slash", "prompt", "template"],
-        trailing: <Badge variant="secondary">4</Badge>,
+        count: COMMANDS.length,
         content: <CommandsPane />,
       },
       {
@@ -600,7 +985,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         label: "MCP Servers",
         icon: PlugsConnectedIcon,
         keywords: ["mcp", "server", "tool", "context protocol"],
-        attention: { tone: "destructive", label: "1 failing" },
+        attention: { state: "error", label: "1 failing" },
         content: <McpPane />,
       },
       {
@@ -608,7 +993,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         label: "Plugins",
         icon: PuzzlePieceIcon,
         keywords: ["plugin", "bundle", "marketplace"],
-        trailing: <Badge variant="secondary">2</Badge>,
+        count: PLUGINS.length,
         content: <PluginsPane />,
       },
     ],

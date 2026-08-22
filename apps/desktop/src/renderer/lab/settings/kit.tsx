@@ -1,136 +1,219 @@
 /**
- * VC-111 — the proposed settings grammar, as primitives. **Second pass**, after
- * an independent review tore the first one apart
- * (docs/plans/settings-redesign-review.md).
+ * VC-111 — the settings design kit. **Third pass.**
  *
- * The first pass closed four drifts and opened five, because it had no
- * vocabulary for what every real pane in this app actually is: asynchronous,
- * failable, and empty before it is full. It also invented a pane-level scope
- * MODE that lied about any row it could not scope. Both are fixed here.
+ * The second pass was reviewed for correctness and passed. Then it was asked
+ * the question it had never been asked: *are these the right components?* The
+ * answer was no — and not because better ones exist on npm, but because better
+ * ones exist **in this repository**, and this file had quietly grown a second
+ * design system beside the real one.
+ *
+ * WHAT THE LIBRARY PASS FOUND (`pick-ui-library`, whose first instruction is
+ * "check what's already installed"):
+ *
+ *  - `ui/list-row.tsx` — five real surfaces draw rows through it. `ItemRow` was
+ *    a sixth hand-rolled copy, and it had *already* re-made the mistake that
+ *    file exists to prevent: its actions were inside the row's own flex target
+ *    instead of a sibling, and it drew a hover fill on rows that activate
+ *    nothing. `ItemRow` is now a thin arrangement over `ListRow`.
+ *  - `ui/status-dot.tsx` — twelve surfaces, including the two settings pages
+ *    being redesigned, get their status colour from one exhaustive map whose
+ *    header says in as many words that its whole point is that "a surface can
+ *    choose to draw a dot but cannot choose what the dot means". `Health` had
+ *    invented a second map. It now delegates.
+ *  - `ui/section-heading.tsx`, `ui/skeleton.tsx`, `ui/input-group.tsx` — three
+ *    more primitives re-derived here by hand.
+ *  - `ui/badge.tsx` has a `count` variant that is *bare muted mono, not a
+ *    pill*, written for exactly the case the rail was using `secondary` for.
+ *
+ * The one object the app genuinely does not have is a **table** — `grep` finds
+ * no `<table>` in the renderer at all. So `DataTable` below is new, built from
+ * the same tokens.
+ *
+ * On virtualization: the curated pick is Virtuoso and it is *not* installed.
+ * The threshold that justifies it is ~1,000 rows; a model catalogue is ~100 and
+ * a skills folder ~200. A capped scroll container is correct at this size, so
+ * the dependency is flagged and deliberately not added.
+ *
+ * THE PILL BUDGET. `ui/segmented.tsx` warns against "a second control
+ * language", and `docs/DESIGN.md` reserves the pill for *a control that acts*.
+ * Repeating a "This project" pill down every row of a list spends that shape on
+ * a fact, not an action. Provenance is a **table column** now, filterable from
+ * one control in the toolbar, and `Segmented` survives in exactly one place:
+ * Light/Dark/Auto, which is a closed three-way with icons.
+ *
+ * THE PROSE BUDGET. Explanations that were paragraphs under a section are now
+ * `InfoHint` — one `(i)` that opens on hover or focus. CLAUDE.md's rule is that
+ * controls talk; a hint a reader summons is not the surface talking at them.
  *
  * ── THE RULES ─────────────────────────────────────────────────────────────
- *
- *  1. THE RAIL IS GROUPED AND SEARCHABLE. Group labels are where the
- *     Settings-vs-Configure relationship is written down.
- *
- *  2. SCOPE IS THE SURFACE, NOT A MODE. **Settings panes are always app-wide.
- *     Configure panes are always this project.** There is no scope switch,
- *     because a pane-level switch claims every row in the pane is scopeable and
- *     most are not (review §1.2a/b). A Configure row that can defer to the
- *     app-wide value carries {@link InheritControl} — ONE idiom, everywhere,
- *     always naming the value it inherits. Settings shows {@link OverrideNote},
- *     which is information, not a control.
- *
- *  3. ONE SECTION HEADER GRAMMAR: icon · title · one action. Two legal action
- *     shapes and a primitive for each ({@link SectionAction},
- *     {@link SectionIconAction}) so neither gets hand-rolled.
- *
- *  4. A SETTING IS A ROW; A THING IS AN ITEM. {@link PrefRow} is label→control.
- *     {@link ItemRow} is a skill/server/model.
- *
- *  5. ONE SAVE MODEL, AND IT CAN REFUSE. Controls save on change.
- *     {@link CommitField} validates before writing, can be refused by the
- *     write, shows the refusal BESIDE the field, and only says "Saved" once
- *     something was. A setting that is destructive or expensive takes
- *     `confirm` and asks first.
- *
- *  6. ONE STATUS VOCABULARY, THREE ROLES, THREE COMPONENTS.
- *     {@link Health} = is it working. {@link Tier} = which layer it came from.
- *     {@link Provenance} = who set this value. The first pass used one `Origin`
- *     component with a boolean that meant "Volli set it" in Settings and "this
- *     project" in Configure — one prop, two meanings, which is the drift this
- *     rule exists to forbid.
- *
- *  7. EVERY PANE DECLARES ITS STATES. {@link AsyncSection} takes
- *     loading/error/empty/ready and there is no other way to draw them, so a
- *     pane cannot invent a fifth. This is the rule the first pass was missing
- *     entirely, and it governs the 80% of a settings surface that is state.
- *
- *  8. WIDTHS COME FROM A LADDER. {@link CONTROL_W}. The first pass used eight
- *     ad-hoc Tailwind widths and left a ragged right edge.
+ *  1. Grouped, searchable rail; group labels carry the relationship.
+ *  2. Scope is the surface. Settings is app-wide, Configure is this project.
+ *     Divergence is marked once per row by `OverrideControl`, never by a mode.
+ *  3. One section header grammar: icon · title · one action.
+ *  4. A setting is a `PrefRow`. A collection of things is a `DataTable`.
+ *  5. One save model, and it can refuse (`CommitField`).
+ *  6. Status has three roles and three components: `Health` (is it working),
+ *     `Provenance` (who set it), and a table column (where it came from).
+ *  7. Every collection declares loading, error, empty and no-results.
+ *  8. Widths come from `CONTROL_W`; nothing else sets one.
+ *  9. Prefer the repo's primitive. If one exists, this file wraps it.
  * ──────────────────────────────────────────────────────────────────────────
- *
- * COPY RULE. CLAUDE.md: "let controls talk — do not add `description` on
- * sections/rows, tutorial tooltips, or paragraphs under controls unless the
- * user asked." The first pass added thirteen section descriptions and two new
- * tooltips, including to a pane carrying an explicit handoff note asking nobody
- * to do that. `PrefSection` therefore has NO `description` prop at all: the
- * only prose slots left are `PrefRow.description` (documented as a trust
- * boundary exception) and `PrefRow.help`.
- *
- * Lab-only: local state, no store, no bridge.
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
-import { ContentColumn } from "@renderer/components/layout/content-column";
-import { PageHeader } from "@renderer/components/layout/page-header";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
-import { Notice } from "@renderer/components/ui/notice";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Segmented } from "@renderer/components/ui/segmented";
-import { Spinner } from "@renderer/components/ui/spinner";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { ContentColumn } from "@renderer/components/layout/content-column";
+import { PageHeader } from "@renderer/components/layout/page-header";
 import { cn } from "@renderer/lib/utils";
 
+/* ========================================================================== */
+/* Rule 8 — the width ladder                                                  */
+/* ========================================================================== */
+
 /**
- * Rule 8 — the control-width ladder.
- *
- * Three rungs, chosen from what the real controls need: a number or a short
- * enum, a path or a branch name, a model identifier with its provider. The
- * first pass shipped `w-72 w-56 w-48 w-40 w-32 w-24 w-20 w-10` across two files
- * with nothing governing the right edge.
+ * Three widths, because the app's controls sit in a right-aligned column and a
+ * column with eight widths in it is not a column. The second pass counted eight
+ * ad-hoc `w-*` classes across two panes.
  */
 export const CONTROL_W = {
-  /** Numbers, short enums, steppers. */
   sm: "w-24",
-  /** Branch names, commands, hostnames, app pickers. */
-  md: "w-56",
-  /** Model identifiers — "claude-sonnet-4.6 · Anthropic" and longer. */
-  lg: "w-72",
+  md: "w-44",
+  lg: "w-64",
 } as const;
 
 export type ControlWidth = keyof typeof CONTROL_W;
 
-/* -------------------------------------------------------------------------- */
-/* Rule 1 — the rail                                                           */
-/* -------------------------------------------------------------------------- */
+/* ========================================================================== */
+/* InfoHint — the prose budget                                                */
+/* ========================================================================== */
+
+/**
+ * The `(i)`.
+ *
+ * This replaces every explanatory paragraph the last pass parked under a
+ * section header. The rule it satisfies is CLAUDE.md's: a settings surface does
+ * not lecture, but a value that resolves through layers genuinely is not
+ * self-describing, and the honest resolution is to make the explanation
+ * *available* rather than *unavoidable*.
+ *
+ * Opens on hover AND on focus AND on click, because a hover-only affordance is
+ * unreachable by keyboard and invisible on a touchscreen. It is a real
+ * `<button>` inside a `Popover` rather than a `Tooltip` so that a hint which
+ * needs a link in it can have one.
+ *
+ * TWO THINGS THE FIRST DRAFT GOT WRONG, both caught by driving it:
+ *
+ *  1. It opened `side="bottom"` from a section header, which put the
+ *     explanation directly on top of the rows it was explaining. A hint that
+ *     covers its own subject is worse than no hint. It opens `top` now, and
+ *     Radix flips it only when there is genuinely no room.
+ *  2. Its panel swallowed the next click. A reader who opens a hint and then
+ *     reaches for the control underneath had that first click eaten by the
+ *     panel — which is exactly the click the hint just persuaded them to make.
+ *     So the panel is `pointer-events-none` by default and behaves like a
+ *     tooltip; `interactive` opts a hint back into being clickable, and only a
+ *     hint with a link or a copyable value should ask for it.
+ */
+export function InfoHint({
+  label,
+  interactive = false,
+  children,
+  className,
+}: {
+  /** What this explains. Becomes the button's accessible name. */
+  label: string;
+  /** The panel holds something you can click. Costs you the click-through. */
+  interactive?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const cancelClose = () => {
+    if (closeTimer.current !== undefined) clearTimeout(closeTimer.current);
+  };
+  // A small grace period, so travelling the gap between the button and the
+  // panel does not dismiss the thing you are travelling towards.
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+
+  React.useEffect(() => cancelClose, []);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        aria-label={`About ${label}`}
+        className={cn(
+          "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none",
+          className,
+        )}
+        onMouseEnter={() => {
+          cancelClose();
+          setOpen(true);
+        }}
+        onMouseLeave={scheduleClose}
+        onFocus={() => setOpen(true)}
+        onBlur={scheduleClose}
+      >
+        <InfoIcon className="size-3.5" />
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        collisionPadding={12}
+        className={cn(
+          "w-64 p-4 text-ui leading-relaxed text-muted-foreground",
+          !interactive && "pointer-events-none",
+        )}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onMouseEnter={interactive ? cancelClose : undefined}
+        onMouseLeave={interactive ? scheduleClose : undefined}
+      >
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/* ========================================================================== */
+/* Rule 1 — the shell                                                         */
+/* ========================================================================== */
 
 export interface PrefCategory {
   key: string;
   label: string;
   icon: PhosphorIcon;
-  /**
-   * Words the search matches beyond the label.
-   *
-   * Hand-maintained, and the review is right that this rots (§1.6): the first
-   * pass advertised "reasoning" on a pane with no reasoning control. The real
-   * fix is to derive it from the rows at build time; until the panes are real
-   * components rather than fixtures, the mitigation is that this list is
-   * asserted against the pane's rendered labels in `kit.test.ts`.
-   */
+  /** Extra search terms. Hand-maintained; see the doc's "still open". */
   keywords?: readonly string[];
-  /**
-   * A count worth seeing without entering the pane.
-   *
-   * A `Badge` reads fine as part of the button's accessible name ("Skills 7").
-   * A coloured dot does not ("MCP Servers 1 failing"), which is why state is
-   * carried by {@link PrefCategory.attention} instead — it renders the dot
-   * `aria-hidden` AND appends a real text suffix, so the signal survives for a
-   * screen reader rather than being deleted for one (review §4.4).
-   */
-  trailing?: React.ReactNode;
-  /** One word appended to the rail button's name when the pane needs attention. */
-  attention?: { tone: "primary" | "destructive"; label: string };
+  /** A count. `Badge variant="count"` — bare mono, deliberately not a pill. */
+  count?: number;
+  /** Something is wrong or waiting here. Drawn as a dot, said in the name. */
+  attention?: { state: StatusDotState; label: string };
   content: React.ReactNode;
 }
 
@@ -140,401 +223,285 @@ export interface PrefGroup {
   categories: readonly PrefCategory[];
 }
 
-function useCategoryFilter(groups: readonly PrefGroup[], query: string) {
-  return React.useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (needle === "") return { groups, total: groups.flatMap((g) => g.categories).length };
-    const filtered = groups
-      .map((group) => ({
-        ...group,
-        categories: group.categories.filter((category) =>
-          [category.label, ...(category.keywords ?? [])].join(" ").toLowerCase().includes(needle),
-        ),
-      }))
-      .filter((group) => group.categories.length > 0);
-    return { groups: filtered, total: filtered.flatMap((g) => g.categories).length };
-  }, [groups, query]);
-}
-
 export function PrefShell({
   surfaceLabel,
-  header,
   groups,
+  header,
   activeKey,
   onSelect,
 }: {
-  /** Names the rail's landmark, so two preference surfaces are distinguishable. */
   surfaceLabel: string;
-  header: React.ReactNode;
   groups: readonly PrefGroup[];
+  /** What sits above the search field — the project identity, on Configure. */
+  header?: React.ReactNode;
+  /**
+   * Controlled, because the surface switch outside this component has to keep
+   * a per-surface selection alive across a toggle.
+   */
   activeKey: string;
-  onSelect(key: string): void;
+  onSelect: (key: string) => void;
 }) {
+  const all = React.useMemo(() => groups.flatMap((group) => group.categories), [groups]);
+  const active = activeKey;
+  const setActive = onSelect;
   const [query, setQuery] = React.useState("");
-  const { groups: filtered, total } = useCategoryFilter(groups, query);
-  const all = groups.flatMap((group) => group.categories);
-  const active = all.find((category) => category.key === activeKey) ?? all[0] ?? null;
-
-  // Review §4.7: the pane's inner div was keyed but the SCROLL CONTAINER was
-  // the unkeyed parent, so leaving a scrolled Models pane for a short one
-  // landed on blank space. The scroller is reset explicitly on entry.
   const scroller = React.useRef<HTMLDivElement>(null);
+
+  const matches = React.useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return null;
+    return new Set(
+      all
+        .filter((category) =>
+          [category.label, ...(category.keywords ?? [])].some((term) =>
+            term.toLowerCase().includes(needle),
+          ),
+        )
+        .map((category) => category.key),
+    );
+  }, [all, query]);
+
+  const visible = groups
+    .map((group) => ({
+      ...group,
+      categories: group.categories.filter((c) => matches === null || matches.has(c.key)),
+    }))
+    .filter((group) => group.categories.length > 0);
+
+  // Rule: a pane switch starts at the top. The scroll container is explicit
+  // rather than inferred, because `scrollIntoView` on a mounting child fights
+  // the layout it is mounting into.
   React.useEffect(() => {
     scroller.current?.scrollTo({ top: 0 });
-  }, [active?.key]);
+  }, [active]);
+
+  const current = all.find((category) => category.key === active);
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <nav aria-label={surfaceLabel} className="flex w-60 shrink-0 flex-col border-r border-border">
-        <div className="border-b border-border p-4">
-          {header}
-          <div className="relative mt-4">
-            <MagnifyingGlassIcon
-              aria-hidden
-              className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              // `search` rather than `text`: it gets the platform's clear
-              // affordance and Escape-to-clear for free, which review §2.12
-              // asked for and a bare text input does not have.
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search"
-              aria-label={`Search ${surfaceLabel}`}
-              className="pl-6"
-            />
-          </div>
-        </div>
+    // `w-full flex-1` is not decoration. Without it this root is a shrink-to-fit
+    // flex item, and the entire surface collapses to the width of its widest
+    // line — 670px in a 1400px window, jammed against the left edge, with every
+    // table column starved. Which is exactly what it did.
+    <div className="flex h-full min-h-0 w-full flex-1">
+      <nav
+        aria-label={`${surfaceLabel} categories`}
+        className="flex w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-4"
+      >
+        {header}
+        <InputGroup className="mx-1">
+          <InputGroupAddon>
+            <MagnifyingGlassIcon />
+          </InputGroupAddon>
+          <InputGroupInput
+            type="search"
+            value={query}
+            aria-label={`Search ${surfaceLabel.toLowerCase()}`}
+            placeholder="Search"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </InputGroup>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-          {/* Review §4.8 — the result count was never announced. */}
-          <p aria-live="polite" className="sr-only">
-            {query.trim() === "" ? "" : `${total} ${total === 1 ? "result" : "results"}`}
-          </p>
-          {filtered.map((group) => (
-            <div key={group.key} className="flex flex-col gap-1">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {visible.map((group) => (
+            <div key={group.key} className="pb-4">
               <SectionHeading as="p" className="px-2 pb-1">
                 {group.label}
               </SectionHeading>
-              {group.categories.map((category) => {
-                const isActive = active?.key === category.key;
-                const Icon = category.icon;
-                return (
-                  <button
-                    key={category.key}
-                    type="button"
-                    aria-current={isActive ? "page" : undefined}
-                    onClick={() => onSelect(category.key)}
-                    className={cn(
-                      "flex items-center gap-2 rounded-md px-2 py-1 text-left text-ui transition-colors",
-                      isActive
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="size-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{category.label}</span>
-                    {category.attention ? (
-                      <>
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "size-1.5 shrink-0 rounded-full",
-                            category.attention.tone === "primary" ? "bg-primary" : "bg-destructive",
-                          )}
-                        />
-                        <span className="sr-only">{category.attention.label}</span>
-                      </>
-                    ) : null}
-                    {category.trailing}
-                  </button>
-                );
-              })}
+              {group.categories.map((category) => (
+                <button
+                  key={category.key}
+                  type="button"
+                  aria-current={category.key === active ? "page" : undefined}
+                  onClick={() => setActive(category.key)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-ui transition-colors focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none",
+                    category.key === active
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                  )}
+                >
+                  <category.icon className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{category.label}</span>
+                  {category.count === undefined ? null : (
+                    <Badge variant="count">{category.count}</Badge>
+                  )}
+                  {category.attention ? (
+                    <>
+                      <StatusDot state={category.attention.state} />
+                      {/* The dot is `aria-hidden` by construction, so the state
+                          is said here instead of being dropped. */}
+                      <span className="sr-only">{category.attention.label}</span>
+                    </>
+                  ) : null}
+                </button>
+              ))}
             </div>
           ))}
-          {filtered.length === 0 ? (
-            <p className="px-2 text-ui text-muted-foreground">No settings match.</p>
+          {visible.length === 0 ? (
+            <p className="px-2 py-6 text-center text-ui text-muted-foreground">Nothing matches.</p>
           ) : null}
+          <p aria-live="polite" className="sr-only">
+            {matches === null ? "" : `${matches.size} categories match`}
+          </p>
         </div>
       </nav>
 
       <div ref={scroller} className="min-w-0 flex-1 overflow-y-auto">
-        {active ? (
-          // Review §5.2: the first pass inlined `mx-auto w-full max-w-content
-          // px-gutter` and a hand-rolled <h1>, which is ContentColumn and
-          // PageHeader copied as strings — the exact failure DESIGN.md's
-          // opening principle names, in the file arguing for cohesion.
-          <ContentColumn className="pb-16">
-            <PageHeader variant="reading" title={active.label} />
-            <div key={active.key} className="flex flex-col gap-4">
-              {active.content}
-            </div>
-          </ContentColumn>
-        ) : null}
+        {/* Tier A, the same call the live settings shell makes: a pane is a
+            reading surface, so it takes the canonical measure and the page
+            gutter rather than a width of its own. */}
+        <ContentColumn className="pb-4">
+          <PageHeader variant="reading" title={current?.label ?? ""} />
+          <div className="flex flex-col gap-6">{current?.content}</div>
+        </ContentColumn>
       </div>
     </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Rule 2 — inheritance, one idiom                                             */
-/* -------------------------------------------------------------------------- */
+/* ========================================================================== */
+/* Rule 3 — sections                                                          */
+/* ========================================================================== */
 
 /**
- * A Configure row that may defer to the app-wide value.
+ * A section. Icon, title, at most one action.
  *
- * THE ONE INHERITANCE IDIOM. The first pass had three — a `Segmented` in
- * Appearance, a "Same as Project chats" option inside a `Select` in Models, and
- * a "Same as Settings — …" option inside a different `Select` in Sessions —
- * while its own rule said scope lives in exactly one place (review §1.1, §1.3).
- * Anything that inherits now looks like this, on every surface.
- *
- * Inherit is the ABSENCE of a stored value, never a stored marker, matching
- * `projectCanvasChoice`'s existing treatment. `inheritedValue` is required
- * rather than optional: an Inherit state that does not name what it inherits is
- * the blank-looking-like-unconfigured problem the app already solved once.
- *
- * `ariaLabel` is required for the same reason — the first pass hardcoded
- * `"Scope"`, so a pane with three of these announced three identical groups,
- * regressing from today's "Canvas scope" / "Terminal theme scope" (review §4.2).
- */
-export function InheritControl({
-  ariaLabel,
-  inherited,
-  inheritedValue,
-  onChange,
-  children,
-}: {
-  ariaLabel: string;
-  inherited: boolean;
-  /** What the app-wide setting says. Shown whenever this row is inheriting. */
-  inheritedValue: React.ReactNode;
-  onChange(inherit: boolean): void;
-  /** The control itself, rendered only when this row is NOT inheriting. */
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      {inherited ? (
-        <span className="text-ui text-muted-foreground">
-          <span className="text-foreground">{inheritedValue}</span>
-        </span>
-      ) : (
-        children
-      )}
-      <Segmented
-        ariaLabel={ariaLabel}
-        value={inherited ? "inherit" : "custom"}
-        options={[
-          { key: "inherit", label: "Inherit" },
-          { key: "custom", label: "Custom" },
-        ]}
-        onChange={(key) => onChange(key === "inherit")}
-      />
-    </div>
-  );
-}
-
-/**
- * Settings' half of the same fact: this app-wide value is overridden somewhere.
- *
- * INFORMATION, NOT A MODE. The first pass put a two-option `Segmented` at the
- * top of the pane that swapped its whole contents — which hid every row that
- * could not be scoped, silently mis-framed the ones it kept, could not express
- * a twelfth project's override, took a hand-maintained integer that nothing
- * derived, and had no state for "no project selected" (review §1.2 a–f).
- *
- * This takes the projects themselves, so the count cannot drift from the list,
- * and it names them — which is the question "3 overridden" could not answer.
- */
-export function OverrideNote({
-  projects,
-  onOpen,
-}: {
-  /** Every project overriding something in THIS pane. Empty renders nothing. */
-  projects: readonly string[];
-  onOpen(project: string): void;
-}) {
-  if (projects.length === 0) return null;
-  const shown = projects.slice(0, 3);
-  return (
-    <p className="text-ui text-muted-foreground">
-      Overridden in{" "}
-      {shown.map((project, index) => (
-        <React.Fragment key={project}>
-          {index > 0 ? ", " : ""}
-          <button
-            type="button"
-            onClick={() => onOpen(project)}
-            // `max-w-48` + truncate: a 60-character monorepo folder name blew
-            // the first pass's scope control out of the 720px measure, because
-            // it rendered the raw project name into a Segmented label that has
-            // no truncation (review §1.2f).
-            className="max-w-48 truncate align-bottom text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
-          >
-            {project}
-          </button>
-        </React.Fragment>
-      ))}
-      {projects.length > shown.length ? ` and ${projects.length - shown.length} more` : ""}.
-    </p>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Rules 3 and 4 — sections, rows, items                                       */
-/* -------------------------------------------------------------------------- */
-
-/**
- * A group of related settings.
- *
- * NO `description` PROP. CLAUDE.md forbids section descriptions outright, and
- * the first pass added thirteen of them. Removing the prop is what makes the
- * rule enforceable rather than aspirational — a pane cannot add helper text
- * here because there is nowhere to put it.
+ * There is **no `description` prop**, and that is load-bearing: CLAUDE.md
+ * forbids explanatory text under a section header, and an earlier pass added
+ * thirteen of them. A rule you cannot express is a rule you cannot break — what
+ * a section needs to say now goes in an `InfoHint` beside its title, which the
+ * reader opens or ignores.
  */
 export function PrefSection({
   title,
   icon: Icon,
+  hint,
   action,
   children,
 }: {
-  title?: string;
+  title: string;
   icon?: PhosphorIcon;
+  /** The `(i)`. A node, not a string, so it can carry a link. */
+  hint?: React.ReactNode;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const hasHeader = title !== undefined || action !== undefined;
+  // One fill, no border, no internal rules. This is `SettingsSection`'s own
+  // chrome, and departing from it was what turned the surface into a stack of
+  // boxes inside boxes: a bordered card, holding a bordered table, holding a
+  // bordered search field.
   return (
-    <section className="rounded-lg bg-card px-4 py-2">
-      {hasHeader ? (
-        <div className="mb-2 flex items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-2">
-            {Icon ? <Icon className="size-4 shrink-0 text-muted-foreground" /> : null}
-            {title ? <h2 className="truncate text-sm font-semibold">{title}</h2> : null}
-          </div>
-          {action ? <div className="shrink-0">{action}</div> : null}
+    <section className="rounded-lg bg-card px-4 py-4">
+      {/* The rule under the header is DELIBERATE and drawn here.
+          It used to appear by accident: `PrefRow`'s `first:border-t-0` never
+          matched, because this header — not the first row — is the section's
+          first child. Same pixels, but now the code says so, and the rows own
+          only the rules between themselves. */}
+      <div className="mb-4 flex items-start justify-between gap-4 border-b border-border/50 pb-4">
+        <div className="flex min-w-0 items-center gap-2">
+          {Icon ? <Icon className="size-4 shrink-0 text-muted-foreground" /> : null}
+          <h2 className="min-w-0 truncate text-sm font-semibold">{title}</h2>
+          {hint ? <InfoHint label={title}>{hint}</InfoHint> : null}
         </div>
-      ) : null}
-      <div>{children}</div>
+        {action}
+      </div>
+      {children}
     </section>
   );
 }
 
-/** Rule 3, shape one: a named action. */
+/** A section action with a word on it. */
 export function SectionAction({
   label,
   icon: Icon,
-  onClick,
+  onAct,
 }: {
   label: string;
   icon?: PhosphorIcon;
-  onClick?: () => void;
+  onAct?: () => void;
 }) {
   return (
-    <Button size="xs" variant="outline" onClick={onClick}>
+    <Button size="xs" variant="ghost" onClick={onAct}>
       {Icon ? <Icon /> : null}
       {label}
     </Button>
   );
 }
 
-/**
- * Rule 3, shape two: a glyph-only action — refresh, and nothing else so far.
- *
- * A primitive rather than a convention, because the first pass named two legal
- * shapes and shipped one, which guaranteed the other would be hand-rolled at
- * every call site (review §1.6).
- */
+/** A section action that is only a glyph. Its name lives in `aria-label`. */
 export function SectionIconAction({
   label,
-  icon: Icon = ArrowsClockwiseIcon,
-  busy = false,
-  onClick,
+  icon: Icon = ArrowClockwiseIcon,
+  onAct,
 }: {
   label: string;
   icon?: PhosphorIcon;
-  busy?: boolean;
-  onClick?: () => void;
+  onAct?: () => void;
 }) {
   return (
-    <Button size="icon-xs" variant="ghost" aria-label={label} disabled={busy} onClick={onClick}>
-      <Icon className={busy ? "animate-spin" : undefined} />
+    <Button size="icon-xs" variant="ghost" aria-label={label} onClick={onAct}>
+      <Icon />
     </Button>
   );
 }
 
-/**
- * The label's hover helper.
- *
- * OUTSIDE the `<label>`, unlike today's shell and unlike the first pass, which
- * inherited the bug and then claimed to have fixed the drift: a button nested
- * inside a `<label htmlFor>` forwards its activation to the labelled control,
- * so pressing "what is this?" next to a Switch TOGGLES THE SWITCH (review §4.5).
- *
- * A real `InfoIcon`, not the `ⓘ` character the first pass substituted — a
- * unicode glyph sits outside the Phosphor weight/size language and renders
- * differently on every fallback font (review §4.6).
- */
-function RowHelp({ help }: { help: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={help}
-          className="inline-flex cursor-help text-muted-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring/45"
-        >
-          <InfoIcon aria-hidden className="size-3.5" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-64">
-        {help}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
+/* ========================================================================== */
+/* Rule 4 — a setting is a row                                                */
+/* ========================================================================== */
 
 export function PrefRow({
   label,
-  help,
-  description,
   htmlFor,
+  hint,
+  description,
+  overridden = false,
   align = "center",
   testId,
   children,
 }: {
   label: string;
-  help?: string;
-  /** Trust boundaries only — what a deletion takes, what a value costs. */
-  description?: React.ReactNode;
   htmlFor?: string;
-  align?: "center" | "start";
+  /** The `(i)`. Preferred over `description` everywhere. */
+  hint?: React.ReactNode;
   /**
-   * Kept from `SettingsRow`. The first pass dropped it, which breaks fifteen
-   * references across `model-access-settings.test.tsx`,
-   * `appearance-settings.test.tsx` and `e2e/canvas-theming-smoke.mjs` — a
-   * migration cost the proposal never mentioned (review §2.11).
+   * Prose under the label. **Reserved for trust boundaries** — where the app
+   * takes an irreversible action and CLAUDE.md's own carve-out applies. Two
+   * uses in the whole prototype, both about automatic deletion.
    */
+  description?: string;
+  /**
+   * This project has diverged from the app-wide value. Draws the marker; the
+   * revert control comes from {@link OverrideControl}.
+   */
+  overridden?: boolean;
+  align?: "center" | "start";
   testId?: string;
   children: React.ReactNode;
 }) {
   return (
     <div
       data-testid={testId}
+      data-overridden={overridden || undefined}
       className={cn(
-        "flex justify-between gap-4 border-t border-border/50 py-2 first:border-t-0 first:pt-0 last:pb-0",
+        "relative flex justify-between gap-6 border-t border-border/50 py-4 first:border-t-0 first:pt-0 last:pb-0",
         align === "center" ? "items-center" : "items-start",
       )}
     >
+      {/* The override marker: a 2px accent bar in the gutter. One glyph, no
+          pill, no repeated word — and it is the ONLY thing on a Configure row
+          that says "this one differs". */}
+      {overridden ? (
+        <span aria-hidden className="absolute top-4 -left-2 h-4 w-0.5 rounded-full bg-primary" />
+      ) : null}
       <div className="min-w-0 flex-1">
-        {/* The label and its helper are SIBLINGS — see RowHelp. */}
-        <div className="flex items-center gap-1.5">
-          <label className="block text-sm font-medium" htmlFor={htmlFor}>
+        <div className="flex items-center gap-1">
+          {/* The hint is a SIBLING of the label, never a child: a `<button>`
+              inside a `<label htmlFor>` toggles the control it names. */}
+          <label htmlFor={htmlFor} className="block text-sm font-medium">
             {label}
+            {overridden ? <span className="sr-only"> (overridden for this project)</span> : null}
           </label>
-          {help === undefined ? null : <RowHelp help={help} />}
+          {hint ? <InfoHint label={label}>{hint}</InfoHint> : null}
         </div>
         {description ? (
           <p className="mt-1 text-ui leading-5 text-muted-foreground">{description}</p>
@@ -545,296 +512,559 @@ export function PrefRow({
   );
 }
 
+/**
+ * A thing in a list, as opposed to a setting.
+ *
+ * Now a thin arrangement over `ui/list-row.tsx` rather than a sixth hand-rolled
+ * row. That file owns the branch this one kept getting wrong: actions must be a
+ * *sibling* of the activation target (a button inside a button is not markup),
+ * and a row that activates nothing must not draw a hover fill.
+ */
 export function ItemRow({
-  icon: Icon,
   name,
   meta,
+  leading,
   badges,
+  onOpen,
   testId,
   children,
 }: {
-  icon?: PhosphorIcon;
-  name: string;
-  meta?: React.ReactNode;
+  name: React.ReactNode;
+  meta?: string;
+  leading?: React.ReactNode;
   badges?: React.ReactNode;
+  onOpen?: () => void;
   testId?: string;
   children?: React.ReactNode;
 }) {
   return (
-    <div
+    <ListRow
+      density={meta ? "two-line" : "row"}
+      leading={leading}
+      primary={name}
+      primaryTrailing={badges}
+      secondary={meta}
+      actions={
+        children ? <div className="flex shrink-0 items-center gap-2">{children}</div> : undefined
+      }
+      onActivate={onOpen ?? null}
       data-testid={testId}
-      className="flex items-center justify-between gap-4 border-t border-border/50 py-2 first:border-t-0 first:pt-0 last:pb-0"
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        {Icon ? <Icon className="size-4 shrink-0 text-muted-foreground" /> : null}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-ui font-medium text-foreground">{name}</p>
-            {badges}
-          </div>
-          {meta ? <p className="mt-1 truncate text-ui text-muted-foreground">{meta}</p> : null}
-        </div>
-      </div>
-      {children ? <div className="flex shrink-0 items-center gap-2">{children}</div> : null}
-    </div>
+    />
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Rule 7 — every pane declares its states                                     */
-/* -------------------------------------------------------------------------- */
-
-/** What a pane's data can be. `empty` is NOT `ready` with nothing in it — see below. */
-export type AsyncState<T> =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: T };
+/* ========================================================================== */
+/* Rule 2 — divergence, marked once                                           */
+/* ========================================================================== */
 
 /**
- * A section whose body depends on a read that can fail.
+ * The one inheritance idiom, and it costs **zero pills**.
  *
- * THE PRIMITIVE THE FIRST PASS DID NOT HAVE. Every real settings pane in this
- * app — worktrees, CLI, web access, model access, project appearance — renders
- * a loading line, a `Notice` with a Retry, and an empty state, and the first
- * kit had no vocabulary for any of it. So each pane would have invented its
- * own, which is exactly the drift the rules exist to stop (review §1.6).
+ * The last pass put a `Segmented` "Inherit | Custom" pair on every scopeable
+ * row — two pills and a value per row, a whole extra control language for a
+ * fact. This is the affordance macOS and VS Code both settled on instead:
  *
- * `empty` and `noResults` are separate slots on purpose: a project with no
- * skills at all and a search that matched nothing are different answers, and
- * the first pass rendered "No skills match." for both (review §2.4).
+ *   - Inheriting? The control simply shows the inherited value. Touching it
+ *     overrides — no mode to enter first, which was always the redundant step,
+ *     since choosing a value *is* the act of overriding.
+ *   - Overridden? A revert button appears, and `PrefRow` draws its gutter mark.
+ *
+ * So the row is quiet until it has something to say, and the only new control
+ * is one that appears exactly when it is actionable.
  */
-export function AsyncSection<T>({
-  title,
-  icon,
-  action,
-  state,
-  isEmpty,
-  empty,
-  onRetry,
+export function OverrideControl({
+  label,
+  inheritedValue,
+  overridden,
+  onRevert,
   children,
 }: {
-  title?: string;
-  icon?: PhosphorIcon;
-  action?: React.ReactNode;
-  state: AsyncState<T>;
-  /** Whether ready data is the genuinely-nothing case. */
-  isEmpty?(data: T): boolean;
-  /** One line for the genuinely-nothing case. */
-  empty?: string;
-  onRetry?(): void;
-  children(data: T): React.ReactNode;
+  /** Names the revert button: "Use the app-wide Harness". */
+  label: string;
+  /** What Settings says. Shown in the revert button's tooltip-free label. */
+  inheritedValue: string;
+  overridden: boolean;
+  onRevert: () => void;
+  children: React.ReactNode;
 }) {
-  return (
-    <PrefSection title={title} icon={icon} action={action}>
-      {state.status === "loading" ? (
-        <p className={cn(EMPTY_INLINE, "flex items-center gap-2")}>
-          <Spinner className="size-3.5" />
-          Loading…
-        </p>
-      ) : state.status === "error" ? (
-        // A read that FAILED and a read that found nothing are not the same
-        // answer — `settings-page.tsx` learned this the hard way and says so.
-        // The recovery lives here rather than in a toast, for the same reason.
-        <Notice
-          announce
-          tone="error"
-          icon={WarningIcon}
-          title="Couldn't load this"
-          detail={state.message}
-          actions={
-            onRetry ? (
-              <Button size="xs" variant="outline" onClick={onRetry}>
-                <ArrowsClockwiseIcon />
-                Retry
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : isEmpty?.(state.data) ? (
-        <p className={EMPTY_INLINE}>{empty ?? "Nothing here yet."}</p>
-      ) : (
-        children(state.data)
-      )}
-    </PrefSection>
-  );
-}
-
-/**
- * A searchable list of like things.
- *
- * TAKES DATA AND A RENDERER, never children. The first pass typed `children` as
- * `ReactElement[]` and filtered by reaching into `child.props.name`, which
- * breaks on a single child, a fragment, a conditional, a nested map, or any
- * wrapper — and returned `"[object Object]"` for the `ReactNode` name its own
- * `ItemRow` allowed (review §3.1).
- *
- * `search` extracts the haystack, so a model row can match on its PROVIDER as
- * well as its name. That is not a nicety: `model-access-settings.tsx` documents
- * that eight providers ship a model called exactly "GPT-5.6 Luna", so a filter
- * over names alone cannot tell two rows apart (review §2.5).
- */
-export function ItemList<T>({
-  items,
-  search,
-  keyOf,
-  placeholder,
-  noResults = "Nothing matches.",
-  /**
-   * Always show the field. The first pass hid it under `children.length > 6` —
-   * a magic threshold that hides search on the seven-item list you want to
-   * search and shows it on the one you do not (review §3.2).
-   */
-  render,
-}: {
-  items: readonly T[];
-  search(item: T): string;
-  keyOf(item: T): string;
-  placeholder: string;
-  noResults?: string;
-  render(item: T): React.ReactNode;
-}) {
-  const [query, setQuery] = React.useState("");
-  const needle = query.trim().toLowerCase();
-  const shown =
-    needle === "" ? items : items.filter((item) => search(item).toLowerCase().includes(needle));
-
   return (
     <>
-      <div className="pb-2">
-        <Input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={placeholder}
-          aria-label={placeholder}
-        />
-      </div>
-      <p aria-live="polite" className="sr-only">
-        {needle === "" ? "" : `${shown.length} of ${items.length} shown`}
-      </p>
-      {shown.length === 0 ? (
-        <p className={EMPTY_INLINE}>{noResults}</p>
+      {children}
+      {overridden ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`Reset ${label} to the app-wide value, ${inheritedValue}`}
+          onClick={onRevert}
+        >
+          <ArrowCounterClockwiseIcon />
+        </Button>
       ) : (
-        <div>
-          {shown.map((item) => (
-            <React.Fragment key={keyOf(item)}>{render(item)}</React.Fragment>
-          ))}
-        </div>
+        // Holds the column so the control does not shift left when a row
+        // reverts. Same trick the model catalogue uses for un-reservable rows.
+        <span aria-hidden className="size-5" />
       )}
     </>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Rule 5 — one save model, and it can refuse                                  */
-/* -------------------------------------------------------------------------- */
+/**
+ * The Settings-side counterpart: which projects have diverged.
+ *
+ * Takes the projects, not a count, so it can name them and link to each. A
+ * hand-maintained "3 projects override this" is a number that goes stale and
+ * cannot be clicked.
+ */
+export function OverrideNote({
+  projects,
+  onOpen,
+}: {
+  projects: readonly string[];
+  onOpen: (project: string) => void;
+}) {
+  if (projects.length === 0) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-1 text-ui text-muted-foreground">
+      <span>Overridden in</span>
+      {projects.map((project, index) => (
+        <React.Fragment key={project}>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-auto px-1 py-0 underline underline-offset-2"
+            onClick={() => onOpen(project)}
+          >
+            {project}
+          </Button>
+          {index < projects.length - 1 ? <span>·</span> : null}
+        </React.Fragment>
+      ))}
+    </p>
+  );
+}
+
+/* ========================================================================== */
+/* Rule 6 — status, three roles                                               */
+/* ========================================================================== */
+
+/**
+ * Is this thing working?
+ *
+ * Delegates its colour to `ui/status-dot.tsx`, which is the app's single map
+ * from state to hue. The previous pass had its own three-tone map — precisely
+ * the drift StatusDot's header describes itself as existing to end, written
+ * again one folder away.
+ */
+export function Health({ state, children }: { state: StatusDotState; children: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-ui text-muted-foreground">
+      <StatusDot state={state} />
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Who set this value — Volli, or the tool it reads from.
+ *
+ * Distinct from provenance-as-scope (project vs personal), which is a table
+ * column now. One component, one meaning.
+ */
+export function Provenance({ mine, children }: { mine?: boolean; children: string }) {
+  return (
+    <span className={cn("text-ui", mine ? "text-primary-text" : "text-muted-foreground")}>
+      {children}
+    </span>
+  );
+}
+
+/* ========================================================================== */
+/* Rule 7 — collections declare their states                                  */
+/* ========================================================================== */
+
+export type AsyncState<T> =
+  | { status: "loading" }
+  | { status: "error"; message: string; onRetry: () => void }
+  | { status: "ready"; data: T };
+
+/** The skeleton a first read draws. Uses the repo's primitive. */
+function LoadingRows({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="flex flex-col gap-2 py-4" aria-live="polite" aria-busy>
+      <span className="sr-only">Loading…</span>
+      {Array.from({ length: rows }, (_, index) => (
+        <Skeleton key={index} className="h-8 w-full rounded-lg" />
+      ))}
+    </div>
+  );
+}
+
+function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex items-center gap-2 py-4 text-ui">
+      <WarningIcon className="size-4 shrink-0 text-destructive" />
+      <span className="min-w-0 flex-1 text-muted-foreground">{message}</span>
+      <Button size="xs" variant="outline" onClick={onRetry}>
+        Try again
+      </Button>
+    </div>
+  );
+}
+
+export function Empty({ children }: { children: string }) {
+  return <p className="py-6 text-center text-ui text-muted-foreground">{children}</p>;
+}
+
+/**
+ * A section whose body is fetched.
+ *
+ * The vocabulary the first two passes were missing entirely: they drew only the
+ * happy path, which is the 20% of a settings surface that is easy.
+ */
+export function AsyncSection<T>({
+  title,
+  icon,
+  hint,
+  action,
+  state,
+  isEmpty,
+  empty,
+  children,
+}: {
+  title: string;
+  icon?: PhosphorIcon;
+  hint?: React.ReactNode;
+  action?: React.ReactNode;
+  state: AsyncState<T>;
+  isEmpty?: (data: T) => boolean;
+  empty?: string;
+  children: (data: T) => React.ReactNode;
+}) {
+  return (
+    <PrefSection title={title} icon={icon} hint={hint} action={action}>
+      {state.status === "loading" ? <LoadingRows /> : null}
+      {state.status === "error" ? (
+        <ErrorRow message={state.message} onRetry={state.onRetry} />
+      ) : null}
+      {state.status === "ready" ? (
+        isEmpty?.(state.data) ? (
+          <Empty>{empty ?? "Nothing here yet."}</Empty>
+        ) : (
+          children(state.data)
+        )
+      ) : null}
+    </PrefSection>
+  );
+}
+
+/* ========================================================================== */
+/* DataTable — the one object the app didn't have                             */
+/* ========================================================================== */
+
+export interface Column<T> {
+  key: string;
+  header: string;
+  /** A CSS grid track: `minmax(0,1fr)`, `8rem`, `auto`. */
+  width: string;
+  align?: "start" | "end";
+  /** Header text is hidden but still read. For an actions or toggle column. */
+  headerHidden?: boolean;
+  cell: (item: T) => React.ReactNode;
+}
+
+export interface TableFilter {
+  label: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}
+
+/**
+ * A bounded, scrollable, sticky-headed table.
+ *
+ * WHY THIS EXISTS. Models, Skills, Commands, MCP servers and Plugins are all
+ * *homogeneous collections with shared attributes* — and every one of them was
+ * being drawn as an unbounded stack of two-line rows. Two things went wrong.
+ * The page grew without limit, so a catalogue of a hundred models buried every
+ * section under it and the rail's other categories became unreachable without a
+ * long scroll. And the shared attributes had nowhere to live but the row, which
+ * is what forced provenance into a repeated pill on every single line.
+ *
+ * A table fixes both at once: `rows` caps the height so the *page* stays
+ * navigable while the *collection* scrolls inside its own box, and a column
+ * turns a repeated pill into a quiet aligned word.
+ *
+ * NOT VIRTUALIZED, on purpose. The curated pick (Virtuoso) earns its keep past
+ * roughly a thousand rows; the largest real collection here is a skills folder
+ * at a couple of hundred. Adding the dependency now would be churn — but the
+ * moment a list here is genuinely unbounded, that is the library to reach for
+ * rather than pagination.
+ *
+ * A REAL `<table>`, because this is tabular data and the semantics are free:
+ * column headers announce with their cells, and `scope="col"` costs nothing.
+ * The sticky header is `position: sticky` on the `<th>`s, which works inside an
+ * `overflow-auto` ancestor without JS.
+ */
+export function DataTable<T>({
+  items,
+  keyOf,
+  columns,
+  search,
+  placeholder = "Search",
+  filter,
+  rows = 8,
+  empty,
+  noResults = "Nothing matches.",
+  label,
+}: {
+  items: readonly T[];
+  keyOf: (item: T) => string;
+  columns: readonly Column<T>[];
+  /** The haystack. Omit for a table that isn't searchable. */
+  search?: (item: T) => string;
+  placeholder?: string;
+  filter?: TableFilter;
+  /** How many rows before it scrolls. */
+  rows?: number;
+  empty: string;
+  noResults?: string;
+  /** The table's accessible name. */
+  label: string;
+}) {
+  const [query, setQuery] = React.useState("");
+
+  const shown = React.useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle || !search) return items;
+    return items.filter((item) => search(item).toLowerCase().includes(needle));
+  }, [items, query, search]);
+
+  // 32px a row, PLUS the 28px sticky header, which lives inside the same scroll
+  // box and would otherwise eat a row: `rows={8}` was showing seven.
+  const maxBodyHeight = rows * 36 + 32;
+
+  if (items.length === 0) return <Empty>{empty}</Empty>;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {search || filter ? (
+        <div className="flex items-center gap-2">
+          {search ? (
+            <InputGroup className="min-w-0 flex-1">
+              <InputGroupAddon>
+                <MagnifyingGlassIcon />
+              </InputGroupAddon>
+              <InputGroupInput
+                type="search"
+                value={query}
+                aria-label={placeholder}
+                placeholder={placeholder}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </InputGroup>
+          ) : (
+            <div className="flex-1" />
+          )}
+          {/* ONE control replaces N pills. The provenance a reader wanted to
+              scan for is now something they can filter to. */}
+          {filter ? (
+            <Select value={filter.value} onValueChange={filter.onChange}>
+              <SelectTrigger size="sm" className={CONTROL_W.md} aria-label={filter.label}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {filter.options.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* NO FRAME. The section already is one; a bordered box in here was the
+          second of three nested rounded rectangles, and the reason the surface
+          read as boxes all the way down. The header hairline and the row
+          hairlines are the whole structure a table needs. */}
+      <div className="overflow-y-auto" style={{ maxHeight: maxBodyHeight }}>
+        <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+          <caption className="sr-only">{label}</caption>
+          <colgroup>
+            {columns.map((column) => (
+              <col key={column.key} style={{ width: column.width }} />
+            ))}
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-card">
+            <tr>
+              {columns.map((column) => (
+                <th
+                  key={column.key}
+                  scope="col"
+                  className={cn(
+                    // `text-ui` in the mute, sentence case. The 11px uppercase
+                    // eyebrow belongs to a section, not to a column, and using
+                    // it here made eight rows of data look like a spreadsheet
+                    // embedded in a settings page.
+                    "h-8 border-b border-border/50 px-2 text-ui font-normal text-muted-foreground",
+                    column.align === "end" ? "text-right" : "text-left",
+                  )}
+                >
+                  <span className={column.headerHidden ? "sr-only" : undefined}>
+                    {column.header}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((item) => (
+              <tr
+                key={keyOf(item)}
+                className="border-t border-border/50 first:border-t-0 hover:bg-accent/40"
+              >
+                {columns.map((column) => (
+                  <td
+                    key={column.key}
+                    className={cn(
+                      "h-9 px-2 text-sm",
+                      column.align === "end" ? "text-right" : "text-left",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "flex min-w-0 items-center gap-2",
+                        column.align === "end" && "justify-end",
+                      )}
+                    >
+                      {column.cell(item)}
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {shown.length === 0 ? <Empty>{noResults}</Empty> : null}
+      </div>
+      <p aria-live="polite" className="sr-only">
+        {query.trim() ? `${shown.length} of ${items.length} shown` : ""}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * A quiet, aligned word. What a repeated pill becomes inside a table.
+ *
+ * A string cell carries its own `title`, because a column narrow enough to be
+ * scannable is narrow enough to truncate, and a truncated value the reader
+ * cannot recover is worse than a wrapped one. This is the content itself on
+ * hover — not a tutorial tooltip, which is what CLAUDE.md forbids.
+ */
+export function Cell({ children, muted }: { children: React.ReactNode; muted?: boolean }) {
+  return (
+    <span
+      title={typeof children === "string" ? children : undefined}
+      className={cn("min-w-0 truncate", muted && "text-muted-foreground")}
+    >
+      {children}
+    </span>
+  );
+}
+
+/* ========================================================================== */
+/* Rule 5 — one save model, and it can refuse                                 */
+/* ========================================================================== */
 
 export type CommitResult = { ok: true; value?: string } | { ok: false; error: string };
 
 /**
- * A text setting that commits on blur and on Enter — and can be told no.
+ * A text field that saves on blur, and can be told no.
  *
- * The first pass got the principle right and the primitive wrong. It sent the
- * raw string on blur with no validation, no disabled state and no error slot,
- * which for the retention TTL means select-all-type-`1`-click-away silently
- * commits a one-day window on the setting that AUTOMATICALLY DELETES WORKTREE
- * FOLDERS. Today that field validates, disables while saving, toasts a refusal
- * and reflects main's clamped value back (review §1.5).
+ * Everything on these surfaces saves on change; the exception is text, which
+ * has no natural commit point until focus leaves. That made the first version
+ * dangerous: it sent whatever string was in the box, so select-all-type-`1`
+ * -click-away silently armed a one-day automatic folder deletion.
  *
- * So this one:
- *  - runs `validate` BEFORE writing and refuses locally, holding the draft;
- *  - takes an async `onCommit` returning a {@link CommitResult}, so a refusal
- *    from main lands BESIDE THE FIELD — which is where `web-access-settings.tsx`
- *    deliberately puts its endpoint-policy refusals, and a decision this would
- *    otherwise have regressed into a toast;
- *  - adopts a `value` the write hands back (a clamped number, a normalised URL);
- *  - says "Saved" only after something was saved. The first pass showed it the
- *    moment the draft differed, so a FAILED write read as success — against
- *    CLAUDE.md's "surface every failed mutation" (review §5.4).
- *  - renders the verdict CONDITIONALLY. An `aria-live` region whose text is the
- *    constant "Saved" can never announce, because live regions fire on content
- *    change; and at `opacity-0` it stays in the accessibility tree, so every
- *    field on the page read "Saved" permanently (review §4.1).
- *  - does not clobber an in-progress edit: `value` is adopted only while the
- *    field is idle, so a background refresh mid-typing cannot wipe the draft.
- *
- * `confirm` is the escape hatch for a setting that is destructive or expensive.
+ * So a commit is a *transaction*: validate locally, ask for confirmation where
+ * the consequence is destructive, let the write refuse, show a refusal beside
+ * the field it belongs to, and adopt whatever the write normalized the value
+ * to. `Escape` abandons.
  */
 export function CommitField({
   id,
   value,
-  placeholder,
-  width = "md",
   type = "text",
-  disabled = false,
+  width = "md",
+  placeholder,
+  disabled,
   validate,
   confirm,
   onCommit,
 }: {
   id?: string;
   value: string;
-  placeholder?: string;
+  type?: "text" | "password" | "number";
   width?: ControlWidth;
-  type?: "text" | "number" | "password";
+  placeholder?: string;
   disabled?: boolean;
-  /** Local refusal, before any write. Return a sentence to reject. */
-  validate?(next: string): string | null;
-  /** Asked before writing. Return false to abandon. */
-  confirm?(next: string): boolean | Promise<boolean>;
-  onCommit(next: string): Promise<CommitResult> | CommitResult;
+  /** Cheap local check. Return a message to refuse. */
+  validate?: (next: string) => string | null;
+  /** Last gate before a destructive write. Return false to abandon. */
+  confirm?: (next: string) => boolean;
+  onCommit: (next: string) => CommitResult | Promise<CommitResult>;
 }) {
   const [draft, setDraft] = React.useState(value);
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  const committed = React.useRef(value);
-  const dirty = draft !== committed.current;
+  const dirty = React.useRef(false);
 
+  // Adopt an external change ONLY when the user is not mid-edit. The earlier
+  // version had a bare dependency on `value`, so a background refresh wiped
+  // whatever was half-typed.
   React.useEffect(() => {
-    // Adopt an externally-changed value ONLY when the user is not mid-edit.
-    if (dirty || busy) return;
-    setDraft(value);
-    committed.current = value;
-  }, [value, dirty, busy]);
+    if (!dirty.current) setDraft(value);
+  }, [value]);
 
-  React.useEffect(() => {
-    if (!saved) return;
-    const timer = window.setTimeout(() => setSaved(false), 1800);
-    return () => window.clearTimeout(timer);
-  }, [saved]);
+  const commit = async () => {
+    if (!dirty.current || busy) return;
+    const next = draft;
 
-  async function commit(): Promise<void> {
-    if (!dirty || busy) return;
-    const refusal = validate?.(draft) ?? null;
-    if (refusal !== null) {
-      setError(refusal);
+    const local = validate?.(next) ?? null;
+    if (local) {
+      setError(local);
       return;
     }
-    if (confirm && !(await confirm(draft))) {
-      setDraft(committed.current);
+    if (confirm && !confirm(next)) {
+      setDraft(value);
+      dirty.current = false;
+      setError(null);
       return;
     }
+
     setBusy(true);
-    setError(null);
-    try {
-      const result = await onCommit(draft);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      const stored = result.value ?? draft;
-      committed.current = stored;
-      setDraft(stored);
-      setSaved(true);
-    } finally {
-      setBusy(false);
+    const result = await onCommit(next);
+    setBusy(false);
+
+    if (!result.ok) {
+      setError(result.error);
+      return;
     }
-  }
+    dirty.current = false;
+    setError(null);
+    if (result.value !== undefined) setDraft(result.value);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1600);
+  };
 
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-2">
-        {/* Conditional, so the live region has content to announce. */}
+        {/* Rendered only when true. A permanently-present node with constant
+            text is not something a live region can announce. */}
         {saved ? (
           <span aria-live="polite" className="text-ui text-muted-foreground">
             Saved
@@ -844,27 +1074,32 @@ export function CommitField({
           id={id}
           type={type}
           value={draft}
-          placeholder={placeholder}
           disabled={disabled || busy}
+          placeholder={placeholder}
           aria-invalid={error !== null}
-          aria-errormessage={error !== null && id ? `${id}-error` : undefined}
+          aria-describedby={error && id ? `${id}-error` : undefined}
           className={CONTROL_W[width]}
           onChange={(event) => {
+            dirty.current = true;
             setDraft(event.target.value);
-            if (error !== null) setError(null);
+            if (error) setError(null);
           }}
           onBlur={() => void commit()}
           onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
             if (event.key === "Escape") {
-              setDraft(committed.current);
+              setDraft(value);
+              dirty.current = false;
               setError(null);
             }
           }}
         />
       </div>
-      {error !== null ? (
-        <p id={id ? `${id}-error` : undefined} className="text-ui text-destructive">
+      {error ? (
+        <p id={id ? `${id}-error` : undefined} role="alert" className="text-ui text-destructive">
           {error}
         </p>
       ) : null}
@@ -872,70 +1107,17 @@ export function CommitField({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Rule 6 — one status vocabulary, three roles, three components               */
-/* -------------------------------------------------------------------------- */
+/* ========================================================================== */
+/* About — a headline, and the faults actually present                        */
+/* ========================================================================== */
 
-/** Is it working? The only thing that gets a coloured dot. */
-export function Health({ state, children }: { state: StatusDotState; children: React.ReactNode }) {
-  return (
-    <span className="flex items-center gap-2 text-ui text-foreground">
-      <StatusDot state={state} />
-      {children}
-    </span>
-  );
-}
-
-/**
- * Which LAYER a thing came from — this project, or your personal directory.
- *
- * Its own component rather than a boolean on a shared one. The first pass had a
- * single `Origin` whose `mine` prop meant "Volli set this value" in Settings
- * and "this project owns this item" in Configure: one prop, two meanings, which
- * is precisely the drift rule 6 forbids (review §1.6).
- */
-export function Tier({ scope }: { scope: "project" | "personal" }) {
-  return (
-    <Badge variant={scope === "project" ? "accent" : "outline"}>
-      {scope === "project" ? "This project" : "Personal"}
-    </Badge>
-  );
-}
-
-/** Who set a VALUE — the Ghostty chain's provenance chip and nothing else. */
-export function Provenance({ mine, children }: { mine?: boolean; children: React.ReactNode }) {
-  return <Badge variant={mine ? "accent" : "outline"}>{children}</Badge>;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Diagnostics — concise, but not lossy                                        */
-/* -------------------------------------------------------------------------- */
-
-/** One thing that is wrong, and the one thing to do about it. */
 export interface Fault {
   id: string;
   headline: string;
-  detail?: string;
-  remedy?: { label: string; onAct(): void };
+  detail: string;
+  remedy?: { label: string; onAct: () => void };
 }
 
-/**
- * The health surface: one headline, then the faults that are ACTUALLY PRESENT,
- * each with its own remedy.
- *
- * The first pass collapsed CLI + Harness + Doctor into "one sentence, one
- * button", and the review found nine things that loses — four link states with
- * four different remedies, `installSuppressed`'s reinstall path, Doctor's
- * per-check remedies and its `--fix`, the legacy path a user is told to delete
- * but never shown, `SessionPathComparison`'s `pending` tri-state, and the
- * project-scoped credential-helper read (review §1.4). "One sentence over a
- * four-state link and an N-check report" is a lossy cast, not concision.
- *
- * This is the shape `cli-status-model.ts` already implies: on a healthy machine
- * it IS one sentence, because `faults` is empty — which is the case the brief
- * was written about. On a broken one it grows a row per real problem and keeps
- * every remedy the model already computes.
- */
 export function HealthPanel({
   healthy,
   headline,
@@ -947,30 +1129,26 @@ export function HealthPanel({
   headline: string;
   faults: readonly Fault[];
   actions?: React.ReactNode;
-  /** Plain-language facts, behind a disclosure. Never the first thing read. */
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
   const detailsId = React.useId();
+
   return (
-    <div className="rounded-lg bg-card px-4 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-2">
-          <StatusDot state={healthy ? "ready" : "waiting"} className="mt-1" />
-          <p className="min-w-0 text-sm font-medium">{headline}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
-      </div>
+    <section className="rounded-lg bg-card px-4 py-4">
+      <header className="flex items-center gap-2 py-1">
+        <StatusDot state={healthy ? "ready" : "waiting"} size="md" />
+        <h2 className="min-w-0 flex-1 text-ui font-medium">{headline}</h2>
+        {actions}
+      </header>
 
       {faults.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-2">
+        <div className="mt-4 flex flex-col">
           {faults.map((fault) => (
-            <div key={fault.id} className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-ui text-foreground">{fault.headline}</p>
-                {fault.detail ? (
-                  <p className="mt-1 text-ui text-muted-foreground">{fault.detail}</p>
-                ) : null}
+            <div key={fault.id} className="flex items-start gap-4 border-t border-border/50 py-4">
+              <div className="min-w-0 flex-1">
+                <p className="text-ui">{fault.headline}</p>
+                <p className="text-ui text-muted-foreground">{fault.detail}</p>
               </div>
               {fault.remedy ? (
                 <Button size="xs" variant="outline" onClick={fault.remedy.onAct}>
@@ -983,44 +1161,31 @@ export function HealthPanel({
       ) : null}
 
       {children ? (
-        <>
+        <div className="mt-4 border-t border-border/50">
           <button
             type="button"
             aria-expanded={open}
             aria-controls={detailsId}
-            onClick={() => setOpen((value) => !value)}
-            className="mt-2 flex items-center gap-1 text-ui text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setOpen((current) => !current)}
+            className="flex w-full items-center gap-1 py-2 text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
           >
-            <CaretRightIcon
-              aria-hidden
-              className={cn("size-3 transition-transform duration-150", open && "rotate-90")}
-            />
+            <CaretDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
             {open ? "Hide details" : "Details"}
           </button>
-          {open ? (
-            <div id={detailsId} className="mt-2 border-t border-border/50 pt-2">
-              {children}
-            </div>
-          ) : null}
-        </>
+          <div id={detailsId} hidden={!open} className="pb-2">
+            {children}
+          </div>
+        </div>
       ) : null}
-    </div>
+    </section>
   );
 }
 
-/**
- * A plain-language fact inside `Details`.
- *
- * `title` on the value, because the first pass truncated it with no hover — so
- * five harnesses rendered as an ellipsis and nothing else (review §1.4.7).
- */
 export function DetailLine({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1">
-      <span className="shrink-0 text-ui text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-ui text-foreground" title={value}>
-        {value}
-      </span>
+    <div className="flex items-baseline justify-between gap-4 border-t border-border/50 py-2 first:border-t-0">
+      <span className="text-ui text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-ui">{value}</span>
     </div>
   );
 }
