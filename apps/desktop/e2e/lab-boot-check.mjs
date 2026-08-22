@@ -39,6 +39,12 @@ const SCRATCHES = [
   // Borrows Button/TabStrip/Tooltip and mounts its own Tooltip provider at the
   // root — the provider-shaped failure this check exists for (VC-55).
   "project-session-identity",
+  // Two whole preference surfaces built from app primitives, and it caught the
+  // exact failure this check exists for on its first run: `PrefRow`'s `help`
+  // renders a Tooltip, so the Updates and Models panes threw
+  // "`Tooltip` must be used within `TooltipProvider`" and painted an empty box
+  // while the rail still looked fine (VC-111).
+  "settings-redesign",
 ];
 
 /**
