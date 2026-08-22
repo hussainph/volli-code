@@ -320,6 +320,10 @@ describe("applySkillModes", () => {
     expect(applySkillModes([tdd], { tdd: "manual" })).toHaveLength(1);
   });
 
+  it("does not clone a skill that is already manual", () => {
+    expect(applySkillModes([quiet], { quiet: "manual" })[0]).toBe(quiet);
+  });
+
   it("cannot currently promote a frontmatter-quiet skill, because storage drops an auto rule", () => {
     // The shipped limitation, pinned so it is a decision rather than a
     // surprise: `parseSkillModes` drops `auto` to keep "never touched" and

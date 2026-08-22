@@ -100,15 +100,18 @@ export function ModelAccessAccounts({
   if (providers.length === 0) return null;
   return (
     <PrefSection title="Accounts">
-      {orderedAccounts(providers).map((provider) => (
-        <ProviderAccount
-          key={provider.id}
-          provider={provider}
-          onArrival={deepLinkedAction(provider, autoSignInProviderId)}
-          onRecover={onRecover}
-          onChanged={onChanged}
-        />
-      ))}
+      {/* Provider names arrive from Pi's catalogue, not the app's search vocabulary. */}
+      <div data-slot="model-access-accounts">
+        {orderedAccounts(providers).map((provider) => (
+          <ProviderAccount
+            key={provider.id}
+            provider={provider}
+            onArrival={deepLinkedAction(provider, autoSignInProviderId)}
+            onRecover={onRecover}
+            onChanged={onChanged}
+          />
+        ))}
+      </div>
     </PrefSection>
   );
 }
