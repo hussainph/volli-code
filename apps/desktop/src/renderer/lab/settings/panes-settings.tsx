@@ -537,7 +537,6 @@ function ModelsPane() {
             {
               key: "name",
               header: "Model",
-              width: "minmax(0, 1fr)",
               cell: (model) => <Cell>{model.name}</Cell>,
             },
             {

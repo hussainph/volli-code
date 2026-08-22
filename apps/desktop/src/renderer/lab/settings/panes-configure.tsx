@@ -195,13 +195,12 @@ function SkillsPane() {
             {
               key: "name",
               header: "Skill",
-              width: "minmax(0, 1fr)",
+              width: "28%",
               cell: (skill) => <Cell>{skill.slug}</Cell>,
             },
             {
               key: "description",
               header: "Description",
-              width: "minmax(0, 1.4fr)",
               cell: (skill) => (
                 <Cell muted>
                   {skill.shadowed ? "Shadowed by this project's own copy" : skill.description}
@@ -421,7 +420,6 @@ function CommandsPane() {
             {
               key: "description",
               header: "Description",
-              width: "minmax(0, 1fr)",
               cell: (command) => <Cell muted>{command.description}</Cell>,
             },
             {
@@ -624,7 +622,6 @@ function McpPane() {
             {
               key: "name",
               header: "Server",
-              width: "minmax(0, 1fr)",
               cell: (server) => <Cell>{server.name}</Cell>,
             },
             {
@@ -712,7 +709,6 @@ function PluginsPane() {
             {
               key: "name",
               header: "Plugin",
-              width: "minmax(0, 1fr)",
               cell: (plugin) => <Cell>{plugin.name}</Cell>,
             },
             {
