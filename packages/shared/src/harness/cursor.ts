@@ -41,7 +41,10 @@ export const cursorAdapter: HarnessAdapter = {
     skillsDir: "{home}/.cursor/skills",
     // `~/.cursor/commands` does not exist for the CLI.
     commandsDir: null,
-    instructionsFile: "{home}/AGENTS.md",
+    // `~/AGENTS.md` is a user-owned global rules file — Volli claims no
+    // instructions file here. The skills symlink carries session context when
+    // `VOLLI_TICKET` / `VOLLI_SESSION` are present.
+    instructionsFile: null,
   },
   injection: { kind: "cursor-hooks-file" },
   // `--new-session-id` exists but is hidden (`.hideHelp()`).

@@ -40,10 +40,10 @@ describe("harness install executor", () => {
     const second = await applyHarnessInstallPlan(plan, manifestPath);
 
     expect(first.conflicts).toEqual([]);
-    // 4 canonical skill files + claude/codex skill symlinks + codex AGENTS.md + opencode command.
-    expect(first.written).toHaveLength(8);
+    // 4 canonical skill files + claude/codex skill symlinks + opencode command.
+    expect(first.written).toHaveLength(7);
     expect(second.written).toEqual([]);
-    expect(second.skipped).toHaveLength(8);
+    expect(second.skipped).toHaveLength(7);
     expect(await readFile(join(root, ".agents/skills/volli/custom/mine.md"), "utf8")).toBe(
       "user owned",
     );
