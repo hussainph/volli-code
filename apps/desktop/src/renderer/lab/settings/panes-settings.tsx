@@ -1,32 +1,22 @@
 /**
- * VC-111 — the proposed **Settings** surface. Second pass.
+ * VC-111 — the **Settings** surface. Third pass.
  *
- * Settings is app-wide, always. There is no scope switch: the surface IS the
- * scope (kit rule 2). Where an app-wide value can be overridden per project,
- * the row carries an `OverrideNote` naming the projects that did it, and the
- * override itself is set in Configure.
+ * Settings is app-wide, always. Where a value can diverge per project, the row
+ * carries an `OverrideNote` naming the projects that diverged.
  *
- * WHAT CHANGED AFTER REVIEW:
- *  - **Storage is back.** The first pass dropped orphaned-worktree cleanup —
- *    a live feature with a permanent-delete flow — off the IA and off the kill
- *    list, so it vanished without anyone deciding to remove it (review §2.1).
- *    It is app-wide by construction (`sweepOrphans` walks every project), so it
- *    belongs here, next to the retention window that governs it.
- *  - **Reasoning is back** (review §2.2). A control that costs money is not
- *    fixed by deleting it.
- *  - **The web key keeps Remove and its three-state label** (review §1.5).
- *  - **The terminal keeps both config-file buttons and the per-key revert** —
- *    the app's only real reset-to-default (review §2.7, §7.3).
- *  - **The canvas keeps Vibrancy, Grain and ContrastAlert.** The first pass
- *    replaced the whole editor with a swatch and an "Edit…" button opening
- *    something that did not exist, discarding an accessibility guardrail
- *    (review §2.8).
- *  - **Every section description is gone**, per CLAUDE.md. The first pass added
- *    thirteen; `PrefSection` no longer has the prop.
- *  - **The invented settings are gone**: "Reopen last project" had no backing
- *    state and "Confirm before quitting" was a switch to disable a documented
- *    data-loss guard (review §2.9).
- *  - **Every pane declares its states** via `AsyncSection`.
+ * WHAT THE COMPONENT PASS CHANGED HERE:
+ *  - **The model catalogue is a table**, capped at eight rows and scrolling
+ *    inside its own box. It was an unbounded stack of two-line rows, which for
+ *    a hundred models meant a page you could not get past — Accounts sat below
+ *    it and effectively did not exist.
+ *  - **Reserve and Provider are columns**, not things crammed into a row's
+ *    trailing slot. That is what makes them scannable and alignable.
+ *  - **Fewer pills.** `Segmented` now appears exactly once on this surface
+ *    (Light/Dark/Auto). Web-search provider, diff layout and update channel are
+ *    `Select`s — they are one-of-N choices, not a closed set worth four pills.
+ *  - **Prose became `(i)`.** Background jobs, compaction reserve, the canary
+ *    warning and the retention rule are hints now, opened on hover or focus.
+ *  - **Rows come from `ui/list-row.tsx`** and dots from `ui/status-dot.tsx`.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -35,21 +25,21 @@ import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
+import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
+import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
 
-import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import {
@@ -64,12 +54,13 @@ import { Switch } from "@renderer/components/ui/switch";
 
 import {
   AsyncSection,
+  Cell,
   CommitField,
   CONTROL_W,
+  DataTable,
   DetailLine,
   Health,
   HealthPanel,
-  ItemList,
   ItemRow,
   OverrideNote,
   PrefRow,
@@ -82,9 +73,6 @@ import {
   type PrefGroup,
 } from "./kit";
 
-/* -------------------------------------------------------------------------- */
-
-/** Fixtures. `ready` here; the panes exist to show the SHAPE of each state. */
 function ready<T>(data: T): AsyncState<T> {
   return { status: "ready", data };
 }
@@ -116,14 +104,6 @@ interface Orphan {
   reason: string;
 }
 
-/**
- * Storage — retention, the orphan sweep, and the database.
- *
- * The category the first pass lost. Retention and orphan cleanup are the same
- * subject (how long a finished ticket's checkout is worth keeping) and today
- * they sit in two different Settings categories; putting them in one is the
- * reorganization actually doing something.
- */
 function StoragePane() {
   const [orphans] = React.useState<AsyncState<readonly Orphan[]>>(
     ready([
@@ -138,8 +118,9 @@ function StoragePane() {
         <PrefRow
           label="Keep Done worktrees for"
           htmlFor="ttl"
-          // The sanctioned trust-boundary exception: this governs an automatic
-          // deletion, so the row states what is taken and what survives.
+          // The sanctioned trust-boundary exception, and the reason it stays
+          // prose rather than becoming a hint: this governs an automatic
+          // deletion, and what gets deleted must not be behind a disclosure.
           description="Volli removes the folder and keeps the branch, its commits, and the ticket."
         >
           <CommitField
@@ -147,10 +128,6 @@ function StoragePane() {
             type="number"
             width="sm"
             value="14"
-            // Review §1.5: the first pass sent the raw string on blur, so
-            // select-all-type-1-click-away silently armed a one-day automatic
-            // folder deletion. Validated locally, then confirmed, because the
-            // consequence is destructive and there is no undo.
             validate={(next) => {
               const parsed = Number.parseInt(next.trim(), 10);
               if (!Number.isFinite(parsed) || parsed < 1) {
@@ -173,6 +150,12 @@ function StoragePane() {
       <AsyncSection
         title="Orphaned worktrees"
         icon={TreeStructureIcon}
+        hint={
+          <>
+            Folders left behind when a ticket&rsquo;s branch was deleted or its project was removed.
+            Volli won&rsquo;t sweep these automatically while they hold uncommitted work.
+          </>
+        }
         action={<SectionIconAction label="Rescan orphaned worktrees" />}
         state={orphans}
         isEmpty={(list) => list.length === 0}
@@ -182,10 +165,10 @@ function StoragePane() {
           <>
             {list.map((orphan) => (
               <ItemRow key={orphan.path} name={orphan.path} meta={orphan.reason}>
-                <Button size="icon-xs" variant="ghost" aria-label="Reveal in Finder">
+                <Button size="icon-xs" variant="ghost" aria-label={`Reveal ${orphan.path}`}>
                   <FolderOpenIcon />
                 </Button>
-                <Button size="icon-xs" variant="ghost" aria-label="Delete worktree">
+                <Button size="icon-xs" variant="ghost" aria-label={`Delete ${orphan.path}`}>
                   <TrashIcon />
                 </Button>
               </ItemRow>
@@ -216,35 +199,36 @@ function StoragePane() {
 
 function AppearancePane() {
   const [mode, setMode] = React.useState("dark");
-  const [diff, setDiff] = React.useState("inline");
 
   return (
     <>
       <PrefSection title="Theme" icon={PaletteIcon}>
+        {/*
+         * THE ONE SEGMENTED CONTROL ON THIS SURFACE. It earns the shape: a
+         * closed three-way, all of it on screen, each member with an icon, and
+         * the thing being chosen is visible behind the control as you choose.
+         * Everything else that was a pill is now a Select.
+         */}
         <PrefRow label="Mode" testId="appearance-mode">
           <Segmented
             ariaLabel="Appearance mode"
             value={mode}
             options={[
-              { key: "light", label: "Light" },
-              { key: "dark", label: "Dark" },
-              { key: "auto", label: "Auto" },
+              { key: "light", label: "Light", icon: SunIcon },
+              { key: "dark", label: "Dark", icon: MoonIcon },
+              { key: "auto", label: "Auto", icon: MonitorIcon },
             ]}
             onChange={setMode}
           />
         </PrefRow>
+
         {/*
-         * The canvas editor stays WHOLE. Review §2.8: it is not a gradient pad,
-         * it is the pad, the stop row, the colour picker, Vibrancy, Grain and
-         * ContrastAlert — an accessibility guardrail with a one-click
-         * remediation. Collapsing it to a swatch plus a modal would also have
-         * put `bg-scrim` over the very window the edit is judged against.
-         *
-         * So rule 4 ("every control is a row") takes its one recorded
-         * exception, stated here rather than quietly broken: the canvas is an
-         * authoring surface, and it keeps its own block inside this section.
+         * The canvas editor keeps its own block — rule 4's one recorded
+         * exception. It is an authoring surface, not a setting: a pad, a stop
+         * row, a picker, vibrancy, grain and the contrast guardrail. Collapsing
+         * it behind a modal would also scrim the window it is judged against.
          */}
-        <div className="border-t border-border/50 py-2">
+        <div className="border-t border-border/50 py-4">
           <p className="pb-2 text-sm font-medium">Canvas</p>
           <div className="flex h-24 items-center justify-center rounded-md bg-primary/20 text-ui text-muted-foreground">
             gradient pad · stops · picker
@@ -256,9 +240,9 @@ function AppearancePane() {
         <PrefRow label="Grain">
           <span className="text-ui text-muted-foreground">dial</span>
         </PrefRow>
-        <div className="border-t border-border/50 py-2">
+        <PrefRow label="Per-project themes">
           <OverrideNote projects={["acme-api", "dashboard"]} onOpen={() => {}} />
-        </div>
+        </PrefRow>
       </PrefSection>
 
       <PrefSection title="Display" icon={MonitorIcon}>
@@ -276,28 +260,31 @@ function AppearancePane() {
             </SelectContent>
           </Select>
         </PrefRow>
-        <PrefRow label="Diff layout">
-          <Segmented
-            ariaLabel="Diff layout"
-            value={diff}
-            options={[
-              { key: "inline", label: "Inline" },
-              { key: "split", label: "Side by side" },
-            ]}
-            onChange={setDiff}
-          />
+        {/* Was a Segmented. Two options that are not a mode and have no icons
+            do not need two pills; a Select says the same thing quieter. */}
+        <PrefRow label="Diff layout" htmlFor="diff">
+          <Select value="inline">
+            <SelectTrigger id="diff" className={CONTROL_W.md}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inline">Inline</SelectItem>
+              <SelectItem value="split">Side by side</SelectItem>
+            </SelectContent>
+          </Select>
         </PrefRow>
       </PrefSection>
 
-      <PrefSection title="Terminal" icon={TerminalWindowIcon}>
-        {/*
-         * All three rows, at app scope, always. The first pass hid Font and
-         * Size whenever its scope switch was on a project, so a user looking
-         * for terminal font size concluded Volli had no such setting
-         * (review §1.2a). Both config-file buttons stay: decision #67/#68 is
-         * that the file IS the full interface, and keeping the trust sentence
-         * while deleting the button that proves it is the wrong half.
-         */}
+      <PrefSection
+        title="Terminal"
+        icon={TerminalWindowIcon}
+        hint={
+          <>
+            Volli reads your Ghostty config and only overrides what you set here. Anything marked{" "}
+            <em>Set by Volli</em> can be handed back.
+          </>
+        }
+      >
         <PrefRow label="Theme">
           <Provenance>From Ghostty</Provenance>
           <Button size="sm" variant="outline">
@@ -377,8 +364,8 @@ interface CatalogModel {
   provider: string;
   context: string;
   reserve: string;
-  /** Some models report no usable window, so they get no reserve control at all. */
   reservable: boolean;
+  shown: boolean;
 }
 
 const CATALOG: readonly CatalogModel[] = [
@@ -389,6 +376,7 @@ const CATALOG: readonly CatalogModel[] = [
     context: "200K",
     reserve: "32K",
     reservable: true,
+    shown: true,
   },
   {
     id: "a/sonnet",
@@ -397,6 +385,7 @@ const CATALOG: readonly CatalogModel[] = [
     context: "200K",
     reserve: "Default",
     reservable: true,
+    shown: true,
   },
   {
     id: "a/haiku",
@@ -405,6 +394,7 @@ const CATALOG: readonly CatalogModel[] = [
     context: "200K",
     reserve: "Default",
     reservable: true,
+    shown: true,
   },
   {
     id: "o/luna",
@@ -413,6 +403,16 @@ const CATALOG: readonly CatalogModel[] = [
     context: "400K",
     reserve: "64K",
     reservable: true,
+    shown: true,
+  },
+  {
+    id: "o/mini",
+    name: "gpt-5.6-mini",
+    provider: "OpenAI Codex",
+    context: "400K",
+    reserve: "Default",
+    reservable: true,
+    shown: false,
   },
   {
     id: "x/luna",
@@ -421,6 +421,7 @@ const CATALOG: readonly CatalogModel[] = [
     context: "256K",
     reserve: "Default",
     reservable: true,
+    shown: false,
   },
   {
     id: "g/gemini",
@@ -429,10 +430,46 @@ const CATALOG: readonly CatalogModel[] = [
     context: "1M",
     reserve: "Default",
     reservable: false,
+    shown: true,
+  },
+  {
+    id: "g/flash",
+    name: "gemini-3-flash",
+    provider: "Google",
+    context: "1M",
+    reserve: "Default",
+    reservable: true,
+    shown: true,
+  },
+  {
+    id: "m/large",
+    name: "mistral-large-3",
+    provider: "Mistral",
+    context: "128K",
+    reserve: "Default",
+    reservable: true,
+    shown: false,
+  },
+  {
+    id: "d/v4",
+    name: "deepseek-v4",
+    provider: "DeepSeek",
+    context: "128K",
+    reserve: "Default",
+    reservable: true,
+    shown: false,
   },
 ];
 
 function ModelsPane() {
+  const [visibility, setVisibility] = React.useState("all");
+
+  const filtered = React.useMemo(() => {
+    if (visibility === "shown") return CATALOG.filter((model) => model.shown);
+    if (visibility === "hidden") return CATALOG.filter((model) => !model.shown);
+    return CATALOG;
+  }, [visibility]);
+
   return (
     <>
       <PrefSection
@@ -448,78 +485,137 @@ function ModelsPane() {
           <ModelSelect value="a/opus" />
           <ReasoningSelect value="max" />
         </PrefRow>
+        {/* Was a three-line `description`. Now a hint you can open. */}
         <PrefRow
           label="Background jobs"
           testId="default-model-utility"
-          help="Naming new chats and summarizing long conversations. Left unset, these run on the model the chat itself is using — an inexpensive model here keeps them cheap."
+          hint={
+            <>
+              Naming new chats and summarizing long conversations. Left unset, these run on whatever
+              model the chat itself is using — picking something inexpensive here keeps them cheap.
+            </>
+          }
         >
           <ModelSelect value="a/haiku" />
           <ReasoningSelect value="off" />
         </PrefRow>
-        <div className="border-t border-border/50 py-2">
+        <PrefRow label="Per-project defaults">
           <OverrideNote projects={["acme-api"]} onOpen={() => {}} />
-        </div>
+        </PrefRow>
       </PrefSection>
 
       <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
-        <PrefRow label="Compact automatically" testId="auto-compaction">
+        <PrefRow
+          label="Compact automatically"
+          testId="auto-compaction"
+          hint={
+            <>
+              When a conversation approaches the model&rsquo;s context limit, Volli summarizes the
+              earlier turns to make room. The reserve column below sets how much room to leave.
+            </>
+          }
+        >
           <Switch defaultChecked />
-        </PrefRow>
-        {/*
-         * The per-model reserve lives on the model row, two sections down, and
-         * the code comment on today's pane explains why that is right. What was
-         * missing is anything in the UI connecting them. One line does it.
-         */}
-        <PrefRow label="Reserve per model">
-          <span className="text-ui text-muted-foreground">Set in Catalog, below</span>
         </PrefRow>
       </PrefSection>
 
-      <PrefSection title="Catalog" icon={EyeIcon}>
-        <ItemList
-          items={CATALOG}
+      {/*
+       * THE CATALOGUE, AS A TABLE.
+       *
+       * This is the change the whole component pass was for. Ten models here,
+       * a hundred in the real app — as a stack of two-line rows that was a
+       * section with no bottom, and Accounts below it was unreachable. Capped
+       * at eight rows, it scrolls inside its own frame and the page stays
+       * navigable.
+       *
+       * Provider becomes a COLUMN, which does two things a badge could not: it
+       * aligns, so a reader scanning for "who makes this" reads down a strip
+       * instead of hunting mid-row; and it distinguishes the two models both
+       * called `gpt-5.6-luna` without either row having to shout.
+       */}
+      <PrefSection title="Catalog" icon={CpuIcon}>
+        <DataTable
+          label="Model catalog"
+          items={filtered}
           keyOf={(model) => model.id}
-          // Review §2.5: the provider is half a model's identity — eight
-          // providers ship a model called exactly "gpt-5.6-luna" — so the
-          // haystack includes it and the two rows above are distinguishable.
+          rows={8}
           search={(model) => `${model.name} ${model.provider}`}
           placeholder="Search models"
+          filter={{
+            label: "Filter by visibility",
+            value: visibility,
+            onChange: setVisibility,
+            options: [
+              { value: "all", label: "All models" },
+              { value: "shown", label: "Shown in pickers" },
+              { value: "hidden", label: "Hidden" },
+            ],
+          }}
+          empty="No models. Sign in to a provider below."
           noResults="No models match."
-          render={(model) => (
-            <ItemRow
-              name={model.name}
-              meta={`${model.provider} · ${model.context} context`}
-              testId={`visibility-${model.id}`}
-            >
-              {/*
-               * A model whose window yields no reserve choices renders NO
-               * control today. The first pass hand-wrote a fake table header
-               * over the column, so that row's switch slid left and sat under
-               * the "Compaction reserve" label (review §3.3). A placeholder
-               * of the same width keeps the column honest without inventing
-               * an inert control.
-               */}
-              {model.reservable ? (
-                <Select value={model.reserve}>
-                  <SelectTrigger
-                    className={CONTROL_W.md}
-                    aria-label={`Compaction reserve for ${model.name}`}
-                    data-testid={`compaction-reserve-${model.id}`}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Default">Default reserve</SelectItem>
-                    <SelectItem value="32K">32K reserve</SelectItem>
-                    <SelectItem value="64K">64K reserve</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <span className={CONTROL_W.md} aria-hidden />
-              )}
-              <Switch defaultChecked aria-label={`Show ${model.name} in pickers`} />
-            </ItemRow>
-          )}
+          columns={[
+            {
+              key: "name",
+              header: "Model",
+              width: "minmax(0, 1fr)",
+              cell: (model) => <Cell>{model.name}</Cell>,
+            },
+            {
+              key: "provider",
+              header: "Provider",
+              width: "9rem",
+              cell: (model) => <Cell muted>{model.provider}</Cell>,
+            },
+            {
+              key: "context",
+              header: "Context",
+              width: "5rem",
+              align: "end",
+              cell: (model) => <Cell muted>{model.context}</Cell>,
+            },
+            {
+              key: "reserve",
+              header: "Reserve",
+              width: "8rem",
+              align: "end",
+              cell: (model) =>
+                model.reservable ? (
+                  <Select value={model.reserve}>
+                    <SelectTrigger
+                      size="sm"
+                      className="w-full"
+                      aria-label={`Compaction reserve for ${model.name}`}
+                      data-testid={`compaction-reserve-${model.id}`}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Default">Default</SelectItem>
+                      <SelectItem value="32K">32K</SelectItem>
+                      <SelectItem value="64K">64K</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  // No usable window, so no control — and the column holds
+                  // its width so the switch beside it stays aligned.
+                  <Cell muted>—</Cell>
+                ),
+            },
+            {
+              key: "shown",
+              header: "Shown",
+              width: "3.5rem",
+              align: "end",
+              headerHidden: true,
+              cell: (model) => (
+                <Switch
+                  defaultChecked={model.shown}
+                  aria-label={`Show ${model.name} by ${model.provider} in pickers`}
+                  data-testid={`visibility-${model.id}`}
+                />
+              ),
+            },
+          ]}
         />
       </PrefSection>
 
@@ -542,7 +638,11 @@ function ModelsPane() {
             Sign out
           </Button>
         </ItemRow>
-        <ItemRow name="Google Vertex" badges={<Health state="idle">Not signed in</Health>}>
+        <ItemRow
+          name="Google Vertex"
+          meta="Not signed in"
+          badges={<Health state="idle">Off</Health>}
+        >
           <Button size="sm">Sign in</Button>
         </ItemRow>
       </PrefSection>
@@ -568,11 +668,6 @@ function ModelSelect({ value }: { value: string }) {
   );
 }
 
-/**
- * Reasoning level. Review §2.2 — the first pass deleted this control because
- * the audit called it naked. It costs money and changes output quality; the fix
- * is a name and a disabled reason, not removal.
- */
 function ReasoningSelect({ value }: { value: string }) {
   const [selected, setSelected] = React.useState(value);
   return (
@@ -595,9 +690,6 @@ function ReasoningSelect({ value }: { value: string }) {
 
 function WebPane() {
   const [provider, setProvider] = React.useState("brave");
-  // Review §1.5 / §6.10: the first pass rendered "In your keychain"
-  // unconditionally — a claim that is false whenever no key is stored — and
-  // dropped Remove entirely. Three states, and the action that clears it.
   const [keyState, setKeyState] = React.useState<"absent" | "present" | "unreadable">("present");
 
   const KEY_LABEL = {
@@ -607,22 +699,28 @@ function WebPane() {
   } as const;
 
   return (
-    <PrefSection title="Web search" icon={GlobeIcon}>
-      <PrefRow label="Provider">
+    <PrefSection
+      title="Web search"
+      icon={GlobeIcon}
+      hint={<>Applies to every project. Agents reach the web through this one provider.</>}
+    >
+      {/* Was four pills. A Select is the right shape for one-of-N where the
+          options aren't a mode and choosing one changes what's below. */}
+      <PrefRow label="Provider" htmlFor="provider">
         <Health state={provider === "off" ? "idle" : "ready"}>
           {provider === "off" ? "Off" : "On"}
         </Health>
-        <Segmented
-          ariaLabel="Web search provider"
-          value={provider}
-          options={[
-            { key: "off", label: "Off" },
-            { key: "brave", label: "Brave" },
-            { key: "exa", label: "Exa" },
-            { key: "searxng", label: "SearXNG" },
-          ]}
-          onChange={setProvider}
-        />
+        <Select value={provider} onValueChange={setProvider}>
+          <SelectTrigger id="provider" className={CONTROL_W.md}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="off">Off</SelectItem>
+            <SelectItem value="brave">Brave</SelectItem>
+            <SelectItem value="exa">Exa</SelectItem>
+            <SelectItem value="searxng">SearXNG</SelectItem>
+          </SelectContent>
+        </Select>
       </PrefRow>
       {provider === "brave" || provider === "exa" ? (
         <PrefRow label="API key" htmlFor="key" align="start">
@@ -639,8 +737,6 @@ function WebPane() {
             placeholder={keyState === "absent" ? "Paste your key" : "Replace stored key"}
             onCommit={() => {
               setKeyState("present");
-              // Cleared on success: a plaintext key has no reason to stay in a
-              // React tree once main has encrypted it.
               return { ok: true, value: "" };
             }}
           />
@@ -652,10 +748,6 @@ function WebPane() {
             id="instance"
             value=""
             placeholder="http://localhost:8888"
-            // The endpoint policy's refusal is a correction to what was just
-            // typed, so it lands beside the field rather than in a toast — the
-            // decision `web-access-settings.tsx` documents in its header and
-            // the first pass would have regressed.
             onCommit={(next) =>
               next.startsWith("http")
                 ? { ok: true }
@@ -670,31 +762,23 @@ function WebPane() {
 
 /* ----------------------------- Integrations ------------------------------- */
 
-interface ExternalApp {
-  id: string;
-  label: string;
-  installed: boolean;
-}
-
 /**
- * Review §2.10: `external-apps.ts` probes Launch Services, so the catalogue is
- * already filtered to what is installed. A hardcoded list with no
- * "not installed" state and no empty state was inventing a simpler world.
+ * `external-apps.ts` probes Launch Services, so this list is already what is
+ * installed — which is why the empty state below is reachable and not decorative.
  */
-const EDITORS: readonly ExternalApp[] = [
-  { id: "vscode", label: "VS Code", installed: true },
-  { id: "cursor", label: "Cursor", installed: true },
-  { id: "zed", label: "Zed", installed: false },
-  { id: "xcode", label: "Xcode", installed: true },
+const EDITORS: readonly { id: string; label: string }[] = [
+  { id: "vscode", label: "VS Code" },
+  { id: "cursor", label: "Cursor" },
+  { id: "xcode", label: "Xcode" },
 ];
 
 function IntegrationsPane() {
-  const installed = EDITORS.filter((app) => app.installed);
   return (
     <AsyncSection
       title="Open in…"
       icon={PlugsIcon}
-      state={ready(installed)}
+      hint={<>Only editors Volli found installed appear here.</>}
+      state={ready(EDITORS)}
       isEmpty={(apps) => apps.length === 0}
       empty="None of the editors Volli knows are installed."
     >
@@ -742,21 +826,25 @@ function UpdatesPane() {
           <Switch defaultChecked />
         </PrefRow>
         {/*
-         * ← The sqlite3 command from `auto-update.ts`, retired.
+         * ← The `sqlite3` command from `auto-update.ts`, retired.
          *
-         * Review §1.5 flagged that a one-click switch to a build line that
-         * ships broken work and cannot be trivially downgraded is the wrong
-         * default for save-on-change. It confirms.
+         * A Select rather than two pills, and a confirm on the way in: a build
+         * line that ships broken work and will not downgrade itself is not a
+         * one-click toggle.
          */}
-        <PrefRow label="Channel">
-          <Segmented
-            ariaLabel="Update channel"
+        <PrefRow
+          label="Channel"
+          htmlFor="channel"
+          hint={
+            <>
+              Canary builds ship the newest work first and break more often. You can switch back,
+              but an installed canary won&rsquo;t downgrade itself.
+            </>
+          }
+        >
+          <Select
             value={channel}
-            options={[
-              { key: "stable", label: "Stable" },
-              { key: "canary", label: "Canary" },
-            ]}
-            onChange={(next) => {
+            onValueChange={(next) => {
               if (
                 next === "canary" &&
                 !window.confirm(
@@ -767,7 +855,15 @@ function UpdatesPane() {
               }
               setChannel(next);
             }}
-          />
+          >
+            <SelectTrigger id="channel" className={CONTROL_W.md}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="stable">Stable</SelectItem>
+              <SelectItem value="canary">Canary</SelectItem>
+            </SelectContent>
+          </Select>
         </PrefRow>
         <PrefRow label="Current version">
           <span className="text-ui text-muted-foreground">0.1.0-canary.9</span>
@@ -782,22 +878,11 @@ function UpdatesPane() {
 
 /* -------------------------------- About ----------------------------------- */
 
-/**
- * About — concise on a healthy machine, complete on a broken one.
- *
- * Review §1.4 found nine things the first pass's "one sentence, one button"
- * silently dropped. `HealthPanel` takes the faults that are ACTUALLY PRESENT,
- * each carrying the remedy `cli-status-model.ts` already computes — so a
- * healthy machine still reads as one sentence, and a broken one keeps its
- * four-state link, its reinstall path and its per-check Doctor remedies.
- */
 function AboutPane() {
   const [faults, setFaults] = React.useState<readonly Fault[]>([
     {
       id: "legacy",
       headline: "Another volli is shadowing this one",
-      // The path is shown. The user is told they can delete it; a remedy whose
-      // object is hidden as an "internal" is not a remedy (review §1.4.1).
       detail: "/usr/local/bin/volli — admin-owned, harmless, and safe to delete yourself.",
       remedy: { label: "Reveal", onAct: () => {} },
     },
@@ -821,11 +906,6 @@ function AboutPane() {
         faults={faults}
         actions={
           <>
-            {/*
-             * Review §1.4.9: a button that copies $PATH, home directory and
-             * usernames to the clipboard WITHOUT showing them is worse than
-             * printing them, for a local-first app. So it previews first.
-             */}
             <Button size="sm" variant="outline">
               Copy report…
             </Button>
@@ -837,30 +917,27 @@ function AboutPane() {
       >
         <DetailLine label="Version" value="0.1.0-canary.9" />
         <DetailLine label="Command line" value="volli — installed" />
-        <DetailLine label="Harnesses" value="Claude Code (claude), Codex (codex)" />
         <DetailLine label="Model providers" value="Anthropic, OpenAI Codex" />
         <DetailLine label="Session PATH" value="Matches your login shell" />
         <DetailLine label="Database" value="12.4 MB" />
       </HealthPanel>
 
       {/*
-       * Harness INVENTORY, not diagnostic. Review §6.12: `HarnessSelector` is
-       * the only surface answering "did Volli pick up the harness I registered,
-       * and which binary will it launch?" — so it survives the collapse as a
-       * list with the resolved command and the origin chip, rather than as a
-       * comma-separated string in Details.
+       * Harness INVENTORY. Small enough to stay a list — three or four entries,
+       * not a collection — so a table would be ceremony. The rule is that a
+       * table is for a collection that grows; this one doesn't.
        */}
-      <PrefSection title="Harnesses" icon={CpuIcon}>
-        <ItemRow
-          name="Claude Code"
-          meta="claude"
-          badges={<Badge variant="secondary">Built-in</Badge>}
-        />
-        <ItemRow name="Codex" meta="codex" badges={<Badge variant="secondary">Built-in</Badge>} />
+      <PrefSection
+        title="Harnesses"
+        icon={CpuIcon}
+        hint={<>The agent binaries Volli can launch. Registered ones come from your PATH.</>}
+      >
+        <ItemRow name="Claude Code" meta="claude" badges={<Provenance>Built-in</Provenance>} />
+        <ItemRow name="Codex" meta="codex" badges={<Provenance>Built-in</Provenance>} />
         <ItemRow
           name="my-harness"
           meta="~/bin/my-harness"
-          badges={<Badge variant="outline">Registered</Badge>}
+          badges={<Provenance mine>Registered</Provenance>}
         />
       </PrefSection>
     </>
@@ -929,6 +1006,7 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
           "sign in",
           "account",
         ],
+        count: CATALOG.length,
         content: <ModelsPane />,
       },
       {
@@ -963,7 +1041,7 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
         label: "Updates",
         icon: DownloadSimpleIcon,
         keywords: ["update", "version", "canary", "prerelease", "channel"],
-        attention: { tone: "primary", label: "update ready" },
+        attention: { state: "ready", label: "update ready" },
         content: <UpdatesPane />,
       },
       {
@@ -971,7 +1049,7 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
         label: "About",
         icon: InfoIcon,
         keywords: ["version", "diagnostics", "doctor", "cli", "harness", "health", "support"],
-        attention: { tone: "destructive", label: "2 problems" },
+        attention: { state: "waiting", label: "2 problems" },
         content: <AboutPane />,
       },
     ],

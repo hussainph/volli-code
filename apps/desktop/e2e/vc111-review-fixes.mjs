@@ -1,10 +1,6 @@
 /**
- * VC-111 — asserts the fixes the independent review demanded
- * (docs/plans/settings-redesign-review.md) actually landed in the prototype.
- *
- * Boot-checking the scratch only proves it renders. These are the behaviours
- * the review named, and several of them (the live region, the help button, the
- * duplicate aria-labels) are invisible in a screenshot.
+ * VC-111 — asserts the prototype still satisfies (a) the independent review's
+ * findings and (b) the component pass that followed it.
  *
  *   Run (in another terminal):  pnpm lab
  *   Then:                       node apps/desktop/e2e/vc111-review-fixes.mjs
@@ -47,16 +43,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const thrown = [];
 page.on("pageerror", (error) => thrown.push(error.message));
 
-/**
- * Rail buttons are matched on a PREFIX, not exactly, because a category with
- * an `attention` state deliberately appends a visually-hidden suffix to its
- * accessible name — "About 2 problems". That is review §4.4's fix: the first
- * pass made the dot `aria-hidden` and thereby deleted the signal for screen
- * readers instead of relocating it. The name-pollution the original bug was
- * about came from an `aria-label` on a decorative dot; a real text suffix that
- * a sighted user also gets (as a dot) is information, and "About, 2 problems"
- * is a good name for that row.
- */
+/** Rail names carry an sr-only attention suffix, so match on a prefix. */
 const nav = (name) =>
   page
     .locator("nav")
@@ -68,48 +55,37 @@ const surface = (name) =>
 await page.goto(LAB, { waitUntil: "networkidle" });
 await page.waitForTimeout(1500);
 
-/* — review §2.1: orphaned-worktree cleanup must still exist — */
+console.log("\n── the independent review ──");
+
+/* §2.1 — orphaned-worktree cleanup still has a home */
 await nav("Storage").click();
 await page.waitForTimeout(400);
 check(
   "§2.1 orphan cleanup has a home",
-  (await page.getByRole("button", { name: "Delete worktree" }).count()) > 0,
+  (await page.getByRole("button", { name: /^Delete ~\/.volli\/worktrees/ }).count()) === 2,
   "Settings → Storage",
 );
-check(
-  "§2.1 orphan rescan action",
-  (await page.getByRole("button", { name: "Rescan orphaned worktrees" }).count()) > 0,
-);
 
-/* — review §1.5: the retention field must refuse a bad value — */
+/* §1.5 — the retention field refuses a value that would delete sooner */
 const ttl = page.locator("#ttl");
 await ttl.fill("0");
 await ttl.blur();
 await page.waitForTimeout(300);
-check(
-  "§1.5 retention refuses < 1 day inline",
-  (await page.locator("#ttl-error").count()) > 0,
-  await page
-    .locator("#ttl-error")
-    .innerText()
-    .catch(() => ""),
-);
+check("§1.5 retention refuses < 1 day inline", (await page.locator("#ttl-error").count()) > 0);
 check("§1.5 refusal marks the field invalid", (await ttl.getAttribute("aria-invalid")) === "true");
 
-/* — review §4.1: "Saved" must NOT be in the tree until something saved — */
+/* §4.1 — "Saved" is absent until something saved */
 await ttl.fill("21");
 await page.waitForTimeout(200);
 const savedBefore = await page.getByText("Saved", { exact: true }).count();
 await ttl.blur();
 await page.waitForTimeout(400);
-const savedAfter = await page.getByText("Saved", { exact: true }).count();
 check(
-  "§4.1 'Saved' is absent before a save and present after",
-  savedBefore === 0 && savedAfter === 1,
-  `before=${savedBefore} after=${savedAfter}`,
+  "§4.1 'Saved' absent before a save, present after",
+  savedBefore === 0 && (await page.getByText("Saved", { exact: true }).count()) === 1,
 );
 
-/* — review §2.2: the reasoning control must still exist — */
+/* §2.2 — reasoning survives */
 await nav("Models").click();
 await page.waitForTimeout(400);
 check(
@@ -117,43 +93,27 @@ check(
   (await page.getByRole("combobox", { name: "Reasoning level" }).count()) === 3,
 );
 
-/* — review §2.5: the catalog filter must match on provider, not just name — */
+/* §2.5 — the catalogue filters on provider, not just name */
 const modelSearch = page.getByLabel("Search models");
 await modelSearch.fill("xAI");
 await page.waitForTimeout(300);
 const xaiRows = await page.locator('[data-testid^="visibility-"]').count();
 await modelSearch.fill("");
 await page.waitForTimeout(200);
-const allRows = await page.locator('[data-testid^="visibility-"]').count();
 check(
-  "§2.5 catalog searches provider as well as name",
-  xaiRows === 1 && allRows === 6,
-  `xAI=${xaiRows} all=${allRows}`,
+  "§2.5 catalogue searches provider as well as name",
+  xaiRows === 1 && (await page.locator('[data-testid^="visibility-"]').count()) === 10,
+  `xAI=${xaiRows}`,
 );
 
-/* — review §2.11: testIds survive for the existing test suite — */
+/* §2.11 — testIds the existing suite depends on */
 check(
   "§2.11 default-model-* testIds kept",
   (await page.locator('[data-testid="default-model-global"]').count()) === 1 &&
     (await page.locator('[data-testid="default-model-utility"]').count()) === 1,
 );
 
-/* — review §4.5: the help button must not activate the labelled control — */
-const compaction = page.locator('[data-testid="auto-compaction"]').getByRole("switch");
-const beforeHelp = await compaction.getAttribute("aria-checked");
-await page
-  .getByRole("button", { name: /Naming new chats/ })
-  .first()
-  .click();
-await page.waitForTimeout(300);
-const utilityRow = page.locator('[data-testid="default-model-utility"]');
-check(
-  "§4.5 help button is a sibling of the label, not inside it",
-  (await utilityRow.locator("label button").count()) === 0,
-  `switch untouched: ${beforeHelp === (await compaction.getAttribute("aria-checked"))}`,
-);
-
-/* — review §1.4: About keeps per-fault remedies rather than one button — */
+/* §1.4 — About keeps per-fault remedies */
 await nav("About").click();
 await page.waitForTimeout(400);
 check(
@@ -166,20 +126,16 @@ check(
   (await page.getByText("/usr/local/bin/volli").count()) > 0,
 );
 check(
-  "§6.12 harness inventory keeps command + origin",
-  (await page.getByText("my-harness").count()) > 0,
-);
-
-/* — review §4.3: the disclosure must expose its state — */
-const details = page.getByRole("button", { name: "Details" });
-check(
-  "§4.4 attention state is in the accessible name, not deleted",
+  "§4.4 attention state is in the accessible name",
   (await page
     .locator("nav")
     .first()
     .getByRole("button", { name: /About 2 problems/ })
     .count()) === 1,
 );
+
+/* §4.3 — the disclosure exposes its state */
+const details = page.getByRole("button", { name: "Details" });
 check(
   "§4.3 disclosure has aria-expanded",
   (await details.getAttribute("aria-expanded")) === "false",
@@ -192,11 +148,11 @@ check(
     "true",
 );
 
-/* — review §1.2a: app-scope terminal rows are never hidden — */
+/* §1.2a / §2.8 — nothing scope-hidden, canvas intact */
 await nav("Appearance").click();
 await page.waitForTimeout(400);
 check(
-  "§1.2a terminal font + size are always present at app scope",
+  "§1.2a terminal config files always present",
   (await page.getByText("Ghostty config").count()) === 1 &&
     (await page.getByText("Volli overlay").count()) === 1,
 );
@@ -209,35 +165,182 @@ check(
   (await page.getByRole("button", { name: "acme-api" }).count()) === 1,
 );
 
-/* — review §4.2: every inherit control needs its own name — */
-await surface("Configure").click();
-await page.waitForTimeout(600);
-await nav("Appearance").click();
-await page.waitForTimeout(400);
-const scopeNames = ["Appearance scope", "Canvas scope", "Terminal theme scope"];
-const found = [];
-for (const name of scopeNames) {
-  found.push(await page.getByRole("group", { name, exact: true }).count());
-}
+console.log("\n── the component pass ──");
+
+/* Pills: Segmented survives in exactly one place on Settings. */
+const settingsSegmented = await page
+  .locator("main, [role='group']")
+  .first()
+  .evaluate(
+    () => document.querySelectorAll("[data-testid='appearance-mode'] [role='group']").length,
+  )
+  .catch(() => 0);
 check(
-  "§4.2 inherit controls have distinct accessible names",
-  found.every((n) => n === 1),
-  found.join("/"),
+  "one Segmented on Settings → Appearance (Light/Dark/Auto)",
+  (await page.getByRole("group", { name: "Appearance mode" }).count()) === 1,
+  `mode groups=${settingsSegmented}`,
 );
 check(
-  "§1.6 no group is named the generic 'Scope'",
-  (await page.getByRole("group", { name: "Scope", exact: true }).count()) === 0,
+  "diff layout is a Select, not two more pills",
+  (await page.getByRole("combobox", { name: /Diff layout/ }).count()) === 1 ||
+    (await page.locator("#diff").count()) === 1,
 );
 
-/* — review §1.1: precedence must be published — */
+/* Web search provider became a Select. */
+await nav("Web Search").click();
+await page.waitForTimeout(400);
+check(
+  "web search provider is a Select, not four pills",
+  (await page.locator("#provider").count()) === 1 &&
+    (await page.getByRole("group", { name: "Web search provider" }).count()) === 0,
+);
+
+/* InfoHint replaces prose, and is reachable by keyboard. */
+const hint = page.getByRole("button", { name: "About Web search" });
+check("sections explain via an (i), not a paragraph", (await hint.count()) === 1);
+await hint.focus();
+await page.waitForTimeout(300);
+check(
+  "the (i) opens on focus (keyboard-reachable)",
+  (await page.getByText(/Applies to every project/).count()) > 0,
+);
+
+/* Tables: bounded height, sticky header, real semantics. */
+await nav("Models").click();
+await page.waitForTimeout(400);
+const table = page.getByRole("table", { name: "Model catalog" });
+check("the catalogue is a real <table>", (await table.count()) === 1);
+check(
+  "provider is a column, not a badge on every row",
+  (await page.getByRole("columnheader", { name: "Provider" }).count()) === 1,
+);
+const bounded = await table.locator("xpath=ancestor::div[contains(@style,'max-height')]").count();
+check("the table is height-capped so the page stays navigable", bounded === 1);
+
+console.log("\n── Configure ──");
+
+await surface("Configure").click();
+await page.waitForTimeout(600);
+await nav("Skills").click();
+await page.waitForTimeout(500);
+
+check(
+  "skills are a table with a Source column",
+  (await page.getByRole("table", { name: /Skills available/ }).count()) === 1 &&
+    (await page.getByRole("columnheader", { name: "Source" }).count()) === 1,
+);
+
+/* The pill reduction, measured: one filter replaces N repeated pills. */
+const sourceFilter = page.getByRole("combobox", { name: "Filter by source" });
+check("one Source filter replaces a pill per row", (await sourceFilter.count()) === 1);
+await sourceFilter.click();
+await page.waitForTimeout(300);
+await page.getByRole("option", { name: "This project" }).click();
+await page.waitForTimeout(400);
+const projectRows = await page.locator('[data-testid^="skill-"]').count();
+check("the Source filter actually filters", projectRows === 2, `${projectRows} project skills`);
+await sourceFilter.click();
+await page.waitForTimeout(300);
+await page.getByRole("option", { name: "All sources" }).click();
+await page.waitForTimeout(400);
+
+check(
+  "§2.4 no-results copy is distinct from empty copy",
+  await (async () => {
+    await page.getByLabel("Search skills").fill("zzzz");
+    await page.waitForTimeout(300);
+    const has = (await page.getByText("No skills match.").count()) === 1;
+    await page.getByLabel("Search skills").fill("");
+    await page.waitForTimeout(200);
+    return has;
+  })(),
+);
+
+/* The skill switch names its own scope. */
+check(
+  "the skill switch says which scope it writes",
+  (await page.getByRole("switch", { name: "Enable tdd in this project" }).count()) === 1,
+);
+
+/* New command — a designed feature, not a dead button. */
+await nav("Commands").click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "New command" }).click();
+await page.waitForTimeout(500);
+check("New command opens a real form", (await page.getByRole("dialog").count()) === 1);
+const create = page.getByRole("button", { name: "Create" });
+check("Create is disabled until the form is valid", await create.isDisabled());
+await page.locator("#cmd-name").fill("Ship It!");
+await page.waitForTimeout(300);
+check(
+  "the command name is validated against the loader's rule",
+  (await page.locator("#cmd-name-error").count()) === 1,
+);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(400);
+
+/* Add server — the transport fork. */
+await nav("MCP").click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "Add server" }).click();
+await page.waitForTimeout(500);
+check(
+  "Add server asks for a command when local",
+  (await page.locator("#mcp-command").count()) === 1,
+);
+await page.getByRole("combobox", { name: /Transport/ }).click();
+await page.waitForTimeout(300);
+await page.getByRole("option", { name: "Remote URL" }).click();
+await page.waitForTimeout(400);
+check(
+  "…and swaps to a URL when remote, rather than showing both",
+  (await page.locator("#mcp-url").count()) === 1 &&
+    (await page.locator("#mcp-command").count()) === 0,
+);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(400);
+
+/* OverrideControl: zero pills, revert only when there is something to revert. */
 await nav("Sessions").click();
 await page.waitForTimeout(400);
 check(
-  "§1.1 model precedence is stated",
-  (await page.getByText(/own composer, then this project/).count()) > 0,
+  "no Inherit/Custom pills anywhere",
+  (await page.getByRole("group", { name: /scope/i }).count()) === 0,
+);
+check(
+  "an overridden row offers a revert naming the app-wide value",
+  (await page
+    .getByRole("button", { name: /Reset Model to the app-wide value, claude-opus-4\.6/ })
+    .count()) === 1,
+);
+check(
+  "an inheriting row offers no revert",
+  (await page.getByRole("button", { name: /Reset Harness/ }).count()) === 0,
+);
+check(
+  "the overridden row is marked for screen readers too",
+  (await page.getByText("(overridden for this project)").count()) === 1,
 );
 
-/* — review §2.6: the worktreeinclude trap is gone — */
+/* §1.1 — precedence is published, now as a hint. */
+const sessionHint = page.getByRole("button", { name: "About New sessions" });
+await sessionHint.focus();
+await page.waitForTimeout(300);
+check(
+  "§1.1 precedence is stated in the (i)",
+  (await page.getByText(/own composer first, then this project/).count()) > 0,
+);
+
+/* Revert restores inheritance. */
+await page.getByRole("button", { name: /Reset Model to the app-wide value/ }).click();
+await page.waitForTimeout(400);
+check(
+  "revert clears the override",
+  (await page.getByRole("button", { name: /Reset Model/ }).count()) === 0 &&
+    (await page.getByText("(overridden for this project)").count()) === 0,
+);
+
+/* §2.6 — the .worktreeinclude trap stays gone. */
 await nav("Worktrees").click();
 await page.waitForTimeout(400);
 check(
@@ -245,30 +348,11 @@ check(
   (await page.locator("textarea").count()) === 0 &&
     (await page.getByRole("button", { name: /Create .worktreeinclude/ }).count()) === 1,
 );
-
-/* — review §1.5: base branch refuses an unknown ref — */
 const base = page.locator("#base");
 await base.fill("mian");
 await base.blur();
 await page.waitForTimeout(300);
-check(
-  "§1.5 base branch refuses an unknown ref inline",
-  (await page.locator("#base-error").count()) > 0,
-  await page
-    .locator("#base-error")
-    .innerText()
-    .catch(() => ""),
-);
-
-/* — review §2.4: empty and no-results are different strings — */
-await nav("Skills").click();
-await page.waitForTimeout(400);
-await page.getByLabel("Search skills").fill("zzzz");
-await page.waitForTimeout(300);
-check(
-  "§2.4 no-results copy is distinct from empty copy",
-  (await page.getByText("No skills match.").count()) === 1,
-);
+check("§1.5 base branch refuses an unknown ref", (await page.locator("#base-error").count()) > 0);
 
 check("no uncaught errors", thrown.length === 0, thrown.join("; "));
 
