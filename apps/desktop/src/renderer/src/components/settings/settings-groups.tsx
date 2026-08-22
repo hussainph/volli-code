@@ -210,6 +210,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "orphaned worktrees",
             "database",
             "size",
+            "database export",
             "export database",
             "backup",
             "json",

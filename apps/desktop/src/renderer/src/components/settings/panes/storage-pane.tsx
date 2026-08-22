@@ -231,7 +231,7 @@ function DatabaseSection() {
               : "Loading…"}
           </span>
         </PrefRow>
-        <PrefRow label="Export database">
+        <PrefRow label="Database export">
           <Button size="xs" variant="outline" onClick={() => setExportOpen(true)}>
             Export…
           </Button>
