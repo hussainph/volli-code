@@ -52,6 +52,7 @@ import {
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
 
+import { useFixture } from "./fixtures";
 import {
   AsyncSection,
   Cell,
@@ -68,14 +69,9 @@ import {
   Provenance,
   SectionAction,
   SectionIconAction,
-  type AsyncState,
   type Fault,
   type PrefGroup,
 } from "./kit";
-
-function ready<T>(data: T): AsyncState<T> {
-  return { status: "ready", data };
-}
 
 /* ------------------------------- General ---------------------------------- */
 
@@ -99,18 +95,19 @@ function GeneralPane() {
 
 /* ------------------------------- Storage ---------------------------------- */
 
+/** The empty list every collection here falls back to in the lab's empty mode. */
+const EMPTY: readonly never[] = [];
+
 interface Orphan {
   path: string;
   reason: string;
 }
 
 function StoragePane() {
-  const [orphans] = React.useState<AsyncState<readonly Orphan[]>>(
-    ready([
-      { path: "~/.volli/worktrees/volli-code-9f2/VC-88-flaky-auth", reason: "3 uncommitted files" },
-      { path: "~/.volli/worktrees/volli-code-9f2/VC-91-rail-port", reason: "1 uncommitted file" },
-    ]),
-  );
+  const [orphans] = React.useState<readonly Orphan[]>([
+    { path: "~/.volli/worktrees/volli-code-9f2/VC-88-flaky-auth", reason: "3 uncommitted files" },
+    { path: "~/.volli/worktrees/volli-code-9f2/VC-91-rail-port", reason: "1 uncommitted file" },
+  ] as const);
 
   return (
     <>
@@ -152,7 +149,7 @@ function StoragePane() {
         icon={TreeStructureIcon}
         hint={<>Never swept automatically while they hold uncommitted work.</>}
         action={<SectionIconAction label="Rescan orphaned worktrees" />}
-        state={orphans}
+        state={useFixture(orphans, EMPTY)}
         isEmpty={(list) => list.length === 0}
         empty="No orphaned worktrees."
       >
@@ -753,7 +750,7 @@ function IntegrationsPane() {
       title="Open in…"
       icon={PlugsIcon}
       hint={<>Only installed editors appear.</>}
-      state={ready(EDITORS)}
+      state={useFixture(EDITORS, EMPTY)}
       isEmpty={(apps) => apps.length === 0}
       empty="None of the editors Volli knows are installed."
     >
