@@ -94,6 +94,30 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:database", () => {
+    const { guard, invalidError } = DATA_IPC["volli:database"];
+
+    it("accepts a size read with no renderer-supplied path", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("accepts only the main-owned reveal and export actions", () => {
+      expect(guard(["reveal"])).toBe(true);
+      expect(guard(["export"])).toBe(true);
+    });
+
+    it("rejects renderer paths, an unknown action, and a wrong arity", () => {
+      expect(guard(["/Users/me/anything"])).toBe(false);
+      expect(guard([{ path: "/Users/me/anything" }])).toBe(false);
+      expect(guard(["delete"])).toBe(false);
+      expect(guard(["reveal", "extra"])).toBe(false);
+    });
+
+    it("names the database request in its refusal", () => {
+      expect(invalidError).toBe("Invalid database request");
+    });
+  });
+
   describe("volli:legacy-import", () => {
     const { guard, invalidError } = DATA_IPC["volli:legacy-import"];
     const valid = { projects: [], appState: { "volli:ui": "{}" }, rawBackup: { "volli:ui": "{}" } };
@@ -1536,9 +1560,10 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 55 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(55);
+    it("covers all 56 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(56);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
       expect(DATA_CHANNELS).toContain("volli:blob-list");

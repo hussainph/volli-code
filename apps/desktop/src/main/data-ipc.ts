@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import {
@@ -33,6 +34,8 @@ import type {
   CommentCreateInput,
   CommentIdInput,
   CommentUpdateInput,
+  DatabaseAction,
+  DatabaseResult,
   DataIpcChannel,
   LabelResult,
   LabelSetColorInput,
@@ -136,6 +139,7 @@ import {
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { orphanReport } from "./orphan-sweep";
+import { exportDatabase } from "./menu";
 import {
   type AgentSiteReleaseReport,
   archiveAndClean,
@@ -167,6 +171,20 @@ import type { IpcHandlerTable } from "./ipc-registry";
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
+
+/**
+ * The live SQLite database is its main file plus WAL-mode sidecars. A WAL
+ * holds committed pages until checkpoint, so `db.name` alone can be much
+ * smaller than the storage the database currently occupies. Migration backups
+ * are separate recovery files and do not belong to this live footprint.
+ */
+function databaseStorageBytes(dbPath: string): number {
+  let sizeBytes = statSync(dbPath).size;
+  for (const suffix of ["-wal", "-shm"]) {
+    sizeBytes += statSync(`${dbPath}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
+  }
+  return sizeBytes;
+}
 
 // ---- bootstrap payload --------------------------------------------------
 
@@ -394,6 +412,21 @@ export function registerDataIpcHandlers(
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
+    },
+
+    "volli:database": async (action?: DatabaseAction): Promise<DatabaseResult> => {
+      // `db.name` is better-sqlite3's opened file, so the renderer never learns
+      // or submits a filesystem path for either operation.
+      const sizeBytes = databaseStorageBytes(db.name);
+      switch (action) {
+        case "reveal":
+          shell.showItemInFolder(db.name);
+          break;
+        case "export":
+          await exportDatabase({ ok: true, db });
+          break;
+      }
+      return { ok: true, sizeBytes };
     },
 
     "volli:legacy-import": (request: LegacyImportRequest): LegacyImportResult => {

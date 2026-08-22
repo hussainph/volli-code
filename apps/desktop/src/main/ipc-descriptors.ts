@@ -167,6 +167,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is [] => args.length === 0,
     invalidError: "Invalid request",
   },
+  "volli:database": {
+    guard: (args): args is IpcArgs<"volli:database"> =>
+      args.length === 0 || (args.length === 1 && (args[0] === "reveal" || args[0] === "export")),
+    invalidError: "Invalid database request",
+  },
   "volli:legacy-import": {
     guard: (args): args is IpcArgs<"volli:legacy-import"> => {
       if (args.length !== 1) return false;

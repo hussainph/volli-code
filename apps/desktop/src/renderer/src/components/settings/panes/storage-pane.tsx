@@ -13,6 +13,7 @@
  */
 import * as React from "react";
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
+import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
@@ -29,6 +30,7 @@ import {
   ItemRow,
   PrefRow,
   PrefSection,
+  SectionAction,
   SectionIconAction,
   type AsyncState,
   type CommitResult,
@@ -44,6 +46,7 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
+import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { toastError } from "@renderer/lib/toast";
 
@@ -55,6 +58,7 @@ export function StoragePane() {
     <>
       <RetentionSection />
       <OrphansSection />
+      <DatabaseSection />
     </>
   );
 }
@@ -137,6 +141,132 @@ function RetentionSection() {
         <span className="text-ui text-muted-foreground">days</span>
       </PrefRow>
     </PrefSection>
+  );
+}
+
+function DatabaseSection() {
+  const [sizeBytes, setSizeBytes] = React.useState<number | null>(null);
+  const [sizeLoaded, setSizeLoaded] = React.useState(false);
+  const [revealing, setRevealing] = React.useState(false);
+  const [exportOpen, setExportOpen] = React.useState(false);
+  const [exporting, setExporting] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void window.api
+      .database()
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) setSizeBytes(result.sizeBytes);
+        else toastError(`Couldn't load database size: ${result.error}`);
+        setSizeLoaded(true);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(`Couldn't load database size: ${errorMessage(error)}`);
+        setSizeLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function revealDatabase(): Promise<void> {
+    if (revealing) return;
+    setRevealing(true);
+    try {
+      const result = await window.api.database("reveal");
+      if (!result.ok) {
+        toastError(`Couldn't reveal database: ${result.error}`);
+        return;
+      }
+      setSizeBytes(result.sizeBytes);
+      setSizeLoaded(true);
+    } catch (error) {
+      toastError(`Couldn't reveal database: ${errorMessage(error)}`);
+    } finally {
+      setRevealing(false);
+    }
+  }
+
+  async function exportDatabase(): Promise<void> {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const result = await window.api.database("export");
+      if (!result.ok) {
+        toastError(`Couldn't export database: ${result.error}`);
+        return;
+      }
+      setSizeBytes(result.sizeBytes);
+      setSizeLoaded(true);
+    } catch (error) {
+      toastError(`Couldn't export database: ${errorMessage(error)}`);
+    } finally {
+      setExporting(false);
+      setExportOpen(false);
+    }
+  }
+
+  return (
+    <>
+      <PrefSection
+        title="Database"
+        icon={DatabaseIcon}
+        action={
+          <SectionAction
+            label="Reveal in Finder"
+            icon={FolderOpenIcon}
+            disabled={revealing}
+            onAct={() => void revealDatabase()}
+          />
+        }
+      >
+        <PrefRow label="Size">
+          <span className="text-ui text-muted-foreground">
+            {sizeLoaded
+              ? sizeBytes === null
+                ? "Unavailable"
+                : formatFileSize(sizeBytes)
+              : "Loading…"}
+          </span>
+        </PrefRow>
+        <PrefRow label="Database export">
+          <Button size="xs" variant="outline" onClick={() => setExportOpen(true)}>
+            Export…
+          </Button>
+        </PrefRow>
+      </PrefSection>
+
+      <AlertDialog
+        open={exportOpen}
+        onOpenChange={(open) => {
+          if (!exporting) setExportOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Export database?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Creates a JSON file containing every project, ticket, comment, session, label, and
+              setting in Volli.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={exporting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={exporting}
+              onClick={(event) => {
+                event.preventDefault();
+                void exportDatabase();
+              }}
+            >
+              {exporting ? "Exporting…" : "Choose location…"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
