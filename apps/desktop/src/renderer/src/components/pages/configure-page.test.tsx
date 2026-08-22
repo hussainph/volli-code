@@ -2,11 +2,9 @@ import type { Project } from "@volli/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  ConfigureGeneralSection,
-  ConfigurePage,
-  ConfigureWorktreesSection,
-} from "./configure-page";
+import { configureGroups } from "@renderer/components/settings/configure-groups";
+import { PrefShell } from "@renderer/components/settings/kit";
+import { ConfigurePage } from "./configure-page";
 
 const project: Project = {
   id: "p1",
@@ -21,35 +19,81 @@ const project: Project = {
   updatedAt: 0,
 };
 
-describe("ConfigureGeneralSection", () => {
-  it("shows the project's pinned base branch and setup command in editable fields", () => {
-    const html = renderToStaticMarkup(
-      <ConfigureGeneralSection
-        project={project}
-        onSaveBaseBranch={async () => true}
-        onSaveSetupCommand={async () => true}
-      />,
-    );
+/** The surface as it draws for one project, without the store's selection. */
+function renderConfigure(activeKey: string): string {
+  return renderToStaticMarkup(
+    <PrefShell
+      surfaceLabel="Configure"
+      groups={configureGroups(project)}
+      activeKey={activeKey}
+      onSelect={() => {}}
+    />,
+  );
+}
 
-    expect(html).toContain("Default base branch");
-    expect(html).toContain('value="trunk"');
-    expect(html).toContain("Setup command");
-    expect(html).toContain('value="pnpm install"');
-    expect(html).toContain("Save");
-    // The project name titles the section.
-    expect(html).toContain("Volli Code");
+describe("Configure rail", () => {
+  it("groups agent configuration apart from project settings", () => {
+    const html = renderConfigure("skills");
+
+    expect(html).toContain("Agent");
+    expect(html).toContain("Project");
+    for (const category of [
+      "Skills",
+      "Commands",
+      "MCP Servers",
+      "Plugins",
+      "Sessions",
+      "Appearance",
+      "Worktrees",
+    ]) {
+      expect(html).toContain(category);
+    }
   });
 });
 
-describe("ConfigureWorktreesSection", () => {
-  it("documents the per-project copy set without the app-wide orphan list", () => {
-    const html = renderToStaticMarkup(<ConfigureWorktreesSection />);
+describe("Configure → Worktrees", () => {
+  it("carries the project's pinned base branch and setup command", () => {
+    const html = renderConfigure("worktrees");
+
+    expect(html).toContain("Branch from");
+    expect(html).toContain('value="trunk"');
+    expect(html).toContain("Then run");
+    expect(html).toContain('value="pnpm install"');
+  });
+
+  it("keeps the app-wide orphan list off a single project's page", () => {
+    const html = renderConfigure("worktrees");
 
     expect(html).toContain("Copied files");
     expect(html).toContain(".worktreeinclude");
-    // `sweepOrphans` walks every project, so its list (and its permanent
-    // deletes) belongs to app-wide Settings — never a single project's page.
+    // `sweepOrphans` walks every project in the db and reports directories git
+    // attributes to none of them, so its list — and its permanent deletes —
+    // cannot be scoped here. Settings → Storage owns it.
     expect(html).not.toContain("Orphaned worktrees");
+  });
+});
+
+describe("Configure → Sessions", () => {
+  it("offers the harness choice without a scope switch", () => {
+    const html = renderConfigure("sessions");
+
+    expect(html).toContain("Harness");
+    expect(html).toContain("New sessions");
+    // Scope is the surface, not a mode: an Inherit/Custom pair per row is the
+    // exact vocabulary this redesign removed (see kit/override.tsx).
+    expect(html).not.toContain("Inherit");
+  });
+});
+
+describe("Configure → MCP", () => {
+  it("shows the shape and says it does not work yet", () => {
+    const html = renderConfigure("mcp");
+
+    expect(html).toContain("aren&#x27;t wired up yet");
+    // Rule 3 of kit/unavailable.tsx: the real empty state, never invented
+    // servers that a reader could mistake for real ones gone wrong.
+    expect(html).toContain("No MCP servers yet.");
+    expect(html).toContain("inert");
   });
 });
 
@@ -60,6 +104,6 @@ describe("ConfigurePage", () => {
     const html = renderToStaticMarkup(<ConfigurePage />);
 
     expect(html).toContain("Nothing to configure");
-    expect(html).not.toContain("Default base branch");
+    expect(html).not.toContain("Branch from");
   });
 });

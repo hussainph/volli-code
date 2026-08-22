@@ -23,9 +23,9 @@ describe("UPDATE_IPC descriptor table", () => {
    * data (VC-111). Everything else on this surface is argument-less — the
    * state is main's to own — so the loop below still holds for the rest.
    */
-  const CHANNELS_WITH_ARGS: readonly string[] = ["volli:update-channel-set"];
+  const CHANNELS_WITH_ARGS = new Set<string>(["volli:update-channel-set"]);
 
-  for (const channel of UPDATE_CHANNELS.filter((c) => !CHANNELS_WITH_ARGS.includes(c))) {
+  for (const channel of UPDATE_CHANNELS.filter((c) => !CHANNELS_WITH_ARGS.has(c))) {
     describe(`${channel} (no-arg request)`, () => {
       const { guard, invalidError } = UPDATE_IPC[channel];
 

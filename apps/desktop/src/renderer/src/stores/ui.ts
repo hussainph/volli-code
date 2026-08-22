@@ -256,6 +256,15 @@ interface UiState {
   setSidebarWidth(width: number): void;
   setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
+  /**
+   * Sets zoom to one rung of {@link UI_SCALE_STEPS}, snapping anything else.
+   *
+   * The snap is not politeness: `uiScale` is applied verbatim as CSS `zoom`,
+   * so an off-ladder value is an untested layout and a corrupt one (`0`, NaN)
+   * renders the entire app below the chrome band invisible — with the
+   * zoom-reset menu item unreachable by mouse.
+   */
+  setUiScale(scale: number): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean, category?: string, signInProviderId?: string): void;
   /**
@@ -348,6 +357,7 @@ export function createUiStore(storage?: StateStorage) {
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
+        setUiScale: (scale) => set({ uiScale: sanitizeUiScale(scale) }),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open, category, signInProviderId) =>
           set({

@@ -1,29 +1,25 @@
 /**
- * The harness master list, and the two spare views every surface that offers a
- * per-harness choice draws it with.
+ * The harness master list — every harness this host can launch.
  *
- * Lifted out of `harness-settings.tsx` when Configure gained a Runtime category:
- * app-wide Settings and one project's Configure page now ask the same host the
- * same question, and two copies of the fetch would be two places for its failure
- * behaviour — and for the pill row's pressed-state contract — to drift.
+ * ONE READ, two surfaces. Settings → About lists the inventory; Configure →
+ * Sessions picks one per project. Both ask the same host the same question, and
+ * two copies of the fetch would be two places for its failure behaviour to
+ * drift.
  *
- * The pure union rule stays where it was, in `harness-catalog.ts`: that module
- * is enrolled at 100% coverage precisely because it decides what a user sees,
- * and an effect and some JSX are not decisions. This file is the view glue over
- * it, and holds no rule of its own.
+ * The pill-row selector and the identity card that used to live here went with
+ * the Harness Runtimes category (VC-111): a settings category whose pane held
+ * one read-only command string was a page teaching people the rail is not worth
+ * reading. The command is a row in About now, beside the other facts about this
+ * install.
+ *
+ * The pure union rule stays in `harness-catalog.ts`, which is enrolled at 100%
+ * coverage precisely because it decides what a user sees. This file is view
+ * glue over it and holds no rule of its own.
  */
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import * as React from "react";
 import { errorMessage, type HarnessAdapter } from "@volli/shared";
 
-import {
-  harnessListings,
-  type HarnessListing,
-  type HarnessOrigin,
-} from "@renderer/components/pages/harness-catalog";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
-import { Badge } from "@renderer/components/ui/badge";
-import { Segmented } from "@renderer/components/ui/segmented";
+import { harnessListings, type HarnessListing } from "@renderer/components/pages/harness-catalog";
 import { toastError } from "@renderer/lib/toast";
 
 /**
@@ -70,77 +66,4 @@ export function useHarnessListings(): readonly HarnessListing[] {
   }, []);
 
   return React.useMemo(() => harnessListings(registered), [registered]);
-}
-
-/**
- * The master list, as one row of pills above the detail it selects.
- *
- * Above rather than beside: a settings pane is one reading column (the app's
- * `max-w-content` measure inside its gutter), and it already sits behind
- * Settings' own category rail. A second vertical rail in front of that is two
- * rails deep to reach one card, and it spends the column's width on chrome
- * rather than on the command a launch resolves. Above, the selector costs one
- * row and the detail keeps the full width.
- *
- * Every harness is listed, including the ones with nothing to configure. A list
- * pruned to the configurable one would quietly claim this host can launch
- * exactly one harness.
- */
-export function HarnessSelector({
-  listings,
-  activeId,
-  onSelect,
-}: {
-  listings: readonly HarnessListing[];
-  activeId: string | null;
-  onSelect(harnessId: string): void;
-}) {
-  return (
-    // The track wears the same fill as the sections below it and no frame, for
-    // the same reason they dropped theirs: this pane already sits inside the
-    // app shell's framed card. `flex-wrap` because this is the one segmented
-    // control whose members are user-installed and therefore unbounded.
-    <Segmented
-      ariaLabel="Harnesses"
-      // Chip height, not the settings step: this row IS the pane's subject, and
-      // every section below it is about whichever segment is pressed.
-      size="default"
-      value={activeId ?? ""}
-      options={listings.map((listing) => ({ key: listing.id, label: listing.label }))}
-      className="w-fit flex-wrap rounded-lg bg-card p-1"
-      onChange={onSelect}
-    />
-  );
-}
-
-/**
- * The selected harness's identity card: the executable a launch resolves, and
- * where the harness came from.
- *
- * Deliberately spare — these are what is true and knowable about a harness
- * Volli has nothing else to change about, and padding a pane out to a matching
- * size would state things nobody can act on. There is nothing else to show:
- * the one row that ever sat under these, the binary override, was retired once
- * its only launch-time reader went, and a launch resolves its binary off the
- * login-shell PATH the generated wrapper walks.
- */
-export function HarnessIdentitySection({ listing }: { listing: HarnessListing }) {
-  return (
-    <SettingsSection
-      title={listing.label}
-      icon={CpuIcon}
-      action={<OriginChip origin={listing.origin} />}
-    >
-      <SettingsRow label="Command">
-        <code className="rounded-sm border border-border/50 bg-muted/30 px-1 py-1 font-mono text-ui text-foreground">
-          {listing.command}
-        </code>
-      </SettingsRow>
-    </SettingsSection>
-  );
-}
-
-/** Built-in or registered, stated where the harness's other identity facts are. */
-function OriginChip({ origin }: { origin: HarnessOrigin }) {
-  return <Badge className="uppercase">{origin === "built-in" ? "Built-in" : "Registered"}</Badge>;
 }
