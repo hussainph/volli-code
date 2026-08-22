@@ -125,6 +125,15 @@ describe("promptTemplateDescription", () => {
 });
 
 describe("mergePromptTemplates", () => {
+  it("keeps sources on names only one tier defines", () => {
+    const merged = mergePromptTemplates({
+      project: [template({ name: "zeta" })],
+      global: [template({ name: "alpha" })],
+    });
+
+    expect(merged.map((entry) => entry.source)).toEqual(["personal", "project"]);
+  });
+
   it("lets the project's name replace the global one outright", () => {
     const merged = mergePromptTemplates({
       project: [template({ name: "review", content: "project body" })],
@@ -133,6 +142,7 @@ describe("mergePromptTemplates", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0]?.content).toBe("project body");
+    expect(merged[0]?.source).toBe("project");
   });
 
   it("keeps both tiers when the names differ, sorted by name", () => {
