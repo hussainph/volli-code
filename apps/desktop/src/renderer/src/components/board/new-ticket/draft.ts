@@ -6,16 +6,25 @@
  * write-through, `beforeunload` flush) on every change; any close keeps it, the
  * next open restores it, and a successful create clears it.
  *
- * A draft only exists when there's CONTENT to protect (title, body, or labels)
- * — chip-only fiddling (status/priority/worktree/project) is not worth
- * restoring and would just surprise on the next open, so {@link saveDraft}
- * treats it as "no draft". Loading is defensive: any malformed or
- * wrong-version envelope reads as "no draft" rather than throwing (the value
- * crossed a persistence boundary; trust nothing).
+ * A draft only exists when there's CONTENT to protect (title, body, labels,
+ * or a staged attachment — a dropped screenshot is as much a half-written
+ * Ticket as a sentence is); chip-only fiddling (status/priority/worktree/
+ * project) is not worth restoring and would just surprise on the next open, so
+ * {@link saveDraft} treats it as "no draft". Loading is defensive: any
+ * malformed or wrong-version envelope reads as "no draft" rather than
+ * throwing (the value crossed a persistence boundary; trust nothing).
+ *
+ * A draft's attachments are UNOWNED Blobs until the Ticket exists, and boot
+ * time collection would reclaim them on relaunch — except that it spares
+ * whatever a stored draft still names (see `draftAttachmentHashes` in
+ * `@volli/shared`), which is what makes the strip restore below honest.
  */
 import {
+  isBlobLinkView,
   isTicketPriority,
   isTicketStatus,
+  NEW_TICKET_DRAFT_APP_STATE_KEY,
+  type BlobLinkView,
   type TicketPriority,
   type TicketStatus,
 } from "@volli/shared";
@@ -40,14 +49,28 @@ export interface ComposerDraft {
    * can be deleted between two app launches.
    */
   baseBranch?: string | null;
+  /**
+   * The files staged on the Ticket being composed (VC-137) — persisted beside
+   * the words for the same reason they are: an accidental close must not eat
+   * one half of a half-written Ticket. `linkId` is always `null` here (the
+   * Ticket does not exist to own a link); the Blobs are unowned until
+   * `linkDrafts` adopts them at create, and boot-time collection spares
+   * whatever this list still names.
+   */
+  attachments?: readonly BlobLinkView[];
 }
 
-const DRAFT_KEY = "volli:new-ticket-draft";
+const DRAFT_KEY = NEW_TICKET_DRAFT_APP_STATE_KEY;
 const DRAFT_VERSION = 1;
 
 /** Whether the draft carries no content worth protecting (see module doc). */
 export function isEmptyDraft(draft: ComposerDraft): boolean {
-  return draft.title.trim() === "" && draft.body.trim() === "" && draft.labels.length === 0;
+  return (
+    draft.title.trim() === "" &&
+    draft.body.trim() === "" &&
+    draft.labels.length === 0 &&
+    (draft.attachments?.length ?? 0) === 0
+  );
 }
 
 /**
@@ -83,7 +106,9 @@ function isComposerDraft(value: unknown): value is ComposerDraft {
     typeof draft["usesWorktree"] === "boolean" &&
     (draft["baseBranch"] === undefined ||
       draft["baseBranch"] === null ||
-      typeof draft["baseBranch"] === "string")
+      typeof draft["baseBranch"] === "string") &&
+    (draft["attachments"] === undefined ||
+      (Array.isArray(draft["attachments"]) && draft["attachments"].every(isBlobLinkView)))
   );
 }
 

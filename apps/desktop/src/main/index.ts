@@ -26,11 +26,13 @@ import {
   harnessAdapters,
   globalSkillsDir,
   projectSkillsDir,
+  draftAttachmentHashes,
   resolveDefaultModel,
   resolveShell,
   skillPromptResource,
   skillsIndexResource,
   ticketBranchName,
+  NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
@@ -1151,9 +1153,23 @@ app.whenReady().then(async () => {
   // so leaves an unlinked Blob whenever a draft is thrown away. Housekeeping, so
   // it runs at boot rather than on the user's turn, and a failure is logged
   // rather than raised: garbage left behind is a disk cost, never a broken app.
+  //
+  // EXCEPT what a still-stored new-Ticket draft names (VC-137): the draft
+  // persists its attachment strip like it persists the words, so those Blobs
+  // are a persisted attachment waiting for their Ticket, not garbage. Reading
+  // the raw app_state row here — the renderer owns that envelope's shape, and
+  // `draftAttachmentHashes` reads it defensively enough that a malformed row
+  // can at worst leak bytes until the draft is fixed or cleared.
   if (dbHandle.ok) {
     try {
-      const { collected } = collectUnlinkedBlobs(dbHandle.db, blobsRoot(app.getPath("userData")));
+      const retained = new Set(
+        draftAttachmentHashes(getAllAppState(dbHandle.db)[NEW_TICKET_DRAFT_APP_STATE_KEY]),
+      );
+      const { collected } = collectUnlinkedBlobs(
+        dbHandle.db,
+        blobsRoot(app.getPath("userData")),
+        retained,
+      );
       if (collected.length > 0) {
         console.info(`[volli] collected ${collected.length} unreferenced attachment(s)`);
       }

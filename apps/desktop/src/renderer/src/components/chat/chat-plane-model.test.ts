@@ -15,10 +15,24 @@ import type {
   SessionInteractionResolution,
 } from "@volli/shared";
 import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
+import type { BlobLinkView } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
+/** One staged file, for the rows and steers that carry them (VC-137). */
+function blobLinkView(): BlobLinkView {
+  return {
+    linkId: "link-1",
+    blobHash: "ab".repeat(32),
+    label: "shot.png",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 2048,
+  };
+}
+
 import { createChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
+import type { QueuedMessage } from "@renderer/chat/session-model";
 
 import {
   answerInteraction,
@@ -58,7 +72,7 @@ function heldMessage(id: string, text: string, state: HeldMessage["state"]): Hel
 
 interface SteerHarnessInput {
   held?: readonly HeldMessage[];
-  queue?: readonly { id: string; text: string }[];
+  queue?: readonly QueuedMessage[];
   steerable?: boolean;
   submit?: QueuedSteerActs["submit"];
 }
@@ -1523,6 +1537,45 @@ describe("steerQueuedMessage", () => {
     expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
   });
 
+  // The attachments half of the same promise (VC-137): steering a queued row
+  // must deliver the file that was attached when ⏎ was pressed — not a copy
+  // the rebuild silently stripped to its words.
+  it("hands a held row's attachments to submit when steered", async () => {
+    const attachments = [blobLinkView()];
+    const state = steerHarness({
+      held: [{ ...heldMessage("q1", "look at this", "unsent"), attachments }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "look at this", attachments });
+        expect(delivery).toBe("steer");
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+
+    expect(state.held()).toEqual([]);
+    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
+  });
+
+  // A held copy predating this feature (or one `beginQueuedSteer` has not yet
+  // touched) may carry no attachments field at all while the resident release
+  // queue still holds the row it came from — the queue observes an enqueue
+  // synchronously, before any held write. The queue's own copy is the fallback.
+  it("falls back to the queue copy's attachments when the held copy names none", async () => {
+    const attachments = [blobLinkView()];
+    const state = steerHarness({
+      held: [heldMessage("q1", "look at this", "unsent")],
+      queue: [{ id: "q1", text: "look at this", attachments }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "look at this", attachments });
+        expect(delivery).toBe("steer");
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+  });
+
   it("restores a refused queue-only row between its original neighbors", async () => {
     const state = steerHarness({
       queue: [
@@ -1773,6 +1826,15 @@ describe("heldStrip", () => {
     const resources = [{ name: "logos", text: "# Logos" }];
     expect(heldStrip([{ ...heldMessage("m1", "/logos go", "unsent"), resources }], [])).toEqual([
       { id: "m1", text: "/logos go", resources },
+    ]);
+  });
+
+  // Same rule for files (VC-137): a row that redraws without its attachments
+  // is a message the person believes still carries them.
+  it("keeps a held row's attachments on its strip row", () => {
+    const attachments = [blobLinkView()];
+    expect(heldStrip([{ ...heldMessage("m1", "look", "unsent"), attachments }], [])).toEqual([
+      { id: "m1", text: "look", attachments },
     ]);
   });
 });

@@ -191,6 +191,12 @@ export interface SessionComposerProps {
   onAttachFiles?(files: readonly File[]): void;
   onRemoveAttachment?(attachment: BlobLinkView): void;
   /**
+   * A queued row came back for editing, and its files return with it (VC-137).
+   * The parent owns the strip, so the row's attachments hand back through
+   * here rather than the box minting a second copy of them.
+   */
+  onRestoreAttachments?(attachments: readonly BlobLinkView[]): void;
+  /**
    * The selected model takes no image input, so the affordance says so rather
    * than letting a picture be attached to a model that cannot see it.
    */
@@ -301,6 +307,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   attachments = NO_ATTACHMENTS,
   onAttachFiles,
   onRemoveAttachment,
+  onRestoreAttachments,
   imagesUnsupported = false,
   modelPickerOpen,
   onModelPickerOpenChange,
@@ -336,10 +343,21 @@ export const SessionComposer = React.memo(function SessionComposer({
   // while a skill of that name is still installed — rename or remove it between
   // edit and re-submit and the reference goes out plain, exactly as if the user
   // had typed it fresh against today's skills directory.
+  //
+  // The FILES are the opposite: text cannot carry them, so they go back to
+  // the strip (VC-137) — unqueue must never be a way to lose a screenshot the
+  // message still needs, and ⏎ will carry them again exactly as before.
   const editQueued = (id: string) => {
     const taken = takeQueued(queued, id);
     if (!taken) return;
     editedQueueId = id;
+    // The files go back to the strip BEFORE the row leaves the queue: the
+    // plane reads the strip to tell "this row came back" (keep its links)
+    // from "this row was deleted" (detach them), so restoring after the
+    // removal would read as a delete and drop the links the edit needs.
+    if (taken.attachments !== undefined && taken.attachments.length > 0) {
+      onRestoreAttachments?.(taken.attachments);
+    }
     if (onQueuedChange(taken.queue) === false) return;
     // Prepending keeps whatever is already typed rather than trading one draft
     // for another — unqueue must never be a way to lose a sentence.
@@ -475,11 +493,20 @@ export const SessionComposer = React.memo(function SessionComposer({
         <PromptInputBody>
           {/* Above the text, not below it: the strip is part of the message
               being written, and a person scanning what they are about to send
-              reads top to bottom. */}
+              reads top to bottom.
+
+              `w-full`, AND IT IS LOAD-BEARING. `PromptInputBody` is
+              `display:contents`, so this strip is a flex CHILD of the vendored
+              `InputGroup` — which is `items-center` and flips to a COLUMN
+              once the footer's block-end addon mounts. In a column, `center`
+              is the CROSS axis: a shrink-to-fit strip sat mid-composer with
+              its one thumbnail floating over the textarea's centre while
+              everything around it ran edge to edge (VC-137). `w-full` is the
+              same rule the textarea below already follows. */}
           <AttachmentStrip
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
-            className="px-3 pt-2"
+            className="w-full px-3 pt-2"
           />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
@@ -494,6 +521,7 @@ export const SessionComposer = React.memo(function SessionComposer({
             onSteer={() => send("steer")}
             queued={queued}
             onQueuedChange={onQueuedChange}
+            onRestoreAttachments={onRestoreAttachments}
           />
         </PromptInputBody>
 
@@ -748,6 +776,7 @@ function ComposerTextarea({
   onSteer,
   queued,
   onQueuedChange,
+  onRestoreAttachments,
 }: {
   value: string;
   ready: boolean;
@@ -757,6 +786,8 @@ function ComposerTextarea({
   onSteer(): void;
   queued: readonly QueuedMessage[];
   onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
+  /** The row's files return to the strip — see {@link SessionComposerProps.onRestoreAttachments}. */
+  onRestoreAttachments?(attachments: readonly BlobLinkView[]): void;
 }) {
   const caret = React.useContext(ComposerCaretContext);
   return (
@@ -818,6 +849,11 @@ function ComposerTextarea({
           event.preventDefault();
           const taken = unqueueLast(queued);
           if (!taken) return;
+          // Same rule and same ORDER as Edit: files back to the strip first,
+          // then the row out of the queue — see `editQueued`.
+          if (taken.attachments !== undefined && taken.attachments.length > 0) {
+            onRestoreAttachments?.(taken.attachments);
+          }
           if (onQueuedChange(taken.queue) === false) return;
           onValueChange(taken.text);
         }

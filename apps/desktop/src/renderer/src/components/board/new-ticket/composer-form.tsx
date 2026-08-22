@@ -117,19 +117,9 @@ export function ComposerForm({
 
   // Implicit save: every field change re-caches the draft (the storage layer
   // debounces the SQLite write), so closing the dialog ANY way keeps the work.
-  // Content-empty state clears the slot instead (erasing = discarding).
-  React.useEffect(() => {
-    saveDraft({
-      projectId: target.id,
-      status,
-      priority,
-      title,
-      body,
-      labels,
-      usesWorktree,
-      baseBranch: chosenBase,
-    });
-  }, [target.id, status, priority, title, body, labels, usesWorktree, chosenBase]);
+  // Content-empty state clears the slot instead (erasing = discarding). Lives
+  // below the attachments hook, because the strip is one of the fields it
+  // writes — see it there.
 
   const titleRef = React.useRef<HTMLInputElement>(null);
   const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
@@ -196,6 +186,7 @@ export function ComposerForm({
     attachFiles,
     remove: removeAttachment,
     clear: clearAttachments,
+    reset: resetAttachments,
   } = useAttachments({
     owner: { unowned: true },
     refRoot: target.path,
@@ -204,6 +195,32 @@ export function ComposerForm({
   });
   const attachmentsRef = React.useRef(attachments);
   attachmentsRef.current = attachments;
+  // The strip is part of the draft cache (VC-137): seed it from whatever the
+  // restored draft still names, once per mount. The Blobs outlived the close
+  // because boot-time collection spares what a stored draft names — see
+  // `draft.ts` — so the thumbs still render.
+  React.useEffect(() => {
+    const persisted = restored?.attachments;
+    if (persisted !== undefined && persisted.length > 0) resetAttachments(persisted);
+  }, [resetAttachments, restored]);
+
+  // Implicit save, declared here because the strip is one of its fields: every
+  // field change re-caches the draft (the storage layer debounces the SQLite
+  // write), so closing the dialog ANY way keeps the work. Content-empty state
+  // clears the slot instead (erasing = discarding).
+  React.useEffect(() => {
+    saveDraft({
+      projectId: target.id,
+      status,
+      priority,
+      title,
+      body,
+      labels,
+      usesWorktree,
+      baseBranch: chosenBase,
+      attachments,
+    });
+  }, [target.id, status, priority, title, body, labels, usesWorktree, chosenBase, attachments]);
 
   const deps = React.useMemo<SubmitDeps>(
     () => ({

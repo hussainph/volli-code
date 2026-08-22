@@ -243,6 +243,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
   const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
   const setDraft = useChatDraftsStore((state) => state.setDraft);
+  const setDraftAttachments = useChatDraftsStore((state) => state.setDraftAttachments);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
   const beginQueuedSteer = useChatDraftsStore((state) => state.beginQueuedSteer);
   const markHeld = useChatDraftsStore((state) => state.markHeld);
@@ -392,6 +393,13 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
    * not to the box: they have to survive the composer's memo, ride the queued
    * copy, and be readable by {@link send} at the moment ⏎ is pressed.
    *
+   * And they are part of the Session's DRAFT (VC-137), which is why every strip
+   * change writes through to the chat-drafts store and the strip is seeded
+   * from it on mount: the words survive a tab switch and a relaunch, and the
+   * files beside them must survive exactly the same events. The links live in
+   * main, owned by the Session — so the bytes survive boot collection too, and
+   * the strip's thumbs still render after a relaunch.
+   *
    * A repository file resolves to an `@` reference instead of a copy, and that
    * reference is appended to the draft — the same text the `@` picker would
    * have inserted, so both routes to a repository file end in one thing.
@@ -401,7 +409,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     attachFiles,
     remove: removeAttachment,
     clear: clearAttachments,
-    discardPending: discardPendingAttachments,
+    reset: resetAttachments,
   } = useAttachments({
     owner: { sessionId },
     onRefInsert: (relPath) => {
@@ -410,24 +418,51 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       setDraft(sessionId, input.length === 0 ? `@${relPath} ` : `${input} @${relPath} `);
     },
     onError: (message) => toast.error(message),
+    onChange: (next) => setDraftAttachments(sessionId, next),
   });
   // Read at submit rather than closed over, so `send` keeps its identity while
   // the strip changes underneath it.
   const attachmentsRef = React.useRef(attachments);
   attachmentsRef.current = attachments;
-  // The strip dies with the pane (VC-50). Its links were made at attach time,
-  // and nothing else — no draft store, no message — points at them until ⏎
-  // carries them into one; a pane that unmounted (or switched Sessions) with
-  // files still in the strip would strand those links: invisible, unremovable,
-  // spending the Session's image budget and materializing on every boot.
-  // `discardPending` reads the hook's own synchronously-kept ref, so a message
-  // sent in this same tick (send() clears the strip before returning) keeps
-  // every link it references.
-  React.useEffect(
-    () => () => {
-      void discardPendingAttachments();
+  // Seed the strip from the persisted draft, once per Session. The pane is
+  // keyed by sessionId at every call site, so a remount is a new Session's
+  // plane — but the ref guard keeps a same-key remount (React strict-mode
+  // double effects, or a future call site without a key) from wiping a strip
+  // that changed between the first seed and now.
+  const seededSession = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (seededSession.current === sessionId) return;
+    seededSession.current = sessionId;
+    const persisted = useChatDraftsStore.getState().drafts[sessionId]?.attachments ?? [];
+    if (persisted.length > 0) resetAttachments(persisted);
+  }, [resetAttachments, sessionId]);
+  /**
+   * A pulled-back row's files rejoin the strip (VC-137), merged by hash — the
+   * strip never draws one picture twice, and one link to a Blob serves either
+   * purpose. The row's own view wins a collision with a file staged for the
+   * NEXT message (the row is the thing being edited; its link is the one the
+   * re-send should carry), and the shadowed staged view is detached so no
+   * invisible link is left behind.
+   *
+   * `attachmentsRef` is written here rather than left to the next render: the
+   * composer calls this and then `onQueuedChange` in the same tick, and the
+   * removal path reads the ref to know which files came BACK rather than went
+   * away — a stale ref there would detach the links it is deciding to keep.
+   */
+  const restoreAttachments = React.useCallback(
+    (incoming: readonly BlobLinkView[]) => {
+      if (incoming.length === 0) return;
+      const incomingHashes = new Set(incoming.map((entry) => entry.blobHash));
+      const kept = attachmentsRef.current.filter((entry) => {
+        if (!incomingHashes.has(entry.blobHash)) return true;
+        void removeAttachment(entry);
+        return false;
+      });
+      const merged = [...kept, ...incoming];
+      attachmentsRef.current = merged;
+      resetAttachments(merged);
     },
-    [discardPendingAttachments, sessionId],
+    [removeAttachment, resetAttachments],
   );
 
   const dispatch = React.useCallback(
@@ -468,13 +503,18 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
+      // The strip's durable copy empties BEFORE the hold, so the one flush
+      // `dispatchHeldMessage` performs carries both halves of the same
+      // transition — the message leaving the box WITH its files, and the box
+      // no longer holding them — in a single durable write window.
+      if (attachmentsRef.current.length > 0) setDraftAttachments(sessionId, []);
       dispatch(text, (message) => deliver(message, intent), resources, attachmentsRef.current);
       // The strip belongs to the message that just left, not to the box. It is
       // cleared rather than detached: the links stay, because the message the
       // agent received refers to them.
       clearAttachments();
     },
-    [clearAttachments, deliver, dispatch],
+    [clearAttachments, deliver, dispatch, sessionId, setDraftAttachments],
   );
 
   // What the Session is holding for you, from the two records that say it — see
@@ -510,15 +550,40 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       const entry = removed[0]!;
       const current = sessionsStore.getState().sessions[sessionId];
       const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
-      return coordinateQueuedMutation({
+      const gone = coordinateQueuedMutation({
         queueBacked,
         claim: () => claimQueued(entry.id),
         consumeClaim: () => dequeueClaimed(entry.id),
         releaseClaim: () => releaseQueuedClaim(entry.id),
         dropHeld: () => dropHeld(sessionId, entry.id),
       });
+      if (!gone) return false;
+      // A REMOVED row's files are the one queued-message ending that must also
+      // detach its links (VC-137): the row is gone, no message will ever name
+      // them, and the pane is still mounted — unlike a delivered turn, whose
+      // links the transcript's parts now reference. Files whose Blob is back
+      // in the strip (an edited row restored them a moment ago) keep their
+      // link; `removeAttachment` detaches by link id and only filters a strip
+      // it is already absent from, so this cannot touch files staged for the
+      // next message (a second link to the same Blob survives — links are per
+      // row, not per bytes).
+      const staged = new Set(attachmentsRef.current.map((view) => view.blobHash));
+      for (const attachment of entry.attachments ?? []) {
+        if (staged.has(attachment.blobHash)) continue;
+        void removeAttachment(attachment);
+      }
+      return true;
     },
-    [claimQueued, dequeueClaimed, dropHeld, releaseQueuedClaim, sessionId, sessionsStore, strip],
+    [
+      claimQueued,
+      dequeueClaimed,
+      dropHeld,
+      removeAttachment,
+      releaseQueuedClaim,
+      sessionId,
+      sessionsStore,
+      strip,
+    ],
   );
 
   const onSteerQueued = React.useCallback(
@@ -1072,6 +1137,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
               attachments={attachments}
               onAttachFiles={(picked) => void attachFiles(picked)}
               onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
+              onRestoreAttachments={restoreAttachments}
               imagesUnsupported={imagesUnsupported}
             />
           </ComposerInteractionStack>

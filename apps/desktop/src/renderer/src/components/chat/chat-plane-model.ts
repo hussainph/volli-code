@@ -416,6 +416,30 @@ export async function coordinateQueuedSteerStart(
 }
 
 /**
+ * The message a steer actually delivers, rebuilt from whichever of the two
+ * records name it.
+ *
+ * A queue-only row — no held copy at all — is exactly what the release queue
+ * already holds. A held row's own text and resources win over the queue's,
+ * and so do its attachments (VC-137): the held copy is the durable one, and
+ * the queue's serves only as a fallback for a held row this build wrote
+ * before attachments rode it at all.
+ */
+function steerMessage(
+  held: HeldMessage | undefined,
+  queued: QueuedMessage | undefined,
+): QueuedMessage | undefined {
+  if (held === undefined) return queued;
+  const attachments = held.attachments ?? queued?.attachments;
+  return {
+    id: held.id,
+    text: held.text,
+    ...(held.resources === undefined ? {} : { resources: held.resources }),
+    ...(attachments === undefined ? {} : { attachments }),
+  };
+}
+
+/**
  * Moves one existing strip row into the active turn without changing its id.
  *
  * A queue-only row gains its durable held copy before dequeue. An unsent
@@ -435,14 +459,7 @@ export async function steerQueuedMessage(
   if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
     return "stale";
   }
-  const message: QueuedMessage | undefined =
-    held === undefined
-      ? queued
-      : {
-          id: held.id,
-          text: held.text,
-          ...(held.resources === undefined ? {} : { resources: held.resources }),
-        };
+  const message: QueuedMessage | undefined = steerMessage(held, queued);
   if (message === undefined) return "stale";
   // A click cannot improve a queue while the Session cannot steer. In
   // particular, never manufacture a release-queue copy for a held-only row:
@@ -499,8 +516,11 @@ export function heldStrip(
       id: entry.id,
       text: entry.text,
       // The row is also what `beginQueuedSteer` persists back, so the skill
-      // resources riding the held copy must survive the round trip (VC-49).
+      // resources riding the held copy must survive the round trip (VC-49) —
+      // and so must the files (VC-137): a strip row that redraws without its
+      // attachments is a message the person believes still carries them.
       ...(entry.resources === undefined ? {} : { resources: entry.resources }),
+      ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
     });
   }
   for (const entry of queue)

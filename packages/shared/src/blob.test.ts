@@ -3,12 +3,16 @@ import {
   BLOB_URL_SCHEME,
   MAX_INLINE_IMAGE_BYTES,
   MAX_SESSION_INLINE_IMAGE_BYTES,
+  NEW_TICKET_DRAFT_APP_STATE_KEY,
+  type BlobLinkView,
   type NamedBlobLink,
   blobRelPath,
   blobsSectionInput,
   blobUrl,
+  draftAttachmentHashes,
   fitsSessionImageBudget,
   isBlobHash,
+  isBlobLinkView,
   isImageMime,
   isInlinableImageMime,
   materializedBlobNames,
@@ -251,5 +255,80 @@ describe("resolveAttachment", () => {
 
   it("snapshots an extensionless repo-root file, which has no ref form", () => {
     expect(resolveAttachment("Makefile", "text/plain")).toBe("snapshot");
+  });
+});
+
+describe("isBlobLinkView", () => {
+  function view(overrides: Partial<BlobLinkView> = {}): BlobLinkView {
+    return {
+      linkId: "link-1",
+      blobHash: HASH,
+      label: "shot.png",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 2048,
+      ...overrides,
+    };
+  }
+
+  it("accepts a well-shaped view, linked or not", () => {
+    expect(isBlobLinkView(view())).toBe(true);
+    expect(isBlobLinkView(view({ linkId: null }))).toBe(true);
+  });
+
+  it("rejects a hash that is not 64 lowercase hex digits", () => {
+    expect(isBlobLinkView(view({ blobHash: "not a hash" }))).toBe(false);
+  });
+
+  it("rejects a non-finite size", () => {
+    expect(isBlobLinkView(view({ sizeBytes: Number.NaN }))).toBe(false);
+  });
+
+  it("rejects values that are not plain objects", () => {
+    expect(isBlobLinkView(null)).toBe(false);
+    expect(isBlobLinkView("a string")).toBe(false);
+    expect(isBlobLinkView([view()])).toBe(false);
+  });
+
+  it("rejects a view missing a required field", () => {
+    const { label: _label, ...rest } = view();
+    expect(isBlobLinkView(rest)).toBe(false);
+  });
+});
+
+/** Wraps the draft-attachment payload in the app_state envelope both processes agree on. */
+function envelope(attachments: unknown): string {
+  return JSON.stringify({ version: 1, draft: { attachments } });
+}
+
+describe("draftAttachmentHashes", () => {
+  it("reads the Blob hashes a stored new-Ticket draft still names", () => {
+    expect(draftAttachmentHashes(envelope([{ blobHash: HASH }, { blobHash: OTHER_HASH }]))).toEqual(
+      [HASH, OTHER_HASH],
+    );
+  });
+
+  it("retains nothing for a draft with no attachments field", () => {
+    expect(draftAttachmentHashes(JSON.stringify({ version: 1, draft: {} }))).toEqual([]);
+  });
+
+  it("retains nothing rather than throwing on a malformed value", () => {
+    expect(draftAttachmentHashes(undefined)).toEqual([]);
+    expect(draftAttachmentHashes("not json")).toEqual([]);
+    expect(draftAttachmentHashes(JSON.stringify("a string"))).toEqual([]);
+    expect(draftAttachmentHashes(JSON.stringify({ version: 1, draft: "bogus" }))).toEqual([]);
+    expect(draftAttachmentHashes(envelope("not an array"))).toEqual([]);
+  });
+
+  it("drops a malformed entry but keeps the well-shaped ones beside it", () => {
+    expect(
+      draftAttachmentHashes(
+        envelope([{ blobHash: HASH }, { blobHash: "not a hash" }, "not an object", null]),
+      ),
+    ).toEqual([HASH]);
+  });
+
+  it("names the same app_state key both processes read and write", () => {
+    expect(NEW_TICKET_DRAFT_APP_STATE_KEY).toBe("volli:new-ticket-draft");
   });
 });
