@@ -121,6 +121,7 @@ export default function SettingsRedesign() {
           <PrefShell
             key={surface}
             header={<Masthead surface={surface} />}
+            surfaceLabel={isSettings ? "Settings" : "Configure"}
             groups={isSettings ? SETTINGS_GROUPS : CONFIGURE_GROUPS}
             activeKey={isSettings ? settingsKey : configureKey}
             onSelect={isSettings ? setSettingsKey : setConfigureKey}

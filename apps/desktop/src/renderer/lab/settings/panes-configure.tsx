@@ -1,48 +1,42 @@
 /**
- * VC-111 — the proposed **Configure** surface (this project's agent setup).
+ * VC-111 — the proposed **Configure** surface. Second pass.
  *
- * The brief: "Configure becomes the new home for workspace agent configuration
- * — Skills, Plugins, MCPs, etc. — since I want them easily accessible and
- * editable."
+ * Configure is this project, always. Every row here is scoped to the selected
+ * project, and any row that can defer to the app-wide value carries the one
+ * `InheritControl` idiom naming what it would inherit (kit rule 2).
  *
- * That gives Configure an identity it has never had. Today it is three
- * categories, two of which are barely settings at all: a General card with two
- * Input+Save fields, an Appearance card that duplicates Settings, and a
- * Worktrees card that is two paragraphs of prose about `.worktreeinclude`.
- * Under this pass, theming leaves (it is a preference, and Settings' `ScopeBar`
- * absorbs it) and the agent's whole configurable surface arrives.
- *
- * ── WHY THIS IS THE BIG WIN ───────────────────────────────────────────────
- * Skills, commands and MCP servers are already REAL in this codebase and have
- * NO user interface whatsoever. `main/skills.ts` reads
- * `<project>/.agents/skills/` and `~/.agents/skills/`; `main/prompt-templates.ts`
- * reads `<project>/.volli/commands/` and `<userData>/commands/`. Both merge
- * project-over-personal. Both are invisible unless you type `/` in a composer
- * and notice what appears. So "add a Skills page" is mostly *surfacing what
- * already loads*, not new plumbing.
- *
- * This is also precisely the move Cursor made: their Customize page put
- * plugins, skills, MCP, subagents, rules, commands and hooks in ONE place
- * filtered by scope, explicitly so people stop "switching between separate
- * settings pages".
- * ──────────────────────────────────────────────────────────────────────────
- *
- * THE ONE VOCABULARY RULE THIS PAGE ADDS: every item here comes from either
- * this project or your personal directory, and every list says which with the
- * same chip in the same place. That is the `Origin` primitive doing the same
- * job it does for Ghostty provenance in Settings — one drawing, one meaning.
+ * WHAT CHANGED AFTER REVIEW:
+ *  - **Three inheritance vocabularies became one.** The first pass had a
+ *    `Segmented` in Appearance, a "Same as Project chats" option inside a
+ *    Select in Models and a "Same as Settings — …" option inside another Select
+ *    in Sessions — while its own rule said scope lives in one place
+ *    (review §1.1, §1.3). All of it is `InheritControl` now.
+ *  - **Precedence is published.** Review §1.1's sharpest finding was that the
+ *    proposal put models on both surfaces and stated no precedence — rebuilding
+ *    the desync in the commit claiming to fix it. `ResolutionNote` says the
+ *    order out loud, on every pane where two tiers meet.
+ *  - **The skill switch got a scope.** Toggling a personal skill from inside
+ *    one project could not say whether it was off here or off everywhere. Now
+ *    a personal skill can only be disabled FOR THIS PROJECT from here, and the
+ *    row says so.
+ *  - **Appearance came back** under a Project group. It is only three rows, and
+ *    sending someone to Settings to theme one project is the confusion the
+ *    ticket was about. Settings' `OverrideNote` is the other half.
+ *  - **The `.worktreeinclude` trap is gone.** A `Textarea` seeded with the
+ *    built-in defaults and blur-saved would have MATERIALIZED a tracked file
+ *    that did not exist, freezing today's defaults into the repo (review §2.6).
+ *  - **No section descriptions**, per CLAUDE.md.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
+import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { PuzzlePieceIcon } from "@phosphor-icons/react/dist/csr/PuzzlePiece";
-import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 
@@ -55,321 +49,524 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
-import { Textarea } from "@renderer/components/ui/textarea";
 
 import {
+  AsyncSection,
   CommitField,
+  CONTROL_W,
   Health,
+  InheritControl,
   ItemList,
   ItemRow,
-  Origin,
   PrefRow,
   PrefSection,
   SectionAction,
+  Tier,
+  type AsyncState,
   type PrefGroup,
 } from "./kit";
 
-/* -------------------------------------------------------------------------- */
-
-/** Where an item was found. The one chip, used identically by all four agent lists. */
-function Where({ project }: { project: boolean }) {
-  return <Origin mine={project}>{project ? "This project" : "Personal"}</Origin>;
+function ready<T>(data: T): AsyncState<T> {
+  return { status: "ready", data };
 }
 
 /**
- * Skills — `.agents/skills/<slug>/SKILL.md`, project tier over personal tier.
+ * The precedence sentence.
  *
- * Everything in this list already loads today (`main/skills.ts`) and there has
- * never been a way to see it, let alone switch one off. The switch is the one
- * genuinely new capability: today a skill on disk is a skill in the model's
- * index, and the only way to remove it is to move the directory.
+ * Review §1.1: the audit praised Claude Code for publishing a precedence table
+ * and then the proposal shipped none, while putting the same setting on two
+ * surfaces. This is the smallest honest version — the resolution order, stated
+ * where the two tiers actually meet, rather than in a doc nobody opens.
  *
- * A skill shadowed by a same-named project skill says so on its own row rather
- * than vanishing — the merge is `mergeSkills`' project-over-personal rule made
- * visible, because a personal skill that silently stops applying in one repo is
- * exactly the kind of thing you lose an afternoon to.
+ * It is the one sanctioned prose exception on this surface, and it earns it on
+ * the same grounds CLAUDE.md grants a trust boundary: a value that resolves
+ * through layers is not self-describing, and getting it wrong costs money.
  */
+function ResolutionNote({ children }: { children: React.ReactNode }) {
+  return <p className="border-t border-border/50 py-2 text-ui text-muted-foreground">{children}</p>;
+}
+
+/* -------------------------------- Skills ---------------------------------- */
+
+interface Skill {
+  slug: string;
+  description: string;
+  scope: "project" | "personal";
+  enabled: boolean;
+  /** A personal skill a same-named project skill shadows. */
+  shadowed?: boolean;
+}
+
+const SKILLS: readonly Skill[] = [
+  { slug: "tdd", description: "Test-driven development", scope: "project", enabled: true },
+  {
+    slug: "code-review",
+    description: "Review a branch against standards",
+    scope: "project",
+    enabled: true,
+  },
+  {
+    slug: "diagnose",
+    description: "Disciplined loop for hard bugs",
+    scope: "personal",
+    enabled: true,
+  },
+  {
+    slug: "writing-for-agents",
+    description: "Writing skills and AGENTS.md",
+    scope: "personal",
+    enabled: true,
+  },
+  {
+    slug: "svelte-code-writer",
+    description: "Svelte 5 components",
+    scope: "personal",
+    enabled: false,
+    shadowed: true,
+  },
+  { slug: "mintlify", description: "Build Mintlify docs sites", scope: "personal", enabled: false },
+  {
+    slug: "research",
+    description: "Investigate against primary sources",
+    scope: "personal",
+    enabled: true,
+  },
+];
+
 function SkillsPane() {
   return (
-    // NO section title: the pane header already says "Skills", and a card that
-    // repeats its own page's masthead is the kind of redundancy that makes a
-    // settings surface feel padded. A single-list pane states the subject once,
-    // in the header, and the section carries only what the header cannot — the
-    // provenance line and the action.
-    <PrefSection
+    <AsyncSection
+      title="Skills"
       icon={BookOpenIcon}
-      description="Loaded from .agents/skills. The agent picks these up when they're relevant."
       action={<SectionAction label="Reveal folder" icon={FolderOpenIcon} />}
+      state={ready(SKILLS)}
+      isEmpty={(list) => list.length === 0}
+      // Review §2.4: a project with no skills is not a search that matched
+      // nothing, and the first pass rendered the same string for both.
+      empty="No skills yet. Add one to .agents/skills."
     >
-      <ItemList placeholder="Search skills" empty="No skills match.">
-        {[
-          { name: "tdd", meta: "Test-driven development", project: true, on: true },
-          {
-            name: "code-review",
-            meta: "Review a branch against standards",
-            project: true,
-            on: true,
-          },
-          { name: "diagnose", meta: "Disciplined loop for hard bugs", project: false, on: true },
-          {
-            name: "writing-for-agents",
-            meta: "Writing skills and AGENTS.md",
-            project: false,
-            on: true,
-          },
-          {
-            name: "svelte-code-writer",
-            meta: "Shadowed by this project's own copy",
-            project: false,
-            on: false,
-          },
-          { name: "mintlify", meta: "Build Mintlify docs sites", project: false, on: false },
-          {
-            name: "research",
-            meta: "Investigate against primary sources",
-            project: false,
-            on: true,
-          },
-        ].map((skill) => (
-          <ItemRow
-            key={skill.name}
-            name={skill.name}
-            meta={skill.meta}
-            badges={<Where project={skill.project} />}
-          >
-            <Button size="icon-xs" variant="ghost" aria-label={`Open ${skill.name}`}>
-              <ArrowSquareOutIcon />
-            </Button>
-            <Switch defaultChecked={skill.on} aria-label={`Enable ${skill.name}`} />
-          </ItemRow>
-        ))}
-      </ItemList>
-    </PrefSection>
+      {(list) => (
+        <>
+          <ItemList
+            items={list}
+            keyOf={(skill) => `${skill.scope}/${skill.slug}`}
+            search={(skill) => `${skill.slug} ${skill.description}`}
+            placeholder="Search skills"
+            noResults="No skills match."
+            render={(skill) => (
+              <ItemRow
+                name={skill.slug}
+                meta={skill.shadowed ? "Shadowed by this project's own copy" : skill.description}
+                badges={<Tier scope={skill.scope} />}
+              >
+                <Button size="icon-xs" variant="ghost" aria-label={`Open ${skill.slug}`}>
+                  <ArrowSquareOutIcon />
+                </Button>
+                {/*
+                 * Review §1.1: a bare switch on a personal skill could not say
+                 * whether it was off HERE or off EVERYWHERE. The switch on this
+                 * per-project page always means "in this project", and the
+                 * label says so — a personal skill's global state is its own
+                 * frontmatter (`isUserInvokeOnly`), reachable via the row's
+                 * open button.
+                 */}
+                <Switch
+                  defaultChecked={skill.enabled}
+                  disabled={skill.shadowed}
+                  aria-label={`Enable ${skill.slug} in this project`}
+                />
+              </ItemRow>
+            )}
+          />
+          <ResolutionNote>
+            A project skill wins over a personal one with the same name. Switches here apply to this
+            project only.
+          </ResolutionNote>
+        </>
+      )}
+    </AsyncSection>
   );
 }
 
-/**
- * Commands — `.volli/commands/*.md` and `<userData>/commands/*.md`, the `/`
- * picker's supply. Same merge rule, same chip, same list shape as Skills.
- *
- * Drawn identically to Skills ON PURPOSE. They are two directories of markdown
- * with frontmatter, read by the same parser, merged by the same rule; the whole
- * argument of this redesign is that two things that are the same shape should
- * not be two shapes.
- */
+/* ------------------------------- Commands --------------------------------- */
+
+interface Command {
+  name: string;
+  description: string;
+  scope: "project" | "personal";
+}
+
+const COMMANDS: readonly Command[] = [
+  { name: "/ship", description: "Open a PR with the ticket body as description", scope: "project" },
+  { name: "/audit", description: "Read a surface and list what's wrong", scope: "project" },
+  {
+    name: "/handoff",
+    description: "Compact this conversation for another agent",
+    scope: "personal",
+  },
+  { name: "/grill", description: "Stress-test a plan", scope: "personal" },
+];
+
 function CommandsPane() {
   return (
-    <PrefSection
+    <AsyncSection
+      title="Commands"
       icon={CommandIcon}
-      description="Read from .volli/commands and your personal commands folder."
       action={<SectionAction label="New command" icon={PlusIcon} />}
+      state={ready(COMMANDS)}
+      isEmpty={(list) => list.length === 0}
+      empty="No commands yet. Add a .md file to .volli/commands."
     >
-      <ItemList placeholder="Search commands" empty="No commands match.">
-        {[
-          { name: "/ship", meta: "Open a PR with the ticket body as description", project: true },
-          { name: "/audit", meta: "Read a surface and list what's wrong", project: true },
-          { name: "/handoff", meta: "Compact this conversation for another agent", project: false },
-          { name: "/grill", meta: "Stress-test a plan", project: false },
-        ].map((command) => (
-          <ItemRow
-            key={command.name}
-            name={command.name}
-            meta={command.meta}
-            badges={<Where project={command.project} />}
-          >
-            <Button size="icon-xs" variant="ghost" aria-label={`Edit ${command.name}`}>
-              <ArrowSquareOutIcon />
-            </Button>
-          </ItemRow>
-        ))}
-      </ItemList>
-    </PrefSection>
+      {(list) => (
+        <>
+          <ItemList
+            items={list}
+            keyOf={(command) => `${command.scope}${command.name}`}
+            search={(command) => `${command.name} ${command.description}`}
+            placeholder="Search commands"
+            noResults="No commands match."
+            render={(command) => (
+              <ItemRow
+                name={command.name}
+                meta={command.description}
+                badges={<Tier scope={command.scope} />}
+              >
+                <Button size="icon-xs" variant="ghost" aria-label={`Edit ${command.name}`}>
+                  <ArrowSquareOutIcon />
+                </Button>
+              </ItemRow>
+            )}
+          />
+          <ResolutionNote>
+            A project command wins over a personal one with the same name.
+          </ResolutionNote>
+        </>
+      )}
+    </AsyncSection>
   );
 }
 
-/**
- * MCP servers — genuinely new plumbing, and the one pane here that needs a
- * health dot, because an MCP server is the only thing on this page that can be
- * *configured correctly and still not working*.
- *
- * Note what the failing row does NOT do: it does not print the spawn command,
- * the exit code or the stderr tail. Same rule as About — one sentence, one
- * button, internals on request.
- */
+/* --------------------------------- MCP ------------------------------------ */
+
+interface Server {
+  name: string;
+  meta: string;
+  scope: "project" | "personal";
+  state: "ready" | "error" | "idle";
+  status: string;
+}
+
+const SERVERS: readonly Server[] = [
+  {
+    name: "linear",
+    meta: "12 tools · issues, projects, cycles",
+    scope: "project",
+    state: "ready",
+    status: "Connected",
+  },
+  {
+    name: "sentry",
+    meta: "6 tools · issues, releases",
+    scope: "project",
+    state: "ready",
+    status: "Connected",
+  },
+  {
+    name: "postgres",
+    meta: "Couldn't start — check the connection string",
+    scope: "personal",
+    state: "error",
+    status: "Failed",
+  },
+  {
+    name: "figma",
+    meta: "4 tools · files, comments",
+    scope: "personal",
+    state: "idle",
+    status: "Off",
+  },
+];
+
 function McpPane() {
   return (
-    <>
-      <PrefSection
-        icon={PlugsConnectedIcon}
-        description="Each server is a set of tools the agent can call."
-        action={<SectionAction label="Add server" icon={PlusIcon} />}
-      >
-        <ItemRow
-          name="linear"
-          meta="12 tools · issues, projects, cycles"
-          badges={<Where project />}
-        >
-          <Health state="ready">Connected</Health>
-          <Switch defaultChecked aria-label="Enable linear" />
-        </ItemRow>
-        <ItemRow name="sentry" meta="6 tools · issues, releases" badges={<Where project />}>
-          <Health state="ready">Connected</Health>
-          <Switch defaultChecked aria-label="Enable sentry" />
-        </ItemRow>
-        <ItemRow
-          name="postgres"
-          meta="Couldn't start — check the connection string"
-          badges={<Where project={false} />}
-        >
-          <Health state="error">Failed</Health>
-          <Button size="sm" variant="outline">
-            Fix
-          </Button>
-        </ItemRow>
-        <ItemRow name="figma" meta="4 tools · files, comments" badges={<Where project={false} />}>
-          <Health state="idle">Off</Health>
-          <Switch aria-label="Enable figma" />
-        </ItemRow>
-      </PrefSection>
-    </>
+    <AsyncSection
+      title="Servers"
+      icon={PlugsConnectedIcon}
+      action={<SectionAction label="Add server" icon={PlusIcon} />}
+      state={ready(SERVERS)}
+      isEmpty={(list) => list.length === 0}
+      empty="No MCP servers yet."
+    >
+      {(list) => (
+        <>
+          {list.map((server) => (
+            <ItemRow
+              key={server.name}
+              name={server.name}
+              meta={server.meta}
+              badges={<Tier scope={server.scope} />}
+            >
+              <Health state={server.state}>{server.status}</Health>
+              {server.state === "error" ? (
+                <Button size="sm" variant="outline">
+                  Fix
+                </Button>
+              ) : (
+                <Switch
+                  defaultChecked={server.state === "ready"}
+                  aria-label={`Enable ${server.name} in this project`}
+                />
+              )}
+            </ItemRow>
+          ))}
+          {/*
+           * Review §1.1: web search is agent tooling filed under Settings while
+           * MCP — also "tools the agent can reach" — is filed here, and the
+           * split gave a user no way to guess which page holds what. Under the
+           * scope rule the answer is consistent (web search is one account, so
+           * it is app-wide; servers are per-project), but consistent is not the
+           * same as discoverable. So this pane says where the other one is.
+           */}
+          <ResolutionNote>
+            Web search is configured once for every project, in Settings.
+          </ResolutionNote>
+        </>
+      )}
+    </AsyncSection>
   );
 }
 
-/** Plugins — bundles that install skills, commands and MCP servers together. */
+/* ------------------------------- Plugins ---------------------------------- */
+
 function PluginsPane() {
   return (
-    <PrefSection
+    <AsyncSection
+      title="Installed"
       icon={PuzzlePieceIcon}
-      description="Installing a plugin installs everything inside it."
       action={<SectionAction label="Browse…" icon={PlusIcon} />}
+      state={ready([
+        {
+          name: "matt-pocock-engineering",
+          meta: "9 skills · 3 commands",
+          scope: "project" as const,
+        },
+        { name: "emil-design-eng", meta: "4 skills · 1 command", scope: "personal" as const },
+      ])}
+      isEmpty={(list) => list.length === 0}
+      empty="No plugins installed."
     >
-      <ItemRow
-        name="matt-pocock-engineering"
-        meta="9 skills · 3 commands"
-        badges={<Where project />}
-      >
-        <Button size="sm" variant="outline">
-          Manage
-        </Button>
-        <Switch defaultChecked aria-label="Enable matt-pocock-engineering" />
-      </ItemRow>
-      <ItemRow
-        name="emil-design-eng"
-        meta="4 skills · 1 command"
-        badges={<Where project={false} />}
-      >
-        <Button size="sm" variant="outline">
-          Manage
-        </Button>
-        <Switch defaultChecked aria-label="Enable emil-design-eng" />
-      </ItemRow>
-    </PrefSection>
+      {(list) => (
+        <>
+          {list.map((plugin) => (
+            <ItemRow
+              key={plugin.name}
+              name={plugin.name}
+              meta={plugin.meta}
+              badges={<Tier scope={plugin.scope} />}
+            >
+              <Button size="sm" variant="outline">
+                Manage
+              </Button>
+              <Switch defaultChecked aria-label={`Enable ${plugin.name} in this project`} />
+            </ItemRow>
+          ))}
+        </>
+      )}
+    </AsyncSection>
   );
 }
 
-/**
- * Sessions — what a new Session in THIS project starts as.
- *
- * Audit item 30: today model defaults, harness choice and web access are all
- * app-wide only, while appearance — the least consequential of them — got full
- * per-project scoping. This pane is that imbalance corrected, and it is where
- * a per-project model override finally has an honest home. Note the inherit
- * options name what they inherit, the same rule Settings' Models pane follows.
- */
+/* ------------------------------- Sessions --------------------------------- */
+
 function SessionsPane() {
+  const [harnessInherited, setHarnessInherited] = React.useState(true);
+  const [modelInherited, setModelInherited] = React.useState(false);
+
   return (
     <>
-      <PrefSection
-        title="New sessions"
-        icon={LightningIcon}
-        description="What a Ticket Session in this project starts with."
-      >
-        <PrefRow label="Harness" htmlFor="harness">
-          <Select value="claude-code">
-            <SelectTrigger id="harness" className="w-56">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="claude-code">Claude Code</SelectItem>
-              <SelectItem value="codex">Codex</SelectItem>
-            </SelectContent>
-          </Select>
+      <PrefSection title="New sessions" icon={CpuIcon}>
+        <PrefRow label="Harness">
+          <InheritControl
+            ariaLabel="Harness scope"
+            inherited={harnessInherited}
+            inheritedValue="Claude Code"
+            onChange={setHarnessInherited}
+          >
+            <Select value="codex">
+              <SelectTrigger className={CONTROL_W.md} aria-label="Harness">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="claude-code">Claude Code</SelectItem>
+                <SelectItem value="codex">Codex</SelectItem>
+              </SelectContent>
+            </Select>
+          </InheritControl>
         </PrefRow>
-        <PrefRow label="Model" htmlFor="model">
-          <Select value="inherit">
-            <SelectTrigger id="model" className="w-72">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="inherit">Same as Settings — claude-sonnet-4.6</SelectItem>
-              <SelectItem value="opus">claude-opus-4.6 · Anthropic</SelectItem>
-            </SelectContent>
-          </Select>
+        <PrefRow label="Model">
+          <InheritControl
+            ariaLabel="Model scope"
+            inherited={modelInherited}
+            inheritedValue="claude-opus-4.6"
+            onChange={setModelInherited}
+          >
+            <Select value="sonnet">
+              <SelectTrigger className={CONTROL_W.lg} aria-label="Model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="opus">claude-opus-4.6 · Anthropic</SelectItem>
+                <SelectItem value="sonnet">claude-sonnet-4.6 · Anthropic</SelectItem>
+              </SelectContent>
+            </Select>
+          </InheritControl>
         </PrefRow>
+        {/*
+         * THE PRECEDENCE TABLE, as one sentence. This is the thing whose
+         * absence made the first pass's models-on-both-surfaces a rebuild of
+         * the very desync the ticket is about.
+         */}
+        <ResolutionNote>
+          A session uses the model picked in its own composer, then this project&rsquo;s, then the
+          default in Settings.
+        </ResolutionNote>
       </PrefSection>
 
       <PrefSection
         title="Instructions"
-        icon={SlidersHorizontalIcon}
-        description="Read at the start of every session in this project."
+        icon={BookOpenIcon}
         action={<SectionAction label="Open AGENTS.md" icon={ArrowSquareOutIcon} />}
       >
-        <ItemRow name="AGENTS.md" meta="12 KB · repo root" badges={<Where project />} />
-        <ItemRow name="CLAUDE.md" meta="15 KB · repo root" badges={<Where project />} />
+        <ItemRow name="AGENTS.md" meta="12 KB · repo root" badges={<Tier scope="project" />} />
+        <ItemRow name="CLAUDE.md" meta="15 KB · repo root" badges={<Tier scope="project" />} />
       </PrefSection>
     </>
   );
 }
 
-/**
- * Worktrees — the project automation that was already here, plus the thing
- * that was only ever documentation.
- *
- * Audit item 31: the copy set is two read-only `<p>`s about `.worktreeinclude`
- * today. It is a gitignore-syntax file at a known path — there is no reason it
- * cannot be edited in place, and every reason it should be, since the default
- * set silently decides whether a fresh worktree can run at all.
- */
-function WorktreesPane() {
-  const [base, setBase] = React.useState("main");
-  const [setup, setSetup] = React.useState("pnpm install");
+/* ------------------------------ Appearance -------------------------------- */
 
+/**
+ * This project's theming overrides.
+ *
+ * Back on Configure, against the first pass, which moved it wholesale to
+ * Settings behind a scope switch. Two reasons: sending someone to the app-wide
+ * page to theme one project is the confusion the ticket opened with, and the
+ * pane-level scope switch that made it possible was itself the thing review
+ * §1.2 took apart. Three rows, one idiom, and Settings carries the
+ * `OverrideNote` that points here.
+ */
+function AppearancePane() {
+  const [modeInherited, setModeInherited] = React.useState(false);
+  const [canvasInherited, setCanvasInherited] = React.useState(true);
+  const [terminalInherited, setTerminalInherited] = React.useState(true);
+
+  return (
+    <PrefSection title="Overrides" icon={PaletteIcon}>
+      <PrefRow label="Mode" testId="project-appearance-mode">
+        <InheritControl
+          ariaLabel="Appearance scope"
+          inherited={modeInherited}
+          inheritedValue="Dark"
+          onChange={setModeInherited}
+        >
+          <Segmented
+            ariaLabel="Appearance mode"
+            value="light"
+            options={[
+              { key: "light", label: "Light" },
+              { key: "dark", label: "Dark" },
+              { key: "auto", label: "Auto" },
+            ]}
+            onChange={() => {}}
+          />
+        </InheritControl>
+      </PrefRow>
+      <PrefRow label="Canvas" testId="project-appearance-canvas">
+        <InheritControl
+          ariaLabel="Canvas scope"
+          inherited={canvasInherited}
+          inheritedValue="Ember"
+          onChange={setCanvasInherited}
+        >
+          <Button size="sm" variant="outline">
+            Edit canvas…
+          </Button>
+        </InheritControl>
+      </PrefRow>
+      <PrefRow label="Terminal theme" testId="project-appearance-terminal">
+        <InheritControl
+          ariaLabel="Terminal theme scope"
+          inherited={terminalInherited}
+          inheritedValue="Rosé Pine"
+          onChange={setTerminalInherited}
+        >
+          <Button size="sm" variant="outline">
+            Tokyo Night
+          </Button>
+        </InheritControl>
+      </PrefRow>
+      <PrefRow label="Config file">
+        <Button size="sm" variant="outline">
+          This project&rsquo;s overlay
+        </Button>
+      </PrefRow>
+    </PrefSection>
+  );
+}
+
+/* ------------------------------ Worktrees --------------------------------- */
+
+function WorktreesPane() {
   return (
     <>
       <PrefSection title="New worktrees" icon={TreeStructureIcon}>
         <PrefRow label="Branch from" htmlFor="base">
-          <CommitField id="base" value={base} placeholder="main" width="w-48" onCommit={setBase} />
+          <CommitField
+            id="base"
+            value="main"
+            placeholder="main"
+            // Review §1.5: neither version verifies the ref exists, so a typo
+            // surfaces later, at worktree creation, far from the field. A
+            // blur-commit is fine IF the field can refuse — so it does.
+            onCommit={(next) =>
+              ["main", "master", "develop"].includes(next.trim())
+                ? { ok: true, value: next.trim() }
+                : { ok: false, error: `No branch named "${next.trim()}" in this repo.` }
+            }
+          />
         </PrefRow>
         <PrefRow label="Then run" htmlFor="setup">
-          <CommitField
-            id="setup"
-            value={setup}
-            placeholder="pnpm install"
-            width="w-56"
-            onCommit={setSetup}
-          />
+          <CommitField id="setup" value="pnpm install" onCommit={() => ({ ok: true })} />
         </PrefRow>
       </PrefSection>
 
+      {/*
+       * Review §2.6: the first pass shipped a Textarea seeded with the BUILT-IN
+       * DEFAULTS and blur-saved. Since `.worktreeinclude` is a tracked repo file
+       * that usually does not exist, that would have materialized it — freezing
+       * today's defaults into the repo so future default changes stopped
+       * applying — and produced an uncommitted working-tree change from a
+       * settings page. So: read-only until someone opts in, the defaults are
+       * labelled as defaults, and creating the file is an explicit act.
+       */}
       <PrefSection
         title="Copied files"
         icon={TerminalWindowIcon}
-        description="Gitignore syntax. ! negates. Copied into every new worktree."
-        action={<SectionAction label="Reveal" icon={FolderOpenIcon} />}
+        action={<SectionAction label="Create .worktreeinclude" icon={PlusIcon} />}
       >
-        <div className="py-2">
-          <Textarea
-            aria-label="Worktree copy set"
-            defaultValue={".env*\n.claude/settings.local.json"}
-            className="min-h-24 font-mono"
-          />
-          <p className="mt-2 text-ui text-muted-foreground">
-            Saved to{" "}
-            <code className="rounded-sm bg-muted px-1 py-1 font-mono">.worktreeinclude</code> at the
-            repo root.
-          </p>
-        </div>
+        <ItemRow name=".env*" badges={<Badge variant="outline">Default</Badge>} />
+        <ItemRow
+          name=".claude/settings.local.json"
+          badges={<Badge variant="outline">Default</Badge>}
+        />
+        <ResolutionNote>
+          This repo has no{" "}
+          <code className="rounded-sm bg-muted px-1 py-1 font-mono">.worktreeinclude</code>, so
+          Volli&rsquo;s defaults apply. Creating one replaces them.
+        </ResolutionNote>
       </PrefSection>
     </>
   );
@@ -377,15 +574,6 @@ function WorktreesPane() {
 
 /* -------------------------------------------------------------------------- */
 
-/**
- * Six categories in two groups.
- *
- * The group labels are load-bearing: "Agent" is what the brief asked for and
- * did not exist, and "Project" is the small amount of genuine per-project
- * automation that was already here. Between them they answer the question
- * today's two surfaces cannot — Settings is you, Configure is this repo's
- * agent.
- */
 export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
   {
     key: "agent",
@@ -395,8 +583,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "skills",
         label: "Skills",
         icon: BookOpenIcon,
-        description: "What the agent knows how to do in this project.",
-        keywords: ["skill", "agents", "SKILL.md", "capability"],
+        keywords: ["skill", "agents", "capability", "shadow"],
         trailing: <Badge variant="secondary">7</Badge>,
         content: <SkillsPane />,
       },
@@ -404,7 +591,6 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "commands",
         label: "Commands",
         icon: CommandIcon,
-        description: "Slash commands available in every composer here.",
         keywords: ["command", "slash", "prompt", "template"],
         trailing: <Badge variant="secondary">4</Badge>,
         content: <CommandsPane />,
@@ -413,20 +599,15 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "mcp",
         label: "MCP Servers",
         icon: PlugsConnectedIcon,
-        description: "Tools and data the agent can reach beyond this repo.",
-        keywords: ["mcp", "server", "tool", "integration", "context protocol"],
-        // aria-hidden — see the note on Settings' Updates category. A count
-        // Badge beside it reads fine as part of the name ("Skills 7"); a
-        // labelled dot does not ("MCP Servers 1 failing").
-        trailing: <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-destructive" />,
+        keywords: ["mcp", "server", "tool", "context protocol"],
+        attention: { tone: "destructive", label: "1 failing" },
         content: <McpPane />,
       },
       {
         key: "plugins",
         label: "Plugins",
         icon: PuzzlePieceIcon,
-        description: "Bundles that install skills, commands and servers together.",
-        keywords: ["plugin", "bundle", "marketplace", "extension"],
+        keywords: ["plugin", "bundle", "marketplace"],
         trailing: <Badge variant="secondary">2</Badge>,
         content: <PluginsPane />,
       },
@@ -440,15 +621,20 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "sessions",
         label: "Sessions",
         icon: CpuIcon,
-        description: "What a new session in this project starts with.",
         keywords: ["harness", "model", "claude code", "codex", "agents.md", "instructions"],
         content: <SessionsPane />,
+      },
+      {
+        key: "appearance",
+        label: "Appearance",
+        icon: PaletteIcon,
+        keywords: ["theme", "dark", "light", "canvas", "terminal", "override"],
+        content: <AppearancePane />,
       },
       {
         key: "worktrees",
         label: "Worktrees",
         icon: TreeStructureIcon,
-        description: "How a ticket's checkout gets built.",
         keywords: ["worktree", "branch", "base", "setup", "copy", "worktreeinclude", "env"],
         content: <WorktreesPane />,
       },
