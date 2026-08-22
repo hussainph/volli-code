@@ -62,6 +62,8 @@ import type {
   FileReadResult,
   FileWriteInput,
   FileWriteResult,
+  PromptTemplateCreateInput,
+  PromptTemplateCreateResult,
   PromptTemplateIndexInput,
   PromptTemplateIndexResult,
   Result,
@@ -76,7 +78,7 @@ import type { TicketRow } from "./db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 import { isPathWithinRoots } from "./project-roots";
-import { loadPromptTemplates } from "./prompt-templates";
+import { loadPromptTemplates, writePromptTemplate } from "./prompt-templates";
 import { worktreesHome } from "./worktree-runtime";
 import { isInside } from "./worktree/paths";
 import { loadSkills } from "./skills";
@@ -1397,6 +1399,26 @@ export function registerFileIpcHandlers(
     // the templates the project author wrote (see `projectCommandsDir`). The
     // three reads are independent, and any one tier that exists but cannot be
     // read is still an error the composer says out loud.
+    /**
+     * Creates one `/command` (VC-111). The scope picks which of the two
+     * directories the reader already merges it lands in — so a project command
+     * shadows a personal one of the same name exactly as it always has, and
+     * the collision this refuses is only WITHIN the chosen directory.
+     */
+    "volli:prompt-template-create": async (
+      input: PromptTemplateCreateInput,
+    ): Promise<PromptTemplateCreateResult> => {
+      const project = getProjectById(db, input.projectId);
+      if (!project) return { ok: false, error: "Unknown project" };
+      return writePromptTemplate({
+        dir:
+          input.scope === "project" ? projectCommandsDir(project.path) : options.globalCommandsDir,
+        name: input.name,
+        description: input.description,
+        body: input.body,
+      });
+    },
+
     "volli:prompt-templates": async (
       input: PromptTemplateIndexInput,
     ): Promise<PromptTemplateIndexResult> => {

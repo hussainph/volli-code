@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { UpdateUiState } from "../ipc/contract";
 import {
   readAllowPrerelease,
+  readUpdateChannel,
+  writeUpdateChannel,
   startAutoUpdate,
   UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY,
   type AutoUpdaterLike,
@@ -124,6 +126,39 @@ describe("readAllowPrerelease", () => {
     ctx = openTestDb();
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "not-json{", 1);
     expect(readAllowPrerelease(ctx.db)).toBe(false);
+  });
+});
+
+describe("writeUpdateChannel", () => {
+  it("round-trips through the reader the updater already uses", () => {
+    ctx = openTestDb();
+
+    expect(writeUpdateChannel(ctx.db, "canary", 1)).toBe("canary");
+    expect(readAllowPrerelease(ctx.db)).toBe(true);
+    expect(readUpdateChannel(ctx.db)).toBe("canary");
+
+    expect(writeUpdateChannel(ctx.db, "stable", 2)).toBe("stable");
+    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readUpdateChannel(ctx.db)).toBe("stable");
+  });
+
+  it("reads stable for an install that has never chosen", () => {
+    ctx = openTestDb();
+    expect(readUpdateChannel(ctx.db)).toBe("stable");
+  });
+
+  it("writes the exact JSON true the reader fails closed against", () => {
+    ctx = openTestDb();
+    writeUpdateChannel(ctx.db, "canary", 1);
+
+    // Not "1", not "yes" — `readAllowPrerelease` only opens on an exact JSON
+    // `true`, so the writer has to produce precisely that or the toggle is a
+    // switch that silently does nothing.
+    expect(
+      ctx.db
+        .prepare("SELECT value FROM app_state WHERE key = ?")
+        .get(UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY),
+    ).toEqual({ value: "true" });
   });
 });
 

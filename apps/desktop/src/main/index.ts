@@ -176,7 +176,12 @@ import { registerCliIpcHandlers } from "./cli-ipc";
 import { probeCliDoctor } from "./cli-doctor";
 import { readCliStatus } from "./cli-status";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
-import { readAllowPrerelease, startAutoUpdate } from "./auto-update";
+import {
+  readAllowPrerelease,
+  readUpdateChannel,
+  startAutoUpdate,
+  writeUpdateChannel,
+} from "./auto-update";
 import {
   PACKAGED_RENDERER_ENTRY_URL,
   PACKAGED_RENDERER_HOST,
@@ -1608,6 +1613,16 @@ app.whenReady().then(async () => {
     unsavedDrafts: unsavedDocumentNames,
     beginInstall: beginAcceptedUpdateInstall,
     abandonInstall: abandonAcceptedUpdateInstall,
+    // Absent on a broken db, which is the one case this whole registration is
+    // deliberately outside `dbHandle.ok` for: the install path must survive it,
+    // and a channel setting with nowhere to persist says so rather than
+    // pretending. VC-111 — retires the hand-run `sqlite3` INSERT.
+    channel: dbHandle.ok
+      ? {
+          read: () => readUpdateChannel(dbHandle.db),
+          write: (channel) => writeUpdateChannel(dbHandle.db, channel, Date.now()),
+        }
+      : undefined,
   });
 
   let shimPath = join(runtimePaths.binDir, "volli");
