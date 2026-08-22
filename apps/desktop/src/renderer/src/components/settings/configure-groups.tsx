@@ -56,7 +56,17 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           key: "commands",
           label: "Commands",
           icon: CommandIcon,
-          keywords: ["command", "slash", "prompt", "template", "new command", "description"],
+          keywords: [
+            "command",
+            "slash",
+            "prompt",
+            "template",
+            "new command",
+            "description",
+            "source",
+            "this project",
+            "personal",
+          ],
           content: <CommandsPane project={project} />,
         },
         {

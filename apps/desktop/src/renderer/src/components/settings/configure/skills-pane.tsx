@@ -140,6 +140,7 @@ function SkillsTable({
       filter={{
         label: "Filter by source",
         value: filter,
+        isFiltering: filter !== "all",
         onChange: onFilter,
         options: [
           { value: "all", label: "All sources" },

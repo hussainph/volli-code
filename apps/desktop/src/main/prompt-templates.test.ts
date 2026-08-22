@@ -221,6 +221,10 @@ describe("loadPromptTemplates", () => {
     expect(result.ok).toBe(true);
     expect(result.ok && result.templates.map((entry) => entry.name)).toEqual(["review", "ship"]);
     expect(result.ok && result.templates[0]?.content).toBe("project body");
+    expect(result.ok && result.templates.map((entry) => entry.source)).toEqual([
+      "project",
+      "personal",
+    ]);
   });
 
   it("is an empty list when neither directory exists", async () => {
