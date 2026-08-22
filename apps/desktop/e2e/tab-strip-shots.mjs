@@ -1,19 +1,21 @@
 /**
  * Visual proof for the one tab strip (`ui/tab-strip.tsx`).
  *
- * Drives the BUILT app to each of the three surfaces that draw a strip and
+ * Drives the BUILT app to each of the two surfaces that draw a strip and
  * shoots the strip band alone, cropped, plus the whole window for context:
  *
- *   - **files** — Project Files, the folder variant: two pinned tabs sharing a
- *     basename (so the parent-directory hints render), one italic preview tab,
- *     and one dirty tab wearing the unsaved dot in place of its ×.
- *   - **ticket** — the ticket detail, the folder variant again, with a Doc tab
- *     (not closable) beside a live terminal Session tab (leading status dot,
+ *   - **ticket** — the ticket detail, the folder variant, with a Doc tab (not
+ *     closable) beside a live terminal Session tab (leading status dot,
  *     closable, renamable).
- *   - **home** — Home, the folder variant again, with its permanent Board tab
- *     (not closable) leading two terminal Session tabs.
+ *   - **home** — Home, the folder variant again: its permanent Board tab (not
+ *     closable), a terminal Session tab, and Main-checkout File tabs beside
+ *     them — two pinned tabs sharing a basename (so the parent-directory
+ *     hints render), one italic preview tab, and one dirty tab wearing the
+ *     unsaved dot in place of its ×. VC-122 folded the old standalone Project
+ *     Files strip into this one, so what used to be a third surface ("files")
+ *     is now this same strip carrying more kinds of tab at once.
  *
- * Each surface is shot twice: at rest, and with the second tab hovered so the
+ * Each surface is shot twice: at rest, and with a tab hovered so the
  * hover-revealed close is visible. No assertions beyond "it rendered" — a human
  * judges the shots. Run it once on each side of a change and diff the pairs.
  *
@@ -60,21 +62,12 @@ function navButton(page, label) {
     .getByRole("button", { name: label, exact: true });
 }
 
-function treeFile(page, relPath) {
-  return page.locator(`[data-testid="file-tree-file"][data-rel-path="${relPath}"]`);
-}
-
-function treeDir(page, relPath) {
-  return page.locator(`[data-testid="file-tree-dir"][data-rel-path="${relPath}"]`);
-}
-
-async function expandDir(page, relPath, expectChild) {
-  await waitUntil(`tree row ${relPath}/`, async () => (await treeDir(page, relPath).count()) === 1);
-  if ((await treeFile(page, expectChild).count()) === 0) await treeDir(page, relPath).click();
-  await waitUntil(
-    `tree row ${expectChild}`,
-    async () => (await treeFile(page, expectChild).count()) === 1,
-  );
+/** One row in the Home Files navigator's current folder — `relPath` is always
+ * the full project-relative path (`ticket-files-panel.tsx`'s `FileRow`). */
+function fileRow(page, relPath) {
+  return page
+    .getByTestId("home-files-panel")
+    .locator(`[data-testid="ticket-files-row"][data-path="${relPath}"]`);
 }
 
 /** The whole strip band that holds one named tablist — actions cluster included. */
@@ -128,45 +121,6 @@ try {
     { id: PROJECT_SEED_ID, name: PROJECT_NAME, path: projectDir, prefix: TICKET_PREFIX },
   ]);
 
-  // ---- files -------------------------------------------------------------
-  await navButton(page, "Files").click();
-  await waitUntil(
-    "files workbench",
-    async () => (await page.locator('[data-testid="files-workbench"]').count()) === 1,
-    { timeout: 15000 },
-  );
-  await expandDir(page, "src", "src/app.ts");
-  await expandDir(page, "lib", "lib/app.ts");
-  // Two pinned tabs sharing a basename (the hints), then one preview tab.
-  await treeFile(page, "src/app.ts").dblclick();
-  await sleep(600);
-  await treeFile(page, "lib/app.ts").dblclick();
-  await sleep(600);
-  await treeFile(page, "src/util.ts").click();
-  await sleep(800);
-  // Dirty the first tab: select it, then type into its editor.
-  await page.locator('[data-testid="file-tab"][data-rel-path="src/app.ts"]').click();
-  await waitUntil(
-    "monaco ready",
-    async () =>
-      (await page.locator('[data-monaco-status="ready"] .monaco-editor .view-lines').count()) >= 1,
-    { timeout: 30000 },
-  );
-  await page.locator("[data-monaco-status] .monaco-editor .view-lines").first().click();
-  await page.keyboard.press("Meta+ArrowUp");
-  await page.keyboard.type("// draft");
-  await page.keyboard.press("Enter");
-  await waitUntil(
-    "tab goes dirty",
-    async () =>
-      (await page
-        .locator('[data-testid="file-tab"][data-rel-path="src/app.ts"][data-dirty="true"]')
-        .count()) === 1,
-  );
-  await shootStrip(page, "files", page.locator('[data-testid="file-tab-strip"]'), {
-    hoverIndex: 2,
-  });
-
   // ---- ticket ------------------------------------------------------------
   const seeded = await page.evaluate(async (title) => {
     const boot = await window.api.data.bootstrap();
@@ -209,34 +163,77 @@ try {
     page,
     "ticket",
     // The band, not the tablist: the trailing action cluster lives outside the
-    // tablist and is half of what this strip draws. Named through its tablist
-    // because the Files workbench's strip stays mounted (hidden) behind this
-    // surface, and a positional `.first()` finds that one.
+    // tablist and is half of what this strip draws.
     stripBand(page, "Ticket tabs"),
   );
 
-  // ---- home --------------------------------------------------------------
+  // ---- home (Board + a terminal Session + Main-checkout File tabs) -------
+  // VC-122 folded the old standalone Project Files strip into this one: File
+  // tabs now sit beside Board/Session tabs in Home's own strip rather than a
+  // dedicated page's.
   await page.keyboard.press("Escape");
   await sleep(600);
   await navButton(page, "Home").click();
   await sleep(1200);
   const homeStrip = stripBand(page, "Home tabs");
   await startTerminalSession(page);
-  // The Board tab is always there, so a fresh terminal is the SECOND tab.
+  // The Board tab is always there, so a fresh terminal is the SECOND tab, and
+  // the rail (with its Files page) only exists beside a Session or File tab.
   await waitUntil(
     "first session tab",
     async () => (await homeStrip.getByRole("tab").count()) >= 2,
     { timeout: 30000 },
   );
   await sleep(1200);
-  await startTerminalSession(page);
+
+  await page.getByTestId("home-rail-tab-files").click();
   await waitUntil(
-    "a second session tab",
-    async () => (await homeStrip.getByRole("tab").count()) >= 3,
+    "Home Files panel",
+    async () => (await page.getByTestId("home-files-panel").count()) === 1,
+    { timeout: 15000 },
+  );
+  await waitUntil("src/ row", async () => (await fileRow(page, "src").count()) === 1);
+  await fileRow(page, "src").click();
+  // Two pinned tabs sharing a basename (the hints), then one preview tab.
+  await waitUntil("src/app.ts row", async () => (await fileRow(page, "src/app.ts").count()) === 1);
+  await fileRow(page, "src/app.ts").dblclick();
+  await sleep(600);
+  await page.getByTestId("home-files-up").click();
+  await waitUntil("lib/ row", async () => (await fileRow(page, "lib").count()) === 1);
+  await fileRow(page, "lib").click();
+  await waitUntil("lib/app.ts row", async () => (await fileRow(page, "lib/app.ts").count()) === 1);
+  await fileRow(page, "lib/app.ts").dblclick();
+  await sleep(600);
+  await page.getByTestId("home-files-up").click();
+  await waitUntil("src/ row again", async () => (await fileRow(page, "src").count()) === 1);
+  await fileRow(page, "src").click();
+  await waitUntil(
+    "src/util.ts row",
+    async () => (await fileRow(page, "src/util.ts").count()) === 1,
+  );
+  await fileRow(page, "src/util.ts").click();
+  await sleep(800);
+  // Dirty the first pinned tab: select it, then type into its editor.
+  await page.locator('[data-testid="home-file-tab"][data-rel-path="src/app.ts"]').click();
+  await waitUntil(
+    "monaco ready",
+    async () =>
+      (await page.locator('[data-monaco-status="ready"] .monaco-editor .view-lines').count()) >= 1,
     { timeout: 30000 },
   );
-  await sleep(1500);
-  await shootStrip(page, "home", homeStrip);
+  await page.locator("[data-monaco-status] .monaco-editor .view-lines").first().click();
+  await page.keyboard.press("Meta+ArrowUp");
+  await page.keyboard.type("// draft");
+  await page.keyboard.press("Enter");
+  await waitUntil(
+    "tab goes dirty",
+    async () =>
+      (await page
+        .locator('[data-testid="home-file-tab"][data-rel-path="src/app.ts"][data-dirty="true"]')
+        .count()) === 1,
+  );
+  await sleep(1000);
+  await shootStrip(page, "home", homeStrip, { hoverIndex: 2 });
 
   console.log(`\nshots in ${OUT_DIR}`);
 } finally {

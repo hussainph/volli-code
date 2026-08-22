@@ -36,7 +36,7 @@ describe("sameSnapshot", () => {
   it("compares all three fields", () => {
     expect(sameSnapshot(snap("a", "home", "t1"), snap("a", "home", "t1"))).toBe(true);
     expect(sameSnapshot(snap("a"), snap("b"))).toBe(false);
-    expect(sameSnapshot(snap("a", "home"), snap("a", "files"))).toBe(false);
+    expect(sameSnapshot(snap("a", "home"), snap("a", "configure"))).toBe(false);
     expect(sameSnapshot(snap("a", "home", "t1"), snap("a", "home", null))).toBe(false);
   });
 
@@ -54,7 +54,7 @@ describe("ticketParentSnapshot", () => {
 
   it("does not invent a parent for top-level or project-less locations", () => {
     expect(ticketParentSnapshot(snap("a"))).toBeNull();
-    expect(ticketParentSnapshot(snap("a", "files", "t1"))).toBeNull();
+    expect(ticketParentSnapshot(snap("a", "configure", "t1"))).toBeNull();
     expect(ticketParentSnapshot(snap(null, "home", "t1"))).toBeNull();
   });
 });

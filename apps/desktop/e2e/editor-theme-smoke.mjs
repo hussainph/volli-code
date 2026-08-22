@@ -38,6 +38,7 @@ import {
   readMonacoState,
   seedProjects,
   sleep,
+  startTerminalSession,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -77,18 +78,18 @@ const DISPLAY_ID = `${TICKET_PREFIX}-1`;
 const { userDataDir, dbPath, scratch, cleanup } = await makeScratch("volli-editor-theme-smoke-");
 const { check, attempt, summarize } = createRunner();
 
-function navButton(page, label) {
-  return page
-    .locator('[data-sidebar-presentation="expanded"]')
-    .getByRole("button", { name: label, exact: true });
+function homeFilesPanel(page) {
+  return page.getByTestId("home-files-panel");
 }
 
-function treeFile(page, relPath) {
-  return page.locator(`[data-testid="file-tree-file"][data-rel-path="${relPath}"]`);
+/** One row in the Home Files navigator's current folder — `relPath` is always
+ * the full project-relative path (`ticket-files-panel.tsx`'s `FileRow`). */
+function fileRow(page, relPath) {
+  return homeFilesPanel(page).locator(`[data-testid="ticket-files-row"][data-path="${relPath}"]`);
 }
 
-function treeDir(page, relPath) {
-  return page.locator(`[data-testid="file-tree-dir"][data-rel-path="${relPath}"]`);
+function homeFileTab(page, relPath) {
+  return page.locator(`[data-testid="home-file-tab"][data-rel-path="${relPath}"]`);
 }
 
 /** Opens the actual Settings → Appearance control instead of bypassing the renderer store. */
@@ -131,26 +132,21 @@ async function readAppBackground(page) {
   });
 }
 
-async function goToNav(page, label, settled) {
-  await navButton(page, label).click();
-  await waitUntil(`${label} page to settle`, () => settled(), { timeout: 15000 });
-}
-
-const filesSettled = (page) => async () =>
-  (await page.locator('[data-testid="files-workbench"]').count()) === 1;
-
-async function expandDir(page, relPath, expectChild) {
-  await waitUntil(
-    `tree row for ${relPath}/`,
-    async () => (await treeDir(page, relPath).count()) === 1,
-  );
-  if ((await treeFile(page, expectChild).count()) === 0) {
-    await treeDir(page, relPath).click();
+/**
+ * Ensure the Home rail is showing its Files navigator, starting a terminal
+ * Session first if nothing is in front yet — the rail (and the Files page in
+ * it) only exists beside a Session or File tab, never over the Board.
+ */
+async function openHomeFilesRail(page) {
+  const rail = page.getByTestId("home-rail");
+  if ((await rail.count()) === 0) {
+    await startTerminalSession(page);
+    await waitUntil("Home rail to appear", async () => (await rail.count()) === 1, {
+      timeout: 20000,
+    });
   }
-  await waitUntil(
-    `tree row for ${expectChild}`,
-    async () => (await treeFile(page, expectChild).count()) === 1,
-  );
+  await page.getByTestId("home-rail-tab-files").click();
+  await waitUntil("Home Files panel", async () => (await homeFilesPanel(page).count()) === 1);
 }
 
 async function waitForMonacoReady(page, needle) {
@@ -284,15 +280,19 @@ async function readDocumentSurface(page) {
 }
 
 async function openSeededFile(page) {
-  await goToNav(page, "Files", filesSettled(page));
-  await waitUntil(
-    "files empty or tree",
-    async () =>
-      (await page.locator('[data-testid="files-empty-state"]').count()) === 1 ||
-      (await treeDir(page, "src").count()) === 1,
-  );
-  await expandDir(page, "src", APP_TS);
-  await treeFile(page, APP_TS).click();
+  // Idempotent across repeated calls (checks 1–5 all call this): once the
+  // Home File tab exists, later calls just re-activate it rather than
+  // re-walking the navigator.
+  const tab = homeFileTab(page, APP_TS);
+  if ((await tab.count()) === 1) {
+    await tab.click();
+    return waitForMonacoReady(page, "theme probe");
+  }
+  await openHomeFilesRail(page);
+  await waitUntil("src/ row", async () => (await fileRow(page, "src").count()) === 1);
+  await fileRow(page, "src").click();
+  await waitUntil(`${APP_TS} row`, async () => (await fileRow(page, APP_TS).count()) === 1);
+  await fileRow(page, APP_TS).click();
   return waitForMonacoReady(page, "theme probe");
 }
 

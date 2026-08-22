@@ -52,11 +52,12 @@ const EMPTY_EXPANDED: readonly string[] = [];
 
 /**
  * The nesting rule under a ticket entry, tightened from `SidebarMenuSub`'s
- * stock `mx-4 px-2` — the same call `file-tree.tsx` makes one section up, and
- * for the same reason: stock spends ~48px a level, which a session row cannot
- * pay out of a title that already truncates. The hairline itself is the
- * primitive's own `border-sidebar-border-veil`, so a nested session is bracketed
- * by the mark the file tree already taught this sidebar to mean "inside".
+ * stock `mx-4 px-2` — the same call the sidebar's file tree made before it
+ * retired (VC-122), and for the same reason: stock spends ~48px a level, which
+ * a session row cannot pay out of a title that already truncates. The hairline
+ * itself is the primitive's own `border-sidebar-border-veil`, so a nested
+ * session is bracketed by the mark that tree taught this sidebar to mean
+ * "inside".
  */
 const SESSION_GROUP_NEST = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
 

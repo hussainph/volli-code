@@ -3,7 +3,6 @@ import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
 import { HomeSurface } from "@renderer/components/home/home-surface";
 import { ConfigurePage } from "@renderer/components/pages/configure-page";
-import { FilesPage } from "@renderer/components/pages/files-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { Button } from "@renderer/components/ui/button";
@@ -27,9 +26,8 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
   // Home hosts the layer that owns every live PTY terminal in the app, so it is
   // ALWAYS mounted and merely hidden via CSS — switching nav, switching
-  // projects, or opening Settings must not tear its terminals down. Files,
-  // Configure and Settings are stateless, so they keep plain conditional
-  // rendering.
+  // projects, or opening Settings must not tear its terminals down. Configure
+  // and Settings are stateless, so they keep plain conditional rendering.
   const homeVisible = !settingsOpen && selected !== null && activeNav === "home";
 
   if (override !== undefined) {
@@ -56,8 +54,6 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           <div className={cn("flex-1", EMPTY_PAGE)}>
             <p className="text-sm text-muted-foreground">Select a project</p>
           </div>
-        ) : activeNav === "files" ? (
-          <FilesPage />
         ) : activeNav === "configure" ? (
           <ConfigurePage />
         ) : null /* home: rendered by the always-mounted HomeSurface above */

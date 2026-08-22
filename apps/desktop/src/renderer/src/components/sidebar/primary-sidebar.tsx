@@ -1,7 +1,6 @@
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
-import { FileTree } from "@renderer/components/sidebar/file-tree";
 import { NavList } from "@renderer/components/sidebar/nav-list";
 import { UpdateButton } from "@renderer/components/sidebar/update-button";
 import { SidebarScrollArea } from "@renderer/components/sidebar/sidebar-scroll";
@@ -77,16 +76,10 @@ export function PrimarySidebar() {
           <>
             <NavList />
             <SidebarScrollArea>
-              {/* Render-hidden, not unmounted, across nav switches so the file
-                  tree keeps its lazily-fetched listings and expansion state
-                  (same keep-alive seam main-content.tsx documents for pages). */}
-              <div className={cn((settingsOpen || activeNav !== "files") && "hidden")}>
-                <FileTree key={selected.id} project={selected} />
-              </div>
               <div className={cn(!sessionsVisible && "hidden")}>
-                {/* Render-hidden, not unmounted (above) — so the section cannot
-                    tell it is off screen, and the coarse chat-activity poll it
-                    runs would keep firing behind Files or Settings. `visible`
+                {/* Render-hidden, not unmounted — so the section cannot tell it
+                    is off screen, and the coarse chat-activity poll it runs
+                    would keep firing behind Configure or Settings. `visible`
                     is that fact, handed down from the one place that has it. */}
                 <ActiveSessions project={selected} visible={sessionsVisible} />
               </div>

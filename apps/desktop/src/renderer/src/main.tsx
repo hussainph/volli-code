@@ -30,7 +30,7 @@ import { initTerminalAppearance } from "./terminal/appearance";
  *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
 const INTERRUPT_TOAST_DURATION_MS = 8000;
 
-/** Full-window failure panel — mirrors the app's empty-state styling (see files-page.tsx). */
+/** Full-window failure panel — mirrors the app's empty-state styling (see main-content.tsx's EmptyProjectsState). */
 function BootErrorPanel({ error }: { error: string }) {
   return (
     <div className="flex h-svh w-full flex-col items-center justify-center gap-2 bg-background text-center">

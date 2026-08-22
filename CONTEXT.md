@@ -25,14 +25,17 @@ _Avoid_: ticket worktree, artifact view
 
 **Home**:
 The project-level tabbed workspace, and the app's landing page. Its permanent
-first tab is the Board; the project's own Project Sessions open as tabs beside
-it. Opening a ticket takes Home over: the Ticket workspace fills the surface and
-Home's tab strip steps aside, so only one tab strip is ever on screen.
-_Avoid_: Board (for the page), Sessions page, dashboard
+first tab is the Board; the project's own Project Sessions and Project Files
+open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
+fills the surface and Home's tab strip steps aside, so only one tab strip is
+ever on screen.
+_Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
 **Project Files**:
-The project-level repository workspace for browsing and editing the Main checkout.
-_Avoid_: global files, project file tab
+Main-checkout files opened as tabs in Home, browsed from a Files page in Home's
+own rail. Not a first-class nav item or a standalone page (retired VC-122; the
+rail page and tabs are VC-121).
+_Avoid_: global files, project file tab, Files page, Files nav
 
 **Ticket Files**:
 The ticket-workspace view of files in that ticket's worktree.
