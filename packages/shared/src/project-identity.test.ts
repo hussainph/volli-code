@@ -176,3 +176,27 @@ describe("PROJECT_COLORS / projectColor", () => {
     expect(projectColor(-1)).toBe(PROJECT_COLORS[1]);
   });
 });
+
+describe("parseSessionModel", () => {
+  it("keeps a complete stored model selection", () => {
+    expect(
+      parseSessionModel({
+        providerId: "anthropic",
+        modelId: "claude-sonnet",
+        reasoningLevel: "low",
+      }),
+    ).toEqual({ providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "low" });
+  });
+
+  it.each([
+    "not a record",
+    null,
+    { providerId: 1, modelId: "claude-sonnet", reasoningLevel: "low" },
+    { providerId: "", modelId: "claude-sonnet", reasoningLevel: "low" },
+    { providerId: "anthropic", modelId: 1, reasoningLevel: "low" },
+    { providerId: "anthropic", modelId: "", reasoningLevel: "low" },
+    { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "maximum" },
+  ])("rejects malformed persisted input %#", (value) => {
+    expect(parseSessionModel(value)).toBeNull();
+  });
+});
