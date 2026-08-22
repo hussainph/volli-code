@@ -3,6 +3,9 @@
  *
  * Run: `pnpm lab` → "Settings & Configure, reorganized".
  *
+ * The proposal, the audit and both reviews are on ticket VC-111:
+ *   volli ticket show VC-111 --comments 10
+ *
  * ── WHAT TO LOOK AT, IN ORDER ─────────────────────────────────────────────
  *
  *  1. **Configure → Skills / Commands / MCP / Plugins.** The brief's ask, and
