@@ -6,6 +6,7 @@ import {
   validateUniquePrefix,
   projectColor,
   PROJECT_COLORS,
+  parseSessionModel,
 } from "./project-identity";
 
 describe("monogram", () => {
@@ -126,6 +127,31 @@ describe("validateUniquePrefix", () => {
     const projects = [{ id: "one", name: "Volli Code", ticketPrefix: "VC" }];
     expect(validateUniquePrefix("NEW", projects)).toEqual({ ok: true });
     expect(validateUniquePrefix("VC", projects, "one")).toEqual({ ok: true });
+  });
+});
+
+describe("parseSessionModel", () => {
+  it("accepts only a complete selection with a known reasoning level", () => {
+    expect(parseSessionModel("not a selection")).toBeNull();
+    expect(parseSessionModel(null)).toBeNull();
+    expect(parseSessionModel({ modelId: "opus", reasoningLevel: "high" })).toBeNull();
+    expect(
+      parseSessionModel({ providerId: "", modelId: "opus", reasoningLevel: "high" }),
+    ).toBeNull();
+    expect(parseSessionModel({ providerId: "anthropic", reasoningLevel: "high" })).toBeNull();
+    expect(
+      parseSessionModel({ providerId: "anthropic", modelId: "", reasoningLevel: "high" }),
+    ).toBeNull();
+    expect(
+      parseSessionModel({
+        providerId: "anthropic",
+        modelId: "opus",
+        reasoningLevel: "unsupported",
+      }),
+    ).toBeNull();
+    expect(
+      parseSessionModel({ providerId: "anthropic", modelId: "opus", reasoningLevel: "high" }),
+    ).toEqual({ providerId: "anthropic", modelId: "opus", reasoningLevel: "high" });
   });
 });
 

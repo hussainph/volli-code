@@ -316,6 +316,18 @@ describe("writePromptTemplate", () => {
     });
   });
 
+  it("surfaces an unexpected filesystem error", async () => {
+    const result = await writePromptTemplate({
+      dir: "",
+      name: "ship",
+      description: "",
+      body: "Go.",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).not.toContain("already exists");
+  });
+
   it("refuses an empty prompt — a command with no body invokes nothing", async () => {
     const dir = makeCommandsDir();
 
