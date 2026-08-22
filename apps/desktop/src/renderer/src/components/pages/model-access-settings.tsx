@@ -43,7 +43,7 @@ import {
 } from "@volli/shared";
 
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
   Select,
@@ -61,24 +61,30 @@ import { useUiStore } from "@renderer/stores/ui";
 /**
  * The rows of the Default models section, in resolution order.
  *
- * `help` is the hover helper a row carries when its purpose is not obvious
- * from its two-word label (VC-81 asked for one on the utility row): what the
- * slot is FOR, so a person picking a model for it knows what the bill is for.
- * The tooltip is a helper, not a tutorial — one thought, one hover.
+ * `hint` is the `(i)` a row carries when its purpose is not obvious from its
+ * two-word label (VC-81 asked for one on the utility row): what the slot is
+ * FOR, so a person picking a model for it knows what the bill is for.
  *
- * The Utility helper also names what happens when the slot is empty. Leaving
- * it unset does not switch background work off; those calls fall to the model
- * each chat is already running under. That is a fallback a person can be
- * billed for, and CONTEXT.md's Model Access rule is that Volli never falls
- * back to another model SILENTLY — so this is where it is said out loud.
+ * The Utility hint also names what happens when the slot is EMPTY, and that
+ * half is not optional. Leaving it unset does not switch background work off;
+ * those calls fall to the model each chat is already running under. That is a
+ * fallback a person can be billed for, and CONTEXT.md's Model Access rule is
+ * that Volli never falls back to another model silently.
+ *
+ * Held to the hint budget — twelve words — which is what turned three lines of
+ * prose into one sentence without losing either fact.
  */
-const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string; help?: string }[] = [
+export const PURPOSE_ROWS: readonly {
+  purpose: ModelPurpose;
+  label: string;
+  hint?: string;
+}[] = [
   { purpose: "global", label: "Project chats" },
   { purpose: "ticket", label: "Ticket Sessions" },
   {
     purpose: "utility",
     label: "Utility",
-    help: "Background jobs: naming new chats, summarizing long conversations. Left unset, these run on the model the chat itself is using — an inexpensive model here keeps them cheap.",
+    hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
   },
 ];
 
@@ -208,7 +214,7 @@ export function ModelAccessSettings({
 
   return (
     <>
-      <SettingsSection
+      <PrefSection
         title="Default models"
         icon={CpuIcon}
         action={
@@ -227,12 +233,12 @@ export function ModelAccessSettings({
           </Button>
         }
       >
-        {PURPOSE_ROWS.map(({ purpose, label, help }) => (
+        {PURPOSE_ROWS.map(({ purpose, label, hint }) => (
           <DefaultModelRow
             key={purpose}
             purpose={purpose}
             label={label}
-            help={help}
+            hint={hint}
             selection={defaults[purpose]}
             models={models}
             offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
@@ -241,9 +247,9 @@ export function ModelAccessSettings({
             onSave={(selection) => void saveDefault(purpose, selection)}
           />
         ))}
-      </SettingsSection>
-      <SettingsSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
-        <SettingsRow label="Automatic compaction" testId="auto-compaction">
+      </PrefSection>
+      <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
+        <PrefRow label="Automatic compaction" testId="auto-compaction">
           <Switch
             aria-label="Compact a Session automatically before it fills its context window"
             checked={compaction.autoCompaction}
@@ -252,17 +258,17 @@ export function ModelAccessSettings({
               void saveCompaction({ ...compaction, autoCompaction })
             }
           />
-        </SettingsRow>
-      </SettingsSection>
+        </PrefRow>
+      </PrefSection>
       {groups.length > 0 ? (
-        <SettingsSection title="Models" icon={EyeIcon}>
+        <PrefSection title="Models" icon={EyeIcon}>
           {groups.map((group) => (
             <React.Fragment key={group.providerId}>
               <p className="pt-2 pb-1 text-ui font-medium text-muted-foreground first:pt-1">
                 {group.providerLabel}
               </p>
               {group.models.map((model) => (
-                <SettingsRow
+                <PrefRow
                   key={`${model.providerId}/${model.modelId}`}
                   label={model.label}
                   testId={`visibility-${model.providerId}-${model.modelId}`}
@@ -287,11 +293,11 @@ export function ModelAccessSettings({
                     checked={!isModelHidden(hidden, model)}
                     onCheckedChange={(visible) => void saveVisibility(model, visible)}
                   />
-                </SettingsRow>
+                </PrefRow>
               ))}
             </React.Fragment>
           ))}
-        </SettingsSection>
+        </PrefSection>
       ) : null}
       <ModelAccessAccounts
         providers={providers}
@@ -311,15 +317,15 @@ export function ModelAccessSettings({
  * nothing when the purpose inherits would read as unconfigured — which is the
  * one thing it is not.
  *
- * A row with a `help` string carries it as a hover helper beside the label —
- * rendered by {@link SettingsRow}, so every helper in Settings is the same
- * glyph in the same place, and the slot explains itself without a paragraph
- * under the control (CLAUDE.md's copy rule).
+ * A row with a `hint` carries it as the `(i)` beside its label — rendered by
+ * {@link PrefRow}, so every hint on both surfaces is the same glyph in the same
+ * place, and the slot explains itself without a paragraph under the control
+ * (CLAUDE.md's copy rule).
  */
 function DefaultModelRow({
   purpose,
   label,
-  help,
+  hint,
   selection,
   models,
   offerable,
@@ -329,7 +335,7 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
-  help?: string;
+  hint?: string;
   selection: ModelSelection | null;
   models: readonly ModelAccessModel[];
   offerable: readonly ModelAccessModel[];
@@ -351,9 +357,9 @@ function DefaultModelRow({
         : "";
 
   return (
-    <SettingsRow
+    <PrefRow
       label={label}
-      {...(help === undefined ? {} : { help })}
+      {...(hint === undefined ? {} : { hint })}
       testId={`default-model-${purpose}`}
     >
       <Select
@@ -404,7 +410,7 @@ function DefaultModelRow({
           ))}
         </SelectContent>
       </Select>
-    </SettingsRow>
+    </PrefRow>
   );
 }
 

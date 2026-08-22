@@ -665,3 +665,24 @@ describe("rehydration sanitization (corrupt JSON)", () => {
     expect(store.getState().uiScale).toBe(1);
   });
 });
+
+describe("setUiScale", () => {
+  it("takes a rung from the ladder", () => {
+    const store = createUiStore();
+    store.getState().setUiScale(1.25);
+    expect(store.getState().uiScale).toBe(1.25);
+  });
+
+  it("snaps a value that is not a rung", () => {
+    // `uiScale` is applied verbatim as CSS `zoom` on the content row, so an
+    // off-ladder value is an untested layout — and a corrupt one (0, NaN)
+    // renders the whole app below the chrome band invisible, with the
+    // zoom-reset menu item unreachable by mouse.
+    const store = createUiStore();
+    store.getState().setUiScale(1.13);
+    expect(store.getState().uiScale).toBe(1.1);
+
+    store.getState().setUiScale(Number.NaN);
+    expect(store.getState().uiScale).toBe(1);
+  });
+});

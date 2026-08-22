@@ -83,7 +83,7 @@ import {
   type ResolvedAppearance,
 } from "@volli/shared";
 
-import { SettingsRow } from "@renderer/components/pages/settings-shell";
+import { PrefRow } from "@renderer/components/settings/kit";
 import {
   canvasContrastReport,
   CANVAS_SWATCH_PAGES,
@@ -1130,7 +1130,7 @@ export function CanvasEditor({
         />
       </div>
 
-      <SettingsRow label="Vibrancy" htmlFor="canvas-vibrancy">
+      <PrefRow label="Vibrancy" htmlFor="canvas-vibrancy">
         <UnitSlider
           id="canvas-vibrancy"
           label="Vibrancy"
@@ -1145,11 +1145,11 @@ export function CanvasEditor({
           onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
           onSettle={settle}
         />
-      </SettingsRow>
+      </PrefRow>
 
       {/* No `htmlFor`: the dial is a `div[role="slider"]`, which a label cannot
           be bound to. It carries its own `aria-label` instead. */}
-      <SettingsRow label="Grain">
+      <PrefRow label="Grain">
         <GrainDial
           value={live.grain}
           onInput={(grain) => edit((current) => ({ ...current, grain }))}
@@ -1158,7 +1158,7 @@ export function CanvasEditor({
         <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
           {percentLabel(live.grain)}
         </span>
-      </SettingsRow>
+      </PrefRow>
 
       <ContrastAlert
         report={report}

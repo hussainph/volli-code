@@ -9,18 +9,14 @@ import {
   revealPath,
   terminalThemeItems,
 } from "@renderer/components/theme/appearance-catalog";
-import {
-  InheritNote,
-  SettingsRow,
-  SettingsSection,
-} from "@renderer/components/pages/settings-shell";
+import { OverrideControl, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
 import {
   describeAppearance,
   projectAppearanceChoice,
   projectCanvasChoice,
 } from "@renderer/components/theme/canvas-editor-model";
-import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
+import { ThemeComboBox } from "@renderer/components/theme/theme-combo-box";
 import {
   projectTerminalChoice,
   projectTerminalOverlayEdits,
@@ -33,7 +29,6 @@ import {
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
 import { Button } from "@renderer/components/ui/button";
-import { Segmented, SURFACE_MODES, type SurfaceMode } from "@renderer/components/ui/segmented";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
@@ -82,10 +77,12 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
     // hiccup, a locked database) would leave the pane on "Loading…" for as
     // long as it stays open, with nothing to press.
     return (
-      <SettingsSection title={project.name}>
+      <PrefSection title={project.name}>
         {/* A note and a button are not a row, so nothing else spaces them. */}
         <div className="flex flex-col items-start gap-2">
-          <InheritNote>Loading this project&rsquo;s appearance…</InheritNote>
+          <p className="text-ui leading-5 text-muted-foreground">
+            Loading this project&rsquo;s appearance…
+          </p>
           <Button
             variant="outline"
             size="sm"
@@ -94,7 +91,7 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
             Retry
           </Button>
         </div>
-      </SettingsSection>
+      </PrefSection>
     );
   }
 
@@ -177,60 +174,57 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   };
 
   return (
-    <SettingsSection title="App theme" icon={PaletteIcon}>
-      <SettingsRow label="Mode" align="center">
-        <Segmented
-          ariaLabel="Appearance scope"
-          testId="project-appearance-mode-scope"
-          value={modeChoice.kind === "inherit" ? "inherit" : "custom"}
-          options={SURFACE_MODES}
-          onChange={(mode: SurfaceMode) => writeMode(mode === "inherit" ? null : globalAppearance)}
-        />
-        {modeChoice.kind === "inherit" ? (
-          <span data-testid="project-appearance-mode-inherit">
-            <InheritNote>
-              Following app-wide — <span className="text-foreground">{inherited}</span>.
-            </InheritNote>
-          </span>
-        ) : (
-          <>
-            <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
-            <AppearanceModeChoice
-              value={modeChoice.appearance}
-              testId="project-appearance-mode"
-              onChange={writeMode}
-            />
-          </>
-        )}
-      </SettingsRow>
+    <PrefSection title="App theme" icon={PaletteIcon}>
+      {/*
+       * No scope switch. Touching the control IS the override — choosing a
+       * value was always the act of overriding, and the Inherit/Custom pair
+       * in front of it was a mode you had to enter before you were allowed to
+       * mean it. What remains is a revert button on exactly the rows that
+       * have diverged (see kit/override.tsx).
+       */}
+      <PrefRow label="Mode" align="center" testId="project-appearance-mode-row">
+        <OverrideControl
+          label="Mode"
+          inheritedValue={inherited}
+          overridden={modeChoice.kind !== "inherit"}
+          onRevert={() => writeMode(null)}
+        >
+          <AppearanceModeChoice
+            value={modeChoice.kind === "inherit" ? globalAppearance : modeChoice.appearance}
+            testId="project-appearance-mode"
+            onChange={writeMode}
+          />
+        </OverrideControl>
+      </PrefRow>
 
-      <SettingsRow label="Canvas" align="center">
-        <Segmented
-          ariaLabel="Canvas scope"
-          testId="project-appearance-canvas-mode"
-          value={choice.kind === "inherit" ? "inherit" : "custom"}
-          options={SURFACE_MODES}
-          onChange={(mode: SurfaceMode) => {
-            void useThemeStore
-              .getState()
-              .setProjectCanvas(project.id, mode === "inherit" ? null : globalCanvas);
+      <PrefRow label="Canvas" align="center" testId="project-appearance-canvas-row">
+        <OverrideControl
+          label="Canvas"
+          inheritedValue="the app-wide canvas"
+          overridden={choice.kind !== "inherit"}
+          onRevert={() => {
+            void useThemeStore.getState().setProjectCanvas(project.id, null);
           }}
-        />
-        {choice.kind === "inherit" ? (
-          <span data-testid="project-appearance-canvas-inherit">
-            <InheritNote>Following app-wide canvas.</InheritNote>
-          </span>
-        ) : (
-          <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
-        )}
-      </SettingsRow>
+        >
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="project-appearance-canvas-mode"
+            onClick={() => {
+              void useThemeStore.getState().setProjectCanvas(project.id, globalCanvas);
+            }}
+          >
+            {choice.kind === "inherit" ? "Give this project its own" : "Editing this project's"}
+          </Button>
+        </OverrideControl>
+      </PrefRow>
 
       {choice.kind === "inherit" ? null : (
         <div className="pt-2">
           <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />
         </div>
       )}
-    </SettingsSection>
+    </PrefSection>
   );
 }
 
@@ -283,7 +277,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
     return true;
   };
 
-  const setMode = (mode: SurfaceMode): void => {
+  const setMode = (mode: "inherit" | "custom"): void => {
     if (mode === "inherit") {
       setPending(false);
       // Nothing of this project's is in the file yet, so there is no key to
@@ -304,47 +298,48 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   };
 
   return (
-    <SettingsSection
+    <PrefSection
       title="Terminal"
       icon={TerminalWindowIcon}
-      description="Volli never edits your Ghostty config."
-      action={
-        <Segmented
-          ariaLabel="Terminal theme scope"
-          testId="project-appearance-terminal-mode"
-          value={custom ? "custom" : "inherit"}
-          options={SURFACE_MODES}
-          onChange={setMode}
-        />
-      }
+      hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
     >
-      {custom ? (
-        <SettingsRow label={rows.theme.label}>
-          <ThemeOriginPill emphasized={rows.theme.source === "volli-project"}>
-            {rows.theme.sourceLabel}
-          </ThemeOriginPill>
-          <ThemeComboBox
-            ariaLabel="Project terminal theme"
-            searchLabel="Search terminal themes"
-            buttonLabel={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
-            empty="No matching theme."
-            items={items}
-            activeValue={choice.kind === "theme" ? choice.name : null}
-            onPreview={previewTerminal}
-            onEndPreview={endTerminalPreview}
-            onSelect={(name) => write({ kind: "theme", name })}
-          />
-        </SettingsRow>
-      ) : (
-        <InheritNote>
-          Following app-wide —{" "}
-          <span className="text-foreground">
-            {rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
-          </span>
-          .
-        </InheritNote>
-      )}
-      <SettingsRow label="Config file">
+      {/*
+       * The scope switch was in the header, governing one row. It is the row's
+       * own revert now — same three states, one control instead of two, and
+       * the section header goes back to being a header.
+       */}
+      <PrefRow label={rows.theme.label} testId="project-appearance-terminal-row">
+        <OverrideControl
+          label="Terminal theme"
+          inheritedValue={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
+          overridden={custom}
+          onRevert={() => setMode("inherit")}
+        >
+          {custom ? (
+            <ThemeComboBox
+              ariaLabel="Project terminal theme"
+              searchLabel="Search terminal themes"
+              buttonLabel={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
+              empty="No matching theme."
+              items={items}
+              activeValue={choice.kind === "theme" ? choice.name : null}
+              onPreview={previewTerminal}
+              onEndPreview={endTerminalPreview}
+              onSelect={(name) => write({ kind: "theme", name })}
+            />
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="project-appearance-terminal-mode"
+              onClick={() => setMode("custom")}
+            >
+              {rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
+            </Button>
+          )}
+        </OverrideControl>
+      </PrefRow>
+      <PrefRow label="Config file">
         <Button
           variant="outline"
           size="sm"
@@ -354,7 +349,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
           <FileTextIcon />
           This project&rsquo;s overlay
         </Button>
-      </SettingsRow>
-    </SettingsSection>
+      </PrefRow>
+    </PrefSection>
   );
 }

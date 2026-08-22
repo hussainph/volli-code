@@ -49,7 +49,7 @@ import {
   type DeepLinkedAction,
   type SignInView,
 } from "@renderer/components/pages/model-access-accounts-model";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -99,7 +99,7 @@ export function ModelAccessAccounts({
 }) {
   if (providers.length === 0) return null;
   return (
-    <SettingsSection title="Accounts">
+    <PrefSection title="Accounts">
       {orderedAccounts(providers).map((provider) => (
         <ProviderAccount
           key={provider.id}
@@ -109,7 +109,7 @@ export function ModelAccessAccounts({
           onChanged={onChanged}
         />
       ))}
-    </SettingsSection>
+    </PrefSection>
   );
 }
 
@@ -244,7 +244,7 @@ function ProviderAccount({
 
   return (
     <>
-      <SettingsRow label={provider.label} testId={`account-${provider.id}`}>
+      <PrefRow label={provider.label} testId={`account-${provider.id}`}>
         <span className="text-ui text-muted-foreground">{providerAccessLabel(provider)}</span>
         {session !== null ? (
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
@@ -266,7 +266,7 @@ function ProviderAccount({
             />
           </>
         )}
-      </SettingsRow>
+      </PrefRow>
       {session !== null || view.failure !== null ? (
         <SignInPanel
           view={view}

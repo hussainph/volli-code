@@ -8,7 +8,7 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { resolveAppearance } from "@volli/shared";
 import { getBuiltinTheme } from "restty";
 
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import {
   fallbackTerminalThemeLabel,
   revealPath,
@@ -89,15 +89,15 @@ export function AppearanceSettings() {
     <>
       <AppThemeSection />
 
-      <SettingsSection
+      <PrefSection
         title="Terminal"
         icon={TerminalWindowIcon}
-        description="Volli never edits your Ghostty config."
+        hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
       >
         <TerminalThemeRow row={rows.theme} />
         <FontFamilyRow row={rows["font-family"]} />
         <FontSizeRow row={rows["font-size"]} />
-        <SettingsRow label="Config files">
+        <PrefRow label="Config files">
           <Button
             variant="outline"
             size="sm"
@@ -114,8 +114,8 @@ export function AppearanceSettings() {
             <FileTextIcon />
             Volli overlay
           </Button>
-        </SettingsRow>
-      </SettingsSection>
+        </PrefRow>
+      </PrefSection>
     </>
   );
 }
@@ -157,17 +157,17 @@ function AppThemeSection() {
   const resolved = resolveAppearance(appearance, systemPrefersDark);
 
   return (
-    <SettingsSection title="App theme" icon={PaletteIcon}>
-      <SettingsRow label="Mode">
+    <PrefSection title="App theme" icon={PaletteIcon}>
+      <PrefRow label="Mode">
         <AppearanceModeChoice
           value={appearance}
           testId="appearance-mode"
           onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
         />
-      </SettingsRow>
+      </PrefRow>
       <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
       {shadowed ? <CanvasShadowedNote /> : null}
-    </SettingsSection>
+    </PrefSection>
   );
 }
 
@@ -257,7 +257,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   const resolved = useThemeStore(effectiveAppearance);
 
   return (
-    <SettingsRow label={row.label}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <ThemeComboBox
         ariaLabel="Terminal theme"
@@ -270,7 +270,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
         onEndPreview={endPreview}
         onSelect={(name) => writeOverlay({ theme: name })}
       />
-    </SettingsRow>
+    </PrefRow>
   );
 }
 
@@ -299,7 +299,7 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   }, [opened, families]);
 
   return (
-    <SettingsRow label={row.label}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <ThemeComboBox
         ariaLabel="Terminal font family"
@@ -322,7 +322,7 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
         }}
         onSelect={(family) => writeOverlay({ "font-family": family })}
       />
-    </SettingsRow>
+    </PrefRow>
   );
 }
 
@@ -376,7 +376,7 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   };
 
   return (
-    <SettingsRow label={row.label}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <div className="flex items-center gap-1">
         <Button
@@ -399,6 +399,6 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
           <PlusIcon />
         </Button>
       </div>
-    </SettingsRow>
+    </PrefRow>
   );
 }
