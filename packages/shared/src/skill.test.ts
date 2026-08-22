@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { PromptTemplate } from "./prompt-template";
 import {
+  applySkillModes,
   globalSkillsDir,
   isSkillName,
   isUserInvokeOnly,
@@ -13,6 +14,8 @@ import {
   skillPromptResource,
   skillResourcePart,
   skillRootDir,
+  parseSkillModes,
+  resolveSkillMode,
   skillsIndexResource,
   SKILLS_INDEX_RESOURCE_NAME,
   visibleSkills,
@@ -289,5 +292,84 @@ describe("isUserInvokeOnly", () => {
     expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "false" })).toBe(false);
     expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: false })).toBe(false);
     expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: { nested: "map" } })).toBe(false);
+  });
+});
+
+describe("applySkillModes", () => {
+  const tdd = skill({ name: "tdd" });
+  const diagnose = skill({ name: "diagnose" });
+  const quiet = skill({ name: "quiet", userInvokeOnly: true });
+
+  it("leaves an unruled project exactly as it loaded", () => {
+    expect(applySkillModes([tdd, diagnose], {})).toEqual([tdd, diagnose]);
+  });
+
+  it("removes an off skill entirely", () => {
+    expect(applySkillModes([tdd, diagnose], { diagnose: "off" })).toEqual([tdd]);
+  });
+
+  it("keeps a manual skill invokable but withholds it from the model's index", () => {
+    // This is the whole point of the middle state: the index is ~94% of a
+    // fresh Session's Volli-composed context, and an entry costs that budget
+    // on every single turn. `manual` buys the budget back without losing the
+    // skill — `/tdd` still resolves it.
+    const [ruled] = applySkillModes([tdd], { tdd: "manual" });
+
+    expect(ruled?.userInvokeOnly).toBe(true);
+    expect(skillsIndexResource(applySkillModes([tdd], { tdd: "manual" }))).toBeNull();
+    expect(applySkillModes([tdd], { tdd: "manual" })).toHaveLength(1);
+  });
+
+  it("cannot currently promote a frontmatter-quiet skill, because storage drops an auto rule", () => {
+    // The shipped limitation, pinned so it is a decision rather than a
+    // surprise: `parseSkillModes` drops `auto` to keep "never touched" and
+    // "set to the default" one state, and it cannot tell that `auto` IS a
+    // departure for this particular skill. Reachable only by widening the
+    // stored vocabulary, which is a change to make deliberately.
+    expect(applySkillModes([quiet], parseSkillModes({ quiet: "auto" }))).toEqual([quiet]);
+  });
+
+  it("honours the author's opt-out when the project has said nothing", () => {
+    expect(applySkillModes([quiet], {})).toEqual([quiet]);
+    expect(skillsIndexResource(applySkillModes([quiet], {}))).toBeNull();
+  });
+
+  it("ignores a rule naming a skill that is no longer installed", () => {
+    expect(applySkillModes([tdd], { "uninstalled-last-week": "off" })).toEqual([tdd]);
+  });
+});
+
+describe("resolveSkillMode", () => {
+  it("reads auto for a skill nobody has ruled on", () => {
+    expect(resolveSkillMode({}, skill({ name: "tdd" }))).toBe("auto");
+  });
+
+  it("reads manual for a skill whose own frontmatter opted out", () => {
+    expect(resolveSkillMode({}, skill({ name: "quiet", userInvokeOnly: true }))).toBe("manual");
+  });
+
+  it("lets the project's rule outrank the frontmatter default", () => {
+    const quiet = skill({ name: "quiet", userInvokeOnly: true });
+    expect(resolveSkillMode({ quiet: "auto" }, quiet)).toBe("auto");
+  });
+});
+
+describe("parseSkillModes", () => {
+  it("keeps only the slugs and modes the vocabulary defines", () => {
+    expect(parseSkillModes({ tdd: "off", bad: "sideways", "not a slug": "off" })).toEqual({
+      tdd: "off",
+    });
+  });
+
+  it("drops an auto rule, which is the same as no rule at all", () => {
+    // Storing the default would make "never touched" and "explicitly set to
+    // the default" two states that read identically everywhere above the db.
+    expect(parseSkillModes({ tdd: "auto" })).toEqual({});
+  });
+
+  it("reads anything that is not an object as no rules", () => {
+    expect(parseSkillModes(null)).toEqual({});
+    expect(parseSkillModes(["tdd"])).toEqual({});
+    expect(parseSkillModes("tdd")).toEqual({});
   });
 });

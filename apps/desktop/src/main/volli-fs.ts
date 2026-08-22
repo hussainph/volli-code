@@ -25,6 +25,7 @@ import { shell } from "electron";
 import type { WebContents } from "electron";
 import type Database from "better-sqlite3";
 import {
+  applySkillModes,
   artifactBaseName,
   classifyFileKind,
   errorMessage,
@@ -1399,21 +1400,29 @@ export function registerFileIpcHandlers(
     "volli:prompt-templates": async (
       input: PromptTemplateIndexInput,
     ): Promise<PromptTemplateIndexResult> => {
-      const project = resolveProjectPath(db, input.projectId);
-      if (!project.ok) return project;
+      const project = getProjectById(db, input.projectId);
+      if (!project) return { ok: false, error: "Unknown project" };
       const [loaded, skills] = await Promise.all([
         loadPromptTemplates({
-          projectCommandsDir: projectCommandsDir(project.projectPath),
+          projectCommandsDir: projectCommandsDir(project.path),
           globalCommandsDir: options.globalCommandsDir,
         }),
         loadSkills({
-          projectSkillsDir: projectSkillsDir(project.projectPath),
+          projectSkillsDir: projectSkillsDir(project.path),
           globalSkillsDir: options.globalSkillsDir,
         }),
       ]);
       if (!loaded.ok) return loaded;
       if (!skills.ok) return skills;
-      return { ok: true, templates: [...loaded.templates], skills: [...skills.skills] };
+      // The picker offers what this project actually has. A `manual` skill IS
+      // still offered here — withholding it from the model's index is the
+      // whole point of that mode, and it stays typable by name; only `off`
+      // removes a row.
+      return {
+        ok: true,
+        templates: [...loaded.templates],
+        skills: [...applySkillModes(skills.skills, project.skillModes ?? {})],
+      };
     },
   };
 

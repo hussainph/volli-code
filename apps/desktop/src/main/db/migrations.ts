@@ -736,6 +736,52 @@ DROP TABLE web_access_settings;
 ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
 `;
 
+/**
+ * Migration 023: per-project agent configuration (VC-111) — the Configure
+ * surface's own three columns.
+ *
+ * Columns rather than an `app_state` blob keyed by project id, which is what
+ * Model Access does globally and what this nearly became. The deciding
+ * difference is ownership: these values describe ONE project and die with it,
+ * and `app_state` has no foreign key, so a `volli:agent-config:<projectId>`
+ * row would outlive the project it configured — a leak nothing ever collects,
+ * and a stale answer waiting for the next project that happens to reuse the id.
+ * On the row they cascade for free.
+ *
+ * `NULL` is inherit on all three, exactly as 013, 014 and 019 mean it, so a
+ * project upgraded across this migration behaves precisely as it did before.
+ *
+ * The shapes:
+ *  - `skill_modes` — a JSON object mapping a skill slug to `"manual"` or
+ *    `"off"`. Only DEPARTURES are stored: an absent slug means the skill's own
+ *    frontmatter decides, so a skill installed after this was last written is
+ *    governed by its author rather than silently hidden — which is what an
+ *    allow list would have done.
+ *
+ *    A map rather than the deny-list array this started as, because there are
+ *    three states and the middle one is the valuable one. `manual` withholds a
+ *    skill from the model's metadata index while leaving it invokable by name,
+ *    and that index is ~94% of a fresh Session's Volli-composed prompt, re-sent
+ *    as the stable prefix of every turn. A two-state switch could only ask
+ *    "delete this?" when the question worth asking is "pay for this on every
+ *    turn?".
+ *  - `session_harness` — a harness id. Unconstrained by CHECK on purpose:
+ *    harnesses are user-registrable (migration 015), so the legal set is a
+ *    table, not a literal, and a CHECK here would refuse a harness the user
+ *    installed.
+ *  - `session_model` — a JSON `ModelSelection`. `json_valid` for 019's reason:
+ *    a column whose whole contract is "this is JSON" should fail at the write
+ *    rather than several layers up in a parser that then has to invent a
+ *    policy for the corpse.
+ */
+const MIGRATION_023_PROJECT_AGENT_CONFIG = `
+ALTER TABLE projects ADD COLUMN skill_modes TEXT
+  CHECK (skill_modes IS NULL OR json_valid(skill_modes));
+ALTER TABLE projects ADD COLUMN session_harness TEXT;
+ALTER TABLE projects ADD COLUMN session_model TEXT
+  CHECK (session_model IS NULL OR json_valid(session_model));
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -838,6 +884,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 22,
     name: "web access — Exa as a second keyed search provider",
     sql: MIGRATION_022_WEB_ACCESS_EXA,
+  },
+  {
+    version: 23,
+    name: "projects agent config — the per-project skills, harness and model Configure writes",
+    sql: MIGRATION_023_PROJECT_AGENT_CONFIG,
   },
 ];
 
