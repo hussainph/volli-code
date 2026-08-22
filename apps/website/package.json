@@ -9,8 +9,12 @@
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build",
     "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-code --branch main",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
+    "brand": "node scripts/generate-brand-assets.mjs",
+    "brand:check": "node scripts/generate-brand-assets.mjs --check",
     "test": "vp test run",
-    "test:coverage": "vp test run --coverage"
+    "test:coverage": "vp test run --coverage",
+    "og": "node scripts/generate-og-image.mjs",
+    "og:check": "node scripts/generate-og-image.mjs --check"
   },
   "dependencies": {
     "@astrojs/react": "^6.0.2",
@@ -22,8 +26,11 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
+    "@astrojs/sitemap": "3.7.3",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "playwright-core": "^1.62.1",
+    "sharp": "0.35.3",
     "typescript": "6.0.3",
     "vite-plus": "catalog:",
     "wrangler": "4.121.0"

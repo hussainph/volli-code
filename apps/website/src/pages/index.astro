@@ -23,9 +23,19 @@ const description =
     <meta property="og:url" content="https://volli.app/" />
     <meta property="og:title" content="Volli Code | The workspace for parallel coding agents" />
     <meta property="og:description" content={description} />
-    <meta name="twitter:card" content="summary" />
+    {/* Absolute, because scrapers do not resolve relative image URLs. Regenerate
+        the card with `pnpm -C apps/website run og` after changing the headline. */}
+    <meta property="og:image" content="https://volli.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Volli Code — the workspace for parallel coding agents" />
+    <meta property="og:site_name" content="Volli Code" />
+    {/* summary_large_image is what makes X render the card at full width rather
+        than as a thumbnail beside the title. */}
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Volli Code | The workspace for parallel coding agents" />
     <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="https://volli.app/og.png" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
     <title>Volli Code | The workspace for parallel coding agents</title>
