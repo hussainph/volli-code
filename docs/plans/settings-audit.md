@@ -54,9 +54,13 @@ Configure → App theme puts Inherit/Custom **on each row**. Configure → Termi
 **section header action**. Settings puts it **nowhere**. Same concept, three placements, one page apart.
 
 **4. Two different save models, no rule for which you get.**
-Explicit **Save button**: retention, base branch, setup command, web instance, web API key.
+Explicit **Save button** (five of them): retention (`settings-page.tsx:213`), base branch
+(`configure-page.tsx:133`), setup command (`:172`), web instance (`web-access-settings.tsx:201`),
+web API key (`:248`).
 **Saves on change**: every model default, every switch, every theme control, font size.
-The three Input+Save rows are the *only* three, and they're split across both surfaces.
+Five exceptions, split across both surfaces, with no rule saying which you get.
+
+> Corrected after external review — this said "the only three" in a sentence listing five.
 
 **5. Section header actions have four different shapes.**
 `icon-xs` ghost refresh (Worktrees, CLI), `icon-sm` ghost refresh (Model Access), `xs outline`
@@ -74,8 +78,14 @@ you which one means "healthy" vs "provenance" vs "identity."
 section. This is the "some elements have much more emphasis" complaint, precisely.
 
 **8. Harness Runtimes is a category with nothing to change.**
-`harness-settings.tsx` is 30 lines: a selector and one read-only `Command` row. Its own doc comment
-says the last configurable row "was retired." It is a *diagnostic*, filed under Settings.
+`harness-settings.tsx` is 30 lines: a selector and one read-only `Command` row. The doc comment on
+`harness-picker.tsx`'s `HarnessIdentitySection` says the last configurable row "was retired."
+
+> Corrected after external review, twice. The comment is in `harness-picker.tsx`, not
+> `harness-settings.tsx`. And calling the pane a pure *diagnostic* is half wrong: `HarnessSelector`
+> lists user-installed manifest harnesses, so it is the only surface that answers "did Volli pick up
+> the harness I registered, and which binary will it launch?" That is an **inventory**, and it is why
+> collapsing it to a comma-separated list loses something real.
 
 **9. `harness-picker.tsx` was extracted for a caller that doesn't exist.**
 Its header says it was lifted out "when Configure gained a Runtime category." Configure has no
@@ -97,9 +107,13 @@ subject.
 10 categories and ~45 individual controls (Model Access alone renders one row per available model).
 `SettingsShell` has a category rail and nothing else.
 
-**14. No "reset to default" anywhere except terminal overlay revert.**
-The Ghostty overlay has a lovely per-key revert button. Nothing else in either surface has any way
-back to the default.
+**14. No *explicit* "reset to default" control except the terminal overlay revert.**
+The Ghostty overlay has a per-key revert button (`appearance-settings.tsx:221`). Elsewhere the
+reset exists only as a *value* you re-select — "Project default" (`model-access-settings.tsx:378`),
+"Default reserve" (`:465`), Configure's `Inherit` (which clears the stored column). Those are real
+resets; what is missing is a consistent affordance that says so.
+
+> Softened after external review — the original claim ("nowhere except the overlay") was too strong.
 
 ---
 
@@ -115,7 +129,11 @@ three providers and this is a wall.
 
 **17. Each model row does two unrelated things with no column headers.**
 A compaction-reserve `Select` and a visibility `Switch` sit side by side. Nothing labels either
-column; you have to hover for the `aria-label` to learn which is which.
+column, and neither carries a `title` — so hovering tells you nothing at all. Only a screen
+reader gets the `aria-label`.
+
+> Corrected after external review — this said "you have to hover for the `aria-label`", which
+> describes an affordance that does not exist.
 
 **18. "Project default" is app-wide.**
 The Ticket/Utility pickers offer an option literally labelled **"Project default"** — but every

@@ -1,149 +1,126 @@
-# Settings & Configure — the proposal (VC-111)
+# Settings & Configure — the proposal (VC-111), second pass
 
 Prototype: `pnpm lab` → **"Settings & Configure, reorganized"**.
-Audit that produced it: `docs/plans/settings-audit.md`.
-Code: `src/renderer/lab/settings/` (`kit.tsx` is the actual proposal; the two
-`panes-*.tsx` are content poured into it).
+Audit: `docs/plans/settings-audit.md` · Review that forced this rewrite:
+`docs/plans/settings-redesign-review.md`.
+Code: `src/renderer/lab/settings/` — `kit.tsx` is the proposal; the `panes-*.tsx`
+are content poured into it.
+Verification: `node apps/desktop/e2e/vc111-review-fixes.mjs` (25 checks, one per
+review finding) plus enrolment in `lab-boot-check.mjs`.
 
 ---
 
 ## The split
 
+**Scope is the surface.** Settings is app-wide, always. Configure is this
+project, always. There is no scope switch anywhere.
+
 |  | Settings | Configure |
 |---|---|---|
-| **Is** | preferences about the app | this project's agent setup |
-| **Scope** | you, everywhere (with a per-pane override) | this repo |
+| **Scope** | every project | this project |
 | **Entry** | sidebar-footer gear | project nav tab |
+| **Has** | General, Appearance, Notifications, Models, Web Search, Integrations, Storage, Updates, About | Skills, Commands, MCP Servers, Plugins, Sessions, Appearance, Worktrees |
 
-That boundary is the whole fix for "why are settings duplicated on both
-surfaces". Today they share three category names that mean different things in
-each. Under this split they share none.
+The first pass called this "app preferences vs agent setup", which leaked in
+five places at once (review §1.1). Scope is the boundary that survives, and it
+still lands agent config in Configure — because agent config *is* project-scoped.
 
-**Theming does not move to Configure.** It is a preference, not agent config, so
-it stays in Settings and gains a scope control instead. Configure loses its
-Appearance category entirely.
-
----
-
-## Settings — 8 categories, 3 groups
-
-| Group | Category | Contents | Status |
-|---|---|---|---|
-| Preferences | General | startup · retention · data & export | reworked |
-| | Appearance | theme · canvas · **zoom** · **diff layout** · terminal | + 2 new |
-| | Notifications | master switch · 5 per-event switches | **new** |
-| Services | Models | defaults · compaction · catalog · accounts | restructured |
-| | Web Search | provider · key | as-is |
-| | Integrations | **default editor · default terminal** | **new** |
-| Application | Updates | auto-install · **channel** · version · check now | **new** |
-| | About | one health line, internals behind a disclosure | replaces CLI + Harness + Doctor |
-
-## Configure — 6 categories, 2 groups
-
-| Group | Category | Contents | Status |
-|---|---|---|---|
-| Agent | Skills | list · enable · project-vs-personal · reveal | **new UI, existing data** |
-| | Commands | `/` templates, same shape as Skills | **new UI, existing data** |
-| | MCP Servers | servers · health · add | **new** |
-| | Plugins | bundles | **new** |
-| Project | Sessions | default harness · project model override · AGENTS.md | mostly new |
-| | Worktrees | base branch · setup command · **editable copy set** | reworked |
-
-**Skills and Commands are not speculative.** `main/skills.ts` and
-`main/prompt-templates.ts` already read those directories on every composer open
-and merge them project-over-personal. They have simply never been visible.
+**Where a setting has two tiers**, it appears on both surfaces, the Configure
+side carries `InheritControl`, and the pane states the resolution order. That
+last part is what the first pass was missing, and its absence rebuilt the exact
+desync the ticket is about.
 
 ---
 
-## Six rules (`kit.tsx`)
+## The eight rules (`kit.tsx`)
 
-1. **The rail is grouped and searchable.** Group labels are where the
-   Settings-vs-Configure relationship gets written down. Search filters
-   *categories* by keyword, not rows — a row torn out of its section is a
-   result nobody can act on.
-2. **Scope is one control, in one place: the pane header.** `ScopeBar`. At app
-   scope it reports how many settings this project overrides; at project scope
-   every scopeable row grows the same Inherit/Custom switch, and Inherit names
-   the value it inherits rather than going blank. Replaces three placements
-   across two surfaces.
-3. **One section header grammar:** icon · title · description · one action.
-   The action is an `xs outline` button or an `icon-xs` ghost. Nothing else.
-   Scope is not an action, so it cannot land here.
-4. **A setting is a row; a thing is an item.** `PrefRow` is label→control.
-   `ItemRow` is a skill/server/model — identity, meta, state. Today models are
-   rendered as settings rows, so a model name reads as a setting name.
-5. **Everything saves on change.** `CommitField` commits on blur and Enter with
-   a quiet inline "Saved". Retires all five Input+Save pairs.
-6. **One status vocabulary.** Dot = health. `Badge` = identity. `Origin` =
-   provenance. A surface picks which it needs; it cannot pick what a drawing
-   means.
+1. **Grouped, searchable rail.** Group labels are where the surface relationship
+   is written down.
+2. **Scope is the surface, not a mode.** One `InheritControl` idiom on Configure,
+   one informational `OverrideNote` on Settings. The first pass's pane-level
+   scope switch hid every row it couldn't scope, mis-framed the ones it kept,
+   couldn't express a twelfth project, and took a hand-maintained count.
+3. **One section header grammar** — icon · title · one action, with a primitive
+   for each of the two legal action shapes.
+4. **A setting is a row; a thing is an item.**
+5. **One save model, and it can refuse.** `CommitField` validates, can be
+   refused by the write, shows the refusal beside the field, confirms when
+   destructive, and says "Saved" only after something was.
+6. **One status vocabulary, three roles, three components** — `Health`, `Tier`,
+   `Provenance`. Not one component with a boolean meaning two different things.
+7. **Every pane declares its states.** `AsyncSection` owns loading / error+retry
+   / empty / ready. This is the rule the first pass didn't have, and it governs
+   the 80% of a settings surface that is state.
+8. **Widths come from a ladder** (`CONTROL_W`), not eight ad-hoc classes.
 
----
-
-## Diagnostics
-
-Per the brief — concise, no internals. Today: two categories plus a Doctor
-report, showing `binDir`, a socket path, a shell-chain boolean, a legacy-path
-tri-state, a wrapper list and a PATH comparison table.
-
-Proposed: **one sentence, one button.** `HealthSummary` renders a dot, a
-headline, a detail line and up to two actions. `Details` is closed by default
-and is plain-language when open (six `DetailLine`s: version, command line,
-harnesses, providers, web search, database size). The escape hatch for a bug
-report is **Copy report**, which puts the internals on the clipboard rather than
-on screen. The failure state gets the same shape: one sentence, one **Fix this**,
-still no paths.
-
-Harness Runtimes disappears as a category — it is a selector plus one read-only
-`Command` row, and it becomes one `DetailLine`.
+**No section descriptions.** CLAUDE.md forbids them; the first pass added
+thirteen. `PrefSection` has no `description` prop, so the rule is structural
+rather than aspirational.
 
 ---
 
-## Kill list
+## What the review changed
 
-| Thing | Replaced by |
+| Review | Change |
 |---|---|
-| **`sqlite3` command in `auto-update.ts`** for the canary toggle | Settings → Updates → Channel (`Segmented`) |
-| Settings → Harness Runtimes | one line in About → Details |
-| Settings → CLI (7 rows + Doctor) | About's health line + Copy report |
-| Configure → Appearance | Settings → Appearance + `ScopeBar` |
-| Configure → Worktrees prose | editable `.worktreeinclude` field |
-| `harness-picker.tsx`'s unused second consumer | delete (audit #9) |
-| "Project default" model option | "Same as Project chats" |
-| 5 × Input+Save | `CommitField` |
+| §2.1 | **Orphaned-worktree cleanup restored** as Settings → Storage, beside the retention window that governs it. The first pass dropped a live delete flow off the IA *and* the kill list. |
+| §1.1 | Boundary redrawn as scope; **precedence published** (`ResolutionNote`) on Sessions, Skills, Commands, MCP. |
+| §1.1, §1.3 | Three inheritance vocabularies → one `InheritControl`. |
+| §1.2 | Pane-level `ScopeBar` deleted. Settings gets `OverrideNote`, which **names** the overriding projects instead of counting them, and derives from a list. |
+| §1.4 | About keeps **per-fault remedies**. Healthy machine = one sentence; broken one grows a row per real problem. Legacy path shown. Harness inventory kept with command + origin. Copy report previews. |
+| §1.5 | `CommitField` gains `validate`, `confirm`, async refusal, `disabled`, no clobber of in-progress edits. Retention confirms below 7 days; base branch refuses unknown refs; canary confirms. |
+| §1.6, §7.1 | `AsyncSection` added. Width ladder added. `SectionIconAction` added. `Origin` split into `Tier` + `Provenance`. |
+| §2.2 | Reasoning level restored. |
+| §2.4 | Empty and no-results are separate strings. |
+| §2.5 | Catalog search matches provider, so two `gpt-5.6-luna`s are distinguishable. |
+| §2.6 | `.worktreeinclude` no longer a blur-saved textarea seeded with defaults — read-only until explicitly created. |
+| §2.7 | Both Ghostty config buttons and the per-key revert restored. |
+| §2.8 | Canvas keeps Vibrancy, Grain and ContrastAlert; rule 4 takes one **recorded** exception rather than being quietly broken. |
+| §2.9 | Invented settings removed (`Reopen last project`, `Confirm before quitting`). |
+| §2.10 | Integrations filtered by what's installed, with "Ask every time" and an empty state. |
+| §2.11 | `testId` restored on `PrefRow`/`ItemRow`. |
+| §3.1, §3.2 | `ItemList` takes data + a renderer, not children introspection; no magic `> 6`. |
+| §4.1 | "Saved" rendered conditionally, so the live region can actually announce. |
+| §4.2 | `InheritControl` requires a distinct `ariaLabel`. |
+| §4.3 | Disclosure has `aria-expanded` + `aria-controls`. |
+| §4.4 | Attention dot is `aria-hidden` **plus** an sr-only suffix — relocated, not deleted. |
+| §4.5 | Help button is a sibling of the label, so it no longer toggles the control. |
+| §4.6 | Real `InfoIcon`, not a unicode glyph. |
+| §4.7 | Scroll container reset on pane change. |
+| §4.8, §2.12 | `type="search"`, result counts in live regions. |
+| §5.1 | Every section description removed; prop deleted. |
+| §5.2 | `ContentColumn` + `PageHeader` composed, not re-derived. |
+| §5.4 | A failed write can no longer read as "Saved". |
+| §6.1–6.12 | Four factual errors corrected in the audit doc, inline. |
 
 ---
 
-## What the prototype already corrected
+## Still open
 
-Three things were wrong in the first draft and are fixed in the committed
-version — worth recording because each is a trap the real implementation would
-hit too:
-
-- **A labelled status dot in a rail button poisons the button's accessible
-  name.** "Updates" became "Updates Update ready" for a screen reader and for
-  every name-based query. Trailing marks are `aria-hidden`; count `Badge`s are
-  fine ("Skills 7").
-- **`PrefRow`'s `help` renders a Tooltip**, so any surface using it needs a
-  `TooltipProvider` at its root or the pane throws and paints an empty box while
-  the rail still looks healthy. Caught by `lab-boot-check.mjs`, which the
-  scratch is now enrolled in.
-- **A `Select` whose inherit option and current value share a `value` string**
-  renders both labels into the trigger ("Same as Project chatsSame as Projec").
+- **`keywords` is hand-maintained** and will rot (review §1.6). Mitigation is a
+  test asserting keywords against rendered labels; the real fix is deriving them.
+- **200 skills render unvirtualized.** Fine at the real cap, worth knowing.
+- **`Copy report…` needs a preview sheet** — designed as an intent, not built.
+- **The canvas "Edit canvas…" affordance on Configure** needs a non-modal
+  design, since a scrim over the window defeats the preview.
+- **Deep-link migration**: `stores/ui.ts`'s `settingsCategory` uses
+  `model-access`; the new key is `models`. Needs an alias, plus the
+  auto-sign-in flow (review §2.3) which this prototype does not draw.
 
 ---
 
-## Suggested build order
+## Build order
 
-1. **Updates pane** — kills the sqlite command. Smallest, highest disgust.
-2. **`kit.tsx` into `src/`** — the six rules, replacing `settings-shell.tsx`.
-   Nothing user-visible moves yet.
-3. **About** — absorbs CLI + Harness + Doctor; deletes two categories.
-4. **`ScopeBar`** — Settings → Appearance absorbs Configure → Appearance.
-5. **Configure → Skills + Commands** — surfacing data that already loads.
-6. **Models restructure** — four sections, `ItemList`, the rename.
-7. **MCP + Plugins** — the only genuinely new plumbing.
-8. Notifications, Integrations, zoom, diff layout — one row each.
+1. **Updates pane** — kills the `sqlite3` command. Smallest, highest disgust.
+2. **`kit.tsx` into `src/`**, replacing `settings-shell.tsx`. Nothing moves yet.
+   Rules 3–8 land here, `AsyncSection` first.
+3. **Storage** — retention + orphans + database in one category.
+4. **About** — absorbs CLI + Doctor + harness inventory, with per-fault remedies.
+5. **`InheritControl` + `OverrideNote`** — Configure → Appearance keeps its rows,
+   Settings gains the override note.
+6. **Configure → Skills + Commands** — surfacing data that already loads.
+7. **Models restructure** — four sections, `ItemList`, precedence note.
+8. **MCP + Plugins** — the only genuinely new plumbing.
+9. Notifications, Integrations, zoom, diff layout — one row each.
 
-Steps 1–4 are independent of 5–7 and could run in parallel sessions; 2 should
-land before 3 and 4.
+1 and 3–4 are independent of 6–8; 2 gates everything.
