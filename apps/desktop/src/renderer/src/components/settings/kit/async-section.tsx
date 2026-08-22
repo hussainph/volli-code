@@ -63,6 +63,7 @@ export function AsyncSection<T>({
   icon,
   hint,
   action,
+  before,
   state,
   isEmpty,
   empty,
@@ -72,6 +73,8 @@ export function AsyncSection<T>({
   icon?: PhosphorIcon;
   hint?: React.ReactNode;
   action?: React.ReactNode;
+  /** Content that stays useful while this fetched collection changes state. */
+  before?: React.ReactNode;
   state: AsyncState<T>;
   isEmpty?: (data: T) => boolean;
   empty?: string;
@@ -79,6 +82,7 @@ export function AsyncSection<T>({
 }) {
   return (
     <PrefSection title={title} icon={icon} hint={hint} action={action}>
+      {before}
       {state.status === "loading" ? <LoadingRows /> : null}
       {state.status === "error" ? (
         <ErrorRow message={state.message} onRetry={state.onRetry} />

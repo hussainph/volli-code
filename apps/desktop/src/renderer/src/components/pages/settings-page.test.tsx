@@ -75,6 +75,17 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).not.toContain("API key");
   });
 
+  it("keeps the file-opening preference visible while app detection loads", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="integrations" />);
+
+    // "Ask every time" is a real value, never a blank Select while the list
+    // that supplies app options is still resolving.
+    expect(html).toContain("Open files in");
+    expect(html).toContain("Ask every time");
+    expect(html).toContain('id="open-files-in"');
+    expect(html).toContain("Loading…");
+  });
+
   it("marks the opened category in the rail", () => {
     const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="updates" />);
 
