@@ -338,6 +338,10 @@ describe("applySkillModes", () => {
     expect(skillsIndexResource(applySkillModes([quiet], {}))).toBeNull();
   });
 
+  it("keeps the existing reference when a manual rule already agrees", () => {
+    expect(applySkillModes([quiet], { quiet: "manual" })[0]).toBe(quiet);
+  });
+
   it("ignores a rule naming a skill that is no longer installed", () => {
     expect(applySkillModes([tdd], { "uninstalled-last-week": "off" })).toEqual([tdd]);
   });

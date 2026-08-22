@@ -32,38 +32,65 @@ function preloadApi(): Window["api"] | undefined {
   return typeof window === "undefined" ? undefined : window.api;
 }
 
+/** Whether the registered half of the host inventory has settled truthfully. */
+export type HarnessListingsStatus = "loading" | "ready" | "unavailable";
+
+export interface HarnessListingsState {
+  listings: readonly HarnessListing[];
+  status: HarnessListingsStatus;
+  refresh(): void;
+}
+
 /**
  * Every harness this host can launch: the compiled-in first-class adapters, plus
  * whatever manifests main reports registered.
  *
  * Per HOST, not per scope — a project cannot register or revoke a harness — so
  * both callers get the identical list and only the detail beneath it is scoped.
+ * `status` lets a support report wait for the registered half rather than
+ * silently calling the built-in prefix a complete inventory.
  */
-export function useHarnessListings(): readonly HarnessListing[] {
+export function useHarnessListingsState(): HarnessListingsState {
   const [registered, setRegistered] = React.useState<readonly HarnessAdapter[]>([]);
+  const [status, setStatus] = React.useState<HarnessListingsStatus>("loading");
+  const [request, setRequest] = React.useState(0);
+  const refresh = React.useCallback(() => setRequest((current) => current + 1), []);
 
   React.useEffect(() => {
     const api = preloadApi();
-    if (api === undefined) return;
+    if (api === undefined) {
+      setStatus("ready");
+      return;
+    }
     let cancelled = false;
+    setStatus("loading");
     api.harness
       .registered()
       .then((result) => {
         if (cancelled) return;
         if (!result.ok) {
           toastError(`Couldn't load registered harnesses: ${result.error}`);
+          setStatus("unavailable");
           return;
         }
         setRegistered(result.harnesses);
+        setStatus("ready");
       })
       .catch((error: unknown) => {
         if (cancelled) return;
         toastError(`Couldn't load registered harnesses: ${errorMessage(error)}`);
+        setStatus("unavailable");
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [request]);
 
-  return React.useMemo(() => harnessListings(registered), [registered]);
+  const listings = React.useMemo(() => harnessListings(registered), [registered]);
+  return React.useMemo(() => ({ listings, status, refresh }), [listings, refresh, status]);
+}
+
+/** The inventory alone, for callers that do not need to distinguish a partial first frame. */
+export function useHarnessListings(): readonly HarnessListing[] {
+  return useHarnessListingsState().listings;
 }
