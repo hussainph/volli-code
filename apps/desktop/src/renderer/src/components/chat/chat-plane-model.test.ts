@@ -19,6 +19,21 @@ import type { BlobLinkView } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
+/**
+ * Distinct Blobs under distinct links, so a merge by hash has something to
+ * collide and a detach has a link to name (VC-137).
+ */
+function file(hash: string, linkId: string): BlobLinkView {
+  return {
+    linkId,
+    blobHash: hash.repeat(32),
+    label: `${linkId}.png`,
+    originalName: `${linkId}.png`,
+    mime: "image/png",
+    sizeBytes: 2048,
+  };
+}
+
 /** One staged file, for the rows and steers that carry them (VC-137). */
 function blobLinkView(): BlobLinkView {
   return {
@@ -40,6 +55,7 @@ import {
   composerPress,
   coordinateQueuedMutation,
   coordinateQueuedSteerStart,
+  detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
   heldStrip,
@@ -48,6 +64,7 @@ import {
   messageCopyText,
   messageRoute,
   resolvingWith,
+  restoreStripAttachments,
   sameInteractionId,
   sameMessages,
   sameQueuedMessage,
@@ -1836,6 +1853,75 @@ describe("heldStrip", () => {
     expect(heldStrip([{ ...heldMessage("m1", "look", "unsent"), attachments }], [])).toEqual([
       { id: "m1", text: "look", attachments },
     ]);
+  });
+});
+
+// The two halves of one invariant (VC-137): a pulled-back row's files rejoin
+// the strip BEFORE the row leaves the queue, and the removal path reads that
+// same strip to tell "came back" from "was deleted". Tested together, because
+// getting either one alone right is not the property that matters.
+describe("a queued row's files, coming back and going away", () => {
+  describe("restoreStripAttachments", () => {
+    it("leaves the strip exactly as it was when nothing came back", () => {
+      const staged = [file("ab", "link-1")];
+
+      expect(restoreStripAttachments(staged, [])).toEqual({ strip: staged, detach: [] });
+    });
+
+    it("appends the row's files after what was already staged", () => {
+      const staged = [file("ab", "link-1")];
+      const incoming = [file("cd", "link-2")];
+
+      expect(restoreStripAttachments(staged, incoming)).toEqual({
+        strip: [...staged, ...incoming],
+        detach: [],
+      });
+    });
+
+    // One Blob, two links: the row's is the one a re-send must carry, so the
+    // staged view loses — and its link has to go, or it is invisible forever.
+    it("lets the row's own view win a collision and strands the staged link", () => {
+      const shadowed = file("ab", "staged-link");
+      const rowsOwn = file("ab", "row-link");
+      const untouched = file("cd", "link-2");
+
+      expect(restoreStripAttachments([shadowed, untouched], [rowsOwn])).toEqual({
+        strip: [untouched, rowsOwn],
+        detach: [shadowed],
+      });
+    });
+  });
+
+  describe("detachableRowAttachments", () => {
+    it("has nothing to detach for a row that carried no files", () => {
+      expect(detachableRowAttachments(undefined, [])).toEqual([]);
+      expect(detachableRowAttachments([], [file("ab", "link-1")])).toEqual([]);
+    });
+
+    it("detaches every file of a row nothing restored", () => {
+      const row = [file("ab", "link-1"), file("cd", "link-2")];
+
+      expect(detachableRowAttachments(row, [])).toEqual(row);
+    });
+
+    // The whole point of the pairing: an edited row put these back a moment
+    // ago, so the removal that follows must not tear out the links it needs.
+    it("spares a file whose Blob is back in the strip", () => {
+      const restored = file("ab", "link-1");
+      const deleted = file("cd", "link-2");
+
+      expect(detachableRowAttachments([restored, deleted], [restored])).toEqual([deleted]);
+    });
+  });
+
+  // End to end across the pair, in the order the composer calls them.
+  it("keeps an edited row's links and drops a deleted row's", () => {
+    const carried = [file("ab", "link-1")];
+
+    const edited = restoreStripAttachments([], carried);
+    expect(detachableRowAttachments(carried, edited.strip)).toEqual([]);
+
+    expect(detachableRowAttachments(carried, [])).toEqual(carried);
   });
 });
 

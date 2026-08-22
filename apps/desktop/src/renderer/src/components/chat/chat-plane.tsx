@@ -84,6 +84,7 @@ import {
   composerPress,
   coordinateQueuedMutation,
   coordinateQueuedSteerStart,
+  detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
   heldStrip,
@@ -92,6 +93,7 @@ import {
   messageCopyText,
   messageRoute,
   resolvingWith,
+  restoreStripAttachments,
   sameInteractionId,
   sameMessages,
   sameQueuedMessage,
@@ -437,12 +439,8 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     if (persisted.length > 0) resetAttachments(persisted);
   }, [resetAttachments, sessionId]);
   /**
-   * A pulled-back row's files rejoin the strip (VC-137), merged by hash — the
-   * strip never draws one picture twice, and one link to a Blob serves either
-   * purpose. The row's own view wins a collision with a file staged for the
-   * NEXT message (the row is the thing being edited; its link is the one the
-   * re-send should carry), and the shadowed staged view is detached so no
-   * invisible link is left behind.
+   * A pulled-back row's files rejoin the strip (VC-137) — the merge rule and
+   * the links it strands both live in `restoreStripAttachments`.
    *
    * `attachmentsRef` is written here rather than left to the next render: the
    * composer calls this and then `onQueuedChange` in the same tick, and the
@@ -451,16 +449,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
    */
   const restoreAttachments = React.useCallback(
     (incoming: readonly BlobLinkView[]) => {
-      if (incoming.length === 0) return;
-      const incomingHashes = new Set(incoming.map((entry) => entry.blobHash));
-      const kept = attachmentsRef.current.filter((entry) => {
-        if (!incomingHashes.has(entry.blobHash)) return true;
-        void removeAttachment(entry);
-        return false;
-      });
-      const merged = [...kept, ...incoming];
-      attachmentsRef.current = merged;
-      resetAttachments(merged);
+      const { strip, detach } = restoreStripAttachments(attachmentsRef.current, incoming);
+      for (const shadowed of detach) void removeAttachment(shadowed);
+      attachmentsRef.current = strip;
+      resetAttachments(strip);
     },
     [removeAttachment, resetAttachments],
   );
@@ -558,18 +550,12 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
         dropHeld: () => dropHeld(sessionId, entry.id),
       });
       if (!gone) return false;
-      // A REMOVED row's files are the one queued-message ending that must also
-      // detach its links (VC-137): the row is gone, no message will ever name
-      // them, and the pane is still mounted — unlike a delivered turn, whose
-      // links the transcript's parts now reference. Files whose Blob is back
-      // in the strip (an edited row restored them a moment ago) keep their
-      // link; `removeAttachment` detaches by link id and only filters a strip
-      // it is already absent from, so this cannot touch files staged for the
-      // next message (a second link to the same Blob survives — links are per
-      // row, not per bytes).
-      const staged = new Set(attachmentsRef.current.map((view) => view.blobHash));
-      for (const attachment of entry.attachments ?? []) {
-        if (staged.has(attachment.blobHash)) continue;
+      // A removed row's files lose their links too (VC-137) — which of them,
+      // and why an edited row's do not, is `detachableRowAttachments`.
+      for (const attachment of detachableRowAttachments(
+        entry.attachments,
+        attachmentsRef.current,
+      )) {
         void removeAttachment(attachment);
       }
       return true;
