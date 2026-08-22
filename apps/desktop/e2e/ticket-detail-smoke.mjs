@@ -1412,6 +1412,24 @@ async function main() {
       return typeof raw === "string" && raw.includes(TICKET_ID);
     });
 
+    // ...and the rail collapse from check 10, which lives under a DIFFERENT
+    // app_state key with its OWN debounce (`volli:ui`, 200ms trailing edge in
+    // lib/app-state-storage.ts). Waiting only on `volli:workspace` above proved
+    // nothing about it: the collapse landed in the in-memory cache, the app was
+    // killed inside the debounce window, and the relaunch came up with the rail
+    // EXPANDED — so ⌥⌘B below hid it instead of restoring it and every later
+    // read in this check saw an empty rail. The product's own `beforeunload`
+    // flush is explicitly best-effort (fire-and-forget, no ack before exit), so
+    // a probe that wants the state on disk waits for it on disk.
+    await waitUntil("railCollapsed to persist to app_state", async () => {
+      const raw = await page.evaluate(async () => {
+        const res = await window.api.data.bootstrap();
+        if (!res.ok) return null;
+        return res.data.appState["volli:ui"] ?? null;
+      });
+      return typeof raw === "string" && raw.includes('"railCollapsed":true');
+    });
+
     await app.close();
     app = await launch(DB_PATH);
     page = await app.firstWindow();
@@ -1487,6 +1505,10 @@ async function main() {
         const historyIsSection =
           (await historyHeading.count()) === 1 &&
           (await aside.getByRole("button", { name: /^History/ }).count()) === 0;
+        // Both halves are captured so a failure names WHICH one broke: this
+        // check used to time out reporting a bare `false`, which said nothing
+        // about whether the row was missing or merely untimestamped.
+        let sessionDiag = { row: false, endedAgo: false, railText: "" };
         const sessionOk = await waitUntil(
           "prior renamed session stands in history without a disclosure",
           async () => {
@@ -1494,9 +1516,17 @@ async function main() {
             // History rows trail with when the session ended, not a redundant
             // "Exited" chip — the section heading already says these are past.
             const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
+            sessionDiag = {
+              row,
+              endedAgo,
+              railText: ((await aside.textContent()) ?? "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 400),
+            };
             return row && endedAgo;
           },
-        );
+        ).catch(() => false);
         // Navigation history is deliberately in-memory, so a relaunch has no
         // prior board snapshot. The chrome Back action still needs a semantic
         // fallback from persisted ticket detail to its parent Board.
@@ -1519,7 +1549,7 @@ async function main() {
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyIsSection=${historyIsSection} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyIsSection=${historyIsSection} session=${!!sessionOk} (row=${sessionDiag.row} endedAgo=${sessionDiag.endedAgo} rail=${JSON.stringify(sessionDiag.railText)}) restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

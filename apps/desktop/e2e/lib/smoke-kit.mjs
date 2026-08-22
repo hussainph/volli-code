@@ -181,6 +181,47 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
 }
 
 /**
+ * Write a fake LOGIN SHELL that answers main's PATH probe with `loginPath`,
+ * and return its path for `extraEnv.SHELL`.
+ *
+ * Why any probe needs this: since VC-94 the app does not run on the PATH it was
+ * launched with. At boot `main/login-path-adoption.ts` asks `$SHELL -l [-i] -c
+ * 'printf __VOLLI_PATH__; printenv PATH'` and installs the UNION of that answer
+ * and the launch PATH, with the LOGIN entries FIRST. So a smoke that prepends a
+ * scratch bin dir to `extraEnv.PATH` to shadow a real binary no longer shadows
+ * anything: its dir survives the merge but lands BEHIND every login entry, and
+ * the real `/opt/homebrew/bin/gh` wins the lookup. That is what silently
+ * un-shimmed the `gh` fakes in retention-smoke and done-flow-smoke — the app
+ * called the developer's real `gh`, which found no PR for a scratch branch, and
+ * the probes timed out waiting for a merge that could never be discovered.
+ *
+ * Faking `$SHELL` is the honest lever, because it is the same seam the product
+ * itself reads: whatever this prints becomes the login half of the union, so a
+ * `loginPath` that leads with the shim dir puts the shim genuinely first. The
+ * script ignores its arguments (`-l`, `-i`, `-c <command>`) and exits 0, which
+ * is what the adoption probe requires to believe the answer.
+ *
+ * @param {string} binDir     Directory to write the shell into (created if absent).
+ * @param {string} loginPath  The PATH the fake login shell reports.
+ * @returns {Promise<string>} Absolute path to the fake shell.
+ */
+export async function writeFakeLoginShell(binDir, loginPath) {
+  await fs.mkdir(binDir, { recursive: true });
+  const shellPath = join(binDir, "fake-login-shell");
+  // The marker is printed WITHOUT a trailing newline and the PATH follows on the
+  // same line — main/login-shell-path.ts parses exactly that shape.
+  await fs.writeFile(
+    shellPath,
+    `#!/bin/sh\nprintf '__VOLLI_PATH__%s' ${JSON.stringify(loginPath)}\n`,
+    {
+      mode: 0o755,
+    },
+  );
+  await fs.chmod(shellPath, 0o755);
+  return shellPath;
+}
+
+/**
  * `VOLLI_SMOKE_APP_BINARY` points every smoke at a PACKAGED app binary
  * (`…/Volli.app/Contents/MacOS/Volli`) instead of the dev Electron + source
  * dir — the H2 lane. Electron itself honours `--user-data-dir`, so profile
@@ -987,6 +1028,17 @@ function pageOf(scope) {
  * @param {import("playwright-core").Page | import("playwright-core").Locator} scope
  * @param {string} text
  */
+/**
+ * Collapse whitespace runs so a comparison survives Monaco's WORD WRAP, which
+ * turns one logical line into several `.view-line` nodes and therefore adds
+ * newlines to any rendered read. See {@link typeIntoMonaco}.
+ *
+ * @param {string} value
+ */
+function flattenForWrap(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 export async function typeIntoMonaco(scope, text) {
   const page = pageOf(scope);
   await clickMonaco(scope);
@@ -995,9 +1047,18 @@ export async function typeIntoMonaco(scope, text) {
   // trailing newline for the final line, so a typed string that ends in `\n`
   // (file contents, etc.) must be matched without that terminator.
   const expected = text.replaceAll("\r\n", "\n").replace(/\n$/, "");
+  // WORD WRAP: document-mode.ts pins `wordWrap: "on"`, so Monaco renders ONE
+  // logical line as SEVERAL `.view-line` nodes once it outruns the editor's
+  // width — and the joined read then carries line breaks the typed string never
+  // had. A 78-character composer body split as ["…Run no ", "commands."] and
+  // this gate waited out its full timeout on text that HAD landed correctly.
+  // Comparing with whitespace runs collapsed still proves every character
+  // arrived in order; line STRUCTURE is not this gate's question, and the
+  // probes that ask it use readDocumentLine/readMonacoState instead.
+  const wanted = flattenForWrap(expected);
   await waitUntil(`typed text to land in Monaco (${JSON.stringify(text.slice(-24))})`, async () => {
     const actual = await readMonacoText(scope);
-    return actual.includes(expected) ? actual : null;
+    return flattenForWrap(actual).includes(wanted) ? actual : null;
   });
 }
 

@@ -326,6 +326,23 @@ async function readDiffState(page) {
   });
 }
 
+/**
+ * The modified side's scroll offset, read the way `caretModelState` reads the
+ * File host's: Monaco scrolls by translating `.lines-content`, so its negative
+ * `top` IS the scroll position. `null` when no ready diff is mounted.
+ */
+async function diffModifiedScrollTop(page) {
+  return page.evaluate(() => {
+    const host = document.querySelector('[data-monaco-diff-status="ready"]');
+    const linesContent = host?.querySelector(
+      ".editor.modified .monaco-scrollable-element.editor-scrollable > .lines-content",
+    );
+    return linesContent instanceof HTMLElement
+      ? -Number.parseFloat(linesContent.style.top || "0")
+      : null;
+  });
+}
+
 async function findInDiff(page, text) {
   const host = page.locator('[data-monaco-diff-status="ready"]').first();
   const modified = host.locator(".monaco-editor").last();
@@ -883,20 +900,70 @@ async function main() {
         // Monaco only renders the modified Diff viewport. Force it to the top
         // so the subsequent positive watcher observation sees both the newly
         // prepended first line and the changed baseline line before File opens.
+        // Click a REAL RENDERED LINE, not the editor box and not any line.
+        // Since CONCEPT #51 the default presentation is inline
+        // (`renderSideBySide: false`), so the modified editor carries Monaco's
+        // deleted-line view-zones: THREE `.view-lines` containers, two of them
+        // `line-delete` zones whose lines measure 0x0. Clicking the editor box
+        // put the pointer in a zone and focused NOTHING (`activeElement` stayed
+        // BODY); taking the first `.view-line` hit a 0x0 zone line and timed out
+        // on actionability. The real text lives in the `monaco-mouse-cursor-text`
+        // container — the only one of the three a human can click. `:visible`
+        // on top of that: Monaco POOLS line nodes, so the first DOM child of
+        // even the right container can be a recycled node with no box, which
+        // fails Playwright's actionability check forever.
         const modifiedDiff = page
           .locator('[data-monaco-diff-status="ready"]')
-          .locator(".editor.modified .monaco-editor")
+          .locator(
+            ".editor.modified .monaco-editor .view-lines.monaco-mouse-cursor-text > .view-line:visible",
+          )
           .first();
         await modifiedDiff.click();
-        await page.keyboard.press("Meta+ArrowUp");
+        // Focus is the precondition for the keystroke, so assert it rather than
+        // assume it: an unfocused editor silently swallows ⌘↑ and the failure
+        // then surfaces as an unrelated viewport timeout.
+        // Scroll with the WHEEL, not ⌘↑. Clicking this diff does not focus it:
+        // `document.activeElement` stays BODY through a click on a real, visible
+        // line, so a keyboard scroll is dropped on the floor and the viewport
+        // stayed parked on the first change (scrollTop 269) while this check
+        // waited for line 1. The wheel needs no focus. Monaco clamps one wheel
+        // event to a couple of lines, so step until the top is reached or the
+        // viewport stops moving.
+        await modifiedDiff.hover();
+        let previousTop = null;
+        await waitUntil(
+          "modified Diff viewport wheeled to the top",
+          async () => {
+            const top = await diffModifiedScrollTop(page);
+            if (top === 0) return true;
+            if (top !== null && top === previousTop) {
+              throw new Error(`modified Diff viewport stalled at scrollTop ${top}`);
+            }
+            previousTop = top;
+            await page.mouse.wheel(0, -600);
+            await sleep(80);
+            return null;
+          },
+          { timeout: 15000, interval: 0 },
+        );
+        // The last observation is kept so a timeout can say what the viewport
+        // actually held. Bare "last value: null" cannot distinguish "the Diff
+        // never became ready" from "it is ready but scrolled somewhere else".
+        let lastViewport = null;
         await waitUntil(
           "modified Diff viewport at the clean baseline top",
           async () => {
             const state = await readDiffState(page);
+            lastViewport = state;
             return state.ready && state.lines.includes(baselineLines[0]) ? state : null;
           },
           { timeout: 5000, interval: 50 },
-        );
+        ).catch((error) => {
+          const head = (lastViewport?.lines ?? "").split("\n").slice(0, 4);
+          throw new Error(
+            `${error.message} — ready=${lastViewport?.ready} dirty=${lastViewport?.dirty} head=${JSON.stringify(head)}`,
+          );
+        });
 
         await sleep(20);
         await fs.writeFile(targetPath, PARKED_PREPEND_DISK);

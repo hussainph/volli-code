@@ -47,6 +47,7 @@ import {
   seedProjects,
   sleep,
   waitUntil,
+  writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -150,14 +151,22 @@ async function main() {
   await fs.writeFile(mergedFile, "");
 
   await writeGhShim(binDir, ghLog, mergedFile);
+  // Shadowing the real `gh` takes BOTH halves since VC-94: the launch PATH
+  // below, and a login shell that agrees. Boot adoption installs the union of
+  // the launch PATH and `$SHELL`'s, LOGIN ENTRIES FIRST, so without this the
+  // shim sits behind `/opt/homebrew/bin` and the app calls the developer's real
+  // `gh` (see writeFakeLoginShell).
+  const fakeShell = await writeFakeLoginShell(binDir, `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`);
 
   const app = await launch({
     dbPath,
     userDataDir,
     extraEnv: {
       VOLLI_WORKTREE_HOME_DIR: fakeHome,
-      // Shadow any real `gh`; git etc. still resolve from the inherited PATH.
+      // Shadow any real `gh`; git etc. still resolve from the inherited PATH,
+      // which the union keeps reachable behind the login half.
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      SHELL: fakeShell,
       // Poll fast so the discovery→merge pipeline runs within the probe's waits.
       VOLLI_RETENTION_INTERVAL_MS: "300",
       VOLLI_RETENTION_MAX_BACKOFF_MS: "1000",
