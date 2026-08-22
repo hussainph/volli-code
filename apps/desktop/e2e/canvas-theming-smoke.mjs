@@ -387,6 +387,23 @@ async function openProjectAppearance(page) {
 const segment = (page, testId, choice) =>
   page.getByTestId(testId).locator(`[data-choice="${choice}"]`);
 
+/**
+ * The per-project canvas override, post-VC-111.
+ *
+ * The Inherit/Custom segmented pair is gone from every scopeable row. Touching
+ * the control IS the override — choosing a value was always the act of
+ * overriding — and the only remaining signal is a revert button that exists on
+ * exactly the rows that have diverged. So "custom" is a click on the row's
+ * control, "inherit" is a click on the revert, and "is it overridden" is
+ * whether the revert is there at all.
+ */
+const canvasOverrideControl = (page) => page.getByTestId("project-appearance-canvas-mode");
+
+const canvasRevert = (page) =>
+  page
+    .getByTestId("project-appearance-canvas-row")
+    .getByRole("button", { name: /^Reset Canvas to the app-wide value/ });
+
 /** The terminal theme row's trigger — distinct from the editor picker on the same page. */
 const terminalThemeTrigger = (page) =>
   page.getByRole("button", { name: "Terminal theme", exact: true });
@@ -1195,7 +1212,7 @@ cursor-style = block
     // Custom opens on whatever the workspace is ALREADY wearing — the app-wide
     // canvas — so the switch alone must not change a pixel. Only the edit after
     // it may.
-    await segment(page, "project-appearance-canvas-mode", "custom").click();
+    await canvasOverrideControl(page).click();
     const pinned = await waitUntil("the workspace row to take a canvas", async () => {
       const stored = await storedTheme(page);
       return stored.projects[projectAId]?.canvas ?? null;
@@ -1326,7 +1343,7 @@ cursor-style = block
 
   await attempt(22, "Inherit puts the workspace back on the app-wide canvas", async () => {
     await openProjectAppearance(page);
-    await segment(page, "project-appearance-canvas-mode", "inherit").click();
+    await canvasRevert(page).click();
     const stored = await waitUntil("the workspace row to clear", async () => {
       const state = await storedTheme(page);
       return state.projects[projectAId]?.canvas === null ? state : null;
@@ -1339,9 +1356,9 @@ cursor-style = block
       },
       { timeout: 8000 },
     );
-    const pressed = await segment(page, "project-appearance-canvas-mode", "inherit").getAttribute(
-      "aria-pressed",
-    );
+    // The revert button IS the "overridden" signal now, so its ABSENCE is what
+    // says the row went back to inheriting — there is no pressed pill to read.
+    const revertGone = (await canvasRevert(page).count()) === 0;
     // "Somewhere else" is not the claim — the claim is that A now paints what
     // any inheriting workspace paints. B has never been overridden, so it is the
     // reference: an all-inheriting workspace must read EXACTLY like one that was
@@ -1360,8 +1377,8 @@ cursor-style = block
         stored.projects[projectAId]?.canvas === null &&
         applied !== projectBackground &&
         onB === applied &&
-        pressed === "true",
-      detail: `--background=${applied} (was ${projectBackground}); inheriting Beta paints ${onB}; row=${JSON.stringify(stored.projects[projectAId])} aria-pressed=${pressed}`,
+        revertGone,
+      detail: `--background=${applied} (was ${projectBackground}); inheriting Beta paints ${onB}; row=${JSON.stringify(stored.projects[projectAId])} revertGone=${revertGone}`,
     };
   });
 

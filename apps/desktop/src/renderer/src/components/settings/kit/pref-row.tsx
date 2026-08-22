@@ -50,7 +50,7 @@ export function PrefRow({
         <div className="flex items-center gap-1">
           {/* The hint is a SIBLING of the label, never a child: a `<button>`
               inside a `<label htmlFor>` toggles the control it names. */}
-          <label htmlFor={htmlFor} className="block text-sm font-medium">
+          <label htmlFor={htmlFor} data-slot="pref-row-label" className="block text-sm font-medium">
             {label}
           </label>
           {hint ? <InfoHint label={label}>{hint}</InfoHint> : null}

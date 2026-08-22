@@ -74,9 +74,16 @@ const composer = (page) => page.getByPlaceholder("Ask, plan, or implement…").f
 const picker = (page) => page.locator('[data-slot="composer-picker"]');
 const toasts = (page) => page.locator("[data-sonner-toast]");
 
-/** Settings is a surface, not a dialog: its category list is the tell. */
+/**
+ * Settings is a surface, not a dialog: its category rail is the tell.
+ *
+ * The landmark rather than a category NAME — VC-111 retired "Harness Runtimes"
+ * (a category whose pane held one read-only string), and a probe keyed to any
+ * single category name breaks again the next time the taxonomy moves. The
+ * `<nav>` and its accessible name are the surface's stable identity.
+ */
 async function settingsOpen(page) {
-  return (await page.getByText("Harness Runtimes", { exact: true }).count()) >= 1;
+  return (await page.getByRole("navigation", { name: "Settings categories" }).count()) >= 1;
 }
 
 /**
