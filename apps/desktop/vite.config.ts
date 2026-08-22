@@ -128,6 +128,9 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/pages/web-access-model.ts",
+        // The report mirrors the three data sets About already shows. Keeping
+        // it at full coverage makes a newly added status row hard to omit.
+        "src/components/settings/panes/about-report.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
