@@ -187,7 +187,7 @@ export function InfoHint({
         align="end"
         collisionPadding={12}
         className={cn(
-          "w-64 p-4 text-ui leading-relaxed text-muted-foreground",
+          "w-auto max-w-64 p-2 text-ui text-muted-foreground",
           !interactive && "pointer-events-none",
         )}
         onOpenAutoFocus={(event) => event.preventDefault()}
@@ -397,7 +397,7 @@ export function PrefSection({
           matched, because this header — not the first row — is the section's
           first child. Same pixels, but now the code says so, and the rows own
           only the rules between themselves. */}
-      <div className="mb-4 flex items-start justify-between gap-4 border-b border-border/50 pb-4">
+      <div className="mb-2 flex items-start justify-between gap-4 border-b border-border/50 pb-2">
         <div className="flex min-w-0 items-center gap-2">
           {Icon ? <Icon className="size-4 shrink-0 text-muted-foreground" /> : null}
           <h2 className="min-w-0 truncate text-sm font-semibold">{title}</h2>
@@ -846,7 +846,7 @@ export function DataTable<T>({
   if (items.length === 0) return <Empty>{empty}</Empty>;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-2">
       {search || filter ? (
         <div className="flex items-center gap-2">
           {search ? (
@@ -1143,9 +1143,9 @@ export function HealthPanel({
       </header>
 
       {faults.length > 0 ? (
-        <div className="mt-4 flex flex-col">
+        <div className="mt-2 flex flex-col">
           {faults.map((fault) => (
-            <div key={fault.id} className="flex items-start gap-4 border-t border-border/50 py-4">
+            <div key={fault.id} className="flex items-start gap-4 border-t border-border/50 py-2">
               <div className="min-w-0 flex-1">
                 <p className="text-ui">{fault.headline}</p>
                 <p className="text-ui text-muted-foreground">{fault.detail}</p>
@@ -1161,7 +1161,7 @@ export function HealthPanel({
       ) : null}
 
       {children ? (
-        <div className="mt-4 border-t border-border/50">
+        <div className="mt-2 border-t border-border/50">
           <button
             type="button"
             aria-expanded={open}
