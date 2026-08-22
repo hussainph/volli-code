@@ -19,8 +19,20 @@ import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { DEFAULT_HARNESS_ID, harnessLabel, type Project } from "@volli/shared";
+import {
+  DEFAULT_HARNESS_ID,
+  harnessLabel,
+  type ModelAccessModel,
+  type ModelAccessProvider,
+  type ModelSelection,
+  type Project,
+} from "@volli/shared";
 
+import {
+  offerableModels,
+  preferredReasoning,
+  providerLabelFor,
+} from "@renderer/components/pages/model-access-settings";
 import { useHarnessListings } from "@renderer/components/pages/harness-picker";
 import {
   CONTROL_W,
@@ -30,6 +42,7 @@ import {
   PrefSection,
   SectionAction,
 } from "@renderer/components/settings/kit";
+import { MODELS_CATEGORY_KEY } from "@renderer/components/settings/settings-groups";
 import {
   Select,
   SelectContent,
@@ -37,19 +50,92 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
+import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useUiStore } from "@renderer/stores/ui";
+
+const NO_MODELS: readonly ModelAccessModel[] = [];
+const NO_PROVIDERS: readonly ModelAccessProvider[] = [];
+
+type ModelCatalogStatus = "loading" | "ready" | "error" | "unavailable";
 
 export function SessionsPane({ project }: { project: Project }) {
   const listings = useHarnessListings();
+  const modelAccess = useModelAccessClient();
+  const inspect = modelAccess?.inspect;
   const adoptProject = useProjectsStore((store) => store.adoptProject);
+  const setSettingsOpen = useUiStore((store) => store.setSettingsOpen);
   const [saving, setSaving] = React.useState(false);
+  const [availableModels, setAvailableModels] =
+    React.useState<readonly ModelAccessModel[]>(NO_MODELS);
+  const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>(NO_PROVIDERS);
+  const [modelCatalogStatus, setModelCatalogStatus] = React.useState<ModelCatalogStatus>("loading");
+  const [catalogAttempt, setCatalogAttempt] = React.useState(0);
 
   const harness = project.sessionHarness ?? null;
   const model = project.sessionModel ?? null;
   const inheritedHarness = harnessLabel(DEFAULT_HARNESS_ID);
 
-  async function save(next: { harness: string | null; model: typeof model }): Promise<void> {
+  React.useEffect(() => {
+    let current = true;
+    if (inspect === undefined) {
+      setAvailableModels(NO_MODELS);
+      setProviders(NO_PROVIDERS);
+      setModelCatalogStatus("unavailable");
+      return () => {
+        current = false;
+      };
+    }
+    setModelCatalogStatus("loading");
+    void inspect({ refresh: catalogAttempt > 0 })
+      .then((snapshot) => {
+        if (!current) return;
+        // Pi names every provider it knows. This picker names only models this
+        // profile can run; a stored model outside this set therefore reads as
+        // unset below, just as it does in Settings → Models.
+        setAvailableModels(offerableModels(snapshot.models));
+        setProviders(snapshot.providers);
+        setModelCatalogStatus("ready");
+      })
+      .catch(() => {
+        if (!current) return;
+        setAvailableModels(NO_MODELS);
+        setProviders(NO_PROVIDERS);
+        setModelCatalogStatus("error");
+      });
+    return () => {
+      current = false;
+    };
+  }, [catalogAttempt, inspect]);
+
+  const selectedModel =
+    model === null
+      ? null
+      : (availableModels.find(
+          (candidate) =>
+            candidate.providerId === model.providerId && candidate.modelId === model.modelId,
+        ) ?? null);
+  const modelValue = selectedModel === null ? "" : modelKey(selectedModel);
+  const reasoningValue =
+    model !== null && selectedModel?.reasoningLevels.includes(model.reasoningLevel)
+      ? model.reasoningLevel
+      : "";
+  const hasOfferableModels = modelCatalogStatus === "ready" && availableModels.length > 0;
+  const modelCatalogAction =
+    modelCatalogStatus === "error" ? (
+      <SectionAction label="Try again" onAct={() => setCatalogAttempt((attempt) => attempt + 1)} />
+    ) : modelCatalogStatus === "ready" && availableModels.length === 0 ? (
+      <SectionAction
+        label="Manage models"
+        onAct={() => setSettingsOpen(true, MODELS_CATEGORY_KEY)}
+      />
+    ) : undefined;
+
+  async function save(next: {
+    harness: string | null;
+    model: ModelSelection | null;
+  }): Promise<void> {
     if (saving) return;
     setSaving(true);
     const saved = await writeThrough("save this project's session defaults", () =>
@@ -67,6 +153,7 @@ export function SessionsPane({ project }: { project: Project }) {
         // The precedence table, as one hint rather than a paragraph under the
         // header — available to whoever wants it, invisible to everyone else.
         hint={<>Composer choice wins, then this project, then Settings.</>}
+        action={modelCatalogAction}
       >
         <PrefRow label="Harness" htmlFor="project-harness" testId="project-session-harness">
           <OverrideControl
@@ -95,25 +182,84 @@ export function SessionsPane({ project }: { project: Project }) {
         </PrefRow>
 
         {/*
-         * The model row is deliberately NOT a picker yet.
-         *
-         * A per-project model needs the catalogue, which lives behind the
-         * Model Access client and is an async read this pane does not do. The
-         * COLUMN is real and writable (migration 023) — what is missing is the
-         * list to choose from. Showing an empty picker would be worse than
-         * showing where the setting will be, so the row states what it
-         * resolves to and the revert works for a value set elsewhere.
+         * An override no longer named by the offerable catalogue is shown as
+         * inherited. The reset button remains the one, honest signal that the
+         * stored project value still differs from Settings → Models.
          */}
-        <PrefRow label="Model" testId="project-session-model">
+        <PrefRow
+          label="Model"
+          htmlFor="project-session-model"
+          align="start"
+          testId="project-session-model"
+        >
           <OverrideControl
             label="Model"
             inheritedValue="the app-wide default"
             overridden={model !== null}
             onRevert={() => void save({ harness, model: null })}
           >
-            <span className="text-ui text-muted-foreground">
-              {model === null ? "From Settings → Models" : `${model.modelId} · ${model.providerId}`}
-            </span>
+            {/*
+             * At the app's narrow window floor, the two rails leave no room
+             * for both controls beside the label. Stack this one compound
+             * value rather than clip its provider identity or the reset.
+             */}
+            <div className="flex flex-col items-end gap-2 xl:flex-row xl:items-center">
+              <Select
+                value={modelValue}
+                disabled={saving || !hasOfferableModels}
+                onValueChange={(key) => {
+                  const nextModel = availableModels.find(
+                    (candidate) => modelKey(candidate) === key,
+                  );
+                  if (nextModel === undefined) return;
+                  void save({
+                    harness,
+                    model: {
+                      providerId: nextModel.providerId,
+                      modelId: nextModel.modelId,
+                      reasoningLevel: preferredReasoning(nextModel, model?.reasoningLevel),
+                    },
+                  });
+                }}
+              >
+                <SelectTrigger id="project-session-model" className={CONTROL_W.lg}>
+                  <SelectValue
+                    placeholder={modelPickerPlaceholder(modelCatalogStatus, availableModels.length)}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((availableModel) => (
+                    <SelectItem key={modelKey(availableModel)} value={modelKey(availableModel)}>
+                      {availableModel.label} ·{" "}
+                      {providerLabelFor(providers, availableModel.providerId)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={reasoningValue}
+                disabled={saving || !hasOfferableModels || selectedModel === null}
+                onValueChange={(next) => {
+                  if (model === null || selectedModel === null) return;
+                  const reasoningLevel = selectedModel.reasoningLevels.find(
+                    (level) => level === next,
+                  );
+                  if (reasoningLevel === undefined) return;
+                  void save({ harness, model: { ...model, reasoningLevel } });
+                }}
+              >
+                <SelectTrigger className={CONTROL_W.sm} aria-label="Reasoning level">
+                  <SelectValue placeholder="Level" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(selectedModel?.reasoningLevels ?? []).map((level) => (
+                    <SelectItem key={level} value={level}>
+                      {level}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </OverrideControl>
         </PrefRow>
       </PrefSection>
@@ -135,6 +281,17 @@ export function SessionsPane({ project }: { project: Project }) {
       </PrefSection>
     </>
   );
+}
+
+function modelPickerPlaceholder(status: ModelCatalogStatus, modelCount: number): string {
+  if (status === "loading") return "Loading models…";
+  if (status === "error") return "Couldn't load models";
+  if (status === "unavailable") return "Model Access unavailable";
+  return modelCount === 0 ? "No signed-in models" : "From Settings → Models";
+}
+
+function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): string {
+  return JSON.stringify([model.providerId, model.modelId]);
 }
 
 async function reveal(path: string): Promise<void> {
