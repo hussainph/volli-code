@@ -83,7 +83,10 @@ export const codexAdapter: HarnessAdapter = {
   surfaces: {
     skillsDir: "{home}/.codex/skills",
     commandsDir: null,
-    instructionsFile: "{home}/.codex/AGENTS.md",
+    // Codex reads `~/.codex/AGENTS.md` as a global rules file — Volli claims
+    // no instructions file here. The skills symlink carries session context when
+    // `VOLLI_TICKET` / `VOLLI_SESSION` are present.
+    instructionsFile: null,
   },
   injection: { kind: "codex-config-override", flag: "-c" },
   // The id is discovered from the rollout file, not accepted at launch.

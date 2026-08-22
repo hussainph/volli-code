@@ -376,13 +376,16 @@ describe("buildHarnessInstallPlan", () => {
     ]);
   });
 
-  it("earns codex and cursor a fenced block in the instructions file each one reads", () => {
+  it("does not fence global AGENTS.md for codex or cursor — skills carry session context", () => {
     const plan = buildHarnessInstallPlan({
       home: "/home/dev",
       adapters: [adapterFor("codex"), adapterFor("cursor")],
     });
     const fenced = plan.filter((action) => action.kind === "fenced").map((action) => action.path);
-    expect(fenced).toEqual(["/home/dev/.codex/AGENTS.md", "/home/dev/AGENTS.md"]);
+    expect(fenced).toEqual([]);
+    expect(plan.filter((action) => action.kind === "symlink").map((action) => action.path)).toEqual(
+      ["/home/dev/.codex/skills/volli", "/home/dev/.cursor/skills/volli"],
+    );
   });
 
   it("gives a registered adapter exactly what a built-in with the same surfaces gets", () => {
@@ -428,7 +431,7 @@ describe("buildHarnessInstallPlan", () => {
       home: "/home/dev/",
       adapters: [adapterFor("codex"), adapterFor("codex")],
     });
-    expect(plan.filter((action) => action.path.includes(".codex"))).toHaveLength(2);
+    expect(plan.filter((action) => action.path.includes(".codex"))).toHaveLength(1);
     expect(plan[0]?.path).toBe("/home/dev/.agents/skills/volli/SKILL.md");
   });
 
