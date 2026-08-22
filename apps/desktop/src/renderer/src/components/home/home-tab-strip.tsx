@@ -287,14 +287,12 @@ function BoardTab({
 /**
  * One Main-checkout File tab.
  *
- * It speaks the PROJECT FILES strip's vocabulary rather than the ticket
- * strip's, and that is the deliberate half of the choice: these are main
- * checkout files, opened out of the same `FileWorkspaceState` the Files
- * workbench reduces, so `file-tab-strip.tsx`'s menu is the one a person has
- * already met on the same files — Keep Open (disabled once pinned, so the menu
- * keeps one shape), Close, Close Others. The ticket strip differs because a
- * pinned ticket File tab has no menu at all, which would leave Home's keyboard
- * users with no route to Close.
+ * These are main-checkout files, opened out of the same `FileWorkspaceState`
+ * reducer ticket File tabs share, and this tab carries its own menu: Keep
+ * Open (disabled once pinned, so the menu keeps one shape), Close, Close
+ * Others. The ticket strip differs because a pinned ticket File tab has no
+ * menu at all, which would leave Home's keyboard users with no route to
+ * Close.
  */
 function HomeFileTab({
   tab,

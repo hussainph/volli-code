@@ -38,7 +38,7 @@ describe("railToggleTargetForChrome", () => {
   });
 
   it("names nothing off Home, even with a ticket remembered", () => {
-    expect(railToggleTargetForChrome(chrome({ nav: "files", openTicketId: "t1" }))).toBeNull();
+    expect(railToggleTargetForChrome(chrome({ nav: "configure", openTicketId: "t1" }))).toBeNull();
     expect(
       railToggleTargetForChrome(chrome({ nav: "configure", homeActiveTab: "chat:s1" })),
     ).toBeNull();

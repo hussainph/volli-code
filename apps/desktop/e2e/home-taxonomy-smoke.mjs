@@ -17,7 +17,8 @@
  *
  *   1. A fresh profile lands on Home with the Board tab in front, the board
  *      showing, and NO auto-opened Session anywhere (VC-54 scope 2).
- *   2. The Sessions nav item is gone; the nav is Home / Files / Configure.
+ *   2. The Sessions nav item is gone, and Files retired with it (VC-122): the
+ *      nav is Home / Configure, nothing else.
  *   3. "+ New Session" opens a Project Session tab beside the Board, and the
  *      Board tab is not closable.
  *   3a. The Home rail's Files page lists and live-watches the Main checkout;
@@ -31,10 +32,18 @@
  *      on the strip — and the terminal under it is never unmounted.
  *   5. Opening a ticket HIDES the Home strip; leaving the ticket restores it,
  *      with the Session tab still there.
- *   6. Switching to Files and back keeps the same live terminal mounted (the
- *      keep-alive seam CLAUDE.md protects).
- *   7. Relaunch: the terminal tab is gone with its PTY and Home falls back to
+ *   6. Relaunch: the terminal tab is gone with its PTY and Home falls back to
  *      the permanent Board tab, rather than to a stranded empty surface.
+ *
+ * A check that used to sit here ("switching to Files and back keeps the same
+ * live terminal mounted") retired with VC-122's primary-nav removal: it
+ * proved Home's flat navigator and the (now-gone) primary sidebar tree shared
+ * one ref-counted directory watch without one's cleanup silencing the
+ * other's. With the tree gone, a main-checkout root watch has exactly one
+ * consumer left — this rail's own Files page — so there is no second
+ * consumer left to prove survives. Check 3a's live-root-listing assertion
+ * already covers what remains true: the panel's own watch fires while it is
+ * mounted.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -148,13 +157,15 @@ try {
     },
   );
 
-  await attempt(2, "the nav is Home / Files / Configure — the Sessions page is gone", async () => {
+  await attempt(2, "the nav is Home / Configure — Sessions and Files are both gone", async () => {
     const sessions = await page.getByRole("button", { name: "Sessions", exact: true }).count();
+    const files = await page.getByRole("button", { name: "Files", exact: true }).count();
     const home = await page.getByRole("button", { name: "Home", exact: true }).count();
+    const configure = await page.getByRole("button", { name: "Configure", exact: true }).count();
     const board = await page.getByRole("button", { name: "Board", exact: true }).count();
     return {
-      ok: sessions === 0 && home === 1 && board === 0,
-      detail: `sessionsNav=${sessions} homeNav=${home} boardNav=${board}`,
+      ok: sessions === 0 && files === 0 && home === 1 && configure === 1 && board === 0,
+      detail: `sessionsNav=${sessions} filesNav=${files} homeNav=${home} configureNav=${configure} boardNav=${board}`,
     };
   });
 
@@ -223,16 +234,14 @@ try {
         .locator('[role="tab"][aria-selected="true"]')
         .getAttribute("aria-label");
       const panesAfter = await terminalCanvasCount(page);
-      const filesWorkbench = await page.locator('[data-testid="files-workbench"]').count();
 
       return {
         ok:
           terminalLabel !== null &&
           activeAfterClose === terminalLabel &&
           panesBefore > 0 &&
-          panesAfter === panesBefore &&
-          filesWorkbench === 0,
-        detail: `return=${activeAfterClose} expected=${terminalLabel} panes=${panesBefore}→${panesAfter} topLevelFiles=${filesWorkbench}`,
+          panesAfter === panesBefore,
+        detail: `return=${activeAfterClose} expected=${terminalLabel} panes=${panesBefore}→${panesAfter}`,
       };
     },
   );
@@ -331,29 +340,10 @@ try {
     },
   );
 
-  await attempt(6, "a nav round trip to Files unmounts no live terminal", async () => {
-    const before = await terminalCanvasCount(page);
-    // Home's flat navigator and the hidden primary tree share the root watch.
-    // After Home's panel unmounted, the tree must still receive this change —
-    // one consumer's cleanup cannot silence the other.
-    await fs.writeFile(join(projectPath, "after-home-panel.md"), "# still live\n", "utf8");
-    await page.getByRole("button", { name: "Files", exact: true }).click();
-    const liveTreeRow = page.locator(
-      '[data-testid="file-tree-file"][data-rel-path="after-home-panel.md"]',
-    );
-    await waitUntil(
-      "primary file tree watch after Home Files unmount",
-      async () => (await liveTreeRow.count()) === 1,
-    );
-    const duringFiles = await terminalCanvasCount(page);
-    await page.getByRole("button", { name: "Home", exact: true }).click();
-    await waitUntil("Home's strip to come back", async () => (await strip(page).count()) > 0);
-    const after = await terminalCanvasCount(page);
-    return {
-      ok: before > 0 && duringFiles === before && after === before,
-      detail: `panes ${before} → files:${duringFiles} → ${after}; sharedRootWatch=live`,
-    };
-  });
+  // Check 6 used to live here ("a nav round trip to Files unmounts no live
+  // terminal") — see the module doc for why it retired with VC-122 rather
+  // than being ported: the second watch consumer it cross-checked against is
+  // gone.
 
   // `volli:workspace` writes through a debounced SQLite bridge. Observe the
   // empty File workspace durably before releasing this renderer; otherwise a
@@ -378,7 +368,7 @@ try {
     await page.waitForLoadState("domcontentloaded");
 
     await attempt(
-      7,
+      6,
       "relaunch: the dead terminal tab is gone and Home falls back to the Board tab",
       async () => {
         await waitUntil("Home's strip to mount", async () => (await strip(page).count()) > 0);

@@ -145,7 +145,7 @@ describe("newSessionLandingForChrome", () => {
   });
 
   it("moves to Home from another page", () => {
-    expect(newSessionLandingForChrome(chrome({ nav: "files" }))).toEqual({
+    expect(newSessionLandingForChrome(chrome({ nav: "configure" }))).toEqual({
       projectId: "p1",
       ticketId: null,
       navigateTo: "home",
@@ -182,18 +182,16 @@ describe("newSessionLandingForChrome", () => {
     ).toEqual({ projectId: "p1", ticketId: null, navigateTo: null });
   });
 
-  it("ignores a ticket left open behind another page", () => {
+  it("ignores a ticket left open behind Configure", () => {
     // `setNav` clears `openTicketId` only when Home's Board tab is in front, so
-    // a ticket you opened is still recorded while you stand on Files or
-    // Configure. Minting onto it from there would put a Session somewhere
-    // nobody is looking.
-    for (const nav of ["files", "configure"] as const) {
-      expect(newSessionLandingForChrome(chrome({ nav, openTicketId: "t1" }))).toEqual({
-        projectId: "p1",
-        ticketId: null,
-        navigateTo: "home",
-      });
-    }
+    // a ticket you opened is still recorded while you stand on Configure.
+    // Minting onto it from there would put a Session somewhere nobody is
+    // looking.
+    expect(newSessionLandingForChrome(chrome({ nav: "configure", openTicketId: "t1" }))).toEqual({
+      projectId: "p1",
+      ticketId: null,
+      navigateTo: "home",
+    });
   });
 
   it("starts nothing under an open Settings sheet, ticket behind it or not", () => {

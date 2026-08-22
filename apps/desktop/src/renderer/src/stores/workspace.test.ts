@@ -10,6 +10,7 @@ import {
   applyTicketFileTransition,
   createWorkspaceStore,
   DEFAULT_WORKSPACE_UI,
+  resolvePersistedNav,
   type NavKey,
   type TicketTabsState,
 } from "./workspace";
@@ -38,20 +39,21 @@ function createMemoryStorage() {
 describe("setNav", () => {
   it("tracks nav independently per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
-    store.getState().setNav("project-b", "configure");
+    store.getState().setNav("project-a", "configure");
 
-    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
-    expect(store.getState().byProject["project-b"]?.nav).toBe("configure");
+    // project-b was never touched: if setNav leaked across projects instead of
+    // scoping to the one it was called with, this would read "configure" too.
+    expect(store.getState().byProject["project-a"]?.nav).toBe("configure");
+    expect(store.getState().byProject["project-b"]?.nav ?? DEFAULT_WORKSPACE_UI.nav).toBe("home");
   });
 
   it("keeps a project's nav across changes to other projects", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
     store.getState().setNav("project-b", "home");
     store.getState().setNav("project-b", "configure");
 
-    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+    expect(store.getState().byProject["project-a"]?.nav).toBe("configure");
   });
 
   it("shows the plain board when Home is selected from inside a ticket", () => {
@@ -71,11 +73,11 @@ describe("setNav", () => {
   it("keeps the remembered ticket when Home is selected onto a Session tab", () => {
     // The clear belongs to the BOARD tab, not to the nav item. With a Session
     // tab in front the ticket is not on screen to be left, and the round trip
-    // Home \u2192 Files \u2192 Home must not quietly discard it.
+    // Home → Configure → Home must not quietly discard it.
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().setHomeActiveTab("project-a", "chat:c1");
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
 
     store.getState().setNav("project-a", "home");
 
@@ -99,44 +101,52 @@ describe("setNav", () => {
   });
 });
 
-describe("setDirExpanded", () => {
-  it("tracks expanded directories independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setDirExpanded("project-a", "/a/src", true);
-    store.getState().setDirExpanded("project-a", "/a/src/lib", true);
-    store.getState().setDirExpanded("project-b", "/b/docs", true);
-
-    expect(store.getState().byProject["project-a"]?.expandedDirs).toEqual(["/a/src", "/a/src/lib"]);
-    expect(store.getState().byProject["project-b"]?.expandedDirs).toEqual(["/b/docs"]);
+/**
+ * `nav` is session-only — no shipped build ever persisted one (see the
+ * `NavKey` doc in workspace.ts) — so these are pure insurance: the same
+ * tolerant-read `ticket-rail-model.test.ts` gives `resolvePersistedRailMode`,
+ * exercised directly rather than through a round trip because nothing in this
+ * store's own `partialize` output could ever carry a `nav` field to rehydrate.
+ */
+describe("resolvePersistedNav", () => {
+  it("keeps a key this build still offers", () => {
+    expect(resolvePersistedNav({ nav: "home" })).toBe("home");
+    expect(resolvePersistedNav({ nav: "configure" })).toBe("configure");
   });
 
-  it("collapsing removes only that directory, keeping descendants remembered", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setDirExpanded("project-a", "/a/src", true);
-    store.getState().setDirExpanded("project-a", "/a/src/lib", true);
-    store.getState().setDirExpanded("project-a", "/a/src", false);
-
-    // Descendant flags survive a parent collapse so re-expanding the parent
-    // restores the deeper levels too.
-    expect(store.getState().byProject["project-a"]?.expandedDirs).toEqual(["/a/src/lib"]);
+  it('maps the retired "files" nav key onto "home"', () => {
+    expect(resolvePersistedNav({ nav: "files" })).toBe("home");
   });
 
-  it("is a no-op when the state already matches", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setDirExpanded("project-a", "/a/src", true);
-
-    const before = store.getState().byProject;
-    store.getState().setDirExpanded("project-a", "/a/src", true);
-    store.getState().setDirExpanded("project-a", "/a/never-expanded", false);
-    expect(store.getState().byProject).toBe(before);
+  it("falls back to the default for anything absent, malformed, or unrecognized", () => {
+    expect(resolvePersistedNav({})).toBe(DEFAULT_WORKSPACE_UI.nav);
+    expect(resolvePersistedNav({ nav: "bogus" })).toBe(DEFAULT_WORKSPACE_UI.nav);
+    expect(resolvePersistedNav({ nav: 7 })).toBe(DEFAULT_WORKSPACE_UI.nav);
+    expect(resolvePersistedNav({ nav: null })).toBe(DEFAULT_WORKSPACE_UI.nav);
   });
 
-  it("leaves nav untouched", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
-    store.getState().setDirExpanded("project-a", "/a/src", true);
+  it('cannot be tricked by a persisted "toString" key', () => {
+    // Why RETIRED_NAV_KEYS is a Map rather than an object literal: an object
+    // would answer this lookup with a function off the prototype chain.
+    expect(resolvePersistedNav({ nav: "toString" })).toBe(DEFAULT_WORKSPACE_UI.nav);
+  });
 
-    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+  it("rehydrates a project record whose persisted JSON carries a retired nav key", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: { byProject: { "project-a": { nav: "files", boardView: "list" } } },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      nav: "home",
+      boardView: "list",
+    });
   });
 });
 
@@ -210,10 +220,10 @@ describe("setBoardView", () => {
 
   it("leaves nav and sort untouched", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
     store.getState().setBoardView("project-a", "list");
 
-    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+    expect(store.getState().byProject["project-a"]?.nav).toBe("configure");
     expect(store.getState().byProject["project-a"]?.boardSort).toBe(DEFAULT_TICKET_SORT);
   });
 });
@@ -347,7 +357,7 @@ describe("openHome", () => {
     // remembered behind it — the sidebar band, ⌘K and ⌘T all land here.
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
 
     store.getState().openHome("project-a", "chat:c1");
 
@@ -377,7 +387,7 @@ describe("openHomeBoard", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().setHomeActiveTab("project-a", "chat:c1");
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
 
     store.getState().openHomeBoard("project-a");
 
@@ -436,11 +446,11 @@ describe("openTicket", () => {
 
   it("leaves nav, boardView, and boardSort untouched", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
     store.getState().setBoardView("project-a", "list");
     store.getState().openTicket("project-a", "ticket-1");
 
-    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+    expect(store.getState().byProject["project-a"]?.nav).toBe("configure");
     expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
   });
 });
@@ -456,7 +466,7 @@ describe("openTicketWorkspace", () => {
     // user is on another page — the app-wide "c" shortcut and the command
     // palette both allow this. `openTicket` alone never touched nav, so the
     // ticket detail it promises never rendered.
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
 
     store.getState().openTicketWorkspace("project-a", "ticket-1");
 
@@ -538,7 +548,7 @@ describe("openTicketSession", () => {
     useSessionsStore.getState().setActivePane("ticket-1", "session-1", "session-1");
 
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
     store.getState().openTicketSession("project-a", "ticket-1", "session-1", "session-2");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
@@ -1494,7 +1504,7 @@ describe("Home file workspace", () => {
   it("previews a file as an active Home tab and records the tab it came from", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:one");
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
 
     store.getState().previewHomeFile("project-a", "src/app.ts");
 
@@ -1605,7 +1615,7 @@ describe("Home file workspace", () => {
 
   it("falls back to Board when a restored file has no surviving visit history", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().previewProjectFile("project-a", "one.ts");
+    store.getState().previewHomeFile("project-a", "one.ts");
     store.getState().setHomeActiveTab("project-a", "file:one.ts");
     // Model the session-only history being absent after a relaunch.
     store.setState((state) => ({
@@ -1621,10 +1631,10 @@ describe("Home file workspace", () => {
   });
 });
 
-describe("project file workspace", () => {
-  it("previewProjectFile opens a preview tab for that project only", () => {
+describe("Home file workspace (browse/pin/activate)", () => {
+  it("previewHomeFile opens a preview tab for that project only", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().previewProjectFile("project-a", "src/app.ts");
+    store.getState().previewHomeFile("project-a", "src/app.ts");
 
     expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
       tabs: [{ relPath: "src/app.ts", pinned: false }],
@@ -1635,10 +1645,10 @@ describe("project file workspace", () => {
 
   it("preview replaces the preview slot in place while a pinned tab is appended past", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().previewProjectFile("project-a", "one.ts");
-    store.getState().pinProjectFile("project-a", "one.ts");
-    store.getState().previewProjectFile("project-a", "two.ts");
-    store.getState().previewProjectFile("project-a", "three.ts");
+    store.getState().previewHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().previewHomeFile("project-a", "two.ts");
+    store.getState().previewHomeFile("project-a", "three.ts");
 
     expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
       tabs: [
@@ -1651,9 +1661,9 @@ describe("project file workspace", () => {
 
   it("markProjectFileEdited promotes the preview tab so the next preview appends", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().previewProjectFile("project-a", "one.ts");
+    store.getState().previewHomeFile("project-a", "one.ts");
     store.getState().markProjectFileEdited("project-a", "one.ts");
-    store.getState().previewProjectFile("project-a", "two.ts");
+    store.getState().previewHomeFile("project-a", "two.ts");
 
     expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
       { relPath: "one.ts", pinned: true },
@@ -1661,23 +1671,43 @@ describe("project file workspace", () => {
     ]);
   });
 
-  it("activateProjectFile focuses an open tab and ignores a path that is not open", () => {
+  it("markProjectFileEdited is a no-op once the tab is already pinned (safe on every keystroke)", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().pinProjectFile("project-a", "one.ts");
-    store.getState().pinProjectFile("project-a", "two.ts");
+    store.getState().pinHomeFile("project-a", "one.ts");
+    const before = store.getState().byProject["project-a"];
 
-    store.getState().activateProjectFile("project-a", "one.ts");
+    store.getState().markProjectFileEdited("project-a", "one.ts");
+
+    expect(store.getState().byProject["project-a"]).toBe(before);
+  });
+
+  it("markProjectFileEdited does nothing for a project with no workspace record and no open tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+
+    store.getState().markProjectFileEdited("project-never-seen", "one.ts");
+
+    // No open tab to attach a dirty flag to, so this must not conjure a
+    // record into existence for a project nothing has touched yet.
+    expect(store.getState().byProject["project-never-seen"]).toBeUndefined();
+  });
+
+  it("activateHomeFile focuses an open tab and ignores a path that is not open", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+
+    store.getState().activateHomeFile("project-a", "one.ts");
     expect(store.getState().byProject["project-a"]?.projectFiles.activeRelPath).toBe("one.ts");
 
-    store.getState().activateProjectFile("project-a", "never-opened.ts");
+    store.getState().activateHomeFile("project-a", "never-opened.ts");
     expect(store.getState().byProject["project-a"]?.projectFiles.activeRelPath).toBe("one.ts");
   });
 
   it("setProjectFileViewState keeps one opaque view state per relPath, per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().pinProjectFile("project-a", "one.ts");
-    store.getState().pinProjectFile("project-a", "two.ts");
-    store.getState().pinProjectFile("project-b", "one.ts");
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+    store.getState().pinHomeFile("project-b", "one.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
     store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
     store.getState().setProjectFileViewState("project-b", "one.ts", { cursor: 1 });
@@ -1692,14 +1722,14 @@ describe("project file workspace", () => {
     });
   });
 
-  it("closeProjectFile closes the tab and drops its persisted view state", () => {
+  it("closeHomeFile closes the tab and drops its persisted view state", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().pinProjectFile("project-a", "one.ts");
-    store.getState().pinProjectFile("project-a", "two.ts");
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
     store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
 
-    store.getState().closeProjectFile("project-a", "one.ts");
+    store.getState().closeHomeFile("project-a", "one.ts", []);
 
     expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
       tabs: [{ relPath: "two.ts", pinned: true }],
@@ -1714,15 +1744,15 @@ describe("project file workspace", () => {
 
   it("setProjectFileViewState ignores a path with no open tab, so a close cannot be undone", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().pinProjectFile("project-a", "one.ts");
-    store.getState().pinProjectFile("project-a", "two.ts");
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
-    store.getState().closeProjectFile("project-a", "one.ts");
+    store.getState().closeHomeFile("project-a", "one.ts", []);
 
     // The closing tab's editor unmounts AFTER the close and emits one last view
     // state for the path it was showing. Accepting it would re-insert the entry
     // the close just pruned, and it would then survive all session (only the
-    // rehydrate sanitizer prunes orphans) — the unbounded growth closeProjectFile
+    // rehydrate sanitizer prunes orphans) — the unbounded growth closeHomeFile
     // exists to prevent.
     const before = store.getState().byProject["project-a"];
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
@@ -1739,13 +1769,13 @@ describe("project file workspace", () => {
     expect(store.getState().byProject["unknown-project"]).toBeUndefined();
   });
 
-  it("closeProjectFile leaves the record untouched for a file that is not open", () => {
+  it("closeHomeFile leaves the record untouched for a file that is not open", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().pinProjectFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
     const before = store.getState().byProject["project-a"];
 
-    store.getState().closeProjectFile("project-a", "never-opened.ts");
+    store.getState().closeHomeFile("project-a", "never-opened.ts", []);
 
     // Identity, not just equality: closing something that was never open must
     // not churn the record, or every stray close would notify subscribers and
@@ -1754,18 +1784,18 @@ describe("project file workspace", () => {
 
     // Same for a project with no record at all — a close racing a project
     // removal must not conjure one back into the map.
-    store.getState().closeProjectFile("project-never-seen", "one.ts");
+    store.getState().closeHomeFile("project-never-seen", "one.ts", []);
     expect(store.getState().byProject["project-never-seen"]).toBeUndefined();
   });
 });
 
-describe("project file workspace persistence", () => {
+describe("Home file workspace persistence", () => {
   it("rehydrates tabs, order, pinned flags, and the active tab across a relaunch", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
-    store.getState().pinProjectFile("project-a", "src/one.ts");
-    store.getState().previewProjectFile("project-a", "src/two.ts");
-    store.getState().activateProjectFile("project-a", "src/one.ts");
+    store.getState().pinHomeFile("project-a", "src/one.ts");
+    store.getState().previewHomeFile("project-a", "src/two.ts");
+    store.getState().activateHomeFile("project-a", "src/one.ts");
 
     const rehydrated = createWorkspaceStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.projectFiles).toEqual({
@@ -1780,7 +1810,7 @@ describe("project file workspace persistence", () => {
   it("round-trips a tab's Monaco view state through persistence", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
-    store.getState().pinProjectFile("project-a", "src/one.ts");
+    store.getState().pinHomeFile("project-a", "src/one.ts");
     store.getState().setProjectFileViewState("project-a", "src/one.ts", {
       cursorState: [{ position: { lineNumber: 12, column: 3 } }],
       viewState: { scrollTop: 240 },
@@ -1798,8 +1828,8 @@ describe("project file workspace persistence", () => {
   it("persists tab identities and view state only — never file contents", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
-    store.getState().pinProjectFile("project-a", "src/one.ts");
-    store.getState().previewProjectFile("project-a", "src/two.ts");
+    store.getState().pinHomeFile("project-a", "src/one.ts");
+    store.getState().previewHomeFile("project-a", "src/two.ts");
     store.getState().setProjectFileViewState("project-a", "src/one.ts", { scrollTop: 40 });
 
     const raw = storage.getItem("volli:workspace")!;
@@ -1824,9 +1854,9 @@ describe("project file workspace persistence", () => {
   it("drops the project's record again once its last file tab is closed", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
-    store.getState().previewProjectFile("project-a", "src/one.ts");
+    store.getState().previewHomeFile("project-a", "src/one.ts");
     store.getState().setProjectFileViewState("project-a", "src/one.ts", { scrollTop: 40 });
-    store.getState().closeProjectFile("project-a", "src/one.ts");
+    store.getState().closeHomeFile("project-a", "src/one.ts", []);
 
     const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
       state: { byProject: Record<string, unknown> };
@@ -1936,19 +1966,17 @@ describe("project file workspace persistence", () => {
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
-    store.getState().setDirExpanded("project-a", "/a/src", true);
+    store.getState().setNav("project-a", "configure");
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
-    store.getState().previewProjectFile("project-a", "src/app.ts");
+    store.getState().previewHomeFile("project-a", "src/app.ts");
     store.getState().setProjectFileViewState("project-a", "src/app.ts", { cursor: 3 });
     store.getState().forget("project-a");
 
     expect(store.getState().byProject["project-a"]).toBeUndefined();
     expect(store.getState().byProject["project-a"] ?? DEFAULT_WORKSPACE_UI).toEqual({
       nav: "home",
-      expandedDirs: [],
       expandedSessionGroups: [],
       boardView: "board",
       boardSort: DEFAULT_TICKET_SORT,
@@ -1964,14 +1992,14 @@ describe("forget", () => {
 
   it("leaves other projects untouched and is a no-op for unknown ids", () => {
     const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().setNav("project-a", "files");
+    store.getState().setNav("project-a", "configure");
 
     const before = store.getState().byProject;
     store.getState().forget("never-added");
     expect(store.getState().byProject).toBe(before);
 
     store.getState().forget("project-b");
-    expect(store.getState().byProject["project-a"]?.nav).toBe("files");
+    expect(store.getState().byProject["project-a"]?.nav).toBe("configure");
   });
 });
 
@@ -1980,7 +2008,7 @@ describe("persistence", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
     store.getState().setBoardView("project-a", "list");
-    store.getState().setNav("project-b", "files"); // session-only change → record stays default-valued
+    store.getState().setNav("project-b", "configure"); // session-only change → record stays default-valued
 
     const raw = storage.getItem("volli:workspace");
     expect(raw).not.toBeNull();
@@ -2000,13 +2028,12 @@ describe("persistence", () => {
     ]);
   });
 
-  it("rehydrates view + sort + open ticket while nav and expandedDirs reset to the defaults", () => {
+  it("rehydrates view + sort + open ticket while nav resets to the default", () => {
     const storage = createMemoryStorage();
     const store = createWorkspaceStore(storage);
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
-    store.getState().setNav("project-a", "files");
-    store.getState().setDirExpanded("project-a", "/a/src", true);
+    store.getState().setNav("project-a", "configure");
     useBoardStore.setState({ selectedByProject: {} }); // openTicket's board-store side effect, reset afterward
     store.getState().openTicket("project-a", "ticket-1");
     useBoardStore.setState({ selectedByProject: {} });
@@ -2017,7 +2044,6 @@ describe("persistence", () => {
     expect(ui?.boardSort).toEqual({ key: "priority", direction: "desc" });
     expect(ui?.openTicketId).toBe("ticket-1");
     expect(ui?.nav).toBe("home");
-    expect(ui?.expandedDirs).toEqual([]);
   });
 
   it("restores the open ticket across a restart (openTicket → reload)", () => {
@@ -2155,13 +2181,13 @@ describe("navHistory", () => {
   it("records organic navigations and steps back/forward over them", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().recordNav(snap("a"));
-    store.getState().recordNav(snap("a", "files"));
+    store.getState().recordNav(snap("a", "configure"));
     store.getState().recordNav(snap("b"));
 
-    expect(store.getState().stepNavBack()).toEqual(snap("a", "files"));
+    expect(store.getState().stepNavBack()).toEqual(snap("a", "configure"));
     expect(store.getState().stepNavBack()).toEqual(snap("a"));
     expect(store.getState().stepNavBack()).toBeNull();
-    expect(store.getState().stepNavForward()).toEqual(snap("a", "files"));
+    expect(store.getState().stepNavForward()).toEqual(snap("a", "configure"));
   });
 
   it("stepNavForward returns null and leaves history unchanged when the forward stack is empty", () => {
