@@ -529,15 +529,14 @@ export default function VolliDemo() {
             </DemoRailChip>
           </aside>
 
-          {/* Home / Files / Configure, with Settings in the footer — the nav the
-              app actually ships (sidebar/nav-list.tsx). There is no Sessions
-              page: chats are tabs inside Home. */}
+          {/* Home / Configure, with Settings in the footer — the nav the app
+              actually ships (sidebar/nav-list.tsx). There is no Sessions page
+              and no Files page: chats are tabs inside Home, and main-checkout
+              files are File tabs beside them, opened from Home's own Files
+              navigator (VC-121/VC-122). */}
           <aside className="demo-nav-rail" aria-hidden="true">
             <DemoNavChip label="Home" active>
               <HouseIcon />
-            </DemoNavChip>
-            <DemoNavChip label="Files">
-              <FolderIcon />
             </DemoNavChip>
             <DemoNavChip label="Configure">
               <SlidersIcon />
@@ -1062,14 +1061,6 @@ function TerminalIcon() {
     <SvgIcon>
       <rect x="3" y="5" width="18" height="14" rx="2" />
       <path d="m7 10 3 2-3 2M13 15h4" />
-    </SvgIcon>
-  );
-}
-
-function FolderIcon() {
-  return (
-    <SvgIcon>
-      <path d="M3 7.5h7l2-2h9v13H3z" />
     </SvgIcon>
   );
 }

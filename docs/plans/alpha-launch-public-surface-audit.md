@@ -23,7 +23,7 @@ policy.
 | Landing page foregrounds Pi/terminal over chat-first Home | **Fixed.** Hero leads with the outcome; Pi and terminal detail moved below. |
 | Docs missing current install and first-run path | **Fixed** (no screenshots — see below). |
 | Docs missing current quickstart | **Fixed** (no screenshots — see below). |
-| Demo nav says Board / Sessions / Files / Settings | **Fixed.** Home / Files / Configure, Settings in the footer, Home tab strip with its permanent Board tab. |
+| Demo nav says Board / Sessions / Files / Settings | **Fixed.** Home / Configure, Settings in the footer, Home tab strip with its permanent Board tab. (Originally landed as Home / Files / Configure; VC-122 then retired the Files nav row, and the demo followed.) |
 | Demo presents a terminal as the primary experience | **Fixed.** Structured chat with model and effort chips; terminal named as the optional companion. |
 | Demo mixes Pi wording with Claude styling and internal ticket names | **Fixed.** Brand-ambiguous classes and glyphs removed; board now shows an ordinary team's tickets. |
 | README says "does not have a packaged release yet" | **Fixed.** |
