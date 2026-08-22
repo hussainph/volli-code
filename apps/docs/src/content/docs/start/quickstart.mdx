@@ -1,114 +1,111 @@
 ---
-title: Quickstart
-description: Add a project, shape an idea into tickets with a chat, run one in an isolated worktree, and read the change it produced.
+title: Run your first coding task
+description: Turn a rough idea into focused tasks, run one task in an isolated worktree, and inspect the change it produces.
 sidebar:
   label: Quickstart
 ---
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-By the end of this page you will have added a project, turned a loose idea into
-tickets with a chat, run one ticket in its own isolated worktree, and read the
-change it produced.
+By the end of this tutorial, you will turn a rough idea into focused tasks, run
+an agent on one task, and inspect the change before you deliver it.
 
-You need Volli [installed](/start/install/), a git repository on disk, and about
-fifteen minutes.
+In Volli, a task is a **ticket**. You need Volli [installed](/start/install/), a
+git repository on disk, and about fifteen minutes.
 
-## 1. Meet Home
+## Add a project
 
-A project opens on **Home**, a tabbed workspace. The first tab is the **Board**
-and it never closes; chats and files open as tabs beside it.
+In the project rail, select **+**, then choose a git repository. That folder
+becomes the project's main checkout. Volli derives a ticket prefix from the
+folder name. A folder called `harbor` gets tickets such as `HB-1` and `HB-2`.
 
-![Home's permanent Board tab for a project named voltaic. Five columns hold tickets, and the Chat control is available at the right of the tab strip.](../../../assets/screenshots/board.png)
+The project opens on **Home**, a tabbed workspace. Its permanent **Board** tab
+organizes tasks. Project chats and files open as tabs beside it.
 
-<Aside type="note" title="If you haven't added a project yet">
-  Select **+** in the project rail and choose a git repository. That folder is
-  the project's main checkout. Volli derives a ticket prefix from the folder
-  name. A folder called `harbor` gives you `HB-1`, `HB-2`, and so on.
-</Aside>
+![Home for a project named voltaic. Its permanent Board tab organizes tasks in five columns, and the Chat control starts a project chat.](../../../assets/screenshots/board.png)
 
-## 2. Start a project chat
+## Turn an idea into tasks
 
 <Steps>
 
-1. **Press Chat** on Home's tab strip.
+1. **On Home, select Chat.**
 
-   This starts a *project chat*, working from your main checkout.
+   This starts a *project chat* in your main checkout.
 
-2. **Describe what you want, loosely.**
+2. **Describe the goal in broad terms.**
 
-   A project chat is the right place to be vague:
+   Use a project chat when you want help shaping the work:
 
    > We need to move billing off the nightly job and onto Stripe webhooks. Break
-   > that into tickets for me.
+   > this into tasks for me.
 
-3. **Switch to the Board tab.**
+3. **Return to Board.**
 
-   A project chat can create and edit tickets. Watch them land.
+   A project chat can create and edit tickets. Review the tasks it created and
+   adjust them before you start work.
 
 </Steps>
 
-<Aside type="tip">
-  The difference between the two is scope. A project chat sees your main checkout
-  and the whole board, which is what you want when the work isn't shaped yet. A
-  ticket chat sees one ticket and works in that ticket's own checkout.
-</Aside>
+A project chat sees your main checkout and the whole board. Use it when the
+work is not shaped yet. A ticket chat works on one task in that task's isolated
+checkout.
 
-## 3. Write the ticket body
+## Write a task brief
 
-Open a ticket from the board.
+On the Board, open a task. It opens a ticket workspace.
 
-The first tab is its **body**. Write what should change, what must not, and how
-you will judge the result.
+The first tab is its **Ticket Body**. Write what must change, what must not
+change, and how you will judge the result. This brief is the starting context
+for every chat on the ticket.
 
-This is the starting context for every chat on the ticket. Anything vague here
-comes back as a vague change later.
+![A ticket workspace for VLT-14. Its Ticket Body holds the task brief, and the workspace shows the worktree, review state, and Chat control.](../../../assets/screenshots/ticket-workspace.png)
 
-![A ticket workspace for VLT-14. The Ticket Body holds the scope, the right rail shows the ticket's worktree and review state, and Chat is available at the top right.](../../../assets/screenshots/ticket-workspace.png)
-
-## 4. Start a ticket chat
+## Run a task
 
 <Steps>
 
-1. **Press Chat inside the ticket.**
+1. **Inside the ticket, select Chat.**
 
-   Volli prepares the ticket's isolated git worktree and starts a chat that
-   already carries the ticket body and the ticket's resolved context.
+   Volli prepares the ticket's isolated git worktree and starts a chat with the
+   ticket body and resolved context.
 
-2. **Watch it work, and answer it.**
+2. **Answer questions as the agent works.**
 
-   When it needs a decision, it asks instead of guessing. Interrupt it whenever
-   you want.
+   When the agent needs a decision, it asks. You can interrupt it at any time.
 
-3. **Leave and come back.**
+3. **Return to the chat later.**
 
    Close the tab or quit the app. Reopen the chat from the ticket's **Chats**
-   rail, the sidebar, or <kbd>⌘K</kbd>, with its history intact.
+   rail, the sidebar, or <kbd>⌘K</kbd>. Its history remains available.
 
 </Steps>
 
-<Aside type="note" title="Moving a ticket does not start anything">
-  Dragging a ticket to **Doing** organizes your board. It does not start a chat.
-  Starting work is always an explicit press of **Chat**.
+For independent tasks, repeat this process from each ticket. Each task uses its
+own worktree and branch, so their changes stay separate while agents work in
+parallel.
+
+<Aside type="note" title="Moving a ticket does not start work">
+  Moving a ticket to **Doing** organizes the board. Start work by selecting
+  **Chat** inside the ticket.
 </Aside>
 
-## 5. Read what changed
+## Review the change
 
-The ticket worked in its own git worktree, on its own branch, beside your main
-checkout rather than in it.
+The task worked in its own git worktree and branch, separate from your main
+checkout.
 
 - **Changes** shows the change set against the base branch.
-- **Files** opens the ticket's files as they are in the worktree.
+- **Files** opens the task's files as they are in the worktree.
 
-Read the change yourself. Volli shows you what happened; it does not certify the
-work is correct or run your tests for you.
+Read the change yourself. Volli shows you what happened, but it does not certify
+that the work is correct or run your tests for you.
 
-## 6. Deliver it
+## Deliver the task
 
-Commit, push, and open a pull request from the ticket's repository summary, then
-move the ticket. Clean up its worktree from the same place when you're done.
+Commit, push, and open a pull request from the ticket's repository summary.
+Then move the ticket and clean up its worktree when you are done.
 
-## Using a terminal instead
+## Optional: Use a terminal
 
 To drive a CLI yourself, open the caret beside **Chat** and choose **Terminal**.
 You get a shell in the ticket's worktree for Claude Code, Codex, OpenCode, or
@@ -120,21 +117,21 @@ your own TUI. Volli never opens one as a fallback.
   <LinkCard
     title="The board"
     href="/guides/board/"
-    description="Columns, priorities, filtering, and what the board does and doesn't control."
+    description="Columns, priorities, filtering, and what the board controls."
   />
   <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
-    description="The ticket's body, chats, files, and change set."
+    description="A task's brief, chats, files, and changes."
   />
   <LinkCard
-    title="Sessions and worktrees"
+    title="Chats and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="How chats, worktrees, and terminal companions relate."
+    description="Run project and task chats while keeping their branches separate."
   />
   <LinkCard
     title="Concepts"
     href="/start/concepts/"
-    description="Look up any term used across the app."
+    description="Look up the terms Volli uses in the app."
   />
 </CardGrid>

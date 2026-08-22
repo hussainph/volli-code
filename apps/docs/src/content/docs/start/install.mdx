@@ -1,14 +1,17 @@
 ---
 title: Install Volli Code
-description: Install the Volli Code alpha on an Apple silicon Mac, choose a model, and start your first chat.
+description: Install the Volli Code alpha on an Apple silicon Mac, choose a model, and run your first coding task.
 sidebar:
   label: Install
 ---
 
 import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-Volli Code is a local-first macOS workspace for code projects. Install it, pick
-a model, and start your first chat.
+Volli Code is a local-first macOS workspace for parallel coding agents. Install
+it, add a project, choose a model, and start your first chat.
+
+In Volli, a task is a **ticket**. You can create tasks yourself or use an agent
+to help turn a broad idea into focused work.
 
 <Aside type="caution" title="This is an alpha">
   Volli Code is in early alpha. Builds are published as prereleases, features
@@ -41,15 +44,15 @@ download that release's `.dmg` from
 [GitHub Releases](https://github.com/hussainph/volli-code/releases) and replace
 the app in Applications.
 
-## First run
+## Start your first chat
 
 <Steps>
 
 1. **Add a project.**
 
-   Select **+** in the project rail and pick a git repository. That folder
+   In the project rail, select **+**, then choose a git repository. That folder
    becomes the project's main checkout. Volli derives a ticket prefix from the
-   folder name, so a project called `harbor` gets tickets like `HB-1`.
+   folder name, so a project called `harbor` gets tickets such as `HB-1`.
 
 2. **Choose a model.**
 
@@ -58,23 +61,23 @@ the app in Applications.
 
 3. **Start a chat.**
 
-   Press **Chat**. On **Home**, that starts a project chat working from your
-   main checkout. Inside a ticket, it starts a ticket chat carrying that
-   ticket's body and scoped context.
+   Select **Chat**. On **Home**, this starts a project chat in your main
+   checkout. Use it to shape a broad idea or create tasks. Inside a ticket,
+   **Chat** starts a ticket chat with the task's brief and scoped context.
 
 </Steps>
 
-Continue with the [Quickstart](/start/quickstart/) for the full path from an
-empty board to a reviewed change.
+Continue with the [Quickstart](/start/quickstart/) to turn an idea into tasks,
+run one task, and inspect the change.
 
 ## Chats and terminals
 
-A **chat** is Volli's structured session, running on the model you picked in
-Model Access. It's what **Chat** starts.
+A **chat** is Volli's built-in way to run an agent. Use a project chat to plan
+broad work. Use a ticket chat when one task is ready to implement.
 
 A **terminal** is a manual companion: a shell in the ticket's worktree where you
-drive Claude Code, Codex, OpenCode, or your own TUI. It's under the caret beside
-**Chat**, and you ask for it explicitly. Volli never opens one as a fallback.
+drive Claude Code, Codex, OpenCode, or your own TUI. Open it from the caret
+beside **Chat**. Volli never opens one as a fallback.
 
 ## The `volli` CLI
 
@@ -173,12 +176,12 @@ Node `^24.13.0`, and pnpm `11.10.0`. The repository pins both versions.
   <LinkCard
     title="Quickstart"
     href="/start/quickstart/"
-    description="Go from an empty board to a reviewed change."
+    description="Turn a rough idea into tasks, run an agent on one, and inspect the change."
   />
   <LinkCard
     title="Concepts"
     href="/start/concepts/"
-    description="The terms Volli uses for Home, tickets, chats, and worktrees."
+    description="Translate task, chat, branch, and review into Volli's UI terms."
   />
   <LinkCard
     title="Troubleshooting"

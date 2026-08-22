@@ -744,9 +744,9 @@ function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
         <span className="demo-doc-id">{ticket.code}</span>
         <h2 id="demo-preview-title">{ticket.title}</h2>
         <p>
-          Write the outcome, the constraints, and how you&rsquo;ll judge the result. This body is
-          what a chat on this ticket starts with — and when the work needs a checkout of its own,
-          the ticket gets an isolated worktree rather than taking over your main one.
+          Write the outcome, the constraints, and how you&rsquo;ll judge the result. This brief is
+          what an agent chat on this task starts with. When the work needs a checkout of its own,
+          the task gets an isolated worktree rather than taking over your main one.
         </p>
         <div className="demo-doc-section">
           <strong>Acceptance criteria</strong>
@@ -792,7 +792,7 @@ function ChatPreview({ ticket, review }: { ticket: DemoTicket; review: boolean }
               <BranchIcon /> {branchName(ticket)}
             </span>
           </div>
-          <span className="demo-chat-scope">Ticket chat</span>
+          <span className="demo-chat-scope">Task chat</span>
         </div>
 
         <div className="demo-chat-thread">
@@ -804,8 +804,8 @@ function ChatPreview({ ticket, review }: { ticket: DemoTicket; review: boolean }
           <div className="demo-chat-turn is-agent">
             <span className="demo-chat-author">Volli</span>
             <p>
-              The ticket body and this project&rsquo;s instructions are attached. I&rsquo;ll work in
-              the ticket&rsquo;s worktree and leave the change for you to read.
+              This task&rsquo;s brief and the project&rsquo;s instructions are attached. I&rsquo;ll
+              work in an isolated worktree and leave the change for you to read.
             </p>
             <div className="demo-chat-steps">
               <span>
@@ -907,8 +907,8 @@ function DonePreview({ ticket }: { ticket: DemoTicket }) {
       <span className="demo-doc-id">{ticket.code}</span>
       <h2 id="demo-preview-title">{ticket.title}</h2>
       <p>
-        The ticket keeps its chats, its change set, its branch, and the trail of how it got here —
-        all in one place you can reopen later.
+        The task keeps its chats, changes, branch, and the trail of how it got here in one place you
+        can reopen later.
       </p>
       <div className="demo-delivery-summary">
         <span>

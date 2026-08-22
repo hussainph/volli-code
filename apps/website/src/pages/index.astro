@@ -1,6 +1,5 @@
 ---
 import "@fontsource-variable/mona-sans/wght.css";
-import MorphingText from "../components/MorphingText";
 import LifecycleAccordion from "../components/LifecycleAccordion.astro";
 import VolliDemo from "../components/VolliDemo";
 import "../styles/global.css";
@@ -10,7 +9,7 @@ const releasesUrl = `${repositoryUrl}/releases`;
 const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
 const description =
-  "A local-first macOS workspace for Tickets, structured chats, isolated Git worktrees, and live code review.";
+  "A local-first macOS workspace for planning parallel coding work, running coding agents, and reviewing every change.";
 ---
 
 <!doctype html>
@@ -22,14 +21,14 @@ const description =
     <link rel="canonical" href="https://volli.app/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://volli.app/" />
-    <meta property="og:title" content="Volli Code | Plan and run coding agents" />
+    <meta property="og:title" content="Volli Code | The workspace for parallel coding agents" />
     <meta property="og:description" content={description} />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Volli Code | Plan and run coding agents" />
+    <meta name="twitter:title" content="Volli Code | The workspace for parallel coding agents" />
     <meta name="twitter:description" content={description} />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli Code | Plan and run coding agents</title>
+    <title>Volli Code | The workspace for parallel coding agents</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -52,22 +51,10 @@ const description =
           whether their Mac is supported before meeting an interactive fake UI. */}
       <section class="hero" id="top">
         <span class="alpha-pill">Alpha · Apple silicon</span>
-        <h1 class="hero-headline">
-          <span class="headline-lead">The ticket is</span>
-          <MorphingText
-            client:load
-            texts={[
-              "the plan",
-              "the starting context",
-              "a focused workspace",
-              "the review surface",
-              "the project history",
-            ]}
-          />
-        </h1>
+        <h1 class="hero-headline">The workspace for parallel coding agents.</h1>
         <p class="hero-lede">
-          Plan work in tickets, start project or ticket chats with the right context, keep
-          implementation in isolated Git worktrees, and review every change before it reaches main.
+          Turn a rough idea into focused tasks yourself or with an agent. Run them in parallel and
+          keep every chat, branch, and change in one place.
         </p>
 
         <div class="cta-row hero-cta">
@@ -103,7 +90,8 @@ const description =
         <VolliDemo client:load />
         {/* Labelled illustrative, not a pixel-accurate capture (VC-64). */}
         <p class="hero-preview-label">
-          An illustration of the workflow, not a screenshot — drag a ticket or open one to explore.
+          An interactive illustration, not a screenshot. Open a task to follow its work from plan to
+          review.
         </p>
       </section>
 
@@ -114,24 +102,22 @@ const description =
           </div>
 
           <div class="statement-copy">
-            <h2 class="statement-headline">From Ticket to review</h2>
+            <h2 class="statement-headline">From idea to reviewed code</h2>
 
             <div class="body-copy">
               <p>
-                Home opens on the board, with project chats and Project Files as tabs beside it.
-                Plan the work in a Ticket, then start a project or Ticket chat with its context and
-                history intact.
+                Start with a rough idea. Create focused tasks yourself, or ask an agent to help break
+                the work down. The board keeps every task visible while you decide what moves forward.
               </p>
               <p>
-                When a Ticket needs implementation, its Git worktree stays an explicit, isolated
-                checkout&mdash;not a replacement for the Ticket itself. Inspect the live Change Set
-                beside the chat history that produced it.
+                Start an agent chat for each task that is ready to implement. Volli gives the task its
+                own Git worktree and branch, so independent work stays out of your main checkout.
               </p>
               <p>
-                Pi powers Volli’s structured runtime, using the model you choose in <a
-                  href={`${docsUrl}/guides/settings/`}>Model Access</a
-                >. External and bring-your-own CLI harnesses stay available as manual terminal
-                companions, while the board, chats, and review remain a coherent product surface.
+                When a task is ready for review, return to its chat, files, and changes. Choose a
+                model in <a href={`${docsUrl}/guides/settings/`}>Model Access</a>, inspect the work,
+                and open Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal when
+                you want to drive it yourself.
               </p>
             </div>
 

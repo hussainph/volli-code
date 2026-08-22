@@ -5,7 +5,7 @@
 <h1 align="center">Volli Code</h1>
 
 <p align="center">
-  A local-first macOS workspace for code projects: a ticket board, chats that carry your project or ticket context, isolated Git worktrees, and changes you review.
+  A local-first macOS workspace for parallel coding agents. Turn rough ideas into focused tasks yourself or with an agent, run them in parallel, and review every change in one place.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 <p align="center">
   <img
     src="apps/docs/src/assets/screenshots/board.png"
-    alt="Volli Code's Home Board tab with five ticket columns and a Chat control."
+    alt="Volli Code's Home Board tab with five task columns and a Chat control."
     width="1200"
   />
 </p>
@@ -35,14 +35,16 @@ Download the current build from [volli.app/download](https://volli.app/download/
 
 The [installation guide](https://docs.volli.app/start/install/) covers first run, where your data lives, and how to uninstall cleanly.
 
-## From ticket to review
+## From idea to reviewed code
 
-`ticket → chat → worktree → change set → review`
+`idea → tasks → agent chats → branches → review`
 
-- Plan scope, constraints, and what a good result looks like in a local ticket board.
-- Start a chat that already has the context: a project chat works from your main checkout, a ticket chat from that ticket's isolated Git worktree.
-- Read the live change set beside the chat history that produced it — you review it, Volli does not certify it.
-- Open Claude Code, Codex, OpenCode, or a custom TUI in an embedded terminal when you want a manual companion. It is never a silent fallback for a chat.
+In Volli, a task is a ticket.
+
+- Turn a rough idea into focused tasks yourself, or ask an agent to help break the work down.
+- Start an agent chat for each task. Each ticket gets its own context and isolated Git worktree, so independent work stays separate.
+- Return to a task's chat, branch, files, and changes when it is ready. Read the change before you move it forward.
+- Open Claude Code, Codex, OpenCode, or a custom TUI in an embedded terminal when you want to drive it yourself.
 
 Projects, tickets, and chat history stay on your machine. Model requests go to the provider you select through Model Access.
 

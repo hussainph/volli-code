@@ -1,20 +1,19 @@
 ---
 title: The board
-description: What each of Volli's five columns means, how tickets move, and how deliberate moves interact with Session activity.
+description: Organize coding tasks on Volli's five-column board and understand how work moves.
 sidebar:
   label: The board
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli's board has five fixed columns, and you can't add, rename, or remove
-them. They record the state of a ticket. Starting a Session is a separate
-action inside the ticket workspace.
-![Home's permanent Board tab for a project named voltaic. Five columns (Backlog,
-Todo, Doing, Needs Review, and Done) hold twenty-four tickets. The Doing
-column contains ticket VLT-14, "Cache composer drafts per project", tagged
-composer and renderer.](../../../assets/screenshots/board.png)
+The board is where you organize tasks. In Volli, each task is a ticket. Its
+five fixed columns show the ticket's state. Start a chat separately from the
+ticket workspace.
 
+![Home for a project named voltaic. Five columns (Backlog, Todo, Doing, Needs
+Review, and Done) hold twenty-four tasks. The Doing column contains VLT-14,
+"Cache composer drafts per project", tagged composer and renderer.](../../../assets/screenshots/board.png)
 
 ## The columns
 
@@ -24,7 +23,7 @@ runs here.
 **Todo.** Work you intend to do next. Nothing runs here either.
 
 **Doing.** Work is active. Move a ticket here when implementation starts, then
-open its workspace to start or return to a Session.
+open its workspace to start or return to a chat.
 
 **Needs Review.** The ticket is ready for you to inspect its Change Set and
 decide what happens next.
@@ -33,8 +32,8 @@ decide what happens next.
 retention period, it can reclaim a clean worktree folder when no pull request
 is open and no work is running there.
 
-The board records work state; it does not own Session lifetime. A Ticket
-Session stays openable after the ticket moves.
+The board records task state; it does not control chat lifetime. A ticket chat
+stays openable after the ticket moves.
 
 ## List view
 
@@ -193,9 +192,9 @@ automatically without surfacing an error toast.
 
 <CardGrid>
   <LinkCard
-    title="Sessions and worktrees"
+    title="Chats and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="How Sessions, worktrees, and terminal companions fit together."
+    description="How agent chats, worktrees, and terminal companions fit together."
   />
   <LinkCard
     title="CLI reference"

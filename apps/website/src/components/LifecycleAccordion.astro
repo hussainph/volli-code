@@ -6,39 +6,39 @@ import FeatureGlyph from "./FeatureGlyph.astro";
 // Nothing here describes a feature that has not shipped.
 const items = [
   {
-    title: "Plan the ticket",
+    title: "Turn ideas into tasks",
     description:
-      "Write the scope, constraints, and what a good result looks like into the Ticket Body. That body becomes the starting context for any chat on the ticket.",
+      "Start with a rough goal. Create focused tasks yourself, or ask an agent to help break the work down.",
     illustration: "phases" as const,
   },
   {
-    title: "Start a chat that has the context",
+    title: "Give each task context",
     description:
-      "A project chat works from your main checkout — good for turning a loose idea into a set of tickets. A ticket chat opens with that ticket’s body and scoped workspace already attached.",
+      "Write the outcome, constraints, and review criteria before you start an agent. The task carries that context into its chat.",
     illustration: "agents" as const,
   },
   {
-    title: "Let ticket work run isolated",
+    title: "Run agents in parallel",
     description:
-      "When a ticket needs implementation, it gets its own Git worktree and branch — a separate checkout beside your main one, so the work stays off it until you decide otherwise.",
+      "Start a focused chat for each task. Volli gives every task its own Git worktree and branch, so each task works in a separate checkout.",
     illustration: "context" as const,
   },
   {
-    title: "Keep context and history",
+    title: "Return to the work",
     description:
-      "Chats keep their identity and their locally ordered history through reconnects and restarts. Reopen one later and the thread is still there.",
+      "Each task keeps its chat history. Leave, restart the app, and return to the same conversation later.",
     illustration: "context" as const,
   },
   {
-    title: "Inspect changes and review",
+    title: "Review each change",
     description:
-      "Read the ticket’s change set against its base branch, look at the files and the branch state, and move it forward when you’re satisfied — you decide, not the agent.",
+      "Inspect a task’s changes against its base branch, read the files, and decide when the work is ready to move forward.",
     illustration: "phases" as const,
   },
   {
-    title: "Open a terminal when you want one",
+    title: "Keep your TUI workflow",
     description:
-      "Run Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal, in the same worktree. It’s a companion you ask for explicitly, never a silent fallback.",
+      "Open Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal in the same worktree whenever you want to drive it yourself.",
     illustration: "parallel" as const,
   },
 ];

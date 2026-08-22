@@ -173,21 +173,6 @@ a:focus-visible {
   text-wrap: balance;
 }
 
-/* The morphing word is absolutely positioned inside its own line box, so the
-   headline needs both lines reserved whether or not a word is mid-swap. */
-.hero-headline .headline-lead {
-  display: block;
-}
-
-.hero-headline .morphing-text {
-  text-align: center;
-}
-
-.hero-headline .morphing-text__word {
-  right: 0;
-  text-align: center;
-}
-
 .hero-lede {
   max-width: 54ch;
   margin: 0 auto;
@@ -463,35 +448,6 @@ a:focus-visible {
   font-weight: 420;
   letter-spacing: -0.05em;
   line-height: 1.13;
-}
-
-.headline-lead {
-  display: block;
-  color: var(--text);
-  font-weight: 420;
-}
-
-.morphing-text {
-  position: relative;
-  display: block;
-  min-height: 1.16em;
-  color: var(--ember);
-  font-weight: 390;
-  isolation: isolate;
-  white-space: nowrap;
-}
-
-.morphing-text__word {
-  position: absolute;
-  inset: 0 auto auto 0;
-  display: block;
-  max-width: 100%;
-  will-change: filter, opacity;
-}
-
-.morphing-text__word--next {
-  opacity: 0;
-  filter: blur(80px);
 }
 
 .visually-hidden {
@@ -1107,9 +1063,5 @@ footer nav a:hover {
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
-  }
-
-  .morphing-text__word--next {
-    display: none;
   }
 }

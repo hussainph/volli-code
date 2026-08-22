@@ -1,12 +1,12 @@
 ---
 title: Volli Code
-description: "Documentation for Volli Code, a local-first macOS workspace for code projects: a ticket board, chats that carry your project or ticket context, isolated worktrees, and changes you review."
+description: "Documentation for Volli Code, a local-first macOS workspace for parallel coding agents."
 template: splash
 head:
   - tag: title
     content: Volli Code documentation
 hero:
-  tagline: Plan the work on a board, chat it through with the context it needs, and read what changed before it lands.
+  tagline: Turn ideas into focused tasks, run agents in parallel, and review every change in one place.
   actions:
     - text: Install Volli Code
       link: /start/install/
@@ -19,9 +19,14 @@ hero:
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli Code is a local-first macOS app for code projects. Projects, tickets, chat
-history, and worktrees stay on your machine. Volli itself needs no account. You
-sign in to a model provider through Model Access, and model requests go there.
+Volli Code is a local-first macOS workspace for parallel coding agents. Turn a
+rough idea into focused tasks yourself, or ask an agent to help break it down.
+Run independent tasks in parallel, then inspect their changes before you merge.
+
+In Volli, a task is a **ticket**. Each ticket keeps its brief, chat history,
+Git branch, and changes together. Projects, tickets, chat history, and
+worktrees stay on your machine. Volli itself needs no account. You sign in to a
+model provider through Model Access, and model requests go there.
 
 <Aside type="caution" title="Alpha">
   Volli Code is in early alpha, for Apple silicon Macs. Features move between
@@ -41,12 +46,12 @@ sign in to a model provider through Model Access, and model requests go there.
   <LinkCard
     title="Quickstart"
     href="/start/quickstart/"
-    description="Go from an empty board to a reviewed change."
+    description="Turn a rough idea into tasks, run an agent on one, and inspect the change."
   />
   <LinkCard
     title="Concepts"
     href="/start/concepts/"
-    description="The terms Volli uses for Home, tickets, chats, and worktrees."
+    description="Translate tasks, chats, branches, and review into Volli's UI terms."
   />
   <LinkCard
     title="CLI reference"
@@ -61,17 +66,17 @@ sign in to a model provider through Model Access, and model requests go there.
   <LinkCard
     title="Plan on the board"
     href="/guides/board/"
-    description="Home opens on the board: five fixed columns, and the ticket that needs you."
+    description="Organize tasks before and while agents work."
   />
   <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
-    description="A ticket's body, its chats, its files, and its change set."
+    description="A task's brief, chats, files, branch, and changes."
   />
   <LinkCard
-    title="Sessions and worktrees"
+    title="Chats and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="Project chats, ticket chats, isolated worktrees, and terminal companions."
+    description="Run project and task chats while keeping their branches separate."
   />
   <LinkCard
     title="Settings"
