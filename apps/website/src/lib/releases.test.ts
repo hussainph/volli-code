@@ -175,6 +175,23 @@ describe("primaryArtifact", () => {
     ]);
     expect(build && primaryArtifact(build)?.kind).toBe("zip");
   });
+
+  // resolveAlphaBuild never hands back an artifact-less build, so this build is
+  // constructed by hand. The case still has to answer: the signature promises
+  // `| null`, and download.astro marks its primary row by identity
+  // (`artifact === primary`). Returning undefined there would quietly make the
+  // comparison lie rather than say "nothing is primary".
+  it("returns null when the build has no artifacts", () => {
+    expect(
+      primaryArtifact({
+        version: "0.1.0-alpha.1",
+        releaseUrl: "https://github.com/hussainph/volli-code/releases/tag/v0.1.0-alpha.1",
+        publishedAt: null,
+        prerelease: true,
+        artifacts: [],
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("formatBytes", () => {
