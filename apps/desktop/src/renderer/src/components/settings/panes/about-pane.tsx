@@ -21,7 +21,7 @@ import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
 import { errorMessage, type DoctorCheck } from "@volli/shared";
 
-import { useHarnessListings } from "@renderer/components/pages/harness-picker";
+import { useHarnessListingsState } from "@renderer/components/pages/harness-picker";
 import {
   DetailLine,
   HealthPanel,
@@ -37,30 +37,49 @@ import { toastError } from "@renderer/lib/toast";
 import { cliStatusRows, type CliStatusRow } from "@renderer/components/pages/cli-status-model";
 
 import { buildAboutReport } from "./about-report";
-import { CopyReportDialog } from "./copy-report-dialog";
+import { CopyReportDialog, type CopyReportAvailability } from "./copy-report-dialog";
+
+type AboutFactStatus = CopyReportAvailability;
 
 export function AboutPane() {
-  const listings = useHarnessListings();
+  const harnesses = useHarnessListingsState();
+  const { listings } = harnesses;
   const projectCwd = useSelectedProject()?.path;
+  const statusScope = projectCwd ?? null;
   const [rows, setRows] = React.useState<readonly CliStatusRow[]>([]);
   const [checks, setChecks] = React.useState<readonly DoctorCheck[]>([]);
-  const [running, setRunning] = React.useState(false);
+  const [statusState, setStatusState] = React.useState<AboutFactStatus>("loading");
+  const [loadedStatusScope, setLoadedStatusScope] = React.useState<string | null | undefined>(
+    undefined,
+  );
+  const [doctorState, setDoctorState] = React.useState<AboutFactStatus>("loading");
   const statusFetch = useLatestAsync();
 
   const load = React.useCallback(async () => {
     const token = statusFetch.claim();
+    setStatusState("loading");
     try {
       const result = await window.api.cli.status(
         projectCwd === undefined ? undefined : { cwd: projectCwd },
       );
       if (!statusFetch.isCurrent(token)) return;
-      if (result.ok) setRows(cliStatusRows(result.status));
+      if (!result.ok) {
+        setLoadedStatusScope(statusScope);
+        setStatusState("unavailable");
+        toastError(`Couldn't check this install: ${result.error}`);
+        return;
+      }
+      setRows(cliStatusRows(result.status));
+      setLoadedStatusScope(statusScope);
+      setStatusState("ready");
     } catch (error) {
       if (statusFetch.isCurrent(token)) {
+        setLoadedStatusScope(statusScope);
+        setStatusState("unavailable");
         toastError(`Couldn't check this install: ${errorMessage(error)}`);
       }
     }
-  }, [projectCwd, statusFetch]);
+  }, [projectCwd, statusFetch, statusScope]);
 
   React.useEffect(() => {
     void load();
@@ -73,18 +92,19 @@ export function AboutPane() {
    * "fine" by default. `--fix` stays explicit — it writes.
    */
   const runDoctor = React.useCallback(async (fix: boolean) => {
-    setRunning(true);
+    setDoctorState("loading");
     try {
       const result = await window.api.cli.doctor({ fix });
       if (!result.ok) {
+        setDoctorState("unavailable");
         toastError(`Doctor couldn't run: ${result.error}`);
         return;
       }
       setChecks(result.checks);
+      setDoctorState("ready");
     } catch (error) {
+      setDoctorState("unavailable");
       toastError(`Doctor couldn't run: ${errorMessage(error)}`);
-    } finally {
-      setRunning(false);
     }
   }, []);
 
@@ -110,6 +130,19 @@ export function AboutPane() {
     () => buildAboutReport({ rows, checks, listings }),
     [checks, listings, rows],
   );
+  const scopedStatusState: AboutFactStatus =
+    loadedStatusScope === statusScope ? statusState : "loading";
+  const reportAvailability: CopyReportAvailability =
+    scopedStatusState === "unavailable" ||
+    doctorState === "unavailable" ||
+    harnesses.status === "unavailable"
+      ? "unavailable"
+      : scopedStatusState === "loading" ||
+          doctorState === "loading" ||
+          harnesses.status === "loading"
+        ? "loading"
+        : "ready";
+  const checking = reportAvailability === "loading";
   const healthy = faults.length === 0;
 
   return (
@@ -128,24 +161,25 @@ export function AboutPane() {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={running}
+                disabled={checking}
                 onClick={() => void runDoctor(true)}
               >
                 <WrenchIcon />
                 Fix
               </Button>
             ) : null}
-            <CopyReportDialog report={report} />
+            <CopyReportDialog report={report} availability={reportAvailability} />
             <Button
               size="sm"
               variant="outline"
-              disabled={running}
+              disabled={checking}
               onClick={() => {
+                harnesses.refresh();
                 void load();
                 void runDoctor(false);
               }}
             >
-              {running ? "Checking…" : "Re-check"}
+              {checking ? "Checking…" : "Re-check"}
             </Button>
           </div>
         }
