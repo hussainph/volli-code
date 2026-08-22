@@ -11,6 +11,8 @@
 // It lives in the app rather than in @volli/shared because a transport catalog
 // is knowledge of Electron, and that package is pure domain code.
 
+import type { ExternalAppId } from "../external-app-ids";
+
 import type {
   Appearance,
   ArchivedTicket,
@@ -365,16 +367,7 @@ export interface FilePathInput {
 }
 
 /** A known macOS app that can open a safely resolved Files target. */
-export type ExternalAppId =
-  | "vscode"
-  | "cursor"
-  | "zed"
-  | "xcode"
-  | "android-studio"
-  | "terminal"
-  | "iterm2"
-  | "ghostty"
-  | "warp";
+export type { ExternalAppId } from "../external-app-ids";
 
 export type ExternalAppKind = "editor" | "terminal";
 

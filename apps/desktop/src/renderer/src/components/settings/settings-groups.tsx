@@ -182,6 +182,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "zed",
             "open in…",
             "open in",
+            "open files in",
             "terminal",
             "external",
           ],
