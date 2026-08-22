@@ -6,6 +6,7 @@ import {
   validateUniquePrefix,
   projectColor,
   PROJECT_COLORS,
+  parseSessionModel,
 } from "./project-identity";
 
 describe("monogram", () => {
@@ -148,5 +149,28 @@ describe("PROJECT_COLORS / projectColor", () => {
 
   it("handles negative input defensively", () => {
     expect(projectColor(-1)).toBe(PROJECT_COLORS[1]);
+  });
+});
+
+describe("parseSessionModel", () => {
+  it("reads a complete stored model selection", () => {
+    expect(
+      parseSessionModel({ providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" }),
+    ).toEqual({ providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" });
+  });
+
+  it.each([
+    ["null", null],
+    ["a non-record", "openai/gpt-5"],
+    ["a missing provider", {}],
+    ["an empty provider", { providerId: "", modelId: "gpt-5", reasoningLevel: "high" }],
+    ["a non-string model", { providerId: "openai", modelId: 5, reasoningLevel: "high" }],
+    ["an empty model", { providerId: "openai", modelId: "", reasoningLevel: "high" }],
+    [
+      "an unknown reasoning level",
+      { providerId: "openai", modelId: "gpt-5", reasoningLevel: "beyond-max" },
+    ],
+  ])("drops %s", (_reason, value) => {
+    expect(parseSessionModel(value)).toBeNull();
   });
 });
