@@ -386,6 +386,39 @@ check(
   `${hintLengths.length} hints, longest ${longest}w`,
 );
 
+console.log("\n── audit #2 blocking fixes ──");
+
+/* B1 — every declared column width must survive the DOM. Grid syntax does not. */
+await surface("Settings").click();
+await page.waitForTimeout(500);
+await nav("Models").click();
+await page.waitForTimeout(500);
+const cols = await page.evaluate(() =>
+  [...document.querySelectorAll("colgroup col")].map((c) => ({
+    declared: c.getAttribute("style") ?? "",
+    width: Math.round(c.getBoundingClientRect().width || 0),
+  })),
+);
+check(
+  "B1 no column declares a width the browser drops",
+  cols.every((c) => c.declared === "" || /\d/.test(c.declared)),
+  cols.map((c) => c.declared || "(auto)").join(" | "),
+);
+
+/* B3 — a refusal is announceable even when the caller passes no id. */
+await nav("Storage").click();
+await page.waitForTimeout(400);
+const ttl2 = page.locator("#ttl");
+await ttl2.fill("0");
+await ttl2.blur();
+await page.waitForTimeout(300);
+const describedBy = await ttl2.getAttribute("aria-describedby");
+check(
+  "B3 the refusal is wired to the field it belongs to",
+  !!describedBy && (await page.locator(`#${describedBy}`).count()) === 1,
+  describedBy ?? "(none)",
+);
+
 check("no uncaught errors", thrown.length === 0, thrown.join("; "));
 
 await browser.close();

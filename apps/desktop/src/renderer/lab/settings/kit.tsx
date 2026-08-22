@@ -190,7 +190,9 @@ export function InfoHint({
           "w-auto max-w-64 p-2 text-ui text-muted-foreground",
           !interactive && "pointer-events-none",
         )}
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        // An interactive panel must let focus in, or its link is unreachable by
+        // keyboard: Tab from the trigger would skip straight past the panel.
+        onOpenAutoFocus={interactive ? undefined : (event) => event.preventDefault()}
         onMouseEnter={interactive ? cancelClose : undefined}
         onMouseLeave={interactive ? scheduleClose : undefined}
       >
@@ -758,8 +760,19 @@ export function AsyncSection<T>({
 export interface Column<T> {
   key: string;
   header: string;
-  /** A CSS grid track: `minmax(0,1fr)`, `8rem`, `auto`. */
-  width: string;
+  /**
+   * A CSS length or percentage — `8rem`, `40%`. **Not** a grid track.
+   *
+   * This said `minmax(0,1fr)` and three columns passed it. React drops it as
+   * an invalid width, so the attribute reached the DOM empty and the column
+   * sized by `table-layout: fixed`'s remainder rule instead. It LOOKED right,
+   * which is the worst way for an API to be wrong.
+   *
+   * Omit to take the remaining space — that is the same behaviour, now
+   * spelled. Two omitted columns split the remainder evenly; use percentages
+   * when you want a ratio.
+   */
+  width?: string;
   align?: "start" | "end";
   /** Header text is hidden but still read. For an actions or toggle column. */
   headerHidden?: boolean;
@@ -788,11 +801,18 @@ export interface TableFilter {
  * navigable while the *collection* scrolls inside its own box, and a column
  * turns a repeated pill into a quiet aligned word.
  *
- * NOT VIRTUALIZED, on purpose. The curated pick (Virtuoso) earns its keep past
- * roughly a thousand rows; the largest real collection here is a skills folder
- * at a couple of hundred. Adding the dependency now would be churn — but the
- * moment a list here is genuinely unbounded, that is the library to reach for
- * rather than pagination.
+ * NOT VIRTUALIZED, on purpose — but the headroom is smaller than I first
+ * claimed. `MAX_SKILLS_PER_DIR` is 200 PER DIRECTORY (`main/skills.ts:47`) and
+ * a project merges two of them, so 400 is reachable today, not the "couple of
+ * hundred" this comment used to assert.
+ *
+ * `rows` caps what you SEE, not what renders: every row is in the DOM so the
+ * scrollbar can be honest about the height. So `maxItems` caps what renders,
+ * with a footer that says what it withheld. Search runs BEFORE the cap, so a
+ * withheld row is always still reachable by typing its name — which is what
+ * makes truncation safe rather than lossy.
+ *
+ * Past ~1,000 the answer is Virtuoso, not a bigger cap and not pagination.
  *
  * A REAL `<table>`, because this is tabular data and the semantics are free:
  * column headers announce with their cells, and `scope="col"` costs nothing.
@@ -807,6 +827,7 @@ export function DataTable<T>({
   placeholder = "Search",
   filter,
   rows = 8,
+  maxItems = 500,
   empty,
   noResults = "Nothing matches.",
   label,
@@ -820,6 +841,8 @@ export function DataTable<T>({
   filter?: TableFilter;
   /** How many rows before it scrolls. */
   rows?: number;
+  /** How many rows may render at once. The rest are withheld, and said so. */
+  maxItems?: number;
   empty: string;
   noResults?: string;
   /** The table's accessible name. */
@@ -827,11 +850,15 @@ export function DataTable<T>({
 }) {
   const [query, setQuery] = React.useState("");
 
-  const shown = React.useMemo(() => {
+  const matched = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle || !search) return items;
     return items.filter((item) => search(item).toLowerCase().includes(needle));
   }, [items, query, search]);
+
+  // Cap AFTER filtering, so narrowing the search always reaches a withheld row.
+  const shown = matched.length > maxItems ? matched.slice(0, maxItems) : matched;
+  const withheld = matched.length - shown.length;
 
   // 32px a row, PLUS the 28px sticky header, which lives inside the same scroll
   // box and would otherwise eat a row: `rows={8}` was showing seven.
@@ -942,8 +969,13 @@ export function DataTable<T>({
         </table>
         {shown.length === 0 ? <Empty>{noResults}</Empty> : null}
       </div>
+      {withheld > 0 ? (
+        <p className="text-ui text-muted-foreground">
+          Showing {shown.length} of {matched.length}. Search to narrow.
+        </p>
+      ) : null}
       <p aria-live="polite" className="sr-only">
-        {query.trim() ? `${shown.length} of ${items.length} shown` : ""}
+        {query.trim() ? `${shown.length} of ${matched.length} shown` : ""}
       </p>
     </div>
   );
@@ -1010,6 +1042,13 @@ export function CommitField({
   confirm?: (next: string) => boolean;
   onCommit: (next: string) => CommitResult | Promise<CommitResult>;
 }) {
+  // A refusal has to be announceable, so the association can never depend on
+  // the caller having passed an id. It didn't: `aria-describedby` was gated on
+  // `id`, so an id-less field showed its error and told a screen reader nothing.
+  const autoId = React.useId();
+  const fieldId = id ?? autoId;
+  const errorId = `${fieldId}-error`;
+
   const [draft, setDraft] = React.useState(value);
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState(false);
@@ -1065,13 +1104,13 @@ export function CommitField({
           </span>
         ) : null}
         <Input
-          id={id}
+          id={fieldId}
           type={type}
           value={draft}
           disabled={disabled || busy}
           placeholder={placeholder}
           aria-invalid={error !== null}
-          aria-describedby={error && id ? `${id}-error` : undefined}
+          aria-describedby={error ? errorId : undefined}
           className={CONTROL_W[width]}
           onChange={(event) => {
             dirty.current = true;
@@ -1093,7 +1132,7 @@ export function CommitField({
         />
       </div>
       {error ? (
-        <p id={id ? `${id}-error` : undefined} role="alert" className="text-ui text-destructive">
+        <p id={errorId} role="alert" className="text-ui text-destructive">
           {error}
         </p>
       ) : null}

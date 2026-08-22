@@ -28,6 +28,14 @@ project, always. There is no scope switch anywhere.
 Agent configuration lands in Configure because agent configuration *is*
 project-scoped — the ticket's ask and the scope rule agree.
 
+**The one asymmetry, stated up front.** Web search is app-wide; MCP servers are
+per-project. Both are "tools the agent can reach", so a reader hunting for agent
+tooling will not find it all on one surface. The reason is real — web search is
+one account and one key, while an MCP server is a process with a config file per
+repo — but "defensible" is not "discoverable", so Configure → MCP carries a hint
+pointing at the other one. If per-project web-search keys are ever wanted, this
+is the seam that has to move.
+
 **Where a setting has two tiers** it appears on both surfaces, the Configure
 side carries `OverrideControl`, and the pane publishes its resolution order in
 an `InfoHint`. The first prototype had models on both surfaces and stated no
@@ -106,7 +114,10 @@ unbounded — before reaching for pagination.
   with a confirm.
 - The pane-level scope switch (`Segmented` "App / This project").
 - `SettingsSection`/`SettingsRow` `description` at every current call site.
-- The second, unused `HarnessPicker` consumer in `harness-picker.tsx`.
+- `HarnessPicker`'s second view — **inlined** into Configure → Sessions, not
+  deleted outright. `harness-picker.tsx:5` says it was lifted out "when
+  Configure gained a Runtime category"; that caller is the harness row in
+  step 5, so the abstraction collapses into its one remaining site.
 - `InheritNote` — replaced by `OverrideControl`.
 
 ---
@@ -144,4 +155,16 @@ unbounded — before reaching for pagination.
   backing store yet and is the largest piece of new plumbing in the plan.
 - **Skill enable/disable per project** has no store. `main/skills.ts` has
   `isUserInvokeOnly` for a global opt-out; a project-scoped disable list is new.
-- **The table is not virtualized** (see rule 9).
+- **The table is not virtualized** (see rule 9), and the headroom is smaller
+  than first claimed: `MAX_SKILLS_PER_DIR` is 200 **per directory**
+  (`main/skills.ts:47`) and a project merges two, so 400 is reachable now.
+  `DataTable` caps rendering at `maxItems` (500) with a footer that says what it
+  withheld; search runs before the cap, so a withheld row stays reachable. Past
+  ~1,000, switch to Virtuoso rather than raising the cap.
+- **`DataTable` has no roving tabindex.** Every in-row control is reachable, so
+  it meets SC 2.1.1, but 100 rows × 2 controls is 200 Tab stops with no
+  shortcut. Remedy: `tabIndex` on rows, up/down arrow handling, Enter to
+  activate — standard for a table with in-row actions.
+- **`Column.width` takes a CSS length or percentage, never a grid track.** Three
+  columns passed `minmax(0,1fr)`; React drops it as invalid, so they sized by
+  `table-layout: fixed`'s remainder rule and looked correct by accident.
