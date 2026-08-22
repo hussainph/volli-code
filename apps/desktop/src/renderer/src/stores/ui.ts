@@ -88,7 +88,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-import { isKnownExternalAppId, type ExternalApp, type ExternalAppId } from "../../../ipc/contract";
+import { isKnownExternalAppId } from "../../../external-app-ids";
+import type { ExternalApp, ExternalAppId } from "../../../ipc/contract";
 import {
   DEFAULT_EMPTY_VISUAL,
   sanitizeEmptyVisual,
