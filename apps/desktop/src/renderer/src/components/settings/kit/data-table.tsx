@@ -67,6 +67,8 @@ export interface Column<T> {
 export interface TableFilter {
   label: string;
   value: string;
+  /** Whether this selection has already narrowed `items` outside the table. */
+  isFiltering: boolean;
   options: readonly { value: string; label: string }[];
   onChange: (value: string) => void;
 }
@@ -121,7 +123,7 @@ export function DataTable<T>({
   // a row — `rows={8}` was showing seven.
   const maxBodyHeight = rows * ROW_H + HEAD_H;
 
-  if (items.length === 0) return <Empty>{empty}</Empty>;
+  if (items.length === 0 && !filter?.isFiltering) return <Empty>{empty}</Empty>;
 
   return (
     <div className="flex flex-col gap-2">
