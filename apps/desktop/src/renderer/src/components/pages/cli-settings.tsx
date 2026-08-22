@@ -14,6 +14,8 @@
  * the quiet neutral, exactly the severity reading that component documents.
  */
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { StethoscopeIcon } from "@phosphor-icons/react/dist/csr/Stethoscope";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -26,6 +28,7 @@ import type { DoctorCheck } from "@volli/shared";
 import type { CliToolStatus } from "../../../../ipc/contract";
 
 import {
+  cliStatusDisclosure,
   cliStatusRows,
   type CliRowTone,
   type CliStatusRow,
@@ -33,6 +36,11 @@ import {
 import { SessionPathComparison } from "@renderer/components/pages/session-path-comparison";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@renderer/components/ui/collapsible";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Notice } from "@renderer/components/ui/notice";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
@@ -60,6 +68,7 @@ type DoctorState =
 export function CliSettings() {
   const [state, setState] = useState<StatusState>({ status: "loading" });
   const [doctor, setDoctor] = useState<DoctorState>({ status: "idle" });
+  const [showDetails, setShowDetails] = useState(false);
   // The host facts are app-wide, but Git's local helper chain belongs to the
   // project a Session would enter; the one status read carries both truths.
   const projectCwd = useSelectedProject()?.path;
@@ -115,63 +124,55 @@ export function CliSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <SettingsSection
-        title="Command-line tool"
-        icon={TerminalWindowIcon}
-        action={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh CLI status"
-            disabled={state.status === "loading"}
-            onClick={() => void load()}
-          >
-            <ArrowsClockwiseIcon
-              className={state.status === "loading" ? "animate-spin" : undefined}
-            />
-          </Button>
-        }
-      >
-        {state.status === "loading" ? (
-          <p className={EMPTY_INLINE}>Checking…</p>
-        ) : state.status === "error" ? (
-          <Notice
-            announce
-            tone="error"
-            icon={WarningIcon}
-            title="Couldn't check the CLI install"
-            detail={state.message}
-            actions={
-              <Button size="xs" variant="outline" onClick={() => void load()}>
-                <ArrowsClockwiseIcon />
-                Retry
+      <Collapsible open={showDetails} onOpenChange={setShowDetails}>
+        <SettingsSection
+          title="Command-line tool"
+          icon={TerminalWindowIcon}
+          action={
+            <div className="flex items-center gap-1">
+              {state.status === "loaded" ? (
+                <CollapsibleTrigger asChild>
+                  <Button size="xs" variant="ghost">
+                    {showDetails ? <CaretUpIcon /> : <CaretDownIcon />}
+                    {showDetails ? "Hide details" : "Show details"}
+                  </Button>
+                </CollapsibleTrigger>
+              ) : null}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Refresh CLI status"
+                disabled={state.status === "loading"}
+                onClick={() => void load()}
+              >
+                <ArrowsClockwiseIcon
+                  className={state.status === "loading" ? "animate-spin" : undefined}
+                />
               </Button>
-            }
-          />
-        ) : (
-          <>
-            {state.rows.map((row) => (
-              <SettingsRow key={row.key} label={row.label} align="start">
-                <div className="flex max-w-96 flex-col items-end gap-1">
-                  <span className="flex items-center gap-2 text-ui text-foreground">
-                    <StatusDot state={TONE_DOT[row.tone]} />
-                    {row.value}
-                  </span>
-                  {row.detail ? (
-                    <span
-                      className="break-all text-right font-mono text-ui text-muted-foreground"
-                      title={row.detail}
-                    >
-                      {row.detail}
-                    </span>
-                  ) : null}
-                </div>
-              </SettingsRow>
-            ))}
-            <SessionPathComparison environment={state.environment} />
-          </>
-        )}
-      </SettingsSection>
+            </div>
+          }
+        >
+          {state.status === "loading" ? (
+            <p className={EMPTY_INLINE}>Checking…</p>
+          ) : state.status === "error" ? (
+            <Notice
+              announce
+              tone="error"
+              icon={WarningIcon}
+              title="Couldn't check the CLI install"
+              detail={state.message}
+              actions={
+                <Button size="xs" variant="outline" onClick={() => void load()}>
+                  <ArrowsClockwiseIcon />
+                  Retry
+                </Button>
+              }
+            />
+          ) : (
+            <CliStatusBody rows={state.rows} environment={state.environment} />
+          )}
+        </SettingsSection>
+      </Collapsible>
 
       <SettingsSection
         title="Doctor"
@@ -190,6 +191,58 @@ export function CliSettings() {
         <DoctorBody doctor={doctor} onFix={() => void runDoctor(true)} />
       </SettingsSection>
     </div>
+  );
+}
+
+function CliStatusBody({
+  rows,
+  environment,
+}: {
+  rows: readonly CliStatusRow[];
+  environment: CliToolStatus["environment"];
+}) {
+  const disclosure = cliStatusDisclosure(rows);
+
+  return (
+    <>
+      {disclosure.needsAttention ? (
+        disclosure.attentionRows.map((row) => <CliStatusRowView key={row.key} row={row} />)
+      ) : (
+        <SettingsRow label="CLI">
+          <span className="flex items-center gap-2 text-ui text-foreground">
+            <StatusDot state="ready" />
+            Installed and working
+          </span>
+        </SettingsRow>
+      )}
+      <CollapsibleContent className="border-t border-border/50 pt-2">
+        {disclosure.detailRows.map((row) => (
+          <CliStatusRowView key={row.key} row={row} />
+        ))}
+        <SessionPathComparison environment={environment} />
+      </CollapsibleContent>
+    </>
+  );
+}
+
+function CliStatusRowView({ row }: { row: CliStatusRow }) {
+  return (
+    <SettingsRow label={row.label} align="start">
+      <div className="flex max-w-96 flex-col items-end gap-1">
+        <span className="flex items-center gap-2 text-ui text-foreground">
+          <StatusDot state={TONE_DOT[row.tone]} />
+          {row.value}
+        </span>
+        {row.detail ? (
+          <span
+            className="break-all text-right font-mono text-ui text-muted-foreground"
+            title={row.detail}
+          >
+            {row.detail}
+          </span>
+        ) : null}
+      </div>
+    </SettingsRow>
   );
 }
 

@@ -242,7 +242,27 @@ export function cliStatusRows(status: CliToolStatus): CliStatusRow[] {
   return rows;
 }
 
-/** Whether anything on the pane deserves the user's eyes — drives the section's summary chip. */
+/** Whether anything on the pane deserves the user's eyes — drives the section's compact summary. */
 export function cliNeedsAttention(rows: readonly CliStatusRow[]): boolean {
   return rows.some((row) => row.tone === "warn");
+}
+
+/**
+ * Splits diagnostic rows around the compact Settings disclosure.
+ *
+ * A healthy install collapses every diagnostic behind the summary. When a row
+ * needs attention, it remains in sight and the non-warning evidence stays
+ * available on demand without repeating the warning inside the disclosure.
+ */
+export function cliStatusDisclosure(rows: readonly CliStatusRow[]): {
+  needsAttention: boolean;
+  attentionRows: readonly CliStatusRow[];
+  detailRows: readonly CliStatusRow[];
+} {
+  const needsAttention = cliNeedsAttention(rows);
+  return {
+    needsAttention,
+    attentionRows: needsAttention ? rows.filter((row) => row.tone === "warn") : [],
+    detailRows: needsAttention ? rows.filter((row) => row.tone !== "warn") : rows,
+  };
 }

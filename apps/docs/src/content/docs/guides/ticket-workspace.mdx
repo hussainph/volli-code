@@ -1,32 +1,35 @@
 ---
 title: The ticket workspace
-description: Use a ticket's workspace to read its scope, return to Sessions, inspect files and changes, and edit its properties.
+description: "Work on one task: read its brief, return to its chats, inspect files and changes, and edit its properties."
 sidebar:
   label: Ticket workspace
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Opening a ticket gives you one working surface for its Ticket Body, Sessions,
-files, diffs, and properties. The main tab strip keeps the documents and
-Sessions you open. The right rail has **Now**, **Diffs**, and **Files** views.
+A ticket is a task in Volli. Open one to read its **Ticket Body**, return to
+its chats, inspect files and diffs, and edit its properties. The main tab strip
+keeps the documents and chats you open. **Now**, **Diffs**, and **Files** group
+the task's workspace views.
+
+![A ticket workspace for VLT-14. Its Ticket Body holds the task brief, and the workspace shows the worktree, review state, and Chat control.](../../../assets/screenshots/ticket-workspace.png)
 
 ## Now
 
-**Now** shows the repository summary, ticket properties, and Sessions together.
-Use **Properties** here to edit status, priority, and labels. The repository
-summary shows the branch, base branch, worktree, changes, and pull-request
-state. Changing status updates the board; starting work remains a separate
-Session action.
+**Now** shows the repository summary, ticket properties, and **Sessions**
+together. Use **Properties** here to edit status, priority, and labels. The
+repository summary shows the branch, base branch, worktree, changes, and
+pull-request state. Changing status updates the board. Starting a chat is a
+separate action.
 
-The **Sessions** section lists the ticket's live and durable Session records.
-Open one to return to its history. A Ticket Session carries the ticket's
-context and works from that ticket's worktree; changing its live runtime
-attachment does not create a different Session.
+The **Sessions** section lists the ticket's chats and terminal sessions. Open
+one to return to its history. A ticket chat carries the task's context and
+works from that ticket's worktree. Reconnecting it does not create a second
+chat history.
 
-Use the Sessions heading to start structured work after configuring **Settings
-→ Model Access**. If you need a shell or an external TUI harness, open a
-terminal companion explicitly.
+Use the **Sessions** heading to start a chat after configuring **Settings →
+Model Access**. Open a terminal companion explicitly when you need a shell or
+an external TUI harness.
 
 ## Files and references
 
@@ -47,7 +50,7 @@ work, so it reflects the branch as it is on disk.
 
 <Aside type="note">
   Worktrees are retained when a ticket is archived. See
-  [Sessions and worktrees](/guides/agents-and-worktrees/#change-sets-and-retained-worktrees)
+  [Chats and worktrees](/guides/agents-and-worktrees/#change-sets-and-retained-worktrees)
   for safe removal after the branch is landed.
 </Aside>
 
@@ -55,9 +58,9 @@ work, so it reflects the branch as it is on disk.
 
 <CardGrid>
   <LinkCard
-    title="Sessions and worktrees"
+    title="Chats and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="See where each kind of Session works and how terminals fit in."
+    description="See where each kind of chat works and how terminals fit in."
   />
   <LinkCard
     title="The board"

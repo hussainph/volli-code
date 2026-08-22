@@ -18,7 +18,6 @@ import "./VolliDemo.css";
 if (typeof window !== "undefined") gsap.registerPlugin(Flip);
 
 type Phase = "backlog" | "todo" | "doing" | "review" | "done";
-type Agent = "Pi Session";
 
 interface DemoTicket {
   id: string;
@@ -26,8 +25,10 @@ interface DemoTicket {
   title: string;
   phase: Phase;
   priority: 1 | 2 | 3;
-  agent?: Agent;
-  sessions?: number;
+  /** How many chats this ticket has, when it has any. */
+  chats?: number;
+  /** What someone actually typed to open the ticket's chat. */
+  prompt?: string;
 }
 
 interface DragSession {
@@ -47,70 +48,75 @@ const PHASES: ReadonlyArray<{ key: Phase; label: string; mobileLabel: string }> 
   { key: "done", label: "Done", mobileLabel: "Done" },
 ];
 
+/**
+ * An ordinary app team's board, not Volli's own issue history (VC-64). The
+ * demo used to carry real internal ticket numbers, which read as a changelog
+ * to anyone who recognised them and as noise to everyone else.
+ */
 const INITIAL_TICKETS: DemoTicket[] = [
   {
-    id: "session-recovery",
-    code: "VC-18",
-    title: "Plan Session recovery",
+    id: "passkey-signin",
+    code: "HB-41",
+    title: "Add passkey sign-in",
     phase: "backlog",
     priority: 2,
   },
   {
-    id: "release-checks",
-    code: "VC-21",
-    title: "Design release safety checks",
+    id: "api-rate-limits",
+    code: "HB-38",
+    title: "Rate-limit the public API",
     phase: "backlog",
     priority: 1,
   },
   {
-    id: "worktree-setup",
-    code: "VC-24",
-    title: "Set up isolated worktrees",
+    id: "inbox-empty-states",
+    code: "HB-36",
+    title: "Design the inbox empty states",
     phase: "todo",
     priority: 3,
   },
   {
-    id: "mobile-review",
-    code: "VC-27",
-    title: "Plan the mobile review flow",
+    id: "flaky-upload-test",
+    code: "HB-35",
+    title: "Fix the flaky upload test",
     phase: "todo",
     priority: 2,
   },
   {
-    id: "session-receipts",
-    code: "VC-31",
-    title: "Persist Session receipts",
+    id: "billing-webhooks",
+    code: "HB-32",
+    title: "Move billing to webhooks",
     phase: "doing",
     priority: 3,
-    agent: "Pi Session",
-    sessions: 2,
+    chats: 2,
+    prompt: "Move billing off the nightly job and onto Stripe webhooks.",
   },
   {
-    id: "session-history",
-    code: "VC-33",
-    title: "Preserve Session history",
+    id: "search-recency",
+    code: "HB-30",
+    title: "Rank search results by recency",
     phase: "doing",
     priority: 2,
-    agent: "Pi Session",
-    sessions: 3,
+    chats: 1,
+    prompt: "Weight search results by recency without hurting exact-title matches.",
   },
   {
-    id: "agent-questions",
-    code: "VC-29",
-    title: "Surface agent questions",
+    id: "admin-audit-log",
+    code: "HB-27",
+    title: "Audit log for admin actions",
     phase: "review",
     priority: 2,
-    agent: "Pi Session",
-    sessions: 2,
+    chats: 2,
+    prompt: "Record every admin action with actor, target, and timestamp.",
   },
   {
-    id: "execution-history",
-    code: "VC-12",
-    title: "Persist execution history",
+    id: "settings-dark-mode",
+    code: "HB-24",
+    title: "Dark mode for Settings",
     phase: "done",
     priority: 1,
-    agent: "Pi Session",
-    sessions: 2,
+    chats: 1,
+    prompt: "Make the Settings screens follow the system appearance.",
   },
 ];
 
@@ -128,10 +134,10 @@ const useMediaQuery = (query: string) => {
   return matches;
 };
 
-const agentForTicket = (ticket: DemoTicket): Agent => {
-  if (ticket.agent) return ticket.agent;
-  return "Pi Session";
-};
+/** A ticket carries chats once it has reached work; before that it has none. */
+const chatCount = (ticket: DemoTicket): number => ticket.chats ?? 1;
+
+const branchName = (ticket: DemoTicket) => `volli/${ticket.code.toLowerCase()}-${ticket.id}`;
 
 const phaseLabel = (phase: Phase) => PHASES.find((item) => item.key === phase)?.label ?? phase;
 
@@ -318,14 +324,10 @@ export default function VolliDemo() {
             ? {
                 ...candidate,
                 phase: nextPhase,
-                agent:
+                chats:
                   nextPhase === "doing" || nextPhase === "review" || nextPhase === "done"
-                    ? agentForTicket(candidate)
-                    : candidate.agent,
-                sessions:
-                  nextPhase === "doing" || nextPhase === "review" || nextPhase === "done"
-                    ? (candidate.sessions ?? 2)
-                    : candidate.sessions,
+                    ? chatCount(candidate)
+                    : candidate.chats,
               }
             : candidate,
         ),
@@ -510,37 +512,61 @@ export default function VolliDemo() {
           </div>
         </header>
 
+        {/* The rails are scenery: they name the shape of the app but nothing in
+            them is operable, so they stay out of the tab order and the a11y
+            tree rather than offering keyboard users dead buttons (VC-64). */}
         <div className="demo-workspace">
-          <aside className="demo-project-rail" aria-label="Project switcher preview">
-            <DemoRailButton label="Volli Code" className="is-selected is-ember">
-              VC
-            </DemoRailButton>
-            <DemoRailButton label="Personal projects" className="is-gold">
-              PM
-            </DemoRailButton>
+          <aside className="demo-project-rail" aria-hidden="true">
+            <DemoRailChip label="Harbor" className="is-selected is-ember">
+              HB
+            </DemoRailChip>
+            <DemoRailChip label="Side projects" className="is-gold">
+              SP
+            </DemoRailChip>
             <span className="demo-rail-spacer" />
-            <DemoRailButton label="Add project" className="is-add">
+            <DemoRailChip label="Add project" className="is-add">
               <PlusIcon />
-            </DemoRailButton>
+            </DemoRailChip>
           </aside>
 
-          <aside className="demo-nav-rail" aria-label="Navigation preview">
-            <DemoNavButton label="Board" active>
-              <BoardIcon />
-            </DemoNavButton>
-            <DemoNavButton label="Sessions">
-              <TerminalIcon />
-            </DemoNavButton>
-            <DemoNavButton label="Files">
+          {/* Home / Files / Configure, with Settings in the footer — the nav the
+              app actually ships (sidebar/nav-list.tsx). There is no Sessions
+              page: chats are tabs inside Home. */}
+          <aside className="demo-nav-rail" aria-hidden="true">
+            <DemoNavChip label="Home" active>
+              <HouseIcon />
+            </DemoNavChip>
+            <DemoNavChip label="Files">
               <FolderIcon />
-            </DemoNavButton>
+            </DemoNavChip>
+            <DemoNavChip label="Configure">
+              <SlidersIcon />
+            </DemoNavChip>
             <span className="demo-rail-spacer" />
-            <DemoNavButton label="Settings">
+            <DemoNavChip label="Settings">
               <SettingsIcon />
-            </DemoNavButton>
+            </DemoNavChip>
           </aside>
 
-          <main className="demo-main-surface">
+          {/* A div, not <main>: the page that hosts this already has one, and
+              two main landmarks is one too many. */}
+          <div className="demo-main-surface">
+            {/* Home's tab strip: a permanent Board tab, project chats beside it,
+                and one control that starts a chat. */}
+            <div className="demo-home-tabs" aria-hidden="true">
+              <span className="is-active">
+                <BoardIcon /> Board
+              </span>
+              <span>Plan the billing migration</span>
+              <span>README.md</span>
+              <span className="demo-home-newchat">
+                <PlusIcon /> Chat
+                <span className="demo-home-caret">
+                  <CaretIcon />
+                </span>
+              </span>
+            </div>
+
             <div className="demo-board-toolbar">
               <div className="demo-board-title">
                 <strong>Board</strong>
@@ -571,7 +597,9 @@ export default function VolliDemo() {
                       }`}
                       data-phase={phase.key}
                       key={phase.key}
-                      aria-label={`${phase.label}, ${phaseTickets.length} tickets`}
+                      aria-label={`${phase.label}, ${phaseTickets.length} ${
+                        phaseTickets.length === 1 ? "ticket" : "tickets"
+                      }`}
                     >
                       <div className="demo-column-header">
                         <strong>{phase.label}</strong>
@@ -605,8 +633,7 @@ export default function VolliDemo() {
                             {(ticket.phase === "doing" || ticket.phase === "review") && (
                               <span className="demo-agent-status">
                                 <span className="demo-live-dot" />
-                                {agentForTicket(ticket)}
-                                <span>{ticket.sessions ?? 2}</span>
+                                {chatCount(ticket) === 1 ? "1 chat" : `${chatCount(ticket)} chats`}
                               </span>
                             )}
                           </button>
@@ -620,7 +647,7 @@ export default function VolliDemo() {
                 })}
               </div>
             </div>
-          </main>
+          </div>
         </div>
 
         {selected && (
@@ -679,6 +706,10 @@ export default function VolliDemo() {
   );
 }
 
+/**
+ * A ticket workspace's tabs: the Ticket Body is the permanent first tab, chats
+ * and files open beside it. Not "Session 1 / Session 2" — chats are named.
+ */
 function PreviewTabs({ ticket }: { ticket: DemoTicket }) {
   const active = ticket.phase === "doing" || ticket.phase === "review";
 
@@ -687,8 +718,8 @@ function PreviewTabs({ ticket }: { ticket: DemoTicket }) {
       <span className={!active ? "is-active" : undefined}>{ticket.code}</span>
       {active && (
         <>
-          <span className="is-active">Session 1</span>
-          <span>Session 2</span>
+          <span className="is-active">{ticket.title}</span>
+          {chatCount(ticket) > 1 && <span>Earlier chat</span>}
           <span className="demo-tab-add" aria-hidden="true">
             <PlusIcon />
           </span>
@@ -703,7 +734,7 @@ function PreviewBody({ ticket }: { ticket: DemoTicket }) {
     return <ScratchpadPreview ticket={ticket} />;
   }
   if (ticket.phase === "done") return <DonePreview ticket={ticket} />;
-  return <TerminalPreview ticket={ticket} review={ticket.phase === "review"} />;
+  return <ChatPreview ticket={ticket} review={ticket.phase === "review"} />;
 }
 
 function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
@@ -713,8 +744,9 @@ function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
         <span className="demo-doc-id">{ticket.code}</span>
         <h2 id="demo-preview-title">{ticket.title}</h2>
         <p>
-          Define the outcome, constraints, and acceptance criteria before implementation begins. The
-          Ticket becomes the Session’s starting context; the worktree remains a separate checkout.
+          Write the outcome, the constraints, and how you&rsquo;ll judge the result. This brief is
+          what an agent chat on this task starts with. When the work needs a checkout of its own,
+          the task gets an isolated worktree rather than taking over your main one.
         </p>
         <div className="demo-doc-section">
           <strong>Acceptance criteria</strong>
@@ -742,119 +774,130 @@ function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
   );
 }
 
-function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
+/**
+ * The default session: a structured chat, not a terminal.
+ *
+ * The app's New Session control presses to **Chat** and keeps Terminal under
+ * its caret (`sessions/new-session-control.tsx`), so this is what a first-run
+ * user meets. The terminal appears here only as the optional companion it is.
+ */
+function ChatPreview({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
   return (
-    <div className="demo-terminal-layout">
-      <div className="demo-terminal-main">
-        <div className="demo-terminal-heading">
-          <span className="demo-agent-mark is-claude">✳</span>
+    <div className="demo-chat-layout">
+      <div className="demo-chat-main">
+        <div className="demo-chat-heading">
           <div>
             <h2 id="demo-preview-title">{ticket.title}</h2>
-            <span>
-              volli/{ticket.code.toLowerCase()}-{ticket.id}
+            <span className="demo-chat-branch">
+              <BranchIcon /> {branchName(ticket)}
             </span>
           </div>
+          <span className="demo-chat-scope">Task chat</span>
         </div>
-        <SessionScreen ticket={ticket} review={review} />
+
+        <div className="demo-chat-thread">
+          <div className="demo-chat-turn is-you">
+            <span className="demo-chat-author">You</span>
+            <p>{ticket.prompt}</p>
+          </div>
+
+          <div className="demo-chat-turn is-agent">
+            <span className="demo-chat-author">Volli</span>
+            <p>
+              This task&rsquo;s brief and the project&rsquo;s instructions are attached. I&rsquo;ll
+              work in an isolated worktree and leave the change for you to read.
+            </p>
+            <div className="demo-chat-steps">
+              <span>
+                <BookIcon />
+                <span>
+                  Read <small>ticket body, repo instructions</small>
+                </span>
+              </span>
+              <span>
+                <EditIcon />
+                <span>
+                  Edit <small>4 files in the worktree</small>
+                </span>
+              </span>
+            </div>
+            {review ? (
+              <p className="demo-chat-handoff">
+                Done in the worktree — the change set is on the <strong>Changes</strong> tab
+                whenever you want to read it.
+              </p>
+            ) : null}
+          </div>
+
+          {!review && (
+            <div className="demo-chat-working">
+              <span className="demo-chat-spinner" />
+              Working… <small>esc to interrupt</small>
+            </div>
+          )}
+        </div>
+
+        {/* The composer's real controls: what you type, which model, how much
+            reasoning effort. Effort labels come from the shipped set. */}
+        <div className="demo-chat-composer" aria-hidden="true">
+          <span className="demo-chat-input">Ask a follow-up…</span>
+          <span className="demo-chat-chips">
+            <span className="demo-chat-chip">Default model</span>
+            <span className="demo-chat-chip">Effort: Medium</span>
+            <span className="demo-chat-send">
+              <ArrowIcon />
+            </span>
+          </span>
+        </div>
       </div>
-      <aside className="demo-session-rail">
+
+      <aside className="demo-chat-rail">
         <div className="demo-session-heading">
-          <strong>Sessions</strong>
-          <span>{ticket.sessions ?? 2}</span>
+          <strong>Chats</strong>
+          <span>{chatCount(ticket)}</span>
         </div>
         <div className="demo-session-row is-current">
-          <span className="demo-live-dot" />
+          <span className={review ? "demo-idle-dot" : "demo-live-dot"} />
           <span>
-            <strong>Pi Session</strong>
-            <small>{review ? "Waiting for review" : "Working"}</small>
+            <strong>{ticket.title}</strong>
+            <small>{review ? "Finished · history kept" : "Running"}</small>
           </span>
         </div>
-        <div className="demo-session-row">
-          <span className="demo-idle-dot" />
-          <span>
-            <strong>Earlier Session</strong>
-            <small>Earlier exploration</small>
-          </span>
-        </div>
+        {chatCount(ticket) > 1 && (
+          <div className="demo-session-row">
+            <span className="demo-idle-dot" />
+            <span>
+              <strong>Earlier chat</strong>
+              <small>Reopen any time</small>
+            </span>
+          </div>
+        )}
         <div className="demo-session-details">
-          <span>Phase</span>
+          <span>Column</span>
           <strong>{review ? "Needs Review" : "Doing"}</strong>
           <span>Worktree</span>
-          <strong>Isolated</strong>
+          <strong>Isolated checkout</strong>
+          <span>Base</span>
+          <strong>main</strong>
+        </div>
+        <div className="demo-rail-note">
+          <TerminalIcon />
+          <span>
+            Want to drive a CLI yourself? Open a terminal in the same worktree — it&rsquo;s a
+            companion, not a fallback.
+          </span>
         </div>
       </aside>
     </div>
   );
 }
 
-function SessionScreen({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
-  return (
-    <div className="demo-terminal-screen demo-cli-screen is-claude">
-      <div className="demo-cli-banner">
-        <span className="demo-cli-logo">✳</span>
-        <span>
-          <strong>Agent runtime</strong>
-          <small>Pi-backed structured Session</small>
-        </span>
-        <span className="demo-cli-context">Ticket context · isolated worktree</span>
-      </div>
-
-      <div className="demo-cli-prompt">
-        <span>❯</span>
-        <strong>
-          {review ? "Review the implementation and report anything blocking" : ticket.title}
-        </strong>
-      </div>
-
-      <div className="demo-cli-turn">
-        <div className="demo-cli-line">
-          <span className="demo-claude-bullet">⏺</span>
-          <span>I’ll trace the Ticket context, make the change, then run the focused checks.</span>
-        </div>
-        <div className="demo-cli-line demo-cli-tool">
-          <span className="demo-claude-bullet">⏺</span>
-          <span>
-            <strong>Read</strong>(Ticket brief and repository instructions)
-            <small>⎿ Context attached to this Session</small>
-          </span>
-        </div>
-        <div className="demo-cli-line demo-cli-tool">
-          <span className="demo-claude-bullet">⏺</span>
-          <span>
-            <strong>Edit</strong>(implementation)
-            <small>⎿ Change Set updated</small>
-          </span>
-        </div>
-      </div>
-
-      {review ? (
-        <div className="demo-cli-response">
-          <span className="demo-claude-bullet">⏺</span>
-          <span>
-            The Change Set is ready to inspect. The focused checks pass and the Session history is
-            preserved.
-            <small>Waiting for your review</small>
-          </span>
-        </div>
-      ) : (
-        <div className="demo-cli-status">
-          <span>✻</span>
-          Running targeted tests… <small>esc to interrupt</small>
-        </div>
-      )}
-
-      <div className="demo-cli-composer" aria-hidden="true">
-        <span>❯</span>
-        <span className="demo-cli-cursor" />
-      </div>
-      <div className="demo-cli-footer">
-        <span>Ticket context attached</span>
-        <span>Local history preserved</span>
-      </div>
-    </div>
-  );
-}
-
+/**
+ * What a finished ticket keeps — stated as record, not as a verdict. The old
+ * copy claimed "Tests passed" and "Change Set inspected" as static facts, which
+ * reads as Volli certifying the work. It does not: a person reviewed and moved
+ * it (VC-64).
+ */
 function DonePreview({ ticket }: { ticket: DemoTicket }) {
   return (
     <div className="demo-done-view">
@@ -863,23 +906,26 @@ function DonePreview({ ticket }: { ticket: DemoTicket }) {
       </span>
       <span className="demo-doc-id">{ticket.code}</span>
       <h2 id="demo-preview-title">{ticket.title}</h2>
-      <p>The Ticket keeps its Sessions, Change Set, branch, and review trail together.</p>
+      <p>
+        The task keeps its chats, changes, branch, and the trail of how it got here in one place you
+        can reopen later.
+      </p>
       <div className="demo-delivery-summary">
         <span>
-          <CheckIcon /> Tests passed
+          <BranchIcon /> {branchName(ticket)}
         </span>
         <span>
-          <BranchIcon /> volli/{ticket.code.toLowerCase()}-{ticket.id}
+          <PullRequestIcon /> 4 files changed
         </span>
         <span>
-          <PullRequestIcon /> Change Set inspected
+          <ChatIcon /> {chatCount(ticket) === 1 ? "1 chat" : `${chatCount(ticket)} chats`} kept
         </span>
       </div>
     </div>
   );
 }
 
-function DemoRailButton({
+function DemoRailChip({
   label,
   className,
   children,
@@ -889,14 +935,14 @@ function DemoRailButton({
   children: React.ReactNode;
 }) {
   return (
-    <button type="button" className={`demo-rail-button ${className}`} aria-label={label}>
+    <span className={`demo-rail-button ${className}`}>
       {children}
       <span className="demo-hover-label">{label}</span>
-    </button>
+    </span>
   );
 }
 
-function DemoNavButton({
+function DemoNavChip({
   label,
   active = false,
   children,
@@ -906,14 +952,10 @@ function DemoNavButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      className={`demo-nav-button${active ? " is-active" : ""}`}
-      aria-label={label}
-    >
+    <span className={`demo-nav-button${active ? " is-active" : ""}`}>
       {children}
       <span className="demo-hover-label">{label}</span>
-    </button>
+    </span>
   );
 }
 
@@ -967,6 +1009,50 @@ function BoardIcon() {
       <rect x="14" y="4" width="6" height="4" rx="1" />
       <rect x="4" y="15" width="6" height="5" rx="1" />
       <rect x="14" y="12" width="6" height="8" rx="1" />
+    </SvgIcon>
+  );
+}
+
+/** Home. The app's nav uses Phosphor's House for exactly this row. */
+function HouseIcon() {
+  return (
+    <SvgIcon>
+      <path d="M4 10.5 12 4l8 6.5V20h-5v-5.5H9V20H4z" />
+    </SvgIcon>
+  );
+}
+
+/** Configure. */
+function SlidersIcon() {
+  return (
+    <SvgIcon>
+      <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+      <circle cx="16" cy="7" r="2" />
+      <circle cx="10" cy="17" r="2" />
+    </SvgIcon>
+  );
+}
+
+function CaretIcon() {
+  return (
+    <SvgIcon>
+      <path d="m7 10 5 5 5-5" />
+    </SvgIcon>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <SvgIcon>
+      <path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+    </SvgIcon>
+  );
+}
+
+function BookIcon() {
+  return (
+    <SvgIcon>
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4zM20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h6z" />
     </SvgIcon>
   );
 }

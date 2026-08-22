@@ -1,34 +1,36 @@
 ---
-title: Sessions and worktrees
-description: How Pi-backed Sessions, ticket worktrees, and manual terminal companions fit together in Volli.
+title: Chats and worktrees
+description: Run independent coding tasks in parallel with project chats, ticket chats, and isolated Git worktrees.
 sidebar:
-  label: Sessions and worktrees
+  label: Chats and worktrees
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli has two structured Session scopes. Both are backed by the Pi Agent
-Runtime and persist local history. Their scope determines where they work and
-what context they receive.
+Volli lets you run independent tasks in parallel. Start a project chat to shape
+a broad idea into tasks, then start a ticket chat for each task that needs code
+changes. In Volli, a task is a ticket.
 
-| Session | Context | Working directory |
+## Project chats and ticket chats
+
+| Chat | Use it for | Working directory |
 | --- | --- | --- |
-| **Ticket Session** | One Ticket and its Runtime Brief | That ticket's worktree |
-| **Project Session** | The project, without a Ticket | The project's main checkout |
+| **Ticket chat** | One task and its brief | That ticket's worktree |
+| **Project chat** | Broad project work before you have a task | The project's main checkout |
 
-Choose a default model in **Settings → Model Access** before starting either
-kind. The model policy is recorded for the Session; Volli does not silently
-fall back to a different model or account.
+Choose a default model in **Settings → Model Access** before you start either
+kind. Volli records the model for the chat and does not silently switch to a
+different model or account.
 
 ## Ticket worktrees
 
-When a Ticket Session needs isolated repository work, Volli prepares a ticket
-worktree on a branch named `volli/<DISPLAY-ID>-<slug>`, for example
+When a ticket needs isolated repository work, Volli prepares a ticket worktree
+on a branch named `volli/<DISPLAY-ID>-<slug>`, for example
 `volli/VC-12-mcp-server`. Worktrees live under `~/.volli/worktrees/`.
 
 The project folder you add to Volli remains the main checkout. A ticket's files
-and change set come from its worktree, so parallel tickets can make changes on
-separate branches.
+and changes come from its worktree, so parallel tasks can work on separate
+branches.
 
 You can inspect a ticket's branch from a terminal companion:
 
@@ -40,29 +42,28 @@ volli worktree diff VC-12
 `worktree diff` compares the ticket branch with its base branch. Add
 `--working-tree` to see uncommitted changes.
 
-## Durable Session history
+## Chat history
 
-A Session is not a terminal pane. Its history stays available when you navigate
-away, when an attachment ends, or when you reopen the app. Use the ticket
-workspace to return to a Ticket Session and inspect its recorded work.
+A chat is not tied to an open tab or terminal pane. Its history remains
+available when you navigate away, when its live connection ends, or when you
+reopen the app. Open the ticket workspace to return to a ticket chat and
+inspect its recorded work.
 
-This separation also makes recovery explicit. A new attachment can reconnect
-to an existing Session without inventing a new conversation history.
+A chat can reconnect without creating a second conversation history.
 
 ## Terminal companions
 
-Volli can also open manual terminals and external or bring-your-own TUI
-harnesses. Use them when you want a shell or a specific terminal workflow.
-They can run in a project or ticket worktree, but they are companions rather
-than an alternate structured executor.
+Open a terminal companion when you want a shell or a specific TUI workflow. It
+can run in a project or ticket worktree, but it does not replace Volli's built-in
+chat.
 
 The `volli` CLI is available to supported terminal companions over a local Unix
 socket. It can inspect ticket context and report work to the app. See the
 [CLI reference](/reference/cli/) for its commands.
 
 <Aside type="note">
-  A terminal companion does not become a fallback for a structured Session.
-  Choose it explicitly, and configure Model Access for Pi-backed execution.
+  Open a terminal companion explicitly. Configure Model Access before you start
+  a built-in chat.
 </Aside>
 
 ## Change sets and retained worktrees
@@ -88,7 +89,7 @@ git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-
   <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
-    description="Inspect a ticket's Sessions, files, diffs, and Now rail."
+    description="Inspect a task's chats, files, diffs, and Now view."
   />
   <LinkCard
     title="Troubleshooting"

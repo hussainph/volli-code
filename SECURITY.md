@@ -8,4 +8,16 @@ Include the affected commit, the expected impact, reproduction steps, and any kn
 
 ## Supported versions
 
-Volli Code does not have a packaged release yet. Security fixes currently target the latest commit on `main`; older commits are not supported.
+Volli Code is in early alpha. Only the **most recent published release** and the latest commit on `main` receive security fixes. Older alpha builds are not patched — fixes ship forward in the next build.
+
+The app updates itself from [GitHub Releases](https://github.com/hussainph/volli-code/releases) and installs an available update when you quit, so staying current is the supported path. If you have pinned yourself to an older build, update before reporting an issue.
+
+## What alpha users should expect
+
+This is a prerelease project maintained without a formal SLA. Concretely:
+
+- There is no committed response or fix deadline. Reports are triaged as soon as reasonably possible.
+- There are no backported patches and no security advisories for superseded alpha builds.
+- Volli runs code and tooling on your machine at your direction. Treat any project you point it at, and any model provider you connect, as part of your trust boundary.
+
+Being honest about the above is deliberate: do not rely on this project for a threat model it does not yet support.
