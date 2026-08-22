@@ -30,7 +30,7 @@ import {
   type MessageDelivery,
 } from "@renderer/chat/client";
 import type { QueuedMessage } from "@renderer/chat/session-model";
-import type { TranscriptCompaction } from "@renderer/chat/transcript";
+import type { LiveTranscriptCompaction, TranscriptCompaction } from "@renderer/chat/transcript";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
 const NO_MESSAGES: readonly UIMessage[] = [];
@@ -38,6 +38,7 @@ const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const NO_PROMPT_RESOURCES: readonly string[] = [];
 const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
+const NO_LIVE_COMPACTION: LiveTranscriptCompaction | null = null;
 
 /**
  * One Session's resident state, read field by field.
@@ -90,6 +91,8 @@ export interface SessionView {
    * Session, where the transcript beside it moves every frame.
    */
   compactions: readonly TranscriptCompaction[];
+  /** The summary currently being generated, absent once its durable result lands. */
+  liveCompaction: LiveTranscriptCompaction | null;
 }
 
 export interface SessionController {
@@ -134,7 +137,7 @@ export function useSessionController(
   sessionId: string,
   store: ChatSessionsStore = useChatSessionsStore,
 ): SessionController {
-  // Seven subscriptions rather than one, for the reason {@link SessionView}
+  // Eight subscriptions rather than one, for the reason {@link SessionView}
   // spells out. Each selector returns a field the store already holds or a
   // boolean derived from one, so none of them mints a value: a selector that
   // built an object here would fire on every write and undo the whole exercise.
@@ -166,6 +169,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.compactions ?? NO_COMPACTIONS,
   );
+  const liveCompaction = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.liveCompaction ?? NO_LIVE_COMPACTION,
+  );
 
   const session = React.useMemo<SessionView>(
     () => ({
@@ -179,11 +186,13 @@ export function useSessionController(
       queue,
       promptResources,
       compactions,
+      liveCompaction,
     }),
     [
       compactions,
       deliverable,
       durableMessages,
+      liveCompaction,
       messages,
       openedInteractions,
       projection,

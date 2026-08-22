@@ -29,6 +29,7 @@
 import type {
   AttentionObservation,
   CompactionObservation,
+  CompactionProgressObservation,
   CompactionReason,
   RuntimeActivityObservation,
   RuntimeObservation,
@@ -125,6 +126,12 @@ export type TranslatedObservation =
       turnId: string | null;
       messageId: string;
       delta: TranscriptDelta;
+    })
+  | (TransientObservationBase & {
+      /** A live-only marker while the executor is preparing a context summary. */
+      kind: "context.compaction-progress";
+      state: CompactionProgressObservation["state"];
+      reason: CompactionReason;
     })
   | (TranslatedObservationBase & { kind: "turn.started"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.completed"; turnId: string })
@@ -323,6 +330,10 @@ export class RuntimeObservationTranslator {
         return this.#translateAttachment(observation, emit);
       case "turn":
         return this.#translateTurn(observation, emit);
+      // A compaction's live wait is transient — the durable outcome arrives on
+      // the neighboring `compaction` arm, if there is one.
+      case "compaction-progress":
+        return emit(this.#compactionProgressObservation(observation));
       // Emitted, and nothing else. Compaction touches none of the streaming
       // state a turn boundary retires: no message is in flight that it ends, and
       // the overlay a live turn is filling belongs to the turn it is still in.
@@ -368,6 +379,8 @@ export class RuntimeObservationTranslator {
     switch (observation.kind) {
       case "turn":
         return [this.#turnObservation(observation)];
+      case "compaction-progress":
+        return [];
       case "compaction":
         return [this.#compactionObservation(observation)];
       case "message-settled": {
@@ -572,6 +585,19 @@ export class RuntimeObservationTranslator {
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
       turnId: observation.turnId,
+    };
+  }
+
+  /** The two edges of a compaction wait, with no recovery cursor to advance. */
+  #compactionProgressObservation(
+    observation: CompactionProgressObservation,
+  ): Extract<TranslatedObservation, { kind: "context.compaction-progress" }> {
+    return {
+      id: `${this.#namespace}:compaction-progress:${observation.state}:${++this.#sequence}`,
+      kind: "context.compaction-progress",
+      state: observation.state,
+      reason: observation.reason,
+      occurredAt: observation.occurredAt ?? this.#now(),
     };
   }
 

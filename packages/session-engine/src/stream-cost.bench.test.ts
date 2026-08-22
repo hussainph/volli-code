@@ -7,6 +7,7 @@ import {
   createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
+  isSessionStreamFrame,
   isSessionStreamOverlay,
   sessionMainBranchId,
   sessionRootThreadId,
@@ -311,7 +312,7 @@ describe("session-engine stream-cost probe", () => {
       { sessionId, afterSequence: start.throughSequence },
       (emission) => {
         if (isSessionStreamOverlay(emission)) overlays.push(emission);
-        else durableFrames.push(emission);
+        else if (isSessionStreamFrame(emission)) durableFrames.push(emission);
       },
     );
 

@@ -6,6 +6,8 @@ import {
   createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
+  isSessionStreamCompactionProgress,
+  isSessionStreamFrame,
   isSessionStreamOverlay,
   NativeAttachmentError,
   SessionRuntimeConflictError,
@@ -17,6 +19,7 @@ import {
   type SessionEngine,
   type SessionLocationResolver,
   type SessionRuntime,
+  type SessionStreamCompactionProgress,
   type SessionStreamEmission,
   type SessionStreamFrame,
   type SessionStreamOverlay,
@@ -973,7 +976,7 @@ describe("SessionRuntime native adapter contract", () => {
     const unsubscribe = await runtime.subscribe(
       { sessionId, afterSequence: snapshot.throughSequence },
       (emission) => {
-        if (isSessionStreamOverlay(emission)) return;
+        if (!isSessionStreamFrame(emission)) return;
         steps.push("published");
         seen.push(emission.event);
       },
@@ -1011,7 +1014,7 @@ describe("SessionRuntime native adapter contract", () => {
     const unsubscribe = await runtime.subscribe(
       { sessionId, afterSequence: before.throughSequence },
       (emission) => {
-        if (isSessionStreamOverlay(emission)) return;
+        if (!isSessionStreamFrame(emission)) return;
         seen.push(emission.event);
       },
     );
@@ -1055,7 +1058,7 @@ describe("SessionRuntime native adapter contract", () => {
     const subscription = racing.runtime.subscribe(
       { sessionId, afterSequence: start.throughSequence },
       (emission) => {
-        if (isSessionStreamOverlay(emission)) return;
+        if (!isSessionStreamFrame(emission)) return;
         sequences.push(emission.sequence);
       },
     );
@@ -2380,7 +2383,7 @@ describe("SessionRuntime native adapter contract", () => {
     ).rejects.toThrow("non-negative integer");
     const seen: number[] = [];
     const stop = await runtime.subscribe({ sessionId, afterSequence: 0 }, (emission) => {
-      if (isSessionStreamOverlay(emission)) return;
+      if (!isSessionStreamFrame(emission)) return;
       seen.push(emission.sequence);
     });
     const beforeStop = [...seen];
@@ -3253,6 +3256,12 @@ function overlaysIn(emissions: readonly SessionStreamEmission[]): SessionStreamO
   return emissions.filter((emission) => isSessionStreamOverlay(emission));
 }
 
+function compactionProgressIn(
+  emissions: readonly SessionStreamEmission[],
+): SessionStreamCompactionProgress[] {
+  return emissions.filter((emission) => isSessionStreamCompactionProgress(emission));
+}
+
 /**
  * Runs the microtasks an in-flight `emit` still owes before its overlay reaches
  * a subscriber's chain. Nothing here waits on a timer, so a fixed number of
@@ -3264,6 +3273,87 @@ async function settleMicrotasks(): Promise<void> {
 }
 
 describe("SessionRuntime transient transcript overlay", () => {
+  it("publishes compaction progress without writing it to history", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const before = await runtime.snapshot({ sessionId });
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: before.throughSequence },
+      (emission) => {
+        emissions.push(emission);
+      },
+    );
+
+    await adapter.emit({ kind: "compaction-progress", state: "started", reason: "manual" });
+
+    expect((await runtime.snapshot({ sessionId })).throughSequence).toBe(before.throughSequence);
+    expect(compactionProgressIn(emissions)).toEqual([
+      {
+        kind: "compaction",
+        state: "started",
+        sessionId,
+        throughSequence: before.throughSequence,
+        reason: "manual",
+      },
+    ]);
+
+    await adapter.emit({ kind: "compaction-progress", state: "finished", reason: "manual" });
+    stop();
+
+    expect(compactionProgressIn(emissions).at(-1)).toEqual({
+      kind: "compaction",
+      state: "finished",
+      sessionId,
+      throughSequence: before.throughSequence,
+      reason: "manual",
+    });
+  });
+
+  it("does not revive compaction progress after its durable outcome", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const before = await runtime.snapshot({ sessionId });
+
+    await adapter.emit({ kind: "compaction-progress", state: "started", reason: "threshold" });
+    const reconnecting: SessionStreamEmission[] = [];
+    const stopReconnecting = await runtime.subscribe(
+      { sessionId, afterSequence: before.throughSequence },
+      (emission) => {
+        reconnecting.push(emission);
+      },
+    );
+    expect(compactionProgressIn(reconnecting)).toEqual([
+      {
+        kind: "compaction",
+        state: "started",
+        sessionId,
+        throughSequence: before.throughSequence,
+        reason: "threshold",
+      },
+    ]);
+
+    await adapter.emit({
+      kind: "compaction",
+      state: "failed",
+      reason: "threshold",
+      message: "The summarizer refused the request.",
+    });
+    stopReconnecting();
+
+    const after = await runtime.snapshot({ sessionId });
+    const late: SessionStreamEmission[] = [];
+    const stopLate = await runtime.subscribe(
+      { sessionId, afterSequence: after.throughSequence },
+      (emission) => {
+        late.push(emission);
+      },
+    );
+    stopLate();
+
+    expect(compactionProgressIn(late)).toEqual([]);
+  });
+
   it("publishes deltas without a durable trace or a cursor advance", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -3384,8 +3474,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const [baseline] = overlaysIn(emissions);
     const settled = emissions.find(
       (emission) =>
-        !isSessionStreamOverlay(emission) &&
-        emission.event.payload.kind === "transcript.referenced",
+        isSessionStreamFrame(emission) && emission.event.payload.kind === "transcript.referenced",
     );
     // The guard the consumer applies: this baseline is strictly below the
     // settle's sequence, so a fold that already applied the settle drops it —
@@ -3408,7 +3497,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const stop = await runtime.subscribe(
       { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
       async (emission) => {
-        order.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
+        order.push(isSessionStreamFrame(emission) ? emission.event.payload.kind : "overlay");
         if (isSessionStreamOverlay(emission)) overlays += 1;
         if (overlays === 2) {
           entered.resolve();
@@ -3464,7 +3553,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     await runtime.subscribe(
       { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
       (emission) => {
-        if (isSessionStreamOverlay(emission)) return;
+        if (!isSessionStreamFrame(emission)) return;
         if (!exploded) {
           exploded = true;
           throw new Error("listener exploded");
@@ -3491,7 +3580,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const stop = await runtime.subscribe(
       { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
       (emission) => {
-        if (!isSessionStreamOverlay(emission)) kinds.push(emission.event.payload.kind);
+        if (isSessionStreamFrame(emission)) kinds.push(emission.event.payload.kind);
       },
     );
 
@@ -3528,10 +3617,11 @@ describe("SessionRuntime transient transcript overlay", () => {
     ]);
   });
 
-  it("drops the overlay when the attachment closes and when the adapter is released", async () => {
+  it("drops live transcript state when the attachment closes and when it is released", async () => {
     const closing = composition();
     const closedSession = await createAndAttach(closing.runtime);
     await closing.adapter.emit(textDelta("Hel"));
+    await closing.adapter.emit({ kind: "compaction-progress", state: "started", reason: "manual" });
     await closing.adapter.emit({ kind: "attachment", state: "closed" });
     const afterClose: SessionStreamEmission[] = [];
     (
@@ -3553,6 +3643,11 @@ describe("SessionRuntime transient transcript overlay", () => {
     const attachmentId = (await releasing.runtime.snapshot({ sessionId: releasedSession }))
       .projection.liveExecutor!.id;
     await releasing.adapter.emit(textDelta("Hel"));
+    await releasing.adapter.emit({
+      kind: "compaction-progress",
+      state: "started",
+      reason: "manual",
+    });
     await releasing.runtime.command({
       commandId: "overlay-release",
       sessionId: releasedSession,
@@ -3574,7 +3669,9 @@ describe("SessionRuntime transient transcript overlay", () => {
     )();
 
     expect(overlaysIn(afterClose)).toEqual([]);
+    expect(compactionProgressIn(afterClose)).toEqual([]);
     expect(overlaysIn(afterRelease)).toEqual([]);
+    expect(compactionProgressIn(afterRelease)).toEqual([]);
   });
 
   it("bounds how many Sessions keep an overlay", async () => {
@@ -3791,7 +3888,7 @@ describe("SessionRuntime transient transcript overlay", () => {
           .throughSequence,
       },
       (emission) => {
-        delivered.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
+        delivered.push(isSessionStreamFrame(emission) ? emission.event.payload.kind : "overlay");
         if (isSessionStreamOverlay(emission)) throw new Error("overlay client failed");
       },
     );
@@ -3816,8 +3913,8 @@ describe("SessionRuntime transient transcript overlay", () => {
           .throughSequence,
       },
       async (emission) => {
-        seen.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
-        if (!isSessionStreamOverlay(emission)) {
+        seen.push(isSessionStreamFrame(emission) ? emission.event.payload.kind : "overlay");
+        if (isSessionStreamFrame(emission)) {
           entered.resolve();
           await release.promise;
         }

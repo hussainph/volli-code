@@ -7,8 +7,12 @@
  * deltas; this is the last place a malformed one can still just be dropped
  * rather than drawn, or thrown from inside a React state updater.
  */
-import type { SessionStreamOverlay, TranscriptDelta } from "@volli/session-engine";
-import { parseRendererSessionEvent } from "@volli/shared";
+import type {
+  SessionStreamCompactionProgress,
+  SessionStreamOverlay,
+  TranscriptDelta,
+} from "@volli/session-engine";
+import { COMPACTION_REASONS, parseRendererSessionEvent } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import type { ChatSessionFrame } from "@renderer/chat/transcript";
@@ -80,6 +84,33 @@ export function chatSessionOverlay(value: unknown): SessionStreamOverlay | null 
     messageId: value.messageId,
     delta,
   };
+}
+
+/** The other live stream arm: why the executor is temporarily making a summary. */
+export function chatSessionCompactionProgress(
+  value: unknown,
+): SessionStreamCompactionProgress | null {
+  if (
+    !isRecord(value) ||
+    value.kind !== "compaction" ||
+    typeof value.sessionId !== "string" ||
+    typeof value.throughSequence !== "number" ||
+    (value.state !== "started" && value.state !== "finished") ||
+    !isCompactionReason(value.reason)
+  ) {
+    return null;
+  }
+  return {
+    kind: "compaction",
+    sessionId: value.sessionId,
+    throughSequence: value.throughSequence,
+    state: value.state,
+    reason: value.reason,
+  };
+}
+
+function isCompactionReason(value: unknown): value is (typeof COMPACTION_REASONS)[number] {
+  return typeof value === "string" && COMPACTION_REASONS.some((reason) => reason === value);
 }
 
 function chatTranscriptDelta(value: unknown): TranscriptDelta | null {

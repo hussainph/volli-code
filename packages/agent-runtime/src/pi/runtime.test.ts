@@ -4694,7 +4694,11 @@ describe("the compaction policy a Session is run under", () => {
   async function driveTo(
     occupied: number,
     policy: PiRuntimeHostOptions["compactionPolicy"],
-  ): Promise<{ calls: ProviderCall[]; compacted: CompactionObservation[] }> {
+  ): Promise<{
+    calls: ProviderCall[];
+    compacted: CompactionObservation[];
+    observations: RuntimeObservation[];
+  }> {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
@@ -4707,7 +4711,11 @@ describe("the compaction policy a Session is run under", () => {
     await handle.submitUserMessage(PASTED);
     await handle.submitUserMessage("carry on");
     await handle.close();
-    return { calls, compacted: compactions(attachment.observations) };
+    return {
+      calls,
+      compacted: compactions(attachment.observations),
+      observations: attachment.observations,
+    };
   }
 
   it("leaves a Session compacting at the executor's own reserve when nothing is configured", async () => {
@@ -4719,7 +4727,7 @@ describe("the compaction policy a Session is run under", () => {
   });
 
   it("compacts earlier for a model told to keep more room free", async () => {
-    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
+    const { calls, compacted, observations } = await driveTo(BETWEEN_RESERVES, () => ({
       autoCompaction: true,
       modelLimits: [{ ...LIMIT, reserveTokens: 32_768 }],
     }));
@@ -4729,6 +4737,9 @@ describe("the compaction policy a Session is run under", () => {
     expect(calls).toHaveLength(4);
     expect(compacted).toEqual([
       expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    expect(observations.filter(({ kind }) => kind === "compaction-progress")).toEqual([
+      expect.objectContaining({ state: "started", reason: "threshold" }),
     ]);
     expect(calls[3]?.messages).toContain("compacted into the following summary");
   });
@@ -4914,6 +4925,37 @@ describe("compacting because somebody asked", () => {
     const turn = calls[3]?.messages ?? "";
     expect(turn).toContain("compacted into the following summary");
     expect(turn).not.toContain("first answer");
+    await handle.close();
+  });
+
+  it("reports a manual compaction while its summary is pending", async () => {
+    const attachment = fixture();
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation([], async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    const compacting = handle.compact();
+    await summarizing.promise;
+
+    expect(attachment.observations.filter(({ kind }) => kind === "compaction-progress")).toEqual([
+      expect.objectContaining({ kind: "compaction-progress", state: "started", reason: "manual" }),
+    ]);
+
+    release.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
     await handle.close();
   });
 

@@ -77,7 +77,10 @@ import {
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
 import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
-import { CompactionBoundary } from "@renderer/components/chat/compaction-boundary-ui";
+import {
+  CompactionBoundary,
+  CompactionProgress,
+} from "@renderer/components/chat/compaction-boundary-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -268,7 +271,8 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   // render re-renders the whole box once per streamed frame.
   const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
 
-  const { messages, durableMessages, queue, working, deliverable, projection } = session;
+  const { messages, durableMessages, queue, working, deliverable, projection, liveCompaction } =
+    session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
@@ -985,6 +989,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
                     />
                   ),
                 )}
+                {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
                 {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
               </ContentColumn>
             )}

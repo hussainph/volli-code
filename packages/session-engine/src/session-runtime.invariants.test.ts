@@ -6,7 +6,7 @@ import {
   createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
-  isSessionStreamOverlay,
+  isSessionStreamFrame,
   type BindingHandle,
   type NativeHarnessAdapter,
   type ObservationSink,
@@ -1003,7 +1003,7 @@ describe("SessionRuntime durable boundary invariants", () => {
       if (failPeer) throw new Error("peer failed");
     });
     await runtime.subscribe({ sessionId: created.sessionId, afterSequence: 0 }, (emission) => {
-      if (isSessionStreamOverlay(emission)) return;
+      if (!isSessionStreamFrame(emission)) return;
       received.push(emission.event.payload.kind);
     });
     failPeer = true;

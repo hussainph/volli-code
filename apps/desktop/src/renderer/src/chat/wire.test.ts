@@ -10,7 +10,12 @@
 import type { TranscriptDelta } from "@volli/session-engine";
 import { describe, expect, it } from "vite-plus/test";
 
-import { chatSessionFrame, chatSessionOverlay, rejectedReceipt } from "./wire";
+import {
+  chatSessionCompactionProgress,
+  chatSessionFrame,
+  chatSessionOverlay,
+  rejectedReceipt,
+} from "./wire";
 
 /** The baseline every message's first delta is, keyed on one provider part. */
 function baseline(id: string, text: string): TranscriptDelta {
@@ -26,6 +31,17 @@ function baseline(id: string, text: string): TranscriptDelta {
  */
 function wireOverlay(delta: unknown): Record<string, unknown> {
   return { kind: "overlay", sessionId: "session-1", throughSequence: 0, messageId: "m1", delta };
+}
+
+function wireCompactionProgress(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: "compaction",
+    sessionId: "session-1",
+    throughSequence: 4,
+    state: "started",
+    reason: "manual",
+    ...overrides,
+  };
 }
 
 /** A `reset`'s message with its parts left untyped, which is the half under test. */
@@ -296,6 +312,23 @@ describe("chatSessionOverlay", () => {
   it("refuses an emission whose delta is not a record, or whose delta op it does not know", () => {
     expect(chatSessionOverlay(wireOverlay(null))).toBeNull();
     expect(chatSessionOverlay(wireOverlay({ op: "part.rewrite", key: "prt_1" }))).toBeNull();
+  });
+});
+
+describe("chatSessionCompactionProgress", () => {
+  it("accepts a live context compaction and refuses malformed status", () => {
+    expect(chatSessionCompactionProgress(wireCompactionProgress())).toEqual({
+      kind: "compaction",
+      sessionId: "session-1",
+      throughSequence: 4,
+      state: "started",
+      reason: "manual",
+    });
+    expect(chatSessionCompactionProgress(wireCompactionProgress({ state: "waiting" }))).toBeNull();
+    expect(chatSessionCompactionProgress(wireCompactionProgress({ reason: "other" }))).toBeNull();
+    expect(
+      chatSessionCompactionProgress(wireCompactionProgress({ throughSequence: "4" })),
+    ).toBeNull();
   });
 });
 

@@ -269,9 +269,15 @@ export function createChatSessionsStore(
         });
       },
 
-      applyStream(sessionId, frames, overlays) {
+      applyStream(sessionId, frames, overlays, progress = [], clearLiveCompaction = false) {
         update(sessionId, (slice) => {
-          const transcript = appendFrames(slice.transcript, frames, overlays);
+          const transcript = appendFrames(
+            slice.transcript,
+            frames,
+            overlays,
+            progress,
+            clearLiveCompaction,
+          );
           // `appendFrames` returns what it was handed when a batch had nothing
           // for it, and a fresh slice here would repaint the chat for nothing.
           if (transcript === slice.transcript) return slice;
