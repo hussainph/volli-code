@@ -34,7 +34,11 @@ import { Button } from "@renderer/components/ui/button";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
-import { cliStatusRows, type CliStatusRow } from "@renderer/components/pages/cli-status-model";
+import {
+  cliStatusDisclosure,
+  cliStatusRows,
+  type CliStatusRow,
+} from "@renderer/components/pages/cli-status-model";
 
 import { buildAboutReport } from "./about-report";
 import { CopyReportDialog, type CopyReportAvailability } from "./copy-report-dialog";
@@ -114,16 +118,36 @@ export function AboutPane() {
 
   // Only what is WRONG becomes a fault. A passing check is not news, and the
   // measurements behind it are one disclosure away.
+  /**
+   * Warning-toned STATUS rows are faults too, and the split comes from
+   * `cliStatusDisclosure` (VC-64) rather than being re-derived here.
+   *
+   * Without it the two halves of "is this install healthy" disagree: the Doctor
+   * decides the headline while a warning discovered by detection sits inside a
+   * collapsed disclosure, so the panel can say "Everything's working" over a
+   * hidden row that says the CLI is not on PATH. Folding them into one fault
+   * list means the headline counts everything wrong, and — because the same
+   * function hands back `detailRows` — a promoted row is not ALSO repeated in
+   * the details behind it.
+   */
+  const { attentionRows, detailRows } = React.useMemo(() => cliStatusDisclosure(rows), [rows]);
+
   const faults: readonly Fault[] = React.useMemo(
-    () =>
-      checks
+    () => [
+      ...checks
         .filter((check) => check.status !== "ok")
         .map((check) => ({
           id: check.id,
           headline: check.title,
           detail: check.remedy ? `${check.detail} → ${check.remedy}` : check.detail,
         })),
-    [checks],
+      ...attentionRows.map((row) => ({
+        id: `cli-status:${row.key}`,
+        headline: row.label,
+        detail: row.detail ?? row.value,
+      })),
+    ],
+    [attentionRows, checks],
   );
 
   const report = React.useMemo(
@@ -184,7 +208,7 @@ export function AboutPane() {
           </div>
         }
       >
-        {rows.map((row) => (
+        {detailRows.map((row) => (
           <DetailLine key={row.key} label={row.label} value={row.detail ?? row.value} />
         ))}
       </HealthPanel>
