@@ -321,6 +321,9 @@ describe("applySkillModes", () => {
   });
 
   it("does not clone a skill that is already manual", () => {
+    // `toBe`, not `toEqual`: the point is that a rule matching what the
+    // frontmatter already says hands back the SAME object, so a no-op rule
+    // costs nothing. A deep-equality check would pass even if it cloned.
     expect(applySkillModes([quiet], { quiet: "manual" })[0]).toBe(quiet);
   });
 

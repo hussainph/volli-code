@@ -188,15 +188,22 @@ describe("parseSessionModel", () => {
     ).toEqual({ providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "low" });
   });
 
+  // Named cases, not bare values: a persisted blob that fails this parser fails
+  // it for ONE reason, and "drops an empty provider" says which without anyone
+  // having to count `it.each` indices to find it.
   it.each([
-    "not a record",
-    null,
-    { providerId: 1, modelId: "claude-sonnet", reasoningLevel: "low" },
-    { providerId: "", modelId: "claude-sonnet", reasoningLevel: "low" },
-    { providerId: "anthropic", modelId: 1, reasoningLevel: "low" },
-    { providerId: "anthropic", modelId: "", reasoningLevel: "low" },
-    { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "maximum" },
-  ])("rejects malformed persisted input %#", (value) => {
+    ["null", null],
+    ["a non-record", "openai/gpt-5"],
+    ["a missing provider", {}],
+    ["a non-string provider", { providerId: 1, modelId: "gpt-5", reasoningLevel: "high" }],
+    ["an empty provider", { providerId: "", modelId: "gpt-5", reasoningLevel: "high" }],
+    ["a non-string model", { providerId: "openai", modelId: 5, reasoningLevel: "high" }],
+    ["an empty model", { providerId: "openai", modelId: "", reasoningLevel: "high" }],
+    [
+      "an unknown reasoning level",
+      { providerId: "openai", modelId: "gpt-5", reasoningLevel: "beyond-max" },
+    ],
+  ])("drops %s", (_reason, value) => {
     expect(parseSessionModel(value)).toBeNull();
   });
 });
