@@ -305,23 +305,6 @@ describe("writePromptTemplate", () => {
     });
   });
 
-  it("surfaces an unexpected filesystem failure", async () => {
-    const dir = makeCommandsDir();
-    chmodSync(dir, 0o500);
-    try {
-      const written = await writePromptTemplate({
-        dir,
-        name: "ship",
-        description: "Open a PR",
-        body: "Go.",
-      });
-      expect(written.ok).toBe(false);
-      expect(written.ok === false && written.error).not.toContain('called "ship" already exists');
-    } finally {
-      chmodSync(dir, 0o700);
-    }
-  });
-
   it("refuses a name that would escape the commands directory", async () => {
     const dir = makeCommandsDir();
 
@@ -331,6 +314,18 @@ describe("writePromptTemplate", () => {
       ok: false,
       error: "Use letters, numbers, dashes and underscores — the name becomes the filename.",
     });
+  });
+
+  it("surfaces an unexpected filesystem error", async () => {
+    const result = await writePromptTemplate({
+      dir: "",
+      name: "ship",
+      description: "",
+      body: "Go.",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).not.toContain("already exists");
   });
 
   it("refuses an empty prompt — a command with no body invokes nothing", async () => {

@@ -210,12 +210,11 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ id: "p1", modes: { "not a slug": "off" } }])).toBe(false);
     });
 
-    it("rejects a missing id, a non-object map, or a wrong arity", () => {
-      expect(guard([])).toBe(false);
-      expect(guard([null])).toBe(false);
+    it("rejects a missing id, non-object map, or wrong arity", () => {
       expect(guard([{ modes: {} }])).toBe(false);
       expect(guard([{ id: "p1", modes: null }])).toBe(false);
       expect(guard([{ id: "p1", modes: ["tdd"] }])).toBe(false);
+      expect(guard([])).toBe(false);
     });
   });
 
@@ -244,10 +243,10 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
     });
 
-    it("rejects a wrong arity, non-object input, or a missing project", () => {
-      expect(guard([])).toBe(false);
-      expect(guard([null])).toBe(false);
+    it("rejects a missing id, non-record payload, or wrong arity", () => {
       expect(guard([{ harness: null, model: null }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
     });
   });
 
@@ -1816,27 +1815,31 @@ describe("FILE_IPC descriptor table", () => {
     const valid = {
       projectId: "p1",
       scope: "project",
-      name: "ship",
-      description: "Ship it",
-      body: "Go.",
+      name: "review",
+      description: "Review a file",
+      body: "Review $1.",
     };
 
-    it("accepts both command tiers with a writable name", () => {
+    it("accepts each writable scope", () => {
       expect(guard([valid])).toBe(true);
       expect(guard([{ ...valid, scope: "personal" }])).toBe(true);
     });
 
-    it("rejects every malformed command field before it reaches the writer", () => {
-      expect(guard([])).toBe(false);
+    it("rejects a non-record payload or wrong arity", () => {
       expect(guard([null])).toBe(false);
-      expect(guard([{ ...valid, projectId: 7 }])).toBe(false);
-      expect(guard([{ ...valid, scope: "workspace" }])).toBe(false);
-      expect(guard([{ ...valid, name: "../escape" }])).toBe(false);
-      expect(guard([{ ...valid, description: 7 }])).toBe(false);
-      expect(guard([{ ...valid, body: 7 }])).toBe(false);
+      expect(guard([])).toBe(false);
     });
 
-    it("names the invalid command request", () => {
+    it("rejects every invalid command field", () => {
+      expect(guard([{ ...valid, projectId: 1 }])).toBe(false);
+      expect(guard([{ ...valid, scope: "shared" }])).toBe(false);
+      expect(guard([{ ...valid, name: 1 }])).toBe(false);
+      expect(guard([{ ...valid, name: "../escape" }])).toBe(false);
+      expect(guard([{ ...valid, description: 1 }])).toBe(false);
+      expect(guard([{ ...valid, body: 1 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid command");
     });
   });

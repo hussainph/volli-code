@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { UpdateUiState, VolliIpcChannel } from "../ipc/contract";
+import type { UpdateChannel, UpdateUiState, VolliIpcChannel } from "../ipc/contract";
 
 const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
@@ -149,24 +149,7 @@ describe("registerUpdateIpcHandlers", () => {
     });
   });
 
-  it("reads and writes the persisted release channel", () => {
-    const fixture = makeFixture();
-    let channel: "stable" | "canary" = "stable";
-    fixture.deps.channel = {
-      read: () => channel,
-      write: (next) => {
-        channel = next;
-        return channel;
-      },
-    };
-    registerUpdateIpcHandlers(fixture.deps);
-
-    expect(invoke("volli:update-channel-get")).toEqual({ ok: true, channel: "stable" });
-    expect(invoke("volli:update-channel-set", "canary")).toEqual({ ok: true, channel: "canary" });
-    expect(invoke("volli:update-channel-get")).toEqual({ ok: true, channel: "canary" });
-  });
-
-  it("refuses release-channel reads and writes without persistent storage", () => {
+  it("reports an unavailable release channel honestly", () => {
     const fixture = makeFixture();
     registerUpdateIpcHandlers(fixture.deps);
 
@@ -178,6 +161,23 @@ describe("registerUpdateIpcHandlers", () => {
       ok: false,
       error: "The release channel isn't writable right now.",
     });
+  });
+
+  it("reads and saves the configured release channel", () => {
+    const fixture = makeFixture();
+    let current: UpdateChannel = "stable";
+    fixture.deps.channel = {
+      read: () => current,
+      write: (next) => {
+        current = next;
+        return current;
+      },
+    };
+    registerUpdateIpcHandlers(fixture.deps);
+
+    expect(invoke("volli:update-channel-get")).toEqual({ ok: true, channel: "stable" });
+    expect(invoke("volli:update-channel-set", "canary")).toEqual({ ok: true, channel: "canary" });
+    expect(current).toBe("canary");
   });
 
   it("rejects stray arguments through the shared guard envelope", () => {
