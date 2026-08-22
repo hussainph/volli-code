@@ -41,10 +41,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder } = vi.hoisted(() => ({
+const { handlers, dataChangedSends, showItemInFolder, showSaveDialog } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
   showItemInFolder: vi.fn(),
+  showSaveDialog: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -72,7 +73,9 @@ vi.mock("electron", () => ({
         },
       },
     ],
+    getFocusedWindow: () => undefined,
   },
+  dialog: { showSaveDialog },
   shell: { showItemInFolder },
 }));
 
@@ -201,6 +204,36 @@ describe("volli:database", () => {
       sizeBytes: expectedSize,
     });
     expect(showItemInFolder).toHaveBeenCalledWith(ctx.dbPath);
+  });
+
+  it("counts live WAL companion files in the database size", async () => {
+    expect(ctx.db.pragma("journal_mode = WAL", { simple: true })).toBe("wal");
+    ctx.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run("database-size-test", "x".repeat(1024 * 1024), 0);
+
+    const mainBytes = statSync(ctx.dbPath).size;
+    const walBytes = statSync(`${ctx.dbPath}-wal`).size;
+    const shmBytes = statSync(`${ctx.dbPath}-shm`).size;
+    expect(walBytes).toBeGreaterThan(0);
+
+    await expect(invoke<Promise<DatabaseResult>>("volli:database")).resolves.toEqual({
+      ok: true,
+      sizeBytes: mainBytes + walBytes + shmBytes,
+    });
+  });
+
+  it("opens a save dialog before exporting", async () => {
+    showSaveDialog.mockResolvedValueOnce({ canceled: true });
+
+    await expect(
+      invoke<Promise<DatabaseResult>>("volli:database", "export"),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(showSaveDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ filters: [{ name: "JSON", extensions: ["json"] }] }),
+    );
   });
 });
 
