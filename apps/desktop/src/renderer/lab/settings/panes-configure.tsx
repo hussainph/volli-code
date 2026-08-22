@@ -45,6 +45,7 @@ import {
   DialogTrigger,
 } from "@renderer/components/ui/dialog";
 import { Input } from "@renderer/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -850,6 +851,64 @@ function SessionsPane() {
 
 /* ------------------------------ Appearance -------------------------------- */
 
+/**
+ * The canvas editor, as a POPOVER rather than a dialog.
+ *
+ * This was the last "still open" design question, and it has one constraint
+ * that decides it: the canvas is the window's own background, so the thing you
+ * are editing is behind the editor. A `Dialog` lays `bg-scrim` over the entire
+ * app, which dims the exact surface the edit is being judged against — you
+ * would be picking a gradient while looking at that gradient at 60% opacity.
+ *
+ * A popover has no scrim, stays anchored to the row that opened it, and closes
+ * on Escape or an outside click. It is `interactive` in the sense InfoHint
+ * is not: you click into it, drag stops, and the app behind updates live.
+ *
+ * Settings keeps the inline editor it already has — that pane is a whole
+ * category with room for a block. Configure gets this, because here the canvas
+ * is one row among three and inlining a pad would make the override list
+ * unscannable.
+ */
+function CanvasEditor({ onEdit }: { onEdit: () => void }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline">
+          Edit canvas…
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-4">
+        <div className="flex flex-col gap-4">
+          <div
+            className="flex h-24 items-center justify-center rounded-md bg-primary/20 text-ui text-muted-foreground"
+            aria-hidden
+          >
+            gradient pad
+          </div>
+          <div className="flex items-center gap-2">
+            {["#e8652a", "#7a3fd4", "#1f6f5c"].map((stop) => (
+              <button
+                key={stop}
+                type="button"
+                aria-label={`Colour stop ${stop}`}
+                style={{ backgroundColor: stop }}
+                className="size-6 rounded-full border border-border focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
+                onClick={onEdit}
+              />
+            ))}
+            <Button size="icon-xs" variant="ghost" aria-label="Add colour stop" onClick={onEdit}>
+              <PlusIcon />
+            </Button>
+          </div>
+          {/* The guardrail travels with the editor. It is the reason the
+              Settings copy of this could not be collapsed into a swatch. */}
+          <p className="text-ui text-muted-foreground">Contrast is fine at this vibrancy.</p>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function AppearancePane() {
   const [mode, setMode] = React.useState<string | null>("light");
   const [canvas, setCanvas] = React.useState<string | null>(null);
@@ -887,9 +946,7 @@ function AppearancePane() {
           overridden={canvas !== null}
           onRevert={() => setCanvas(null)}
         >
-          <Button size="sm" variant="outline" onClick={() => setCanvas("custom")}>
-            {canvas === null ? "Ember" : "Custom"}
-          </Button>
+          <CanvasEditor onEdit={() => setCanvas("custom")} />
         </OverrideControl>
       </PrefRow>
 
@@ -965,7 +1022,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "skills",
         label: "Skills",
         icon: BookOpenIcon,
-        keywords: ["skill", "agents", "capability", "shadow"],
+        keywords: ["skill", "agents", "capability", "shadow", "enabled", "source", "description"],
         count: SKILLS.length,
         content: <SkillsPane />,
       },
@@ -973,7 +1030,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "commands",
         label: "Commands",
         icon: CommandIcon,
-        keywords: ["command", "slash", "prompt", "template"],
+        keywords: ["command", "slash", "prompt", "template", "new command", "source"],
         count: COMMANDS.length,
         content: <CommandsPane />,
       },
@@ -981,7 +1038,16 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "mcp",
         label: "MCP Servers",
         icon: PlugsConnectedIcon,
-        keywords: ["mcp", "server", "tool", "context protocol"],
+        keywords: [
+          "mcp",
+          "server",
+          "tool",
+          "context protocol",
+          "servers",
+          "add server",
+          "tools",
+          "status",
+        ],
         attention: { state: "error", label: "1 failing" },
         content: <McpPane />,
       },
@@ -989,7 +1055,7 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "plugins",
         label: "Plugins",
         icon: PuzzlePieceIcon,
-        keywords: ["plugin", "bundle", "marketplace"],
+        keywords: ["plugin", "bundle", "marketplace", "installed", "contents", "browse"],
         count: PLUGINS.length,
         content: <PluginsPane />,
       },
@@ -1003,21 +1069,53 @@ export const CONFIGURE_GROUPS: readonly PrefGroup[] = [
         key: "sessions",
         label: "Sessions",
         icon: CpuIcon,
-        keywords: ["harness", "model", "claude code", "codex", "agents.md", "instructions"],
+        keywords: [
+          "harness",
+          "model",
+          "claude code",
+          "codex",
+          "agents.md",
+          "instructions",
+          "sessions",
+          "precedence",
+          "override",
+        ],
         content: <SessionsPane />,
       },
       {
         key: "appearance",
         label: "Appearance",
         icon: PaletteIcon,
-        keywords: ["theme", "dark", "light", "canvas", "terminal", "override"],
+        keywords: [
+          "theme",
+          "dark",
+          "light",
+          "canvas",
+          "terminal",
+          "override",
+          "mode",
+          "overrides",
+          "config file",
+          "config",
+        ],
         content: <AppearancePane />,
       },
       {
         key: "worktrees",
         label: "Worktrees",
         icon: TreeStructureIcon,
-        keywords: ["worktree", "branch", "base", "setup", "copy", "worktreeinclude", "env"],
+        keywords: [
+          "worktree",
+          "branch",
+          "base",
+          "setup",
+          "copy",
+          "worktreeinclude",
+          "env",
+          "copied files",
+          "then run",
+          "branch from",
+        ],
         content: <WorktreesPane />,
       },
     ],

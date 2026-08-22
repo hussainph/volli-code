@@ -114,7 +114,7 @@ export default function SettingsRedesign() {
     <TooltipProvider delayDuration={200}>
       <div className="flex h-svh w-full flex-col bg-background text-foreground">
         {/* Lab chrome. Not part of the proposal — see the module header. */}
-        <div className="flex shrink-0 items-center justify-center border-b border-dashed border-border/70 px-4 py-2">
+        <div className="flex shrink-0 items-center justify-start gap-4 border-b border-dashed border-border/70 px-4 py-2">
           <Segmented
             ariaLabel="Prototype surface"
             size="default"

@@ -511,6 +511,81 @@ check(
   `${before} -> ${after}, first row "${named.split("\n")[0]}"`,
 );
 
+console.log("\n── non-plumbing close-out ──");
+
+/* Copy report shows what it would copy, before it copies it. */
+await surface("Settings").click();
+await page.waitForTimeout(500);
+await nav("About").click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: "Copy report…" }).click();
+await page.waitForTimeout(500);
+const reportText = await page.getByRole("dialog").innerText();
+check(
+  "Copy report previews the payload rather than copying blind",
+  reportText.includes("PATH") && reportText.includes("Library/Application Support"),
+);
+check(
+  "nothing is copied until Copy is pressed",
+  (await page.getByRole("button", { name: "Copy", exact: true }).count()) === 1,
+);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(400);
+
+/* The canvas editor must not scrim the canvas it edits. */
+await surface("Configure").click();
+await page.waitForTimeout(500);
+await nav("Appearance").click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: "Edit canvas…" }).click();
+await page.waitForTimeout(500);
+check(
+  "the canvas editor opens without a scrim over the canvas",
+  (await page.locator('[data-slot="dialog-overlay"]').count()) === 0 &&
+    (await page.getByRole("button", { name: /Colour stop/ }).count()) === 3,
+);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(300);
+
+/* M4 — keywords rot. Every row label must be reachable from the rail search. */
+const unreachable = [];
+for (const surfaceName of ["Settings", "Configure"]) {
+  await surface(surfaceName).click();
+  await page.waitForTimeout(400);
+  const rail = page.locator("nav").first().getByRole("button");
+  for (let r = 0; r < (await rail.count()); r += 1) {
+    await rail.nth(r).click();
+    await page.waitForTimeout(200);
+    const category = (await rail.nth(r).innerText()).split("\n")[0].trim();
+    const labels = await page
+      .locator("main label, section label")
+      .evaluateAll((els) =>
+        els.map((el) => el.textContent.trim()).filter((t) => t && t.length < 30),
+      );
+    for (const label of labels.slice(0, 4)) {
+      // Split on every non-letter, so "Per-project themes" yields
+      // per/project/themes rather than the non-word "perproject".
+      const word = label
+        .toLowerCase()
+        .split(/[^a-z]+/)
+        .find((w) => w.length >= 4);
+      if (!word) continue;
+      const search = page.getByLabel(`Search ${surfaceName.toLowerCase()}`);
+      await search.fill(word);
+      await page.waitForTimeout(180);
+      const hits = await page.locator("nav").first().getByRole("button").count();
+      if (hits === 0) unreachable.push(`${surfaceName}/${category}: "${word}"`);
+      await search.fill("");
+      await page.waitForTimeout(120);
+    }
+  }
+}
+check(
+  "M4 every row label is reachable from the rail search",
+  unreachable.length === 0,
+  unreachable.length ? unreachable.slice(0, 6).join("; ") : "no keyword drift",
+);
+
 check("no uncaught errors", thrown.length === 0, thrown.join("; "));
 
 await browser.close();

@@ -41,6 +41,16 @@ import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure"
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
 
 import { Button } from "@renderer/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@renderer/components/ui/dialog";
 import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
@@ -845,6 +855,66 @@ function UpdatesPane() {
 
 /* -------------------------------- About ----------------------------------- */
 
+/** What Copy report would put on the clipboard. Shown before it goes there. */
+const REPORT = `Volli 0.1.0-canary.9 (darwin arm64)
+harnesses    claude 2.1.4, codex 0.9.0
+providers    Anthropic (Claude Pro), OpenAI Codex (API key)
+cli          /Users/you/Library/Application Support/Volli Code/bin/volli
+shadowed by  /usr/local/bin/volli
+PATH         /opt/homebrew/bin:/usr/bin:/bin  (matches login shell)
+database     12.4 MB
+faults       legacy-binary, path-missing`;
+
+/**
+ * Copy report, with a preview.
+ *
+ * The first review's §1.4.9: a button that puts your \$PATH, home directory and
+ * username on the clipboard WITHOUT showing them is worse than printing them,
+ * because a local-first app's whole pitch is that you can see what leaves. The
+ * ellipsis in "Copy report…" promises this dialog; the dialog is the promise
+ * kept. Nothing is copied until Copy is pressed.
+ */
+function CopyReportDialog() {
+  const [copied, setCopied] = React.useState(false);
+
+  return (
+    <Dialog onOpenChange={() => setCopied(false)}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">
+          Copy report…
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Copy report</DialogTitle>
+          <DialogDescription>
+            This is everything that goes on your clipboard. It includes your home folder path.
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="max-h-64 overflow-auto rounded-lg bg-muted p-4 font-mono text-ui whitespace-pre-wrap">
+          {REPORT}
+        </pre>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button size="sm" variant="ghost">
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button
+            size="sm"
+            onClick={() => {
+              void navigator.clipboard?.writeText(REPORT).catch(() => {});
+              setCopied(true);
+            }}
+          >
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AboutPane() {
   const [faults, setFaults] = React.useState<readonly Fault[]>([
     {
@@ -873,9 +943,7 @@ function AboutPane() {
         faults={faults}
         actions={
           <>
-            <Button size="sm" variant="outline">
-              Copy report…
-            </Button>
+            <CopyReportDialog />
             <Button size="sm" variant="outline">
               Re-check
             </Button>
@@ -938,6 +1006,14 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
           "diff",
           "ghostty",
           "overlay",
+          "mode",
+          "display",
+          "per-project",
+          "config files",
+          "project",
+          "week",
+          "starts",
+          "language",
         ],
         content: <AppearancePane />,
       },
@@ -968,6 +1044,18 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
           "reasoning",
           "sign in",
           "account",
+          "project chats",
+          "ticket sessions",
+          "background jobs",
+          "catalog",
+          "default",
+          "agent",
+          "session",
+          "input",
+          "finishes",
+          "fails",
+          "ticket",
+          "column",
         ],
         count: CATALOG.length,
         content: <ModelsPane />,
@@ -976,7 +1064,7 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
         key: "web",
         label: "Web Search",
         icon: GlobeIcon,
-        keywords: ["search", "brave", "exa", "searxng", "api key"],
+        keywords: ["search", "brave", "exa", "searxng", "api key", "provider", "instance"],
         content: <WebPane />,
       },
       {
@@ -996,14 +1084,38 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
         key: "storage",
         label: "Storage",
         icon: TreeStructureIcon,
-        keywords: ["retention", "worktree", "orphan", "cleanup", "database", "export", "backup"],
+        keywords: [
+          "retention",
+          "worktree",
+          "orphan",
+          "cleanup",
+          "database",
+          "export",
+          "backup",
+          // Same — "keep", "size" and "days" are how someone would actually
+          // describe what this pane does.
+          "keep",
+          "size",
+          "days",
+          "delete",
+        ],
         content: <StoragePane />,
       },
       {
         key: "updates",
         label: "Updates",
         icon: DownloadSimpleIcon,
-        keywords: ["update", "version", "canary", "prerelease", "channel"],
+        keywords: [
+          "update",
+          "version",
+          "canary",
+          "prerelease",
+          "channel",
+          "install",
+          "current",
+          "check now",
+          "automatically",
+        ],
         attention: { state: "ready", label: "update ready" },
         content: <UpdatesPane />,
       },
@@ -1011,7 +1123,18 @@ export const SETTINGS_GROUPS: readonly PrefGroup[] = [
         key: "about",
         label: "About",
         icon: InfoIcon,
-        keywords: ["version", "diagnostics", "doctor", "cli", "harness", "health", "support"],
+        keywords: [
+          "version",
+          "diagnostics",
+          "doctor",
+          "cli",
+          "harness",
+          "health",
+          "support",
+          "copy report",
+          "harnesses",
+          "re-check",
+        ],
         attention: { state: "waiting", label: "2 problems" },
         content: <AboutPane />,
       },
