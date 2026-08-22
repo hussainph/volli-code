@@ -43,7 +43,7 @@ import {
 } from "@volli/shared";
 
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
-import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
+import { Cell, DataTable, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
   Select,
@@ -210,7 +210,6 @@ export function ModelAccessSettings({
   }
 
   const offerable = offerableModels(models);
-  const groups = availableModelsByProvider(models, providers);
 
   return (
     <>
@@ -260,19 +259,47 @@ export function ModelAccessSettings({
           />
         </PrefRow>
       </PrefSection>
-      {groups.length > 0 ? (
-        <PrefSection title="Models" icon={EyeIcon}>
-          {groups.map((group) => (
-            <React.Fragment key={group.providerId}>
-              <p className="pt-2 pb-1 text-ui font-medium text-muted-foreground first:pt-1">
-                {group.providerLabel}
-              </p>
-              {group.models.map((model) => (
-                <PrefRow
-                  key={`${model.providerId}/${model.modelId}`}
-                  label={model.label}
-                  testId={`visibility-${model.providerId}-${model.modelId}`}
-                >
+      {offerable.length > 0 ? (
+        <PrefSection title="Catalog" icon={EyeIcon}>
+          {/*
+           * THE CATALOGUE AS A TABLE (VC-111), not a stack of rows grouped by
+           * a provider paragraph.
+           *
+           * A signed-in profile can offer a hundred models. As rows this was a
+           * section with no bottom: Accounts sat below it and was effectively
+           * unreachable, and the provider — half a model's identity, since the
+           * same name ships from several — was a heading you had to scroll back
+           * to rather than a value you could read across.
+           *
+           * As a table it caps at eight rows and scrolls inside its own box, so
+           * the PAGE stays navigable while the COLLECTION grows; provider
+           * becomes a column that aligns and can be searched; and the two
+           * per-model controls line up in their own columns instead of being
+           * crammed into a row's trailing slot.
+           */}
+          <DataTable
+            label="Model catalog"
+            items={offerable}
+            keyOf={(model) => `${model.providerId}/${model.modelId}`}
+            rows={8}
+            search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
+            placeholder="Search models"
+            empty="No models. Sign in to a provider below."
+            noResults="No models match."
+            columns={[
+              { key: "name", header: "Model", cell: (model) => <Cell>{model.label}</Cell> },
+              {
+                key: "provider",
+                header: "Provider",
+                width: "10rem",
+                cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
+              },
+              {
+                key: "reserve",
+                header: "Reserve",
+                width: "9rem",
+                align: "end",
+                cell: (model) => (
                   <CompactionReserveSelect
                     model={model}
                     policy={compaction}
@@ -288,15 +315,25 @@ export function ModelAccessSettings({
                       })
                     }
                   />
+                ),
+              },
+              {
+                key: "shown",
+                header: "Shown",
+                width: "4rem",
+                align: "end",
+                headerHidden: true,
+                cell: (model) => (
                   <Switch
-                    aria-label={`Show ${model.label} in pickers`}
+                    aria-label={`Show ${model.label} by ${providerLabelFor(providers, model.providerId)} in pickers`}
+                    data-testid={`visibility-${model.providerId}-${model.modelId}`}
                     checked={!isModelHidden(hidden, model)}
                     onCheckedChange={(visible) => void saveVisibility(model, visible)}
                   />
-                </PrefRow>
-              ))}
-            </React.Fragment>
-          ))}
+                ),
+              },
+            ]}
+          />
         </PrefSection>
       ) : null}
       <ModelAccessAccounts
@@ -586,6 +623,21 @@ export function modelOptionLabel(
 ): string {
   const provider = providers.find((candidate) => candidate.id === model.providerId);
   return `${model.label} · ${provider?.label ?? model.providerId}`;
+}
+
+/**
+ * A provider's display name, or its id when the catalogue does not name it.
+ *
+ * The provider is half a model's identity — eight providers ship a model called
+ * exactly "GPT-5.6 Luna" — so the Provider column exists to tell two identical
+ * rows apart, and falling back to the id keeps it able to do that even for a
+ * provider the profile has no metadata for.
+ */
+export function providerLabelFor(
+  providers: readonly ModelAccessProvider[],
+  providerId: string,
+): string {
+  return providers.find((provider) => provider.id === providerId)?.label ?? providerId;
 }
 
 function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): string {
