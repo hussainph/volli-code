@@ -7,7 +7,7 @@ const releasesUrl = `${repositoryUrl}/releases`;
 const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
 const description =
-  "Download the Volli Code alpha for Apple silicon Macs — one build, served straight from GitHub Releases.";
+  "Download the Volli alpha for Apple silicon Macs — one build, served straight from GitHub Releases.";
 ---
 
 <!doctype html>
@@ -19,22 +19,22 @@ const description =
     <link rel="canonical" href="https://volli.app/download/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://volli.app/download/" />
-    <meta property="og:title" content="Download Volli Code — alpha for Apple silicon" />
+    <meta property="og:title" content="Download Volli — alpha for Apple silicon" />
     <meta property="og:description" content={description} />
     {/* Same card as the homepage: a shared download link should still look like
         Volli, and the card is about the product, not the page. */}
     <meta property="og:image" content="https://volli.app/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Volli Code — the workspace for parallel coding agents" />
-    <meta property="og:site_name" content="Volli Code" />
+    <meta property="og:image:alt" content="Volli — the workspace for parallel coding agents" />
+    <meta property="og:site_name" content="Volli" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Download Volli Code — alpha for Apple silicon" />
+    <meta name="twitter:title" content="Download Volli — alpha for Apple silicon" />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content="https://volli.app/og.png" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Download Volli Code — alpha for Apple silicon</title>
+    <title>Download Volli — alpha for Apple silicon</title>
     <noscript>
       <style>
         [data-live] {
@@ -59,7 +59,7 @@ const description =
 
       <section class="download-intro" id="download">
         <span class="alpha-pill">Alpha</span>
-        <h1>Download Volli Code</h1>
+        <h1>Download Volli</h1>
         <p class="download-sub">
           One build, for Apple silicon Macs (M1 and later), served straight from <a
             href={releasesUrl}>GitHub Releases</a
@@ -67,7 +67,7 @@ const description =
           it yourself? Follow the <a href={`${docsUrl}/start/install/`}>install guide</a>.
         </p>
         <p class="platform-note" data-platform-note hidden>
-          Volli Code runs on macOS only, and this build is Apple silicon only — there is no Intel or
+          Volli runs on macOS only, and this build is Apple silicon only — there is no Intel or
           Windows build today.
         </p>
       </section>

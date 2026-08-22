@@ -74,7 +74,7 @@ const CARDS = [
   {
     out: join(repoRoot, "apps/docs/public/og.png"),
     eyebrow: "Documentation",
-    headline: "Everything you need to run Volli Code.",
+    headline: "Everything you need to run Volli.",
     lede: "Install, quickstart, concepts, guides, and the CLI reference.",
     footer: "docs.volli.app",
   },
@@ -190,7 +190,7 @@ function markup({ eyebrow, headline, lede, footer }, { font, icon }) {
     <div class="row">
       <div class="brand">
         <img src="data:image/png;base64,${icon}" alt="" />
-        <span>Volli Code</span>
+        <span>Volli</span>
       </div>
       <div class="eyebrow">${eyebrow}</div>
     </div>
