@@ -210,7 +210,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ id: "p1", modes: { "not a slug": "off" } }])).toBe(false);
     });
 
-    it("rejects a missing id or a non-object map", () => {
+    it("rejects a missing id, a non-object map, or a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
       expect(guard([{ modes: {} }])).toBe(false);
       expect(guard([{ id: "p1", modes: null }])).toBe(false);
       expect(guard([{ id: "p1", modes: ["tdd"] }])).toBe(false);
@@ -240,6 +242,12 @@ describe("DATA_IPC descriptor table", () => {
 
     it("rejects a non-string harness", () => {
       expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
+    });
+
+    it("rejects a wrong arity, non-object input, or a missing project", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ harness: null, model: null }])).toBe(false);
     });
   });
 
@@ -1800,6 +1808,36 @@ describe("FILE_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:prompt-template-create", () => {
+    const { guard, invalidError } = FILE_IPC["volli:prompt-template-create"];
+    const valid = {
+      projectId: "p1",
+      scope: "project",
+      name: "ship",
+      description: "Ship it",
+      body: "Go.",
+    };
+
+    it("accepts both command tiers with a writable name", () => {
+      expect(guard([valid])).toBe(true);
+      expect(guard([{ ...valid, scope: "personal" }])).toBe(true);
+    });
+
+    it("rejects every malformed command field before it reaches the writer", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ ...valid, projectId: 7 }])).toBe(false);
+      expect(guard([{ ...valid, scope: "workspace" }])).toBe(false);
+      expect(guard([{ ...valid, name: "../escape" }])).toBe(false);
+      expect(guard([{ ...valid, description: 7 }])).toBe(false);
+      expect(guard([{ ...valid, body: 7 }])).toBe(false);
+    });
+
+    it("names the invalid command request", () => {
+      expect(invalidError).toBe("Invalid command");
     });
   });
 

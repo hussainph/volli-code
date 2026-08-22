@@ -149,6 +149,37 @@ describe("registerUpdateIpcHandlers", () => {
     });
   });
 
+  it("reads and writes the persisted release channel", () => {
+    const fixture = makeFixture();
+    let channel: "stable" | "canary" = "stable";
+    fixture.deps.channel = {
+      read: () => channel,
+      write: (next) => {
+        channel = next;
+        return channel;
+      },
+    };
+    registerUpdateIpcHandlers(fixture.deps);
+
+    expect(invoke("volli:update-channel-get")).toEqual({ ok: true, channel: "stable" });
+    expect(invoke("volli:update-channel-set", "canary")).toEqual({ ok: true, channel: "canary" });
+    expect(invoke("volli:update-channel-get")).toEqual({ ok: true, channel: "canary" });
+  });
+
+  it("refuses release-channel reads and writes without persistent storage", () => {
+    const fixture = makeFixture();
+    registerUpdateIpcHandlers(fixture.deps);
+
+    expect(invoke("volli:update-channel-get")).toEqual({
+      ok: false,
+      error: "The release channel isn't readable right now.",
+    });
+    expect(invoke("volli:update-channel-set", "canary")).toEqual({
+      ok: false,
+      error: "The release channel isn't writable right now.",
+    });
+  });
+
   it("rejects stray arguments through the shared guard envelope", () => {
     const fixture = makeFixture();
     registerUpdateIpcHandlers(fixture.deps);
