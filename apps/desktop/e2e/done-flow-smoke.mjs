@@ -57,6 +57,7 @@ import {
   seedProjects,
   sleep,
   waitUntil,
+  writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -130,6 +131,11 @@ async function main() {
   await fs.mkdir(fakeHome, { recursive: true });
 
   await writeGhShim(binDir, ghLog);
+  // Shadowing takes BOTH halves since VC-94: boot adoption installs the union of
+  // this launch PATH and `$SHELL`'s answer with the LOGIN entries FIRST, so a
+  // prepended bin dir alone lands behind `/opt/homebrew/bin` and the app calls
+  // the developer's real `gh` instead of the shim (see writeFakeLoginShell).
+  const fakeShell = await writeFakeLoginShell(binDir, `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`);
 
   const app = await launch({
     dbPath,
@@ -137,8 +143,10 @@ async function main() {
     extraEnv: {
       VOLLI_WORKTREE_HOME_DIR: fakeHome,
       // Prepend the fake-gh bin dir so it SHADOWS any real `gh` on the runner;
-      // git and everything else still resolve from the inherited PATH.
+      // git and everything else still resolve from the inherited PATH, which
+      // the union keeps reachable behind the login half.
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      SHELL: fakeShell,
     },
   });
 

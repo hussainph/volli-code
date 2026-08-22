@@ -135,7 +135,13 @@ async function main() {
         await page.getByRole("menuitemradio", { name: "High", exact: true }).click();
         await composer(page).getByRole("button", { name: "Labels" }).click();
         await sleep(150);
-        await page.getByPlaceholder("Add label…").fill(DRAFT.label);
+        // "Search labels…", not "Add label…": VC-27 turned this into a picker
+        // over the project's own vocabulary (typing still CREATES one, which the
+        // Enter below commits). composer-basics-smoke was updated with the
+        // rename; this probe was not, and the throw left the composer open —
+        // which is why checks 2 and 3 failed behind it on the "New ticket"
+        // button the modal was covering.
+        await page.getByPlaceholder("Search labels…").fill(DRAFT.label);
         await page.keyboard.press("Enter");
         await sleep(200);
         await page.keyboard.press("Escape"); // close the label menu only
