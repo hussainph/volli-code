@@ -18,6 +18,7 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  applySkillModes,
   BLOB_URL_SCHEME,
   diffManagedContent,
   displayTicketId,
@@ -890,10 +891,14 @@ app.whenReady().then(async () => {
                 `The project's skills could not be read: ${read.error}`,
               );
             }
+            // A skill this project switched off is not "hidden from the model"
+            // — it is not available, so resolving it by name fails like any
+            // other name the project does not have.
+            const available = applySkillModes(read.skills, project.skillModes ?? {});
             // Order and dedup follow the request, not the directory: the
             // record should say what was asked for, once each.
             return [...new Set(names)].map((name) => {
-              const skill = read.skills.find((candidate) => candidate.name === name);
+              const skill = available.find((candidate) => candidate.name === name);
               if (!skill) {
                 throw new StructuredSessionsError(
                   "SKILL_NOT_FOUND",
@@ -908,16 +913,28 @@ app.whenReady().then(async () => {
             if (!project) return null;
             // Both tiers, always. Metadata disclosure is the Agent Skills
             // ladder's first rung -- the spec loads every skill's name and
-            // description at startup -- so Volli absorbs the toolkit the user
-            // installed rather than holding an opinion about it. A skill opts
-            // ITSELF out through its frontmatter (`skillsIndexResource`); no
-            // Volli-side switch decides for the user.
+            // description at startup -- so the DEFAULT is to absorb the toolkit
+            // the user installed rather than to hold an opinion about it.
+            //
+            // Two things can narrow that, and neither is Volli deciding on the
+            // user's behalf: the skill's own frontmatter (`isUserInvokeOnly`),
+            // and this project's explicit per-skill rule (VC-111, migration
+            // 023). The second exists because this index is ~94% of a fresh
+            // Session's Volli-composed prompt and is re-sent as the stable
+            // prefix of every turn, so "which skills are worth their prompt
+            // share here" is a real question a project should be able to
+            // answer. Both land in the same place -- `applySkillModes` folds
+            // the rule onto `userInvokeOnly`, and `skillsIndexResource` reads
+            // only that.
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
             });
             if (!read.ok) return null;
-            return skillsIndexResource(read.skills, injectedNames);
+            return skillsIndexResource(
+              applySkillModes(read.skills, project.skillModes ?? {}),
+              injectedNames,
+            );
           },
           record: async (sessionId, resources) => {
             await sessionEngine.getOrRecordSessionInput({

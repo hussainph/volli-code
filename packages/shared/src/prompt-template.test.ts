@@ -4,6 +4,7 @@ import { skillPromptResource } from "./skill";
 import {
   expandCommandInvocation,
   formatPromptTemplateInvocation,
+  isWritablePromptTemplateName,
   mergePromptTemplates,
   parseCommandArgs,
   findCommandInvocations,
@@ -365,5 +366,37 @@ describe("expandCommandInvocation", () => {
         resources: [logosResource],
       });
     });
+  });
+});
+
+describe("isWritablePromptTemplateName", () => {
+  it("accepts a plain slug", () => {
+    expect(isWritablePromptTemplateName("ship")).toBe(true);
+    expect(isWritablePromptTemplateName("open-pr")).toBe(true);
+    expect(isWritablePromptTemplateName("audit_2")).toBe(true);
+  });
+
+  it("rejects a name the `/` grammar would stop reading part-way through", () => {
+    // `findCommandInvocations` stops at the first character outside
+    // COMMAND_NAME_CHAR, so `/ship it` invokes `ship` — a file called
+    // `ship it.md` could never be reached by the whole name it claims.
+    expect(isWritablePromptTemplateName("ship it")).toBe(false);
+    expect(isWritablePromptTemplateName("ship.md")).toBe(false);
+    expect(isWritablePromptTemplateName("ship!")).toBe(false);
+  });
+
+  it("rejects a colon, which the `/` grammar allows but a macOS filename does not", () => {
+    // COMMAND_NAME_CHAR includes `:`. The filename is the invocation here, and
+    // HFS+/APFS show a stored `:` as `/` in Finder — so the writable set is a
+    // strict subset of the invokable one.
+    expect(isWritablePromptTemplateName("ship:now")).toBe(false);
+  });
+
+  it("rejects path traversal and the empty name", () => {
+    expect(isWritablePromptTemplateName("")).toBe(false);
+    expect(isWritablePromptTemplateName(".")).toBe(false);
+    expect(isWritablePromptTemplateName("..")).toBe(false);
+    expect(isWritablePromptTemplateName("../escape")).toBe(false);
+    expect(isWritablePromptTemplateName("nested/name")).toBe(false);
   });
 });

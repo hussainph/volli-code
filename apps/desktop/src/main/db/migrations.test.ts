@@ -1135,3 +1135,73 @@ describe("migrate — 019 to 020 upgrade path (web access)", () => {
     db.close();
   });
 });
+
+describe("migrate — 022 to 023 upgrade path (per-project agent configuration)", () => {
+  it("adds three nullable columns to an existing project, every one meaning inherit", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((m) => m.version <= 22)) {
+      db.exec(migration.sql);
+    }
+    db.pragma("user_version = 22");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    // NULL = inherit, as 013/014/019 all mean it. An upgraded project behaves
+    // exactly as it did before the column existed.
+    expect(
+      db
+        .prepare("SELECT skill_modes, session_harness, session_model FROM projects WHERE id = 'p1'")
+        .get(),
+    ).toEqual({ skill_modes: null, session_harness: null, session_model: null });
+    expect(existsSync(`${dbPath}.backup-v22`)).toBe(true);
+    db.close();
+  });
+
+  it("refuses a skill_modes or session_model value that is not JSON", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+
+    for (const column of ["skill_modes", "session_model"]) {
+      expect(() =>
+        db.prepare(`UPDATE projects SET ${column} = 'not json' WHERE id = 'p1'`).run(),
+      ).toThrow();
+    }
+    expect(() =>
+      db.prepare(`UPDATE projects SET skill_modes = ? WHERE id = 'p1'`).run('{"tdd":"off"}'),
+    ).not.toThrow();
+    expect(() =>
+      db
+        .prepare(`UPDATE projects SET session_model = ? WHERE id = 'p1'`)
+        .run('{"providerId":"anthropic","modelId":"opus","reasoningLevel":"high"}'),
+    ).not.toThrow();
+    db.close();
+  });
+
+  it("cascades with the project, unlike an app_state blob keyed by project id", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at, skill_modes)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0, '{"tdd":"off"}')`,
+    ).run();
+
+    db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
+
+    expect(db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 0 });
+    db.close();
+  });
+});

@@ -61,6 +61,30 @@ const DERIVED_DESCRIPTION_LIMIT = 60;
 const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
 
 /**
+ * The names Volli will CREATE a template file for — a strict subset of the
+ * names it can read and invoke.
+ *
+ * Two rules meet here, and the narrower one wins:
+ *
+ *  - **It has to be invokable whole.** {@link findCommandInvocations} reads a
+ *    name up to the first character outside {@link COMMAND_NAME_CHAR}, so a
+ *    file called `ship it.md` is reachable only as `/ship` — a command whose
+ *    own name cannot summon it.
+ *  - **It has to be a safe flat filename**, because the basename IS the
+ *    invocation. That excludes `:`, which the `/` grammar happily allows and
+ *    macOS does not: HFS+ and APFS store it but Finder renders it as `/`, so
+ *    the file a user sees is not the file they made. It also excludes `.` and
+ *    `..`, and anything with a separator in it.
+ *
+ * Reading stays deliberately more permissive than writing. A template someone
+ * hand-authored with a `:` in it still loads and still runs — this rule governs
+ * only what the app is willing to author on their behalf.
+ */
+export function isWritablePromptTemplateName(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+/**
  * Parse an argument string using simple shell-style single and double quotes.
  *
  * Port of Pi's `parseCommandArgs` — see this module's header.

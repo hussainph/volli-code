@@ -151,6 +151,121 @@ export function isSkillName(value: string): boolean {
 }
 
 /**
+ * How much of itself a skill offers this project (VC-111, migration 023).
+ *
+ * THREE states rather than a switch, because the interesting one is in the
+ * middle. A fresh Project Session's Volli-composed context measures ~10,400
+ * tokens and ~9,800 of them — 94% — are the metadata-only skills index, one
+ * name/path/description row per disclosed skill, re-sent as the stable prefix
+ * of every turn. So "do I want this skill at all" and "do I want to pay for
+ * this skill's discoverability on every turn" are different questions, and a
+ * two-state switch can only ask the first.
+ *
+ *  - `auto` — advertised in the index. The model can find it unprompted, and
+ *    it costs its index row on every turn.
+ *  - `manual` — withheld from the index, still fully invokable by name. Costs
+ *    nothing until someone types `/slug`. This is the budget lever.
+ *  - `off` — gone: unindexed, unlistable, unresolvable.
+ *
+ * `manual` is not a new mechanism. It is the frontmatter opt-out
+ * ({@link isUserInvokeOnly}) with a per-project override in front of it, so
+ * the author's default still holds wherever a project has said nothing.
+ */
+export type SkillMode = "auto" | "manual" | "off";
+
+/** Every mode, for a picker that must offer all of them. */
+export const SKILL_MODES: readonly SkillMode[] = ["auto", "manual", "off"];
+
+/**
+ * One project's skill rules: slug → mode, holding ONLY departures from the
+ * default. An absent slug means "whatever the skill itself asked for".
+ */
+export type SkillModes = Readonly<Record<string, SkillMode>>;
+
+/**
+ * A stored `skill_modes` payload as rules — slugs the grammar can spell, modes
+ * the vocabulary defines, and nothing else.
+ *
+ * `auto` rules are dropped rather than kept, because `auto` is what an absent
+ * rule already means for an ordinary skill. Keeping it would make "never
+ * touched" and "explicitly set to the default" two db states that are
+ * indistinguishable everywhere above the db — a difference waiting to be
+ * depended on by accident.
+ *
+ * NOTE the one asymmetry this creates, and it is deliberate: for a skill whose
+ * frontmatter says `isUserInvokeOnly`, `auto` is NOT the default, so an
+ * explicit `auto` on it is a real departure and IS stored. That is why the
+ * drop is decided here against the vocabulary rather than against each skill.
+ * See {@link resolveSkillMode} for where the two meet.
+ *
+ * Degrades rather than throws, like `parseCanvas` beside it: a project row is
+ * read at boot in a loop over every project, and a hand-edited value must cost
+ * that project its rules, not the whole rail.
+ */
+export function parseSkillModes(value: unknown): SkillModes {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const rules: Record<string, SkillMode> = {};
+  for (const [slug, mode] of Object.entries(value as Record<string, unknown>)) {
+    if (!isSkillName(slug)) continue;
+    if (mode !== "manual" && mode !== "off") continue;
+    rules[slug] = mode;
+  }
+  return rules;
+}
+
+/**
+ * What a skill's mode actually resolves to: the project's rule if it has one,
+ * otherwise the skill author's own declaration.
+ *
+ * `auto` can be stored (see {@link parseSkillModes}) but is never READ back
+ * from the rules here, because `parseSkillModes` drops it — which means a
+ * project cannot currently promote a frontmatter-quiet skill into the index.
+ * That is a real limitation and it is the honest one to ship: the alternative
+ * is storing a rule that says the same thing as no rule for every other skill.
+ */
+export function resolveSkillMode(modes: SkillModes, skill: SkillReference): SkillMode {
+  return modes[skill.name] ?? (skill.userInvokeOnly ? "manual" : "auto");
+}
+
+/**
+ * One project's skill list, with its rules applied — the single seam every
+ * consumption point goes through.
+ *
+ * It works by REWRITING `userInvokeOnly` rather than by teaching each consumer
+ * about modes, which is why nothing downstream needed to change:
+ * {@link skillsIndexResource} already withholds a `userInvokeOnly` skill from
+ * the model, {@link visibleSkills} already offers it to the person, and
+ * explicit resolution already ignores the flag. `off` is the only state that
+ * removes a row.
+ *
+ * Applied AFTER {@link mergeSkills}, so project-over-personal is already
+ * resolved and a slug names exactly one surviving skill — a rule cannot mean
+ * "the project's copy but not the personal one".
+ *
+ * A rule naming nothing installed is ignored: a skill can be uninstalled while
+ * its slug is still in the row, and a stale entry is not a reason to fail a
+ * read that every composer open depends on.
+ */
+export function applySkillModes(
+  skills: readonly SkillReference[],
+  modes: SkillModes,
+): readonly SkillReference[] {
+  if (Object.keys(modes).length === 0) return skills;
+  const ruled: SkillReference[] = [];
+  for (const skill of skills) {
+    const mode = modes[skill.name];
+    if (mode === "off") continue;
+    if (mode === undefined) {
+      ruled.push(skill);
+      continue;
+    }
+    const userInvokeOnly = mode === "manual";
+    ruled.push(skill.userInvokeOnly === userInvokeOnly ? skill : { ...skill, userInvokeOnly });
+  }
+  return ruled;
+}
+
+/**
  * The skills a picker may offer beside `templates` — shadowed names removed.
  *
  * `/name` is one flat namespace at submit, and expansion resolves a name
