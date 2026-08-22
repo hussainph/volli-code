@@ -3,6 +3,7 @@ import type { SessionListingRow, Ticket } from "@volli/shared";
 import type {
   AppStateSetResult,
   BootstrapResult,
+  DatabaseResult,
   ProjectCreateResult,
   ProjectMutationResult,
   Result,
@@ -24,7 +25,15 @@ import type {
   WorktreeOrphansResult,
   WorktreeRemoveResult,
 } from "../ipc/contract";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -32,9 +41,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends } = vi.hoisted(() => ({
+const { handlers, dataChangedSends, showItemInFolder } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
+  showItemInFolder: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -63,6 +73,7 @@ vi.mock("electron", () => ({
       },
     ],
   },
+  shell: { showItemInFolder },
 }));
 
 // The worktree module runs real git — mocked so these handler tests never
@@ -174,6 +185,24 @@ function archiveTicket(ticketId: string): void {
   const result = invoke<Result>("volli:ticket-archive", { ticketId });
   if (!result.ok) throw new Error(result.error);
 }
+
+describe("volli:database", () => {
+  it("reads and reveals the actual database file without taking a renderer path", async () => {
+    const expectedSize = statSync(ctx.dbPath).size;
+
+    await expect(invoke<Promise<DatabaseResult>>("volli:database")).resolves.toEqual({
+      ok: true,
+      sizeBytes: expectedSize,
+    });
+    expect(showItemInFolder).not.toHaveBeenCalled();
+
+    await expect(invoke<Promise<DatabaseResult>>("volli:database", "reveal")).resolves.toEqual({
+      ok: true,
+      sizeBytes: expectedSize,
+    });
+    expect(showItemInFolder).toHaveBeenCalledWith(ctx.dbPath);
+  });
+});
 
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
   it("pins the repository's detected base branch when a project is added", () => {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import {
@@ -33,6 +34,8 @@ import type {
   CommentCreateInput,
   CommentIdInput,
   CommentUpdateInput,
+  DatabaseAction,
+  DatabaseResult,
   DataIpcChannel,
   LabelResult,
   LabelSetColorInput,
@@ -136,6 +139,7 @@ import {
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { orphanReport } from "./orphan-sweep";
+import { exportDatabase } from "./menu";
 import {
   type AgentSiteReleaseReport,
   archiveAndClean,
@@ -394,6 +398,21 @@ export function registerDataIpcHandlers(
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
+    },
+
+    "volli:database": async (action?: DatabaseAction): Promise<DatabaseResult> => {
+      // `db.name` is better-sqlite3's opened file, so the renderer never learns
+      // or submits a filesystem path for either operation.
+      const sizeBytes = statSync(db.name).size;
+      switch (action) {
+        case "reveal":
+          shell.showItemInFolder(db.name);
+          break;
+        case "export":
+          await exportDatabase({ ok: true, db });
+          break;
+      }
+      return { ok: true, sizeBytes };
     },
 
     "volli:legacy-import": (request: LegacyImportRequest): LegacyImportResult => {

@@ -64,6 +64,8 @@ import type {
   BlobListInput,
   CommentIdInput,
   CommentUpdateInput,
+  DatabaseAction,
+  DatabaseResult,
   DataChangedEvent,
   DirChangedEvent,
   DirPathInput,
@@ -324,6 +326,9 @@ const api = {
         ipcRenderer.removeListener("volli:data-changed" satisfies VolliIpcEvent, listener);
     },
   },
+  /** Reads the database size or runs one main-owned action without exposing its path. */
+  database: (action?: DatabaseAction): Promise<DatabaseResult> =>
+    action === undefined ? invoke("volli:database") : invoke("volli:database", action),
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
     syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),

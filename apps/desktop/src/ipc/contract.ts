@@ -434,6 +434,8 @@ export interface ArtifactCreateInput {
  */
 export interface VolliDataIpcContract {
   "volli:data-bootstrap": { args: []; result: BootstrapResult };
+  /** Main owns the database path; an omitted action reads its size. */
+  "volli:database": { args: [action?: DatabaseAction]; result: DatabaseResult };
   /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
   "volli:legacy-import": { args: [request: LegacyImportRequest]; result: LegacyImportResult };
 
@@ -1688,6 +1690,15 @@ export interface SessionActivityNotice {
  * `Result` (no payload) is a plain ok/error ack.
  */
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+
+/**
+ * The app-owned database actions. `undefined` reads its size; neither action
+ * accepts a renderer-supplied path.
+ */
+export type DatabaseAction = "reveal" | "export";
+
+/** The database's on-disk size, returned after a read or action. */
+export type DatabaseResult = Result<{ sizeBytes: number }>;
 
 /**
  * What one attach produced (VC-50). `relPath` is present when the file was
