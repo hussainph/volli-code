@@ -210,6 +210,37 @@ compactions, and dropped telemetry; `runId` remains trace-only. Authority now
 has allowed and denied observability arms, an approval wait is separated from
 tool execution, and provider prose reduces locally to a closed error class.
 
+## Implementation addendum — convention conformance and tool identity
+
+A review pass against the published GenAI conventions found three places where
+Volli borrowed a convention name without meeting the convention's contract, and
+one place where the vocabulary was coarser than this ticket needs.
+
+- **`gen_ai.client.token.usage` is a histogram, not a counter.** The convention
+  defines the instrument type, and a sum emitted under a name a backend reads as
+  a distribution is misreported rather than rejected. Both borrowed metric names
+  now also carry the convention's prescribed `ExplicitBucketBoundaries`; without
+  them the SDK applies HTTP-latency defaults that put every token count in the
+  overflow bucket.
+- **`gen_ai.operation.name` is Required on both borrowed metrics** and was set on
+  spans only. It is now on both metric families.
+- **`gen_ai.response.finish_reasons` is typed as a list** by the convention. It
+  was emitted as a scalar; `SpanAttributes` now has a list arm used by that one
+  attribute, and the privacy property is checked element-by-element so the arm
+  cannot become a looser second channel.
+- **Tools are named, from a closed allowlist.** `ActivityKind` answers "which
+  capability class" but collapses `web_fetch` and `web_search`, which makes the
+  ticket's per-tool call and failure rates unanswerable. `OBSERVED_TOOL_IDS` in
+  `@volli/shared` lists the tools Volli ships; a name on it is spoken, and
+  anything else — an MCP tool, a future Pi tool, a name a model invented — is
+  counted under its capability class and never exported. The harness's
+  `nativeToolName` is sanitized but not bounded, so it is never the thing sent.
+
+The rule this pass settles: borrow a convention name only together with its
+instrument type and its required attributes, or else keep the measurement under
+`volli.`. A near-miss is worse than a custom name, because a dashboard consumes
+it silently.
+
 `@opentelemetry/otlp-exporter-base`, `@opentelemetry/otlp-transformer`, and
 `@opentelemetry/sdk-metrics` are bundled into the Electron-main packed chunk.
 The real meter provider is covered by an in-memory exporter test. Evals remain

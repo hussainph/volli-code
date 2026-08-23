@@ -67,7 +67,7 @@ happened inside the other.
 | Span | What it is |
 | --- | --- |
 | `chat <model>` | One physical provider request: usage, cache splits, cost, TTFT, stop reason |
-| `execute_tool <activity kind>` | One executed tool, by Volli's bounded `ActivityKind`; duration excludes an approval wait |
+| `execute_tool <tool>` | One executed tool, named by Volli's allowlisted tool id (`read`, `bash`, `web_search`, …) and falling back to its bounded `ActivityKind`; duration excludes an approval wait |
 | `volli.agent.turn` | One finished runtime turn |
 | `volli.agent.authority` | An allowed or denied authority decision; an approval wait is its duration |
 | `volli.agent.compaction` | A compaction, with tokens before and after |
@@ -77,19 +77,33 @@ happened inside the other.
 Provider usage is under the OpenTelemetry GenAI names
 (`gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`,
 `gen_ai.response.finish_reasons`, …). Anything the convention has no word for is
-under `volli.` — cost is the clearest case.
+under `volli.` — cost is the clearest case, and the tool's capability class
+(`volli.tool.kind`) sits beside its name so the coarser axis survives the tool
+list changing.
+
+A tool is only named if it is on Volli's allowlist. An unrecognised name — an
+MCP tool, or one a model invented — is counted under its capability class and
+not named at all, because the harness's raw tool name is not a bounded value.
 
 ## Metrics
 
 The same opt-in Settings row sends OTLP metrics to `/v1/metrics`; metrics carry
 no `runId`, so they cannot correlate a Session. The mapper emits:
 
-- tool-call counters by bounded `ActivityKind` and outcome, plus execution and
-  approval-wait histograms;
+- tool-call counters by allowlisted tool id, capability class, and outcome, plus
+  execution and approval-wait histograms;
 - model-request counters and operation-duration histograms by provider, requested
   model, stop reason, and bounded provider error class;
-- input, output, cache-read, cache-write, and reasoning token counters, plus cost;
+- input, output, cache-read, cache-write, and reasoning token histograms, plus cost;
 - authority-decision, compaction, and dropped-telemetry counters.
+
+The two metrics whose names come from the convention —
+`gen_ai.client.token.usage` and `gen_ai.client.operation.duration` — are emitted
+as the convention defines them: both are histograms, both carry the required
+`gen_ai.operation.name`, and both use the convention's prescribed bucket
+boundaries. Borrowing a standard name while emitting a different instrument type
+or omitting a required attribute is worse than choosing a custom name, because a
+GenAI dashboard reads the series either way and misreports it.
 
 No logs signal is configured.
 
