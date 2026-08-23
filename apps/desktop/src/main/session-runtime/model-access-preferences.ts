@@ -1,13 +1,11 @@
 import type Database from "better-sqlite3";
 import {
   DEFAULT_COMPACTION_POLICY,
-  isUsableCompactionReserve,
   REASONING_LEVELS,
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
-  type ModelCompactionLimit,
   type ModelPurpose,
   type ModelSelection,
 } from "@volli/shared";
@@ -26,12 +24,11 @@ export const MODEL_ACCESS_DEFAULTS_APP_STATE_KEY = "volli:model-access-defaults"
 /** The models the user toggled out of composers and pickers. */
 export const MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY = "volli:model-access-hidden-models";
 /**
- * The global compaction switch and the per-model reserves, in one blob.
+ * The global compaction switch, in one blob.
  *
- * One key rather than two, unlike the defaults and the hidden models beside it,
- * because the runtime asks one question — what policy is this Session under
- * right now — and answering it from two rows that could be written apart would
- * be two reads to describe one decision.
+ * The blob once carried per-model reserves beside the switch; they were
+ * retired (VC-155), and a stored `modelLimits` array from that era is simply
+ * ignored on read — the switch it sits beside is still honoured.
  */
 export const COMPACTION_POLICY_APP_STATE_KEY = "volli:compaction-policy";
 
@@ -154,96 +151,33 @@ export function writeHiddenModels(
  * The compaction policy this profile has configured.
  *
  * Absent or unreadable reads as {@link DEFAULT_COMPACTION_POLICY} — compaction
- * on, nothing limited — because that is what every profile did before this
- * setting existed, and an update is not a reason to stop compacting. Each limit
- * is sanitized independently, so one malformed row costs that model its reserve
- * and never the others theirs.
- *
- * A stored reserve is not checked against the model's window here. It cannot be:
- * this function has no catalog, the window it would check against is the one the
- * catalog reports today, and a row that has gone stale against a shrunken window
- * is a live-resolution question rather than a storage one — the runtime asks it,
- * with the window in hand.
+ * on — because that is what every profile did before this setting existed, and
+ * an update is not a reason to stop compacting. A blob written by the era that
+ * stored per-model reserves still reads: the switch is taken and the retired
+ * `modelLimits` beside it are ignored.
  */
 export function readCompactionPolicy(db: Database.Database): CompactionPolicy {
   const stored = readAppState(db, COMPACTION_POLICY_APP_STATE_KEY);
   if (typeof stored !== "object" || stored === null) return DEFAULT_COMPACTION_POLICY;
   const candidate = stored as Record<string, unknown>;
   const autoCompaction = candidate["autoCompaction"];
-  const modelLimits = candidate["modelLimits"];
   return {
     autoCompaction:
       typeof autoCompaction === "boolean"
         ? autoCompaction
         : DEFAULT_COMPACTION_POLICY.autoCompaction,
-    modelLimits: Array.isArray(modelLimits)
-      ? modelLimits.flatMap(sanitizeCompactionLimit)
-      : DEFAULT_COMPACTION_POLICY.modelLimits,
   };
 }
 
-/** One stored per-model reserve, or nothing at all — never a repaired one. */
-function sanitizeCompactionLimit(entry: unknown): ModelCompactionLimit[] {
-  if (typeof entry !== "object" || entry === null) return [];
-  const candidate = entry as Record<string, unknown>;
-  const providerId = candidate["providerId"];
-  const modelId = candidate["modelId"];
-  const reserveTokens = candidate["reserveTokens"];
-  if (!isIdentifier(providerId) || !isIdentifier(modelId)) return [];
-  if (typeof reserveTokens !== "number" || !Number.isSafeInteger(reserveTokens)) return [];
-  if (reserveTokens <= 0) return [];
-  return [{ providerId, modelId, reserveTokens }];
-}
-
-/** Stores the whole policy: the switch, and the full curated list of limits. */
+/** Stores the whole policy: the one global switch. */
 export function writeCompactionPolicy(
   db: Database.Database,
   policy: CompactionPolicy,
   now: number,
 ): CompactionPolicy {
-  const next: CompactionPolicy = {
-    autoCompaction: policy.autoCompaction,
-    modelLimits: policy.modelLimits.map((limit) => ({
-      providerId: limit.providerId,
-      modelId: limit.modelId,
-      reserveTokens: limit.reserveTokens,
-    })),
-  };
+  const next: CompactionPolicy = { autoCompaction: policy.autoCompaction };
   setAppState(db, COMPACTION_POLICY_APP_STATE_KEY, JSON.stringify(next), now);
   return next;
-}
-
-/**
- * A model may only be limited to a reserve it could actually run under.
- *
- * The counterpart of {@link assertDefaultModelAvailable}, and refused at the
- * same boundary for the same reason: a reserve at or above the window puts the
- * threshold at or below zero, which compacts — and pays for a summary — after
- * every single reply, with nothing at the point of use to explain why. A model
- * whose catalog reports no usable window is refused outright rather than stored
- * unchecked: no window means no threshold to measure against, so a limit on it
- * would be a setting that could never do anything.
- *
- * Availability is deliberately not required. Sign-in decides whether a model can
- * answer, not how much room it holds, and a reserve configured for a provider
- * signed out this week is a preference to keep, exactly like a hidden model.
- */
-export function assertCompactionLimitsUsable(
-  access: ModelAccessSnapshot,
-  limits: readonly ModelCompactionLimit[],
-): void {
-  for (const limit of limits) {
-    const model = access.models.find(
-      (candidate) =>
-        candidate.providerId === limit.providerId && candidate.modelId === limit.modelId,
-    );
-    if (model?.contextWindow === undefined) {
-      throw new Error("This model reports no context window to compact against.");
-    }
-    if (!isUsableCompactionReserve(limit.reserveTokens, model.contextWindow)) {
-      throw new Error("This reserve is larger than the model's context window.");
-    }
-  }
 }
 
 /**

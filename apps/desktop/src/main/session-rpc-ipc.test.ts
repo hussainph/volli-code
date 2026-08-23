@@ -588,7 +588,7 @@ describe("registerSessionRpcIpcHandlers", () => {
   it("routes the compaction policy over IPC", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
-    const stored = { autoCompaction: true, modelLimits: [] };
+    const stored = { autoCompaction: true };
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
       readCompactionPolicy: () => stored,
@@ -601,10 +601,7 @@ describe("registerSessionRpcIpcHandlers", () => {
     await expect(
       invoke(sender(), { procedure: "modelAccess.compactionPolicy", input: undefined }),
     ).resolves.toEqual({ ok: true, data: stored });
-    const saved = {
-      autoCompaction: false,
-      modelLimits: [{ providerId: "anthropic", modelId: "claude-sonnet", reserveTokens: 32_768 }],
-    };
+    const saved = { autoCompaction: false };
     await expect(
       invoke(sender(), { procedure: "modelAccess.setCompactionPolicy", input: saved }),
     ).resolves.toEqual({ ok: true, data: saved });

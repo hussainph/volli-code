@@ -32,8 +32,6 @@ import {
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
-  isUsableCompactionReserve,
-  modelCompactionReserve,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
@@ -163,8 +161,8 @@ export interface PiRuntimeHostOptions {
    * a switch that does not work.
    *
    * Absent, this runs {@link DEFAULT_COMPACTION_POLICY}: automatic compaction
-   * on, no model limited, which is the behaviour of every caller that has never
-   * heard of this option.
+   * on, which is the behaviour of every caller that has never heard of this
+   * option.
    */
   compactionPolicy?: () => CompactionPolicy;
 }
@@ -1148,11 +1146,11 @@ async function attachSession(
      * right now.
      *
      * Read per call for {@link summarizationModel}'s reason: a Session outlives
-     * a settings change. Everything the policy does lands on Pi's own
-     * `CompactionSettings` rather than beside it — the global switch IS
-     * `enabled`, which `shouldCompact` reads, and a per-model limit IS
-     * `reserveTokens`, which the threshold arithmetic subtracts. Neither is a
-     * second condition wrapped around Pi's rule.
+     * a settings change. The policy lands on Pi's own `CompactionSettings`
+     * rather than beside it — the global switch IS `enabled`, which
+     * `shouldCompact` reads — not a second condition wrapped around Pi's rule.
+     * The reserve is always the executor's own default: per-model reserve
+     * budgets were retired with the policy that carried them (VC-155).
      *
      * **What switching automatic compaction off does to the overflow path:
      * nothing.** `enabled` is read by `shouldCompact` and by nothing else in
@@ -1164,30 +1162,11 @@ async function attachSession(
      * is being rescued from a dead end. A test pins it, so a future Pi that
      * taught `prepareCompaction` about `enabled` would fail loudly here rather
      * than quietly stop recovering overflowed Sessions.
-     *
-     * A per-model reserve the model's own window cannot hold is ignored rather
-     * than clamped: it is refused at the point it would be saved, so reading one
-     * back means the row has gone stale against a catalog whose window changed,
-     * and a stale row costs itself — the Session runs on the executor's own
-     * reserve, exactly as if the row were not there.
      */
-    const compactionSettings = (): CompactionSettings => {
-      const policy = host.compactionPolicy();
-      const configured = modelCompactionReserve(policy.modelLimits, {
-        providerId: agent.state.model.provider,
-        modelId: agent.state.model.id,
-      });
-      const contextWindow = contextWindowOf(agent.state.model);
-      const usable =
-        configured !== undefined &&
-        contextWindow !== undefined &&
-        isUsableCompactionReserve(configured, contextWindow);
-      return {
-        ...DEFAULT_COMPACTION_SETTINGS,
-        enabled: policy.autoCompaction,
-        ...(usable ? { reserveTokens: configured } : {}),
-      };
-    };
+    const compactionSettings = (): CompactionSettings => ({
+      ...DEFAULT_COMPACTION_SETTINGS,
+      enabled: host.compactionPolicy().autoCompaction,
+    });
 
     /** The durable branch, read as a conversation. Costs the whole history. */
     const conversationBranch = async (): Promise<Entry[]> =>

@@ -369,25 +369,12 @@ const hiddenModelsSchema = z
   .array(z.object({ providerId: nonEmptyString, modelId: nonEmptyString }))
   .max(2000);
 /**
- * The compaction policy, whole in both directions: the switch and the full
- * curated list of per-model reserves, never a delta.
- *
- * A reserve crosses as a positive whole token count and nothing more — whether
- * one is larger than the model's own window is a question about a catalog this
- * edge does not hold, and main refuses it against the snapshot before storing.
- * The same count cap as the hidden models beside it, for the same reason.
+ * The compaction policy, whole in both directions: the one global switch,
+ * never a delta. Per-model reserve budgets used to cross here too and were
+ * retired with the policy that carried them (VC-155).
  */
 const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
-  modelLimits: z
-    .array(
-      z.object({
-        providerId: nonEmptyString,
-        modelId: nonEmptyString,
-        reserveTokens: positiveSafeInteger,
-      }),
-    )
-    .max(2000),
 });
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 const modelAccessSnapshotSchema = z.object({

@@ -4782,14 +4782,8 @@ describe("recovering a turn that overflowed the window", () => {
 describe("the compaction policy a Session is run under", () => {
   /** Over Pi's own reserve against the faux catalog's 128k window. */
   const OVER_RESERVE = 200_000;
-  /**
-   * Under Pi's threshold (128,000 − 16,384) and over a 32,768-token one
-   * (128,000 − 32,768). What a bigger reserve is for: this conversation
-   * compacts only because the model was told to keep more room free.
-   */
+  /** Under Pi's threshold (128,000 − 16,384): the executor's reserve holds it. */
   const BETWEEN_RESERVES = 100_000;
-
-  const LIMIT = { providerId: PROVIDER_ID, modelId: MODEL_ID };
 
   /** Two turns, the second measured at `occupied`, then a third message. */
   function reaching(occupied: number, calls: ProviderCall[]): StreamFn {
@@ -4830,21 +4824,21 @@ describe("the compaction policy a Session is run under", () => {
   }
 
   it("leaves a Session compacting at the executor's own reserve when nothing is configured", async () => {
-    // The baseline both halves of the next test are measured against: three
-    // turns, three calls, no summary — this occupancy is under Pi's threshold.
+    // Three turns, three calls, no summary — this occupancy is under Pi's
+    // threshold, and the executor's own reserve is the only one there is:
+    // per-model reserve budgets were retired with VC-155.
     const { calls, compacted } = await driveTo(BETWEEN_RESERVES, undefined);
     expect(calls).toHaveLength(3);
     expect(compacted).toEqual([]);
   });
 
-  it("compacts earlier for a model told to keep more room free", async () => {
-    const { calls, compacted, observations } = await driveTo(BETWEEN_RESERVES, () => ({
+  it("announces the summary it buys while a threshold compaction is pending", async () => {
+    const { calls, compacted, observations } = await driveTo(OVER_RESERVE, () => ({
       autoCompaction: true,
-      modelLimits: [{ ...LIMIT, reserveTokens: 32_768 }],
     }));
 
-    // The same conversation as above, and the same measurement — only the
-    // reserve differs, and a fourth call is the summary it now buys.
+    // A fourth call is the summary the threshold buys, and the transient
+    // progress marker is what explains the wait to the person inside it.
     expect(calls).toHaveLength(4);
     expect(compacted).toEqual([
       expect.objectContaining({ state: "compacted", reason: "threshold" }),
@@ -4855,40 +4849,11 @@ describe("the compaction policy a Session is run under", () => {
     expect(calls[3]?.messages).toContain("compacted into the following summary");
   });
 
-  it("limits only the model it names", async () => {
-    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
-      autoCompaction: true,
-      modelLimits: [
-        { providerId: PROVIDER_ID, modelId: "some-other-model", reserveTokens: 32_768 },
-      ],
-    }));
-
-    expect(calls).toHaveLength(3);
-    expect(compacted).toEqual([]);
-  });
-
-  it("ignores a reserve the model's own window cannot hold", async () => {
-    // The row a shrunken catalog window leaves behind — refused where it would
-    // be saved, so reading one back means it has gone stale. Ignored rather
-    // than honoured, because honouring it puts the threshold at or below zero:
-    // this Session would compact after its very first reply, and pay for a
-    // summary each time. It runs on the executor's own reserve instead, which
-    // this occupancy does not reach.
-    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
-      autoCompaction: true,
-      modelLimits: [{ ...LIMIT, reserveTokens: 128_000 }],
-    }));
-
-    expect(calls).toHaveLength(3);
-    expect(compacted).toEqual([]);
-  });
-
   it("does not compact on its own when automatic compaction is switched off", async () => {
     // Measured well over the reserve, and nothing happens: the switch is Pi's
     // own `enabled`, which its threshold rule reads.
     const { calls, compacted } = await driveTo(OVER_RESERVE, () => ({
       autoCompaction: false,
-      modelLimits: [],
     }));
 
     expect(calls).toHaveLength(3);
@@ -4910,7 +4875,7 @@ describe("the compaction policy a Session is run under", () => {
           recording(calls, settles("fourth answer")),
         ]),
       ),
-      compactionPolicy: () => ({ autoCompaction, modelLimits: [] }),
+      compactionPolicy: () => ({ autoCompaction }),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -4943,7 +4908,7 @@ describe("the compaction policy a Session is run under", () => {
           recording(calls, settles("recovered answer")),
         ]),
       ),
-      compactionPolicy: () => ({ autoCompaction: false, modelLimits: [] }),
+      compactionPolicy: () => ({ autoCompaction: false }),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -5178,7 +5143,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized anyway"))),
-      compactionPolicy: () => ({ autoCompaction: false, modelLimits: [] }),
+      compactionPolicy: () => ({ autoCompaction: false }),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -5354,7 +5319,7 @@ describe("compacting because somebody asked", () => {
       ),
       compactionPolicy: () => {
         if (!policyReadable) throw new Error("the policy store is unreadable");
-        return { autoCompaction: true, modelLimits: [] };
+        return { autoCompaction: true };
       },
     });
     const handle = await runtime.startSession(attachment.spec);
