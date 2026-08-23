@@ -909,6 +909,14 @@ async function attachSession(
     // query to a third party, a read does not — so a Session may be given
     // either, both or neither, and is offered exactly what it was given.
     if (spec.webSearch !== undefined) tools.push(createWebSearchTool(spec.webSearch, spec.signal));
+    // Composed here, once, and never re-composed: the array is half of this
+    // Session's Cache Prefix (VC-164), and a provider that orders tools ahead
+    // of the system prompt throws the prompt away too when it changes. Every
+    // state transition a Session makes — a model change, a compaction, a
+    // reattach — is a tool call or a message, never a rebuilt bundle. Pinned
+    // off the provider request in `runtime.test.ts`, under "the Cache Prefix a
+    // Session sends", because that is the only place a bundle recomputed
+    // somewhere downstream would show up.
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;

@@ -238,6 +238,18 @@ function settlesHolding(text: string, tokens: number): ScriptStep {
 interface ProviderCall {
   model: string;
   messages: string;
+  /**
+   * The two halves of the Cache Prefix, as bytes rather than as objects
+   * (VC-164): the provider reuses a byte-identical leading part of the
+   * request, and a reworded tool description invalidates it exactly as a
+   * renamed tool would. Serialized at record time because Pi hands out its
+   * own tool objects by reference — comparing references would agree with
+   * itself after an in-place edit to one of them.
+   */
+  systemPrompt: string | undefined;
+  tools: string;
+  /** The same array as the model meets it: same names, same order, same count. */
+  toolNames: readonly string[];
 }
 
 /** Retain what each provider call was made with, in call order. */
@@ -246,6 +258,9 @@ function recording(calls: ProviderCall[], step: ScriptStep): ScriptStep {
     calls.push({
       model: `${model.provider}/${model.id}`,
       messages: JSON.stringify(context.messages),
+      systemPrompt: context.systemPrompt,
+      tools: JSON.stringify(context.tools ?? []),
+      toolNames: (context.tools ?? []).map((tool) => tool.name),
     });
     return step(emit, context, signal, model);
   };
@@ -5501,6 +5516,257 @@ describe("compacting because somebody asked", () => {
     ]);
     expect(attentions(attachment.observations)).toEqual([]);
     await handle.close();
+  });
+});
+
+/**
+ * The Cache Prefix: the byte-identical leading part of a request a provider
+ * reuses, which for Pi is the tool array and the system prompt (VC-164).
+ *
+ * Lane A made the system prompt a pure function of Role, bundle, authority and
+ * resource set, so its bytes cannot vary across Sessions; `prompt.test.ts`
+ * proves that. What is proved HERE is the other axis — that neither half moves
+ * for the life of one Session, through everything a Session actually does:
+ * a tool call inside a turn, a model change between turns, a compaction that
+ * replaces the whole message array, and a reattach that composes both halves
+ * again from scratch.
+ *
+ * Every assertion reads the bytes off the provider request rather than off the
+ * constants behind them, because today both invariants hold by accident and
+ * not by construction: `PI_TOOLS` is a literal in the desktop adapter, and the
+ * bundle reaches Pi once, in `initialState`. VC-162 turns bundles into registry
+ * data, and the first thing that could then break this is a bundle recomputed
+ * mid-Session — which a test re-reading the constant would never see, and
+ * which this one fails on.
+ */
+describe("the Cache Prefix a Session sends", () => {
+  it("offers one tool array from turn 1 to turn N, and again after a reattach", async () => {
+    const attachment = fixture({
+      tools: { tools: ["read", "edit"] },
+      askUser: async () => ({ optionIds: ["one"], response: null }),
+      webFetch: async () => ({
+        requestedUrl: "https://example.com/guide",
+        finalUrl: "https://example.com/guide",
+        origin: "https://example.com",
+        contentType: "markdown",
+        text: "",
+        truncated: false,
+      }),
+      webSearch: async () => ({
+        provider: "brave",
+        query: "vitest matchers",
+        references: [],
+        truncated: false,
+      }),
+    });
+    const calls: ProviderCall[] = [];
+    const catalog = [{ id: MODEL_ID, reasoning: true }, { id: CHAT_MODEL_ID }];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => {
+            emit.text("Reading the marker.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("The token is volli-marker-42.")),
+          recording(calls, settles("second answer")),
+          recording(calls, settles("third answer")),
+        ]),
+        catalog,
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Read MARKER.txt and report the token.");
+    // A state transition mid-Session, which VC-92's ruling says is modeled as a
+    // tool call or a message and never as a re-composed prompt. Selecting a
+    // different model is the sharpest one the product has: it rewrites what Pi
+    // sends the request to, and must rewrite nothing about the request.
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
+    await handle.submitUserMessage("second");
+    await handle.submitUserMessage("third");
+    const recovery = handle.recovery;
+    await handle.close();
+
+    // A reattach composes the prompt and binds the tools again from the same
+    // spec — the one moment in a Session's life when both halves are genuinely
+    // rebuilt rather than merely reused.
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([recording(calls, settles("after the reattach"))]),
+        catalog,
+      ),
+    });
+    const reattached = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    // Four turns' worth of provider calls plus the one after the reattach, and
+    // the Session really ran: the first turn spent two calls on a tool it
+    // actually executed, and the model under it changed halfway through.
+    expect(calls).toHaveLength(5);
+    expect(calls[1]?.messages).toContain("volli-marker-42");
+    expect(calls.map((call) => call.model)).toEqual([
+      `${PROVIDER_ID}/${MODEL_ID}`,
+      `${PROVIDER_ID}/${MODEL_ID}`,
+      `${PROVIDER_ID}/${CHAT_MODEL_ID}`,
+      `${PROVIDER_ID}/${CHAT_MODEL_ID}`,
+      // Back to the spec's own model: a live selection is this attachment's,
+      // and the reattached Session starts from what it was handed.
+      `${PROVIDER_ID}/${MODEL_ID}`,
+    ]);
+
+    // Named before it is compared, so a prompt that arrived as `undefined`
+    // could not satisfy the byte-equality below by agreeing with nothing.
+    expect(calls[0]?.systemPrompt).toContain("# Operating");
+    for (const call of calls) {
+      // Same names, same order, same count — against the literal rather than
+      // against the first call alone, so an array that silently emptied could
+      // not pass by agreeing with itself.
+      expect(call.toolNames).toEqual(["read", "edit", "ask_user", "web_fetch", "web_search"]);
+      // And byte-identical past the names. A description reworded mid-Session
+      // invalidates the prefix exactly as surely as a tool added to it, and
+      // where a provider orders the tool array ahead of the system prompt it
+      // invalidates the prompt too.
+      expect(call.tools).toBe(calls[0]?.tools);
+      expect(call.systemPrompt).toBe(calls[0]?.systemPrompt);
+    }
+  });
+
+  it("compacts into a new base under the same prefix", async () => {
+    // The faux catalog reports a 128k window and Pi reserves 16,384 of it.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    expect(calls).toHaveLength(4);
+    const [firstTurn, overflowingTurn, summarization, afterCompaction] = calls;
+
+    // The middle call is Pi's summarization, and it is deliberately NOT part of
+    // this Session's prefix: its own system prompt, no tools at all. VC-164
+    // originally asked for the compaction request to reuse the parent's exact
+    // prefix; that clause was struck on this evidence, and the full shape is
+    // pinned at the module boundary in `compaction.test.ts`.
+    expect(summarization?.toolNames).toEqual([]);
+    expect(summarization?.systemPrompt).not.toBe(firstTurn?.systemPrompt);
+
+    // The surviving half of that bullet, which is what a cache actually needs:
+    // the Session's own turns are sent under ONE prefix, before the compaction
+    // and after it. Nothing about a compaction re-composes either half, so the
+    // admitted context is a new base the provider can cache from rather than a
+    // rebuilt prefix it has to pay for twice.
+    for (const turn of [overflowingTurn, afterCompaction]) {
+      expect(turn?.systemPrompt).toBe(firstTurn?.systemPrompt);
+      expect(turn?.tools).toBe(firstTurn?.tools);
+    }
+
+    // And the summary arrives as a message at the head of that base — never as
+    // prompt bytes. What follows it is the retained tail verbatim and then the
+    // turn that paid for the compaction; what precedes it is gone.
+    const admitted = JSON.parse(afterCompaction?.messages ?? "[]") as { role: string }[];
+    expect(admitted.map((message) => message.role)).toEqual(["user", "user", "assistant", "user"]);
+    expect(JSON.stringify(admitted[0])).toContain("compacted into the following summary");
+    expect(JSON.stringify(admitted[0])).toContain("finish the marker work");
+    expect(JSON.stringify(admitted.slice(1))).toContain("retained-paste");
+    expect(JSON.stringify(admitted.at(-1))).toContain("carry on");
+    expect(afterCompaction?.messages).not.toContain("first answer");
+  });
+
+  it("loses the Turn Reminder to the first compaction, and is meant to", async () => {
+    // Settled here rather than assumed, because Lane A changed it without
+    // naming it: VC-156's dependency fact used to be a system-prompt section,
+    // which survives compaction forever; it now rides the first message as a
+    // Turn Reminder, and `contextMessages` admits the last compaction entry
+    // plus everything after it — so the reminder goes when the Session first
+    // compacts. The Brief has always gone the same way.
+    //
+    // That is correct, and re-issuing it per turn would not be:
+    //
+    //   - It is a measurement taken at attach, and by the time a Session has
+    //     filled its window the measurement is stale in both directions. A
+    //     Session that ran the install and is then told it has no installed
+    //     dependencies learns to discount what Volli tells it, which costs more
+    //     than the reminder is worth. `RuntimeWorkspaceEnvironment` says the
+    //     same thing about its own freshness: a stale fact is worse than none.
+    //   - Re-measuring at the compaction boundary to re-issue a true one is a
+    //     different feature. The runtime never touches the filesystem for this;
+    //     `workspaceEnvironment` is measured by whoever built the spec, and
+    //     making the runtime re-measure would hand it a fact it has no business
+    //     owning.
+    //   - It is not lost, only elided. The summarizer is handed the reminder
+    //     along with everything else it summarizes (asserted below), so it
+    //     survives into the checkpoint if it still matters; and if it does not,
+    //     `volli identify` answers the same question on demand, which is the
+    //     route VC-156 was written against in the first place.
+    //
+    // What would change this verdict is a reminder whose subject is not spent
+    // by turn one — a standing constraint rather than a first-command errand.
+    // That reminder does not exist yet, and when it does it needs a delivery
+    // that outlives compaction, not this one made permanent.
+    const attachment = fixture({
+      workspaceEnvironment: { dependencies: "absent", installCommand: "pnpm install" },
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", 200_000)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    // Turn one carries both, in the first message rather than in the prompt.
+    expect(calls[0]?.systemPrompt).not.toContain("WORKSPACE ENVIRONMENT");
+    expect(calls[0]?.messages).toContain("BEGIN TICKET BRIEF");
+    expect(calls[0]?.messages).toContain("BEGIN WORKSPACE ENVIRONMENT");
+    expect(calls[0]?.messages).toContain("pnpm install");
+
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    // The summarizer was handed the reminder: whether it reaches the compacted
+    // context is a summary's judgement about relevance, not bytes we deleted.
+    expect(calls[2]?.messages).toContain("pnpm install");
+
+    // And after the compaction both are elided, together, by one rule.
+    expect(calls[3]?.messages).not.toContain("BEGIN WORKSPACE ENVIRONMENT");
+    expect(calls[3]?.messages).not.toContain("BEGIN TICKET BRIEF");
+    // The prefix they never belonged to is untouched by their going.
+    expect(calls[3]?.systemPrompt).toBe(calls[0]?.systemPrompt);
+    expect(calls[3]?.tools).toBe(calls[0]?.tools);
   });
 });
 
