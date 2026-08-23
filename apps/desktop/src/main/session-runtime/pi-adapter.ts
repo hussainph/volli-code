@@ -251,8 +251,8 @@ export interface PiAdapterOptions {
   resolveWebPorts?: () => SessionWebPorts;
   /**
    * The compaction policy every Session is run under — the global automatic
-   * switch and the per-model reserves. Read per compaction rather than per
-   * attach: a Session outlives the settings change that retunes it.
+   * switch. Read per compaction rather than per attach: a Session outlives
+   * the settings change that retunes it.
    */
   compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */

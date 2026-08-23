@@ -85,7 +85,6 @@ import {
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
-  assertCompactionLimitsUsable,
   assertDefaultModelAvailable,
   readCompactionPolicy,
   readHiddenModels,
@@ -1003,18 +1002,8 @@ app.whenReady().then(async () => {
           readCompactionPolicy:
             sessionDb !== null ? () => readCompactionPolicy(sessionDb) : undefined,
           writeCompactionPolicy:
-            sessionDb !== null && piRuntimeHost !== null
-              ? async (policy) => {
-                  // Refused against the catalog before it is stored, like a
-                  // default model is: a reserve the model's own window cannot
-                  // hold would compact after every reply, and the only place
-                  // that is legible is the control that set it.
-                  if (policy.modelLimits.length > 0) {
-                    const access = await piRuntimeHost.inspectModelAccess({});
-                    assertCompactionLimitsUsable(access, policy.modelLimits);
-                  }
-                  return writeCompactionPolicy(sessionDb, policy, Date.now());
-                }
+            sessionDb !== null
+              ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
           createSession: sessions?.create,
           attachSession: sessions?.attach,
