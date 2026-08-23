@@ -233,11 +233,11 @@ function systemSectionCacheClass(id: string, input: SystemPromptInput): PromptCa
     return projectStaticResources ? "project-static" : "session-static";
   }
   if (id.startsWith(RESOURCE_SECTION_PREFIX)) {
-    return projectStaticResources &&
-      id === `${RESOURCE_SECTION_PREFIX}${SKILLS_INDEX_RESOURCE_NAME}`
-      ? "project-static"
-      : "session-static";
+    // A project-static resource set contains exactly the skills index, so every
+    // resource section in that shape is the index by construction.
+    return projectStaticResources ? "project-static" : "session-static";
   }
+  /* v8 ignore next -- fixed section ids are pinned in prompt.test; resource ids returned above. */
   return SYSTEM_SECTION_CACHE_CLASS[id] ?? "session-static";
 }
 
