@@ -698,6 +698,47 @@ describe("environment fault dismissals", () => {
     expect(store.getState().dismissedEnvironmentFaults).toEqual([]);
   });
 
+  /**
+   * A re-measurement that changes nothing must not TOUCH the store.
+   *
+   * zustand's persist middleware wraps `set` and writes the whole store to
+   * `app_state` after every call, so even `set({})` costs a serialize, an IPC
+   * hop and a SQLite UPSERT. This action runs on every window focus — so on a
+   * healthy machine, which by contract sees no banner ever, a `set` here would
+   * be a durable write per focus, forever, recording nothing.
+   */
+  it("writes nothing when a re-measurement changes no dismissal", () => {
+    const storage = createMemoryStorage();
+    let writes = 0;
+    const counted = {
+      ...storage,
+      setItem: (name: string, value: string) => {
+        writes += 1;
+        storage.setItem(name, value);
+      },
+    };
+    const store = createUiStore(counted);
+
+    // The healthy case: nothing dismissed, nothing faulting, focus after focus.
+    writes = 0;
+    store.getState().retainEnvironmentFaultDismissals([]);
+    store.getState().retainEnvironmentFaultDismissals([]);
+    expect(writes).toBe(0);
+
+    // A standing dismissal whose fault is still measured: also nothing to say.
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+    writes = 0;
+    store.getState().retainEnvironmentFaultDismissals(["login-path-unreadable"]);
+    expect(writes).toBe(0);
+    // Dismissing the same kind twice is one dismissal, and one write.
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+    expect(writes).toBe(0);
+
+    // Only a real change is durable.
+    store.getState().retainEnvironmentFaultDismissals([]);
+    expect(writes).toBe(1);
+  });
+
   it("keeps only kinds this build still raises, whatever a past one wrote", async () => {
     const storage = createMemoryStorage();
     storage.setItem(

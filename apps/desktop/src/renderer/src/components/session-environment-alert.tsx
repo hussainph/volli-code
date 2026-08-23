@@ -7,8 +7,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "@volli/shared";
 
 import {
-  sessionEnvironmentAlert,
+  sessionEnvironmentMeasurement,
   type SessionEnvironmentAlertState,
+  type SessionEnvironmentMeasurement,
 } from "@renderer/components/session-environment-alert-model";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
@@ -37,10 +38,14 @@ import { useUiStore } from "@renderer/stores/ui";
  *   notice has no fault kind and is still dismissed for the view only: it is
  *   the project's onboarding state, not an app fault, and VC-156 owns retiring
  *   it altogether.
+ *
+ * One notice is drawn at a time — the first the reader has not dismissed.
+ * Dismissing the app fault therefore reveals whatever the project is still
+ * missing, rather than burying a fact nobody dismissed behind one they did.
  */
 export function SessionEnvironmentAlert() {
-  const [alert, setAlert] = useState<SessionEnvironmentAlertState | null>(null);
-  const [dismissedDetail, setDismissedDetail] = useState<string | null>(null);
+  const [measurement, setMeasurement] = useState<SessionEnvironmentMeasurement | null>(null);
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
   const project = useSelectedProject();
   const projectCwd = project?.path;
@@ -63,23 +68,24 @@ export function SessionEnvironmentAlert() {
    * difference: "the fault is gone" and "nobody could tell" must never be
    * reported to the user as the same outcome.
    */
-  const load = useCallback(async (): Promise<SessionEnvironmentAlertState | null | undefined> => {
+  const load = useCallback(async (): Promise<SessionEnvironmentMeasurement | undefined> => {
     const token = ++fetchToken.current;
     const input = projectCwd === undefined ? undefined : { cwd: projectCwd };
     try {
       const result = await window.api.cli.status(input);
       if (fetchToken.current !== token || !result.ok) return undefined;
-      const measured = sessionEnvironmentAlert(
+      const measured = sessionEnvironmentMeasurement(
         result.status,
         projectName === undefined ? null : { name: projectName },
       );
-      setAlert(measured);
+      setMeasurement(measured);
       // The "cleared when the fault clears" half of the dismissal contract:
       // this measurement is the authority on which faults still exist, so a
       // dismissal for anything else is dropped here rather than lingering to
-      // silence the same fault the next time it happens.
-      const fault = measured === null ? null : measured.fault;
-      retainEnvironmentFaultDismissals(fault === null ? [] : [fault]);
+      // silence the same fault the next time it happens. It is fed every fault
+      // that was MEASURED — not the one notice on screen, which would report a
+      // dismissed lower-ranked fault as repaired while another outranked it.
+      retainEnvironmentFaultDismissals(measured.faults);
       return measured;
     } catch {
       // This read cannot establish a PATH failure, so it must not invent one.
@@ -91,7 +97,7 @@ export function SessionEnvironmentAlert() {
     // A project becomes selected in the same state change that adds it, so this
     // is the onboarding check. It deliberately shares this notice rather than
     // growing a second Configure pane while VC-109 owns that repair surface.
-    setAlert(null);
+    setMeasurement(null);
     void load();
   }, [load]);
 
@@ -121,7 +127,7 @@ export function SessionEnvironmentAlert() {
       const measured = await load();
       if (!result.ok) {
         toastError(`Couldn't repair the Session PATH: ${result.error}`);
-      } else if (measured !== undefined && measured !== null && measured.fault !== null) {
+      } else if (measured !== undefined && measured.faults.length > 0) {
         toastError(
           "Volli still couldn't read your terminal's PATH. Review details for what it found.",
         );
@@ -133,10 +139,13 @@ export function SessionEnvironmentAlert() {
     }
   }, [load]);
 
+  // The first notice this reader has not put away — so dismissing the app
+  // fault reveals the project's own shortfall instead of hiding it too.
+  const alert =
+    measurement?.notices.find((notice) =>
+      notice.fault === null ? notice.key !== dismissedKey : !dismissedFaults.includes(notice.fault),
+    ) ?? null;
   if (terminalFocused || alert === null) return null;
-  const dismissed =
-    alert.fault === null ? alert.detail === dismissedDetail : dismissedFaults.includes(alert.fault);
-  if (dismissed) return null;
 
   return (
     <div className="shrink-0 px-2 pt-2">
@@ -146,7 +155,7 @@ export function SessionEnvironmentAlert() {
         onFix={alert.fault === null ? undefined : () => void fix()}
         onReview={() => setSettingsOpen(true, "cli")}
         onDismiss={() => {
-          if (alert.fault === null) setDismissedDetail(alert.detail);
+          if (alert.fault === null) setDismissedKey(alert.key);
           else dismissEnvironmentFault(alert.fault);
         }}
       />

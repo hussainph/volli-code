@@ -18,16 +18,15 @@
  *    re-entry possible.
  *
  * This is also where the osxkeychain explanation lives now (VC-159/R8). It is
- * asked for ONLY when fetch or push has already failed in a way a GUI
- * credential prompt would account for — point of use, not pre-flight: the
- * helper is the stock macOS Git setup, so a surface that warns about it before
- * anything goes wrong is warning about a default.
+ * asked for ONLY when push has already failed in a way a GUI credential prompt
+ * would account for — point of use, not pre-flight: the helper is the stock
+ * macOS Git setup, so a surface that warns about it before anything goes wrong
+ * is warning about a default.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import {
-  credentialHelperIssues,
   credentialHelperExplanation,
   type CredentialHelperIssue,
 } from "../credential-helper-diagnostics";
@@ -47,9 +46,25 @@ export type RunNet = (
 
 const execFileAsync = promisify(execFile);
 
-/** The default runner over Node's `execFile` (utf8, no shell). */
+/**
+ * How long a single network verb may run before the runner kills it.
+ *
+ * A bound exists at all because of the failure R8 is about: a `git` push whose
+ * credential helper opens a macOS keychain window has nobody to answer it, so
+ * without a timeout it does not fail — it hangs forever, the `catch` below is
+ * never entered, and the explanation that would name the cause never runs.
+ * Generous on purpose: this must outlast a large push over a slow link, and it
+ * is a backstop for a wedged process, not a latency budget.
+ */
+const NET_TIMEOUT_MS = 120_000;
+
+/** The default runner over Node's `execFile` (utf8, no shell, bounded). */
 export const runNet: RunNet = async (file, args, cwd) => {
-  const { stdout, stderr } = await execFileAsync(file, [...args], { cwd, encoding: "utf8" });
+  const { stdout, stderr } = await execFileAsync(file, [...args], {
+    cwd,
+    encoding: "utf8",
+    timeout: NET_TIMEOUT_MS,
+  });
   return { stdout, stderr };
 };
 
@@ -59,12 +74,19 @@ export interface ExecFailure {
   stderr: string;
   /** Exit code (number) or a spawn error string like `"ENOENT"`; `null` if absent. */
   code: number | string | null;
-  /** The signal that killed the child (a runner timeout kills it), or `null`. */
-  signal: string | null;
+  /**
+   * The runner's own timeout killed this child rather than it exiting.
+   *
+   * Read off Node's `killed`, which `execFile` sets only when IT killed the
+   * process — not off `signal`, which is also set when something else kills the
+   * child (an app quit's SIGTERM), and which would then read every one of those
+   * deaths as a hung credential prompt.
+   */
+  timedOut: boolean;
 }
 
 export function extractFailure(caught: unknown): ExecFailure {
-  const e = caught as { stdout?: unknown; stderr?: unknown; code?: unknown; signal?: unknown };
+  const e = caught as { stdout?: unknown; stderr?: unknown; code?: unknown; killed?: unknown };
   const stderr =
     typeof e.stderr === "string" && e.stderr.length > 0
       ? e.stderr
@@ -75,7 +97,7 @@ export function extractFailure(caught: unknown): ExecFailure {
     stdout: typeof e.stdout === "string" ? e.stdout : "",
     stderr,
     code: typeof e.code === "number" || typeof e.code === "string" ? e.code : null,
-    signal: typeof e.signal === "string" ? e.signal : null,
+    timedOut: e.killed === true,
   };
 }
 
@@ -84,8 +106,10 @@ export function extractFailure(caught: unknown): ExecFailure {
 // ---------------------------------------------------------------------------
 
 /**
- * The read-only diagnosis, injectable so the suite never shells out to `git
- * config`. Production passes {@link credentialHelperIssues} itself.
+ * The read-only diagnosis, injected exactly like {@link RunNet} rather than
+ * defaulted: it shells out to `git config`, and a seam with a working default
+ * is one a caller can forget to fake, which is how a subprocess ends up inside
+ * a suite that documents itself as never touching git.
  */
 export type ExplainCredentialHelpers = (cwd: string) => Promise<readonly CredentialHelperIssue[]>;
 
@@ -109,12 +133,12 @@ const CREDENTIAL_PROMPT = [
 
 /**
  * Whether this failure is consistent with Git blocked on a credential prompt a
- * Session cannot answer — either because Git said so, or because the verb was
- * killed rather than finishing (a runner's timeout on a hung prompt, which is
- * what the hang looks like from out here).
+ * Session cannot answer — either because Git said so, or because the verb ran
+ * out {@link NET_TIMEOUT_MS} without finishing, which is what a GUI prompt
+ * nobody can dismiss looks like from out here.
  */
-export function looksLikeCredentialPrompt(failure: ExecFailure): boolean {
-  if (failure.signal !== null || failure.code === "ETIMEDOUT") return true;
+function looksLikeCredentialPrompt(failure: ExecFailure): boolean {
+  if (failure.timedOut) return true;
   return includesAny(failure.stderr, CREDENTIAL_PROMPT);
 }
 
@@ -159,16 +183,18 @@ function lastLine(stdout: string): string {
 export async function fetchBase(
   run: RunNet,
   input: { worktreePath: string; baseBranch: string | null },
-  explain: ExplainCredentialHelpers = credentialHelperIssues,
 ): Promise<WorktreeResult<void>> {
   if (!input.baseBranch) return err("No base branch is known to fetch.");
   try {
     await run("git", ["fetch", "origin", input.baseBranch], input.worktreePath);
     return ok(undefined);
   } catch (caught) {
-    return err(
-      await withCredentialExplanation(explain, input.worktreePath, extractFailure(caught)),
-    );
+    // No credential explanation here, deliberately. Every caller treats a
+    // failed fetch as best-effort and DISCARDS this string (publish.ts §3), so
+    // diagnosing it would spend a `git config` subprocess writing a sentence
+    // nobody reads. A credential prompt that stops the fetch stops the push a
+    // moment later, and that one is surfaced.
+    return err(extractFailure(caught).stderr);
   }
 }
 
@@ -196,7 +222,7 @@ function includesAny(haystack: string, needles: readonly string[]): boolean {
 export async function pushBranch(
   run: RunNet,
   input: { worktreePath: string; branch: string | null },
-  explain: ExplainCredentialHelpers = credentialHelperIssues,
+  explain: ExplainCredentialHelpers,
 ): Promise<WorktreeResult<void>> {
   if (!input.branch) return err("No branch is set on this worktree to push.");
   try {

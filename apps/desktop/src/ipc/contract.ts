@@ -755,7 +755,7 @@ export interface CliSystemPathIssue {
 // `osxkeychain` is the stock macOS Git setup, so a status read that carries it
 // invites a pane to warn about a default. It stays main-local
 // (`credential-helper-diagnostics.ts`) and is asked for at the point of use:
-// the explanation rides a Git network failure it can account for.
+// the explanation rides the failed `git push` it can account for.
 
 export interface CliSessionPathStatus {
   /** The exact colon-delimited PATH a Session command inherits. */

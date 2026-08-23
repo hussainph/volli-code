@@ -18,16 +18,61 @@ export interface SessionEnvironmentAlertState {
    * dismissed for the view rather than durably.
    */
   fault: SessionEnvironmentFaultKind | null;
+  /**
+   * Dismissal identity for a notice with no fault kind behind it. Derived from
+   * what was MEASURED, never from how it was worded: a readiness notice used to
+   * be put away by comparing its exact sentence, so rewording the copy revived
+   * a notice the user had already dismissed. A genuine change in what the
+   * project is missing still produces a new key, which is the point — that is
+   * news, where a copy edit is not. Faults key on their kind instead and are
+   * dismissed durably (see `stores/ui.ts`).
+   */
+  key: string;
   title: string;
   detail: string;
 }
+
+/**
+ * Everything one status read found — not just the single notice it renders.
+ *
+ * The two are deliberately separate. `faults` is the authority on which app
+ * faults still exist, and the durable dismissals are reconciled against it; if
+ * that reconciliation were fed the notice actually on screen, a dismissed
+ * lower-ranked fault would look repaired for as long as a higher-ranked one
+ * outranked it, and would speak again the moment that one cleared — the exact
+ * defect per-kind dismissal exists to prevent (VC-159/R7).
+ */
+export interface SessionEnvironmentMeasurement {
+  /** Every app fault this read measured, whether or not its notice is the visible one. */
+  faults: SessionEnvironmentFaultKind[];
+  /** The notices this read raised, most important first. */
+  notices: SessionEnvironmentAlertState[];
+}
+
+/** A notice that IS an app fault — so its kind reads without a cast or a null check. */
+type SessionEnvironmentFaultNotice = SessionEnvironmentAlertState & {
+  fault: SessionEnvironmentFaultKind;
+};
 
 /** The one project fact the shared alert needs; Configure owns future repair UI. */
 export interface ProjectEnvironmentScope {
   name: string;
 }
 
-/** "git", "git and gh", "git, gh and node" — a sentence, never a CSV. */
+/** The contract tools this Session PATH cannot resolve — the one place that is judged. */
+function missingSessionTools(status: Pick<CliToolStatus, "environment">): string[] {
+  const { tools } = status.environment.session;
+  return SESSION_ENV_TOOLS.filter((tool) => tools[tool] === null);
+}
+
+/**
+ * "git", "git and gh", "git, gh and node" — a sentence, never a CSV.
+ *
+ * The readiness notice below renders the SAME list as a plain comma list on
+ * purpose, and the difference is not an oversight: it prints under a `Missing
+ * from the Session PATH:` label, where a conjunction would read as prose
+ * inside a field. This one is spoken mid-sentence, where a CSV would not.
+ */
 function plainList(items: readonly string[]): string {
   if (items.length <= 1) return items.join("");
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
@@ -53,13 +98,14 @@ function plainList(items: readonly string[]): string {
  */
 function loginPathFault(
   status: Pick<CliToolStatus, "environment">,
-): SessionEnvironmentAlertState | null {
-  const { provenance, interactiveProvenance, tools } = status.environment.session;
+): SessionEnvironmentFaultNotice | null {
+  const { provenance, interactiveProvenance } = status.environment.session;
   if (provenance !== "probe-failed" || interactiveProvenance !== "probe-failed") return null;
-  const missing = SESSION_ENV_TOOLS.filter((tool) => tools[tool] === null);
+  const missing = missingSessionTools(status);
   if (missing.length === 0) return null;
   return {
     fault: "login-path-unreadable",
+    key: "login-path-unreadable",
     title: "Volli couldn't read your terminal's PATH",
     detail: `Sessions can't find ${plainList(missing)}, so some commands may be missing. Fix now asks your terminal again — Sessions you start afterwards get the result.`,
   };
@@ -70,8 +116,8 @@ function loginPathFault(
  * implies. `null` when the project has nothing missing.
  */
 function readinessDetail(status: Pick<CliToolStatus, "environment">): string | null {
-  const { dependencies, tools, installCommand } = status.environment.session;
-  const missingTools = SESSION_ENV_TOOLS.filter((tool) => tools[tool] === null);
+  const { dependencies, installCommand } = status.environment.session;
+  const missingTools = missingSessionTools(status);
   if (missingTools.length === 0 && dependencies !== "absent") return null;
 
   const toolsFact =
@@ -106,21 +152,35 @@ export function projectEnvironmentReadiness(
   if (project === null) return null;
   const detail = readinessDetail(status);
   if (detail === null) return null;
-  return { fault: null, title: `Sessions aren't ready for ${project.name}`, detail };
+  const { dependencies } = status.environment.session;
+  return {
+    fault: null,
+    // The measured facts, not the sentence built from them.
+    key: `readiness:${project.name}:${missingSessionTools(status).join(",")}:${dependencies ?? "unknown"}`,
+    title: `Sessions aren't ready for ${project.name}`,
+    detail,
+  };
 }
 
 /**
- * One notice at a time, and the app fault outranks the project's readiness.
+ * What one status read found, ranked: the app fault first, the project's own
+ * readiness behind it.
  *
  * They are not merged any more (VC-159): the fault already explains why those
  * tools are unreachable, and a banner that appends a second diagnosis to the
- * first is how the error budget was spent in the first place. When the fault
- * clears — repaired, or dismissed and gone on the next measurement — whatever
- * the project still lacks surfaces on its own.
+ * first is how the error budget was spent in the first place. Only the first
+ * notice a reader has not dismissed is drawn — so putting the fault away does
+ * not also bury what the project is still missing, which a reader never
+ * dismissed and which no repair to the PATH would fix.
  */
-export function sessionEnvironmentAlert(
+export function sessionEnvironmentMeasurement(
   status: Pick<CliToolStatus, "environment">,
   project: ProjectEnvironmentScope | null = null,
-): SessionEnvironmentAlertState | null {
-  return loginPathFault(status) ?? projectEnvironmentReadiness(status, project);
+): SessionEnvironmentMeasurement {
+  const fault = loginPathFault(status);
+  const readiness = projectEnvironmentReadiness(status, project);
+  return {
+    faults: fault === null ? [] : [fault.fault],
+    notices: [fault, readiness].filter((notice) => notice !== null),
+  };
 }

@@ -5,6 +5,7 @@ import { SessionEnvironmentNotice } from "./session-environment-alert";
 
 const FAULT = {
   fault: "login-path-unreadable" as const,
+  key: "login-path-unreadable",
   title: "Volli couldn't read your terminal's PATH",
   detail:
     "Sessions can't find gh and node, so some commands may be missing. " +
@@ -56,6 +57,7 @@ describe("SessionEnvironmentNotice", () => {
       <SessionEnvironmentNotice
         alert={{
           fault: null,
+          key: "readiness:Acme::absent",
           title: "Sessions aren't ready for Acme",
           detail: "Dependencies are not installed. Run pnpm install before starting a Session.",
         }}

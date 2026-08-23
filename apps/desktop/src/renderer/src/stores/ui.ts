@@ -211,8 +211,18 @@ function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
     : DEFAULT_DIFF_PRESENTATION;
 }
 
-/** Every fault kind this build knows how to raise — the sanitizer's whitelist. */
-const ENVIRONMENT_FAULT_KINDS: readonly SessionEnvironmentFaultKind[] = ["login-path-unreadable"];
+/**
+ * Every fault kind this build knows how to raise — the sanitizer's whitelist.
+ *
+ * A `Record` keyed by the union rather than an array of it, so adding a kind to
+ * `SessionEnvironmentFaultKind` without listing it here fails to compile. An
+ * array would have accepted the omission silently and then dropped that kind's
+ * dismissals on every rehydrate — a banner returning each launch, which is the
+ * defect this whole mechanism exists to fix.
+ */
+const ENVIRONMENT_FAULT_KINDS: Record<SessionEnvironmentFaultKind, true> = {
+  "login-path-unreadable": true,
+};
 
 /**
  * Dismissals a past build wrote, kept only for kinds this one still raises.
@@ -221,7 +231,9 @@ const ENVIRONMENT_FAULT_KINDS: readonly SessionEnvironmentFaultKind[] = ["login-
  */
 function sanitizeEnvironmentFaults(faults: unknown): SessionEnvironmentFaultKind[] {
   if (!Array.isArray(faults)) return [];
-  return ENVIRONMENT_FAULT_KINDS.filter((kind) => faults.includes(kind));
+  return (Object.keys(ENVIRONMENT_FAULT_KINDS) as SessionEnvironmentFaultKind[]).filter((kind) =>
+    faults.includes(kind),
+  );
 }
 
 interface UiState {
@@ -369,7 +381,7 @@ type PersistedUiState = Pick<
 export function createUiStore(storage?: StateStorage) {
   return create<UiState>()(
     persist(
-      (set) => ({
+      (set, get) => ({
         sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
         railWidth: RAIL_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
@@ -408,22 +420,23 @@ export function createUiStore(storage?: StateStorage) {
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
-        dismissEnvironmentFault: (kind) =>
-          set((state) =>
-            state.dismissedEnvironmentFaults.includes(kind)
-              ? {}
-              : { dismissedEnvironmentFaults: [...state.dismissedEnvironmentFaults, kind] },
-          ),
-        retainEnvironmentFaultDismissals: (active) =>
-          set((state) => {
-            const kept = state.dismissedEnvironmentFaults.filter((kind) => active.includes(kind));
-            // Same array when nothing was dropped: this runs on every
-            // re-measurement (window focus), and a fresh array each time would
-            // re-render every subscriber and re-write `app_state` for nothing.
-            return kept.length === state.dismissedEnvironmentFaults.length
-              ? {}
-              : { dismissedEnvironmentFaults: kept };
-          }),
+        // Same discipline as the retain below: an already-dismissed kind writes
+        // nothing rather than re-persisting the identical list.
+        dismissEnvironmentFault: (kind) => {
+          const current = get().dismissedEnvironmentFaults;
+          if (!current.includes(kind)) set({ dismissedEnvironmentFaults: [...current, kind] });
+        },
+        // Nothing to drop means NO `set` at all, not a `set` of an empty patch.
+        // zustand's persist middleware wraps `set` unconditionally and writes
+        // the whole store to `app_state` after every call, so `set({})` still
+        // costs a serialize, an IPC hop and a SQLite UPSERT. This runs on every
+        // window focus, so on a healthy machine that would have been a durable
+        // write per focus, forever, to record nothing.
+        retainEnvironmentFaultDismissals: (active) => {
+          const current = get().dismissedEnvironmentFaults;
+          const kept = current.filter((kind) => active.includes(kind));
+          if (kept.length !== current.length) set({ dismissedEnvironmentFaults: kept });
+        },
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>

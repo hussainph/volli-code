@@ -39,10 +39,15 @@ discovers it without probing failures.
 > a contract tool is consequently unresolvable — in plain words, with a **Fix
 > now** button that runs the repair in-process instead of a sentence telling
 > somebody to type `volli doctor --fix`, and its dismissal is durable and keyed
-> by fault kind rather than by the alert's own sentence. The osxkeychain notice
+> by fault kind rather than by the alert's own sentence. Outranking is not
+> swallowing: the project-readiness notice queues behind the fault rather than
+> merging into it, so dismissing the fault reveals it. The osxkeychain notice
 > left Settings → CLI entirely: `osxkeychain` is the stock macOS Git setup, so
-> the explanation now rides the failed `git` fetch or push it can account for
-> (`worktree/net.ts`). Both were asked for as R7 and R8 by the git/environment
+> the explanation now rides the failed `git push` it can account for
+> (`worktree/net.ts`) — push and not fetch, because a failed fetch is
+> best-effort and its error is discarded by every caller. The network runner
+> also grew a timeout, without which the hang R8 is about never becomes a
+> failure to explain. Both were asked for as R7 and R8 by the git/environment
 > UX architecture review (`docs/research/env-credential-ux-architecture-review.md`,
 > Part 2), whose R4–R6 remain open as VC-156 and VC-157.
 
@@ -508,8 +513,18 @@ that must establish that product guarantee.
 > longer carries it. `osxkeychain` is the STOCK macOS setup, so an always-on
 > notice was warning every reader about their own default — which is how a
 > product teaches people to ignore warnings. The same sentence is now attached
-> to the failure it predicts: a `git` fetch or push that fails in a way a GUI
-> credential prompt accounts for carries the explanation with Git's own stderr.
+> to the failure it predicts: a `git push` that fails in a way a GUI credential
+> prompt accounts for carries the explanation with Git's own stderr. Push is
+> the whole venue — a failed fetch is best-effort and its error is discarded
+> (§3), so diagnosing it would spend a `git config` subprocess on a sentence
+> with no reader, and the prompt that stops the fetch stops the push anyway.
+>
+> The hang half of R8 needed one more thing: `runNet` had no timeout, so a push
+> blocked on a keychain window did not fail at all — it hung, and an
+> explanation attached to a failure never ran. The runner now bounds every
+> network verb, and `extractFailure` reads Node's `killed` (which is set only
+> when the runner itself killed the child) rather than `signal` (which an app
+> quit's SIGTERM also sets).
 
 ## Review fixes (2026-08-21)
 
