@@ -159,8 +159,10 @@ export async function observeEnvironment(
   for (const command of await commandsToResolve(binDir, environment)) {
     resolved[command] = await resolveOnPath(pathEntries, command, environment);
   }
-  // The session contract tools are measured on every run, with or without
-  // harnesses: a machine with no agent installed still needs `git` audited.
+  // The session tools are measured on every run, with or without harnesses:
+  // a machine with no agent installed still needs `git` audited. Measuring is
+  // not requiring — which of these absences is a fault is decided per project
+  // (`requiredSessionEnvTools`, sent beside this observation).
   // They share the `resolved` map with harness commands — a harness that would
   // take a system tool's name is refused, so the keys never collide.
   for (const tool of SESSION_ENV_TOOLS) {

@@ -7,8 +7,11 @@ import type { CliToolStatus } from "../../../../ipc/contract";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
+/** The selected project, swappable per test: the pane scopes both reads by it. */
+let selectedProject: { path: string } | null = null;
+
 vi.mock("@renderer/hooks/use-selected-project", () => ({
-  useSelectedProject: () => null,
+  useSelectedProject: () => selectedProject,
 }));
 
 import { CliSettings } from "./cli-settings";
@@ -27,8 +30,12 @@ function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
           git: "/usr/bin/git",
           gh: "/opt/homebrew/bin/gh",
           node: "/opt/homebrew/bin/node",
+          npm: "/opt/homebrew/bin/npm",
           pnpm: "/opt/homebrew/bin/pnpm",
+          yarn: null,
+          bun: null,
         },
+        requiredTools: ["git", "node", "pnpm"],
         dependencies: null,
         installCommand: null,
       },
@@ -47,13 +54,13 @@ function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
 
-async function renderCli(statusResult: CliToolStatus): Promise<HTMLDivElement> {
+async function renderCli(statusResult: CliToolStatus, doctor = vi.fn()): Promise<HTMLDivElement> {
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
       cli: {
         status: vi.fn(async () => ({ ok: true, status: statusResult })),
-        doctor: vi.fn(),
+        doctor,
       },
     },
   });
@@ -85,7 +92,37 @@ afterEach(async () => {
   host?.remove();
   root = null;
   host = null;
+  selectedProject = null;
   Reflect.deleteProperty(window, "api");
+});
+
+// VC-157: the probe judges which tools are required from the directory it
+// runs in, so the pane has to scope it the same way it scopes the read above.
+// Unscoped, the probe inherits main's cwd and reports a missing `git` as a
+// tool nothing asks for — contradicting the banner that sent the user here.
+describe("CliSettings — doctor scope", () => {
+  it("runs Doctor against the selected project", async () => {
+    selectedProject = { path: "/work/acme" };
+    const doctor = vi.fn(async () => ({ ok: true as const, checks: [], summary: "All 0 checks." }));
+    const pane = await renderCli(status(), doctor);
+
+    await act(async () => {
+      buttonWithText(pane, "Run Doctor").click();
+    });
+
+    expect(doctor).toHaveBeenCalledWith({ fix: false, cwd: "/work/acme" });
+  });
+
+  it("asks for no project scope when none is selected", async () => {
+    const doctor = vi.fn(async () => ({ ok: true as const, checks: [], summary: "All 0 checks." }));
+    const pane = await renderCli(status(), doctor);
+
+    await act(async () => {
+      buttonWithText(pane, "Run Doctor").click();
+    });
+
+    expect(doctor).toHaveBeenCalledWith({ fix: false });
+  });
 });
 
 describe("CliSettings", () => {

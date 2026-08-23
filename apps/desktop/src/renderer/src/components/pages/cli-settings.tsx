@@ -109,7 +109,11 @@ export function CliSettings() {
     if (doctor.status === "running") return;
     setDoctor({ status: "running", fixing: fix });
     try {
-      const result = await window.api.cli.doctor({ fix });
+      // The same project scope the detection read above uses: the probe has to
+      // stand in the project to judge which tools it requires (VC-157).
+      const result = await window.api.cli.doctor(
+        projectCwd === undefined ? { fix } : { fix, cwd: projectCwd },
+      );
       if (!result.ok) {
         setDoctor({ status: "error", message: result.error });
         return;

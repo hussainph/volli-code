@@ -17,6 +17,7 @@
  * marker makes the answer findable inside an interactive shell's chatter.
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
 import { errorMessage } from "@volli/shared";
 import type { DoctorCheck, DoctorStatus } from "@volli/shared";
@@ -37,12 +38,35 @@ const DOCTOR_COMMAND = `printf ${DOCTOR_MARKER}; volli doctor --json 2>/dev/null
 export interface CliDoctorDeps {
   /** The user's login shell binary (`resolveShell`). */
   shellFile: string;
+  /**
+   * The project root to run the probe in, or `null` for none in scope.
+   *
+   * `volli doctor` decides which tool absences are faults from its own cwd
+   * (VC-157), so the probe has to STAND in the project the pane is describing.
+   * Left to inherit, it would take main's cwd — `/` under launchd — and report
+   * every tool as required by nothing, including a `git` that is genuinely
+   * missing. Only in dev, where main's cwd happens to be the checkout, would
+   * that look correct.
+   */
+  cwd?: string | null;
   /** Test seam over the spawn; resolves whatever the shell printed. */
-  runShell?(file: string, args: readonly string[]): Promise<string>;
+  runShell?(file: string, args: readonly string[], cwd: string | null): Promise<string>;
 }
 
-async function runLoginShell(file: string, args: readonly string[]): Promise<string> {
-  const child = spawn(file, [...args], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+async function runLoginShell(
+  file: string,
+  args: readonly string[],
+  cwd: string | null,
+): Promise<string> {
+  const child = spawn(file, [...args], {
+    detached: true,
+    stdio: ["ignore", "pipe", "ignore"],
+    // A cwd that has gone (a project folder deleted while Settings is open)
+    // makes spawn throw ENOENT, which would report a missing folder as a
+    // broken login shell. Falling back to inherited is the honest degrade:
+    // the probe still answers, and only the project-scoped half is unknown.
+    ...(cwd !== null && existsSync(cwd) ? { cwd } : {}),
+  });
   let output = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
@@ -109,7 +133,7 @@ export async function probeCliDoctor(deps: CliDoctorDeps): Promise<CliDoctorResu
   const runShell = deps.runShell ?? runLoginShell;
   let stdout: string;
   try {
-    stdout = await runShell(deps.shellFile, ["-l", "-i", "-c", DOCTOR_COMMAND]);
+    stdout = await runShell(deps.shellFile, ["-l", "-i", "-c", DOCTOR_COMMAND], deps.cwd ?? null);
   } catch (error) {
     return { ok: false, error: `The login shell could not be run: ${errorMessage(error)}` };
   }

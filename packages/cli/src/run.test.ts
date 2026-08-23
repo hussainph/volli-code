@@ -135,6 +135,8 @@ describe("runCli", () => {
           pnpm: null,
         },
       }),
+      // A bare manifest, no lockfile and no repository: node and npm are
+      // implied, and nothing implies git, pnpm or gh (VC-157).
       pathExists: (path) => path === "/work/volli/package.json",
       request: async () => {
         throw new AgentClientError("APP_UNREACHABLE", "not running");
@@ -145,7 +147,7 @@ describe("runCli", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toEqual([]);
     expect(stdout).toEqual([
-      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"env":{"path":"/opt/homebrew/bin:/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":"/usr/bin/git","gh":"/opt/homebrew/bin/gh","node":null,"pnpm":null},"dependencies":"absent"},"degraded":true}\n',
+      '{"project":null,"ticket":"VC-12","session":"session-7","worktreePath":"/work/volli","socket":"/profiles/volli.sock","appVersion":null,"env":{"path":"/opt/homebrew/bin:/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":"/usr/bin/git","gh":"/opt/homebrew/bin/gh","node":null,"npm":null,"pnpm":null,"yarn":null,"bun":null},"requiredTools":["node","npm"],"dependencies":"absent"},"degraded":true}\n',
     ]);
   });
 
@@ -342,7 +344,7 @@ describe("runCli", () => {
     // app to ask never ran a pass, which is not the same fact as a pass that
     // has yet to land.
     expect(output[0]).toContain(
-      '"env":{"path":"/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":null,"gh":null,"node":null,"pnpm":null}',
+      '"env":{"path":"/usr/bin","provenance":null,"interactiveProvenance":null,"tools":{"git":null,"gh":null,"node":null,"npm":null,"pnpm":null,"yarn":null,"bun":null}',
     );
   });
 
@@ -450,6 +452,31 @@ describe("runCli — doctor", () => {
     expect(requests[0]?.args["pathEntries"]).toEqual(["/ud/bin"]);
     expect(requests[0]?.args["resolved"]).toEqual({ claude: "/ud/bin/claude" });
     expect(requests[0]?.ctx.env.session).toBe("s-1");
+  });
+
+  // Which tools may be FAULTS is a fact about the directory this process
+  // stands in, so it is measured here beside every other observation — main
+  // cannot see the caller's workspace and must not guess at it (VC-157).
+  it("sends the tools this workspace implies, judged by its own lockfile", async () => {
+    const requests: AgentRequest[] = [];
+    const present = new Set(["/work/.git", "/work/package.json", "/work/yarn.lock"]);
+    const code = await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ pathEntries: ["/ud/bin"], resolved: {} }),
+      pathExists: (path) => present.has(path),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(requests[0]?.args["requiredTools"]).toEqual(["git", "node", "yarn"]);
   });
 
   // The observation travels with the request, so the one that arrived WITH the
