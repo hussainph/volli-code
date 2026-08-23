@@ -6,8 +6,12 @@ import {
   sessionEnvironmentAlert,
 } from "./session-environment-alert-model";
 
-const REPAIR_HINT =
-  "Run volli doctor --fix to re-run PATH adoption for new Sessions; this running Session keeps its startup environment.";
+const ALL_TOOLS_FOUND = {
+  git: "/usr/bin/git",
+  gh: "/opt/homebrew/bin/gh",
+  node: "/opt/homebrew/bin/node",
+  pnpm: "/opt/homebrew/bin/pnpm",
+};
 
 function status(
   provenance: CliToolStatus["environment"]["session"]["provenance"],
@@ -21,18 +25,12 @@ function status(
         path: "/volli/bin:/usr/bin:/opt/homebrew/bin",
         provenance,
         interactiveProvenance,
-        tools: {
-          git: "/usr/bin/git",
-          gh: "/opt/homebrew/bin/gh",
-          node: "/opt/homebrew/bin/node",
-          pnpm: "/opt/homebrew/bin/pnpm",
-        },
+        tools: { ...ALL_TOOLS_FOUND },
         dependencies: null,
         installCommand: null,
         ...overrides,
       },
       systemPathIssues: [],
-      credentialHelperIssues: [],
     },
   };
 }
@@ -43,25 +41,61 @@ describe("sessionEnvironmentAlert", () => {
     expect(sessionEnvironmentAlert(status("already-complete", "pending"))).toBeNull();
   });
 
-  it("makes a failed boot adoption visible even when the interactive pass recovered", () => {
-    expect(sessionEnvironmentAlert(status("probe-failed", "adopted"))).toEqual({
-      title: "Sessions couldn't read your login PATH",
-      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT}`,
+  // The whole of VC-159/R7's first half: only the fault a person can feel gets
+  // to interrupt them. Everything below is still reported in Settings → CLI.
+  it("says nothing about a probe failure that cost a Session nothing", () => {
+    expect(sessionEnvironmentAlert(status("probe-failed", "probe-failed"))).toBeNull();
+  });
+
+  it("says nothing when only one pass failed, however much is missing", () => {
+    const missingEverything = { tools: { git: null, gh: null, node: null, pnpm: null } };
+    expect(
+      sessionEnvironmentAlert(status("probe-failed", "adopted", missingEverything)),
+    ).toBeNull();
+    expect(
+      sessionEnvironmentAlert(status("adopted", "probe-failed", missingEverything)),
+    ).toBeNull();
+    // `pending` is not a failure: the second pass runs after the first window
+    // precisely so nothing waits on it.
+    expect(
+      sessionEnvironmentAlert(status("probe-failed", "pending", missingEverything)),
+    ).toBeNull();
+  });
+
+  it("raises one plainly-worded fault when both passes failed and commands are missing", () => {
+    const measured = status("probe-failed", "probe-failed", {
+      tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: "/opt/homebrew/bin/pnpm" },
+    });
+
+    expect(sessionEnvironmentAlert(measured)).toEqual({
+      fault: "login-path-unreadable",
+      title: "Volli couldn't read your terminal's PATH",
+      detail:
+        "Sessions can't find gh and node, so some commands may be missing. " +
+        "Fix now asks your terminal again — Sessions you start afterwards get the result.",
     });
   });
 
-  it("names the two-pass failure without pretending one pass repaired the other", () => {
-    expect(sessionEnvironmentAlert(status("probe-failed", "probe-failed"))).toEqual({
-      title: "Sessions couldn't read your login PATH",
-      detail: `Both login-shell passes failed. Sessions are using the app's inherited PATH, so commands available in your terminal may not run here. ${REPAIR_HINT}`,
+  it("names a single missing command without a list", () => {
+    const measured = status("probe-failed", "probe-failed", {
+      tools: { ...ALL_TOOLS_FOUND, gh: null },
     });
+
+    expect(sessionEnvironmentAlert(measured)?.detail).toContain("Sessions can't find gh,");
   });
 
-  it("surfaces an interactive-only failure because its shell tools can still be absent", () => {
-    expect(sessionEnvironmentAlert(status("adopted", "probe-failed"))).toEqual({
-      title: "Sessions couldn't read your interactive login PATH",
-      detail: `Tools configured by your interactive shell, such as nvm or mise, may not be available in Sessions. ${REPAIR_HINT}`,
-    });
+  // The banner is somebody's first minute in the product. "Login-shell passes",
+  // "adoption", "provenance" and `volli doctor --fix` are Settings → CLI and
+  // doctor vocabulary (VC-159, item 3).
+  it("speaks no internal vocabulary and prescribes no CLI incantation", () => {
+    const alert = sessionEnvironmentAlert(
+      status("probe-failed", "probe-failed", { tools: { ...ALL_TOOLS_FOUND, gh: null } }),
+    );
+    const copy = `${alert?.title} ${alert?.detail}`;
+
+    for (const word of ["pass", "adoption", "provenance", "probe", "doctor", "--fix"]) {
+      expect(copy.toLowerCase()).not.toContain(word);
+    }
   });
 
   it("shows every missing project requirement as soon as a project is selected", () => {
@@ -72,9 +106,10 @@ describe("sessionEnvironmentAlert", () => {
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toEqual({
+      fault: null,
       title: "Sessions aren't ready for Acme",
       detail:
-        "Missing from the Session PATH: gh, node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions. Dependencies are not installed. Run pnpm install before starting a Session.",
+        "Missing from the Session PATH: gh, node. If they are installed, open Settings → CLI to repair the Session PATH. Dependencies are not installed. Run pnpm install before starting a Session.",
     });
   });
 
@@ -104,17 +139,12 @@ describe("sessionEnvironmentAlert", () => {
 
   it("reports missing tools without a dependency sentence when dependencies are fine", () => {
     const measured = status("adopted", "already-complete", {
-      tools: {
-        git: "/usr/bin/git",
-        gh: null,
-        node: "/opt/homebrew/bin/node",
-        pnpm: "/opt/homebrew/bin/pnpm",
-      },
+      tools: { ...ALL_TOOLS_FOUND, gh: null },
       dependencies: "installed",
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Missing from the Session PATH: gh. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions.",
+      "Missing from the Session PATH: gh. If they are installed, open Settings → CLI to repair the Session PATH.",
     );
   });
 
@@ -123,33 +153,33 @@ describe("sessionEnvironmentAlert", () => {
     expect(
       projectEnvironmentReadiness(status("adopted", "already-complete"), { name: "Acme" }),
     ).toBeNull();
-    // A probe failure with a selected but healthy project stays a probe alert.
-    expect(sessionEnvironmentAlert(status("probe-failed", "pending"), { name: "Acme" })).toEqual({
-      title: "Sessions couldn't read your login PATH",
-      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT}`,
-    });
   });
 
-  // The combined notice states every fact once and the repair once: the probe
-  // half already ends with the repair hint, so the readiness half contributes
-  // only its measurements (the duplicated sentence the VC-94 review caught).
-  it("merges a probe failure with project facts without repeating the repair hint", () => {
-    const measured = status("probe-failed", "pending", {
-      tools: {
-        git: "/usr/bin/git",
-        gh: null,
-        node: "/opt/homebrew/bin/node",
-        pnpm: "/opt/homebrew/bin/pnpm",
-      },
+  // One notice at a time (VC-159): the fault already explains why those tools
+  // are unreachable, so the project's readiness sentence does not pile a second
+  // diagnosis onto the first — it waits until the fault is gone.
+  it("lets the app fault outrank the project's readiness rather than merging them", () => {
+    const measured = status("probe-failed", "probe-failed", {
+      tools: { ...ALL_TOOLS_FOUND, gh: null },
       dependencies: "absent",
       installCommand: "pnpm install",
     });
 
     const alert = sessionEnvironmentAlert(measured, { name: "Acme" });
-    expect(alert).toEqual({
-      title: "Sessions couldn't read your login PATH",
-      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT} Missing from the Session PATH: gh. Dependencies are not installed. Run pnpm install before starting a Session.`,
+    expect(alert?.fault).toBe("login-path-unreadable");
+    expect(alert?.detail).not.toContain("pnpm install");
+  });
+
+  it("surfaces the project's own shortfall once no app fault is in the way", () => {
+    const measured = status("adopted", "already-complete", {
+      dependencies: "absent",
+      installCommand: "pnpm install",
     });
-    expect(alert?.detail.match(/volli doctor --fix/g)).toHaveLength(1);
+
+    expect(sessionEnvironmentAlert(measured, { name: "Acme" })).toEqual({
+      fault: null,
+      title: "Sessions aren't ready for Acme",
+      detail: "Dependencies are not installed. Run pnpm install before starting a Session.",
+    });
   });
 });

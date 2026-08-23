@@ -1,7 +1,27 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { CredentialHelperIssue } from "../credential-helper-diagnostics";
 import { fetchBase, ghCreateDraftPr, ghDiscoverPr, ghFindPr, ghPrStatus, pushBranch } from "./net";
 import { netFailure, scriptedNet } from "./scripted-net";
+
+const OSXKEYCHAIN: CredentialHelperIssue = {
+  kind: "osxkeychain-may-prompt-gui",
+  helper: "osxkeychain",
+  scope: "global",
+  location: "/Users/me/.gitconfig",
+};
+
+/** A recording stand-in for the read-only `git config` diagnosis. */
+function explainer(issues: readonly CredentialHelperIssue[] = []) {
+  const asked: string[] = [];
+  return {
+    asked,
+    explain: async (cwd: string) => {
+      asked.push(cwd);
+      return issues;
+    },
+  };
+}
 
 describe("fetchBase", () => {
   it("runs git fetch origin <base> and returns ok", async () => {
@@ -72,6 +92,104 @@ describe("pushBranch", () => {
     if (result.ok) return;
     expect(result.error).toContain("Permission denied");
     expect(result.error).not.toContain("Add an `origin` remote");
+  });
+});
+
+// VC-159/R8: `osxkeychain` is the stock macOS Git setup, so it is explained
+// where it explains something — at the failure it predicts — and nowhere else.
+/** A push/fetch that failed for want of credentials Git could not obtain. */
+function promptFailure() {
+  return scriptedNet(() => {
+    throw netFailure({
+      stderr: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      code: 128,
+    });
+  });
+}
+
+describe("the credential-helper explanation's venue", () => {
+  it("explains the helper on a push that failed for want of credentials", async () => {
+    const { run } = promptFailure();
+    const { asked, explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(asked).toEqual(["/wt"]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Git's own stderr survives; the explanation is added under it.
+    expect(result.error).toContain("could not read Username");
+    expect(result.error).toContain("osxkeychain");
+    expect(result.error).toContain("/Users/me/.gitconfig");
+    expect(result.error).toContain("a Session cannot answer");
+    expect(result.error).toContain("gh auth login");
+  });
+
+  it("explains it on a fetch that failed the same way", async () => {
+    const { run } = promptFailure();
+    const { explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await fetchBase(run, { worktreePath: "/wt", baseBranch: "main" }, explain);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("osxkeychain");
+  });
+
+  it("asks nothing when the failure is not one a credential prompt accounts for", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "! [rejected] b -> b (non-fast-forward)", code: 1 });
+    });
+    const { asked, explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(asked).toEqual([]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).not.toContain("osxkeychain");
+  });
+
+  it("leaves the stderr alone when no such helper is configured", async () => {
+    const { run } = promptFailure();
+    const { explain } = explainer();
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe(
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+    );
+  });
+
+  it("establishes nothing when the diagnosis itself cannot be taken", async () => {
+    const { run } = promptFailure();
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, async () => {
+      throw new Error("git config is not runnable here");
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("could not read Username");
+    expect(result.error).not.toContain("osxkeychain");
+  });
+
+  // A verb that was KILLED rather than finishing is what a hung GUI prompt
+  // looks like from out here: no stderr to classify, just a process that never
+  // came back.
+  it("treats a killed network verb as consistent with a prompt nobody could answer", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "", code: "ETIMEDOUT" });
+    });
+    const { explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("osxkeychain");
   });
 });
 

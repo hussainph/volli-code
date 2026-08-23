@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { credentialHelperIssues } from "./credential-helper-diagnostics";
+import {
+  credentialHelperExplanation,
+  credentialHelperIssues,
+  type CredentialHelperIssue,
+} from "./credential-helper-diagnostics";
 
 function gitConfigOutput(
   entries: ReadonlyArray<readonly [scope: string, origin: string, helper: string]>,
@@ -125,5 +129,48 @@ describe("credentialHelperIssues", () => {
         },
       }),
     ).resolves.toEqual([]);
+  });
+});
+
+function issue(scope: CredentialHelperIssue["scope"], location: string): CredentialHelperIssue {
+  return { kind: "osxkeychain-may-prompt-gui", helper: "osxkeychain", scope, location };
+}
+
+describe("credentialHelperExplanation", () => {
+  it("says what happened, why a Session could not answer, and the one thing that fixes it", () => {
+    const text = credentialHelperExplanation(issue("global", "/Users/me/.gitconfig"));
+
+    expect(text).toContain("Git asked for credentials it could not get.");
+    expect(text).toContain("Your global Git configuration");
+    expect(text).toContain("/Users/me/.gitconfig");
+    expect(text).toContain("osxkeychain");
+    expect(text).toContain("a Session cannot answer");
+    expect(text).toContain("gh auth login");
+  });
+
+  it("names every scope Git can report, including the one it does not classify", () => {
+    // Apple Git reports its Xcode-bundled gitconfig — the file that enables
+    // osxkeychain on a stock Mac — with a scope Git itself calls unknown.
+    expect(credentialHelperExplanation(issue("system", "/etc/gitconfig"))).toContain(
+      "Your system Git configuration",
+    );
+    expect(credentialHelperExplanation(issue("repo-local", "/work/acme/.git/config"))).toContain(
+      "This project's Git configuration",
+    );
+    expect(credentialHelperExplanation(issue("command", "command line"))).toContain(
+      "A Git command setting",
+    );
+    expect(credentialHelperExplanation(issue("unknown", "/Applications/Xcode.app"))).toContain(
+      "Your Git configuration",
+    );
+  });
+
+  // Volli never rewrites the user's Git configuration, and this sentence never
+  // asks them to either: the fix is a sign-in, not an edit.
+  it("asks for no configuration change", () => {
+    const text = credentialHelperExplanation(issue("global", "/Users/me/.gitconfig"));
+
+    expect(text.toLowerCase()).not.toContain("git config --");
+    expect(text.toLowerCase()).not.toContain("remove");
   });
 });

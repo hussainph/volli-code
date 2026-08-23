@@ -65,6 +65,14 @@
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
  *
+ * `dismissedEnvironmentFaults` — which app-level environment faults the user
+ * has put away, by kind. Persisted app-wide because a dismissal that did not
+ * survive relaunch was the defect (VC-159): the banner used to be dismissed in
+ * component state keyed on its exact sentence, so it came back at every launch
+ * and at every wording change. Keyed by FAULT KIND, never by copy, and dropped
+ * again as soon as the fault stops being measured — so the same fault happening
+ * a second time is heard.
+ *
  * `terminalFocusTarget` — the terminal tab temporarily owning the app canvas,
  * whether a ticket owns it or the project does. It is deliberately session-only:
  * live PTYs do not survive relaunch, and entering a new app lifetime with its
@@ -94,6 +102,7 @@ import {
   sanitizeHomeRailMode,
   type HomeRailMode,
 } from "@renderer/components/home/home-rail-model";
+import type { SessionEnvironmentFaultKind } from "@renderer/components/session-environment-alert-model";
 import {
   DEFAULT_TICKET_RAIL_MODE,
   type TicketRailMode,
@@ -202,6 +211,19 @@ function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
     : DEFAULT_DIFF_PRESENTATION;
 }
 
+/** Every fault kind this build knows how to raise — the sanitizer's whitelist. */
+const ENVIRONMENT_FAULT_KINDS: readonly SessionEnvironmentFaultKind[] = ["login-path-unreadable"];
+
+/**
+ * Dismissals a past build wrote, kept only for kinds this one still raises.
+ * A retired kind's row would otherwise sit in `app_state` forever, and a
+ * corrupt value must never be able to silence a fault nobody dismissed.
+ */
+function sanitizeEnvironmentFaults(faults: unknown): SessionEnvironmentFaultKind[] {
+  if (!Array.isArray(faults)) return [];
+  return ENVIRONMENT_FAULT_KINDS.filter((kind) => faults.includes(kind));
+}
+
 interface UiState {
   sidebarWidth: number;
   /** Ticket-detail right rail width; resizable via its grip, persisted app-wide. */
@@ -251,6 +273,14 @@ interface UiState {
   homeEmptyVisual: EmptyVisual;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
+  /**
+   * App-level environment faults the user has put away, by KIND. Persisted
+   * app-wide, which is the whole point (VC-159/R7): the launch banner used to
+   * be dismissed in component state keyed on its own sentence, so it returned
+   * on every relaunch and on every wording change. A kind is dismissed once,
+   * and only that kind — a different fault still speaks.
+   */
+  dismissedEnvironmentFaults: SessionEnvironmentFaultKind[];
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   setSidebarWidth(width: number): void;
@@ -278,6 +308,15 @@ interface UiState {
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
   setDiffPresentation(presentation: DiffPresentation): void;
+  /** Put one fault kind away until it clears and happens again. */
+  dismissEnvironmentFault(kind: SessionEnvironmentFaultKind): void;
+  /**
+   * Keep only the dismissals for faults still being measured — the "cleared
+   * when the fault clears" half of the contract. Called with what the latest
+   * measurement found, so a fault that was dismissed and then genuinely
+   * repaired speaks again if it ever comes back.
+   */
+  retainEnvironmentFaultDismissals(active: readonly SessionEnvironmentFaultKind[]): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -312,6 +351,7 @@ type PersistedUiState = Pick<
   | "homeRailMode"
   | "homeEmptyVisual"
   | "diffPresentation"
+  | "dismissedEnvironmentFaults"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
@@ -344,6 +384,7 @@ export function createUiStore(storage?: StateStorage) {
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
+        dismissedEnvironmentFaults: [],
         terminalFocusTarget: null,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
@@ -367,6 +408,22 @@ export function createUiStore(storage?: StateStorage) {
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
+        dismissEnvironmentFault: (kind) =>
+          set((state) =>
+            state.dismissedEnvironmentFaults.includes(kind)
+              ? {}
+              : { dismissedEnvironmentFaults: [...state.dismissedEnvironmentFaults, kind] },
+          ),
+        retainEnvironmentFaultDismissals: (active) =>
+          set((state) => {
+            const kept = state.dismissedEnvironmentFaults.filter((kind) => active.includes(kind));
+            // Same array when nothing was dropped: this runs on every
+            // re-measurement (window focus), and a fresh array each time would
+            // re-render every subscriber and re-write `app_state` for nothing.
+            return kept.length === state.dismissedEnvironmentFaults.length
+              ? {}
+              : { dismissedEnvironmentFaults: kept };
+          }),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -396,6 +453,7 @@ export function createUiStore(storage?: StateStorage) {
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
           diffPresentation: state.diffPresentation,
+          dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -433,6 +491,10 @@ export function createUiStore(storage?: StateStorage) {
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
+            // A dismissal only survives while this build still raises its kind.
+            dismissedEnvironmentFaults: sanitizeEnvironmentFaults(
+              stored.dismissedEnvironmentFaults,
+            ),
           };
         },
       },

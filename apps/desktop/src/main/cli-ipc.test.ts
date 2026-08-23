@@ -38,7 +38,6 @@ const STATUS: CliToolStatus = {
       installCommand: null,
     },
     systemPathIssues: [],
-    credentialHelperIssues: [],
   },
   socket: { path: "/profiles/volli.sock", live: true },
   wrappers: { commands: ["claude"] },
@@ -113,6 +112,29 @@ describe("registerCliIpcHandlers", () => {
     await expect(invoke("volli:cli-doctor", { fix: true })).resolves.toEqual(REPORT);
     expect(order).toEqual(["repair", "probe"]);
     expect(counters).toEqual({ repairs: 0, probes: 0 }); // overridden counters unused
+  });
+
+  // The launch banner's Fix now (VC-159): the repair alone, so a host whose
+  // login shell is the thing that did not answer never waits out the doctor
+  // probe's timeout to be told what it already knows.
+  it("runs the repair with no probe behind it", async () => {
+    const counters = register();
+
+    await expect(invoke("volli:cli-repair")).resolves.toEqual({ ok: true });
+    expect(counters).toEqual({ repairs: 1, probes: 0 });
+  });
+
+  it("reports a repair that failed instead of claiming one that did not happen", async () => {
+    register({
+      repair: async () => {
+        throw new Error("regeneration failed");
+      },
+    });
+
+    await expect(invoke("volli:cli-repair")).resolves.toEqual({
+      ok: false,
+      error: "regeneration failed",
+    });
   });
 
   it("surfaces a failed repair as data, not a rejection", async () => {

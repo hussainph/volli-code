@@ -53,6 +53,7 @@ import type {
   BootstrapResult,
   CliDoctorInput,
   CliDoctorResult,
+  CliRepairResult,
   CliStatusInput,
   CliStatusResult,
   CommentCreateInput,
@@ -652,6 +653,8 @@ const api = {
       input === undefined ? invoke("volli:cli-status") : invoke("volli:cli-status", input),
     /** A real `volli doctor` run through the user's login shell; `fix` repairs first. */
     doctor: (input: CliDoctorInput): Promise<CliDoctorResult> => invoke("volli:cli-doctor", input),
+    /** The repair alone — both PATH passes re-run in main, no login-shell probe behind it (VC-159). */
+    repair: (): Promise<CliRepairResult> => invoke("volli:cli-repair"),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */

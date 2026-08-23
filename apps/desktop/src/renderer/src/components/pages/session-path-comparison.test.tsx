@@ -24,7 +24,6 @@ function environment(
     },
     ...overrides,
     systemPathIssues: overrides.systemPathIssues ?? [],
-    credentialHelperIssues: overrides.credentialHelperIssues ?? [],
   };
 }
 
@@ -91,58 +90,15 @@ describe("SessionPathComparison", () => {
     expect(html).not.toContain("Fix");
   });
 
-  it("names the GUI-capable Git helper, its global configuration, and the cost to a Session without offering a repair", () => {
-    const html = renderToStaticMarkup(
-      <SessionPathComparison
-        environment={environment({
-          credentialHelperIssues: [
-            {
-              kind: "osxkeychain-may-prompt-gui",
-              helper: "osxkeychain",
-              scope: "global",
-              location: "/Users/me/.gitconfig",
-            },
-          ],
-        })}
-      />,
-    );
+  // VC-159/R8: `osxkeychain` is the STOCK macOS Git setup, so this pane used
+  // to warn every reader about their own default. The diagnosis still exists
+  // (`main/credential-helper-diagnostics.ts`) — it now rides the failed fetch
+  // or push it can account for, where it is news rather than noise.
+  it("says nothing about Git credential helpers", () => {
+    const html = renderToStaticMarkup(<SessionPathComparison environment={environment()} />);
 
-    expect(html).toContain("A Git credential helper can prompt a Session");
-    expect(html).toContain("osxkeychain");
-    expect(html).toContain("Global Git configuration");
-    expect(html).toContain("/Users/me/.gitconfig");
-    expect(html).toContain("can hang");
-    expect(html).toContain("Volli will not rewrite your Git configuration.");
-    // Product copy carries no internal ticket vocabulary (VC-94 review).
-    expect(html).not.toContain("VC-");
-    expect(html).not.toContain("Detection only");
-    expect(html).not.toContain("Fix");
-  });
-
-  // Apple Git reports its Xcode-bundled gitconfig — the file that enables
-  // osxkeychain on a stock Mac — with a scope Git does not classify. The
-  // notice still names the file rather than staying silent.
-  it("names a helper from Git's unclassified scope by its file", () => {
-    const html = renderToStaticMarkup(
-      <SessionPathComparison
-        environment={environment({
-          credentialHelperIssues: [
-            {
-              kind: "osxkeychain-may-prompt-gui",
-              helper: "osxkeychain",
-              scope: "unknown",
-              location: "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
-            },
-          ],
-        })}
-      />,
-    );
-
-    expect(html).toContain("A Git credential helper can prompt a Session");
-    expect(html).toContain(
-      "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
-    );
-    expect(html).toContain("Git configuration");
+    expect(html).not.toContain("osxkeychain");
+    expect(html).not.toContain("credential");
   });
 
   it("does not call an unavailable login PATH a match and keeps the Session value readable", () => {

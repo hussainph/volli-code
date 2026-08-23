@@ -751,20 +751,11 @@ export interface CliSystemPathIssue {
   entry: string;
 }
 
-/** A known Git credential helper that can hang a headless Session on a GUI prompt. */
-export interface CliCredentialHelperIssue {
-  kind: "osxkeychain-may-prompt-gui";
-  helper: "osxkeychain";
-  /**
-   * Git's `local` and `worktree` scopes both mean this project's
-   * configuration. `unknown` is Git's own word for a source it does not
-   * classify — Apple's `/usr/bin/git` reports its Xcode-bundled gitconfig,
-   * the file that enables `osxkeychain` on a stock Mac, exactly this way.
-   */
-  scope: "system" | "global" | "repo-local" | "command" | "unknown";
-  /** The config file or command source Git itself reported for the helper. */
-  location: string;
-}
+// The Git credential-helper diagnosis is deliberately NOT here (VC-159/R8).
+// `osxkeychain` is the stock macOS Git setup, so a status read that carries it
+// invites a pane to warn about a default. It stays main-local
+// (`credential-helper-diagnostics.ts`) and is asked for at the point of use:
+// the explanation rides a Git network failure it can account for.
 
 export interface CliSessionPathStatus {
   /** The exact colon-delimited PATH a Session command inherits. */
@@ -806,8 +797,6 @@ export interface CliToolStatus {
     session: CliSessionPathStatus;
     /** A read-only diagnosis of known malformed system PATH entries. */
     systemPathIssues: CliSystemPathIssue[];
-    /** A read-only diagnosis of GUI-capable credential helpers for the scoped project. */
-    credentialHelperIssues: CliCredentialHelperIssue[];
   };
   /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
@@ -841,10 +830,22 @@ export type CliDoctorResult =
   | { ok: true; checks: DoctorCheck[]; summary: string }
   | { ok: false; error: string };
 
+/**
+ * What main's idempotent Session-environment repair established — `volli doctor
+ * --fix`'s first half, without the login-shell doctor probe behind it.
+ *
+ * Its own verb because the launch banner's Fix now button needs exactly this
+ * work and nothing more (VC-159/R7): the probe spawns a login shell and waits
+ * up to fifteen seconds for it, which is the very shell a PATH fault says is
+ * not answering. Settings → CLI still runs the full `doctor --fix`.
+ */
+export type CliRepairResult = { ok: true } | { ok: false; error: string };
+
 /** The Settings → CLI surface (`src/main/cli-ipc.ts`). */
 export interface VolliCliIpcContract {
   "volli:cli-status": { args: [input?: CliStatusInput]; result: CliStatusResult };
   "volli:cli-doctor": { args: [input: CliDoctorInput]; result: CliDoctorResult };
+  "volli:cli-repair": { args: []; result: CliRepairResult };
 }
 
 export type CliIpcChannel = keyof VolliCliIpcContract;

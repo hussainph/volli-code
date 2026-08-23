@@ -34,5 +34,15 @@ export function registerCliIpcHandlers(deps: CliIpcDeps): void {
       if (input.fix) await deps.repair();
       return deps.doctor();
     },
+    // The same repair, without the probe: the launch banner's Fix now button
+    // re-measures with a plain status read afterwards, and must not spend the
+    // doctor probe's login-shell timeout on a host whose login shell is the
+    // thing that did not answer (VC-159). A repair that throws crosses as
+    // `{ ok: false, error }` through the registry's envelope, and the banner
+    // says so — a button that claims a repair it could not make must not exist.
+    "volli:cli-repair": async () => {
+      await deps.repair();
+      return { ok: true as const };
+    },
   });
 }

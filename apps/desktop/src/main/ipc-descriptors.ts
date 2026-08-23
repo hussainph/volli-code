@@ -956,6 +956,12 @@ export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> }
       args.length === 1 && isRecord(args[0]) && typeof args[0]["fix"] === "boolean",
     invalidError: "Invalid doctor request",
   },
+  // The repair alone (VC-159): the launch banner's Fix now button, which takes
+  // no input at all — there is one repair and it is idempotent.
+  "volli:cli-repair": {
+    guard: (args): args is IpcArgs<"volli:cli-repair"> => args.length === 0,
+    invalidError: "Invalid repair request",
+  },
 };
 // No CLI_CHANNELS sibling to HARNESS_CHANNELS: that list exists to register
 // degraded-db handlers, and the CLI surface is deliberately db-free — a

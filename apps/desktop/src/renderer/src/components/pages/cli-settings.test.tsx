@@ -33,7 +33,6 @@ function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
         installCommand: null,
       },
       systemPathIssues: [],
-      credentialHelperIssues: [],
     },
     socket: { path: "/profiles/volli.sock", live: true },
     wrappers: { commands: ["claude", "codex"] },

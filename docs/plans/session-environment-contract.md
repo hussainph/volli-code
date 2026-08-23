@@ -32,6 +32,19 @@ discovers it without probing failures.
 >
 > **Four improvements remain open** — marked ○ below. A5 and the two non-`PATH`
 > bundle items want coordinating with VC-38, VC-109 and VC-70.
+>
+> **VC-159 changed where two of these surfaces speak (2026-08-23).** Nothing
+> about the adoption machinery moved; the vocabulary and the venue did. The
+> launch banner now fires only for the app-level fault — BOTH passes failed and
+> a contract tool is consequently unresolvable — in plain words, with a **Fix
+> now** button that runs the repair in-process instead of a sentence telling
+> somebody to type `volli doctor --fix`, and its dismissal is durable and keyed
+> by fault kind rather than by the alert's own sentence. The osxkeychain notice
+> left Settings → CLI entirely: `osxkeychain` is the stock macOS Git setup, so
+> the explanation now rides the failed `git` fetch or push it can account for
+> (`worktree/net.ts`). Both were asked for as R7 and R8 by the git/environment
+> UX architecture review (`docs/research/env-credential-ux-architecture-review.md`,
+> Part 2), whose R4–R6 remain open as VC-156 and VC-157.
 
 Investigated 2026-08-20 against `ca9fcccd`. Every claim below marked *measured*
 was observed on the reporting host during the investigation session itself —
@@ -439,6 +452,10 @@ remedies, the persistent Session-PATH notice, and the agent-facing contract now
 name `volli doctor --fix` as the first recovery step. They retain the reporting
 rule and state that it repairs only Sessions started after the command.
 
+> Superseded for the human surfaces by VC-159: `volli doctor --fix` stays the
+> AGENT's recovery step, and the banner offers the same work as a **Fix now**
+> button (`volli:cli-repair`) rather than a command to type.
+
 **○ D3 · Per-session degradation record.** (P2.) Persist the env provenance on the
 session record so a post-mortem can answer "did this session have `gh`?" without
 re-deriving it from a host that has since changed. This is what would have
@@ -485,6 +502,14 @@ known GUI-capable helper in the chain it can read; it does not make an
 interactive credential path unreachable. VC-70 (GitHub in Settings) and VC-45
 (Volli holds the credential and Sessions request operations) remain the work
 that must establish that product guarantee.
+
+> **Venue changed by VC-159 (R8).** The detector is unchanged and still
+> read-only; it no longer renders on Settings → CLI, and the status read no
+> longer carries it. `osxkeychain` is the STOCK macOS setup, so an always-on
+> notice was warning every reader about their own default — which is how a
+> product teaches people to ignore warnings. The same sentence is now attached
+> to the failure it predicts: a `git` fetch or push that fails in a way a GUI
+> credential prompt accounts for carries the explanation with Git's own stderr.
 
 ## Review fixes (2026-08-21)
 

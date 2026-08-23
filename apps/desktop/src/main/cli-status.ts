@@ -15,12 +15,7 @@
 import { lstat, readlink } from "node:fs/promises";
 import { basename } from "node:path";
 
-import type {
-  CliCredentialHelperIssue,
-  CliSessionPathStatus,
-  CliSystemPathIssue,
-  CliToolStatus,
-} from "../ipc/contract";
+import type { CliSessionPathStatus, CliSystemPathIssue, CliToolStatus } from "../ipc/contract";
 import { LEGACY_GLOBAL_CLI_LINK, loginPathHasUserBin, userCliLinkPath } from "./agent-tools";
 
 export interface CliStatusDeps {
@@ -37,8 +32,6 @@ export interface CliStatusDeps {
   sessionEnvironment(cwd: string | null): Promise<CliSessionPathStatus>;
   /** Known malformed `/etc/paths.d` entries, read-only and never repaired here. */
   systemPathIssues(): Promise<CliSystemPathIssue[]>;
-  /** Known GUI-capable Git credential helpers for the scoped project, never repaired here. */
-  credentialHelperIssues(cwd: string | null): Promise<CliCredentialHelperIssue[]>;
   /** Wrapper command names the last harness-runtime regeneration produced. */
   wrapperCommands(): readonly string[];
   /** The user's login shell binary (`resolveShell`). */
@@ -76,11 +69,13 @@ export async function readCliStatus(
   const link = await linkState(userCliLinkPath(deps.home), isOurs);
   const legacyPath = deps.legacyLinkPath ?? LEGACY_GLOBAL_CLI_LINK;
   const legacy = await linkState(legacyPath, isOurs);
-  const [loginPath, session, systemPathIssues, credentialHelperIssues] = await Promise.all([
+  // No credential-helper query here: it is a per-call `git config` exec, and
+  // this status is re-read on every window focus to answer a PATH question
+  // (VC-159/R8 moved that diagnosis to the Git failure it explains).
+  const [loginPath, session, systemPathIssues] = await Promise.all([
     deps.loginShellPath(),
     deps.sessionEnvironment(cwd),
     deps.systemPathIssues(),
-    deps.credentialHelperIssues(cwd),
   ]);
   const shellName = basename(deps.shellFile);
   return {
@@ -94,7 +89,7 @@ export async function readCliStatus(
             ? "reachable"
             : "missing",
     },
-    environment: { loginPath, session, systemPathIssues, credentialHelperIssues },
+    environment: { loginPath, session, systemPathIssues },
     socket: { path: deps.socketPath, live: deps.socketLive() },
     wrappers: { commands: [...deps.wrapperCommands()] },
     shell: {
