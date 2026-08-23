@@ -127,6 +127,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
+        "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
