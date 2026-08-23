@@ -23,7 +23,17 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 
 // Bundle workspace TS source (`@volli/shared` exports raw .ts) into the CJS
 // main/preload artifacts instead of leaving a runtime require() behind.
-const bundleWorkspacePackages = (id: string): boolean => id.startsWith("@volli/");
+//
+// OpenTelemetry rides along for a different reason (VC-119). It is main-only,
+// pure JavaScript, and reads no file relative to its own package layout — the
+// property that makes jsdom unbundleable and forced it into `neverBundle` — so
+// inlining it is safe, and it is the cheaper of the two ways to make the
+// packaged app able to resolve it. The alternative is adding all ten packages
+// (four direct, six transitive) to electron-builder.yml's node_modules
+// whitelist and keeping that list in sync as their dependency graph moves.
+// `verify-packed-requires.mjs` is what catches getting this wrong.
+const bundleWorkspacePackages = (id: string): boolean =>
+  id.startsWith("@volli/") || id.startsWith("@opentelemetry/");
 
 export default defineConfig(({ mode }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
