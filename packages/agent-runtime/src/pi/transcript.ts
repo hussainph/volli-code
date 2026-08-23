@@ -29,7 +29,17 @@ const OPAQUE_SECRET = /[A-Za-z0-9_-]{24,}/g;
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
 const AUTH_SIGNAL =
   /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
-const CONTEXT_SIGNAL = /(context (?:length|limit|window)|too many tokens|maximum tokens)/i;
+/**
+ * How a provider says the window is spent, across the vocabularies they
+ * actually use. Overflow recovery hangs off this classification: a refusal it
+ * does not recognize is a Session told it broke instead of one that compacts
+ * and continues, so each provider family's phrasing is pinned by a test with
+ * its real sentence — OpenAI's "context window"/"maximum context length",
+ * Anthropic's "prompt is too long", Bedrock's "input is too long", Google's
+ * "input token count … exceeds the maximum number of tokens" (VC-155).
+ */
+const CONTEXT_SIGNAL =
+  /(context (?:length|limit|window)|too many tokens|maximum tokens|(?:prompt|input) is too long|exceeds the maximum number of tokens)/i;
 /**
  * How a connection that died mid-stream reads once the provider has rethrown
  * it. Deliberately narrower than pi-ai's own retry predicate: everything else a

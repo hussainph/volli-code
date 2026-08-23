@@ -80,6 +80,24 @@ describe("classifyDiagnostic", () => {
     expect(classifyDiagnostic("maximum context length exceeded")).toBe("context");
     expect(classifyDiagnostic("too many tokens for this context window")).toBe("context");
   });
+
+  it("recognises each provider family's own spent-window sentence (VC-155)", () => {
+    // Overflow recovery hangs off this classification: a refusal it does not
+    // recognize is a Session told it broke instead of one that compacts and
+    // continues. Each case is the sentence its provider actually sends.
+    expect(classifyDiagnostic("prompt is too long: 213021 tokens > 204698 maximum")).toBe(
+      "context",
+    );
+    expect(classifyDiagnostic("Your input exceeds the context window of this model.")).toBe(
+      "context",
+    );
+    expect(classifyDiagnostic("input is too long for requested model")).toBe("context");
+    expect(
+      classifyDiagnostic(
+        "The input token count (1189234) exceeds the maximum number of tokens allowed (1048576).",
+      ),
+    ).toBe("context");
+  });
 });
 
 /** Classified the way a live failure reaches it, so the reason gate is real. */
