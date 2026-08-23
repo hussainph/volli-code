@@ -17,7 +17,14 @@
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
-import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
+import type {
+  AuthorityDenialCause,
+  AuthoritySnapshot,
+  CodingToolId,
+  NonCodingToolId,
+  SessionToolId,
+} from "./authority";
+import { NON_CODING_TOOL_IDS } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import {
   SESSION_ESCALATION_OPTIONS,
@@ -624,6 +631,77 @@ export interface SessionRuntimeSpec {
   webSearch?: (input: { query: string; signal: AbortSignal }) => Promise<RuntimeWebSearchResults>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
+}
+
+/** Just enough of a spec to say what surface it describes. */
+export type SessionToolSpec = Pick<
+  SessionRuntimeSpec,
+  "tools" | "askUser" | "webFetch" | "webSearch"
+>;
+
+/**
+ * One tool of a Session's surface, carrying whatever answers it.
+ *
+ * A coding tool is answered by the execution environment, which the runtime
+ * holds and this package cannot see, so it carries a name and nothing else. A
+ * non-coding tool is answered by a port on the spec, and it carries that port —
+ * already proven present by the act of being in this list. That is the point of
+ * the union: the runtime switches on the name and reaches a port it never has to
+ * null-check, so "named but unwired" has no branch to be handled in, because the
+ * type cannot express it.
+ */
+export type SessionToolBinding =
+  | { tool: CodingToolId }
+  | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
+  | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
+  | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> };
+
+/**
+ * The Agent Tool Surface one spec describes, in the order it is offered.
+ *
+ * The one derivation, and the reason there is only one. Two lists used to state
+ * the same fact — the array the runtime builds, and the tool list on the
+ * {@link AuthoritySnapshot} — kept equal by a caller remembering to keep them
+ * equal. A caller that forgot did not produce a misconfiguration; it produced a
+ * Session whose own policy refused its own tools, which is the failure VC-3 was
+ * filed for. Deriving both from here is what makes that unrepresentable, and it
+ * is what lets the pack carry no rule about tool identity at all.
+ *
+ * Order is part of the answer, not a detail of it. The provider's Cache Prefix
+ * is computed over the serialized tool array, so a Session that reordered its
+ * tools between attachments would pay a full cache miss for a list that had not
+ * changed: the bundle first in its declared order, then the port-wired tools in
+ * {@link NON_CODING_TOOL_IDS} order.
+ *
+ * A port decides membership because a port *is* the capability: a Session handed
+ * nowhere to send a question has no question to send, so it is offered no tool
+ * rather than a tool that fails when used. VC-162 replaces the bundle half with
+ * `bundle(Role) ∪ grants(session)` from the Verb Registry; that changes what
+ * this reads and not what it guarantees.
+ */
+export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[] {
+  // Keyed by the whole vocabulary rather than written as three conditions, so a
+  // name added to `NON_CODING_TOOL_IDS` with no port behind it fails to compile
+  // here — which is the only place that failure is cheap. A Snapshot recording
+  // a tool no Session can be offered would be the same landmine VC-3 defused,
+  // re-laid one vocabulary entry at a time.
+  const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
+    ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
+    web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
+    web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
+  };
+  return [
+    ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
+    ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
+  ];
+}
+
+/**
+ * The same surface as names alone — what a durable {@link AuthoritySnapshot}
+ * records, and what a Role bundle and a rule pack would spell.
+ */
+export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
+  return sessionToolBindings(spec).map((binding) => binding.tool);
 }
 
 /** Sanitized failure surfaced through observations. Never contains secrets. */

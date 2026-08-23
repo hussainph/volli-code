@@ -1,10 +1,22 @@
 /**
- * The built-in rule pack: ten total predicates over one normalized call.
+ * The built-in rule pack: nine total predicates over one normalized call.
  *
  * Ordered evaluation is load-bearing rather than incidental. The rules overlap —
  * `git config http.sslVerify false` writes repository plumbing *and* weakens TLS
  * — and first-match-wins is what turns that overlap into one nameable refusal
  * instead of a set.
+ *
+ * No rule judges the tool's *name*, and the absence is deliberate. The Agent
+ * Tool Surface makes availability the enforcement: a Session is offered exactly
+ * the tools it was handed, Pi resolves a call's name against that array and
+ * answers `Tool X not found` before the gate is consulted, and `sessionToolIds`
+ * leaves the array and the Snapshot no way to disagree. A rule here could
+ * therefore only refuse a name the model was never able to send. That is why an
+ * interaction tool — `ask_user`, `web_fetch`, `web_search` — passes every rule
+ * below: it carries no path, no command and no environment, so each predicate
+ * reads an empty list and objects to nothing. Being judged by no rule *is* how
+ * such a tool is judged, and the port that wires it is where the decision was
+ * already made.
  *
  * Which fields a rule reads is where this layer's scope is really decided, and
  * it is narrower than it first looks. `path.outside-workspace` judges reads and
@@ -522,11 +534,6 @@ type RuleCheck = (
  * itself — the same list the recorded pack hash is computed over.
  */
 const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
-  "tool.not-bundled": (call, snapshot) =>
-    snapshot.tools.some((tool) => tool === call.tool)
-      ? null
-      : `"${call.tool}" is not one of this Session's tools (${snapshot.tools.join(", ") || "none"}); use one of those instead.`,
-
   "path.outside-workspace": (call, _snapshot, context) => {
     for (const path of containedPaths(call)) {
       if (!containsPath(context.workspacePath, path)) {

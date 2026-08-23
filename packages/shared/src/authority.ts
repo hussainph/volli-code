@@ -42,14 +42,13 @@ export type WorkLocationKind = "worktree" | "main-checkout";
 
 /**
  * Explicit coding tools a Session may load. Ambient user and project extensions
- * never load, so an unlisted tool is not merely absent — reaching for one is a
- * policy denial.
+ * never load, so an unlisted tool is not merely absent — it is a tool the Agent
+ * Tool Surface never carried, and Pi refuses the name before any policy runs.
  */
 export type CodingToolId = "read" | "edit" | "write" | "execute";
 
 /**
- * The tools a Session can be offered that are not coding tools, named so a
- * policy can tell them from a tool Volli does not offer at all.
+ * The tools a Session can be offered that are not coding tools.
  *
  * Neither one is a bundle member and neither should become one: a name added to
  * {@link CodingToolId} is a name every rule, every durable Snapshot and every
@@ -58,16 +57,16 @@ export type CodingToolId = "read" | "edit" | "write" | "execute";
  * instead — a Session that was given nowhere to send a question, or no web
  * boundary, is never offered the tool.
  *
- * This list is vocabulary and nothing more. It changes no rule: `tool.not-bundled`
- * still refuses every name outside `snapshot.tools`, which is typed to hold
- * coding tools only, so the day a Snapshot is wired these tools are denied as
- * unknown names — the landmine VC-3 exists to defuse. Recording the names here
- * is what lets that ticket decide *how* they are judged (an allowlist beside the
- * bundle, or the rule's deletion) without first having to discover which names
- * are at stake. Anything registered beside the bundle belongs in this list.
+ * They reach the rule pack the same way a coding tool does and no rule objects,
+ * because none of them carries what a rule reads. That is the whole of how an
+ * interaction tool is judged, and it is deliberate rather than an omission:
+ * these tools are governed by whether the Session was handed the port at all.
  *
- * The order is registration order, and nothing hashes it: {@link AUTHORITY_RULE_IDS}
- * is the pack's identity, and naming a tool is not a rule.
+ * The order is registration order and it is load-bearing twice over — it is the
+ * order `sessionToolIds` returns and therefore the order the Agent Tool Surface
+ * is built in, which the provider's Cache Prefix is computed over. It is
+ * not hashed: {@link AUTHORITY_RULE_IDS} is the pack's identity, and naming a
+ * tool is not a rule. Anything registered beside the bundle belongs in this list.
  */
 export const NON_CODING_TOOL_IDS = [
   /** Asking the person driving the Session a question, and blocking on the answer. */
@@ -79,6 +78,33 @@ export const NON_CODING_TOOL_IDS = [
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
+
+/**
+ * Every name the Agent Tool Surface can carry, whatever kind of tool it is.
+ *
+ * One vocabulary rather than two, because the things that must name a tool —
+ * a durable Snapshot, a Role bundle, a rule pack, a denial in the ledger — have
+ * no reason to care which half a name came from. The split above records how a
+ * tool is *wired*; this union records what a Session may be *offered*.
+ *
+ * The Verb Registry (VC-92, built in VC-161) becomes the source of these names:
+ * a verb's registry key is its name here, on every surface that projects it, so
+ * a tool promoted from the Agent CLI arrives already spelled the way a rule pack
+ * and a Role bundle would spell it. Until the registry exists, the two lists
+ * above are that source, and `sessionToolIds` is the one place they are read
+ * together.
+ *
+ * So this union will hold two spellings, and that is decided rather than
+ * overlooked. Registry verbs are dot-named (`ticket.archive`, `session.start`);
+ * the three tools here are not, and are not renamed to match. They are VC-92's
+ * first family — product-authored tools that were already inside Pi's loop, with
+ * no registry entry to take a key from — and `ask_user` is a name a model has
+ * already been trained against by every harness that ships one. The rule the
+ * amendment actually sets is that a name here must not *differ* from its verb's
+ * dot-name; a verb with no dot-name cannot differ from one. A tool promoted from
+ * the Agent CLI arrives dot-named and keeps it.
+ */
+export type SessionToolId = CodingToolId | NonCodingToolId;
 
 /**
  * When silent denial stops being the right answer and the user should be asked.
@@ -121,7 +147,22 @@ export interface AuthorityFallback {
 export interface AuthoritySnapshot {
   mode: "auto";
   location: WorkLocationKind;
-  tools: readonly CodingToolId[];
+  /**
+   * The Agent Tool Surface this Session was given, recorded rather than judged.
+   *
+   * No rule reads it. Availability is the enforcement — a tool the Session was
+   * not handed is not in Pi's tool array, and Pi refuses an unknown name before
+   * `beforeToolCall` ever runs — so a rule that re-checked the name here could
+   * only fire when this list and the array disagreed, which is a bug in the
+   * caller rather than an act by the model. `sessionToolIds` exists so they
+   * cannot disagree: it is the one derivation both are built from.
+   *
+   * It stays on the Snapshot because the Snapshot is the durable answer to what
+   * a Session was allowed to do, and a denial read back months later is not
+   * interpretable without it. VC-44 persists it; VC-162 makes it registry data
+   * as `bundle(Role) ∪ grants(session)`.
+   */
+  tools: readonly SessionToolId[];
   rulePackId: string;
   rulePackHash: string;
   /**
@@ -224,10 +265,20 @@ export type PolicyDecision =
  * limit of pinning by id — it tightens when per-project packs arrive and the
  * pack becomes data rather than code. Note that no Session persists the hash it
  * ran under yet, so today a changed pack is undetectable in either direction.
+ *
+ * Nine rules, and the missing tenth is the reason to read this list carefully.
+ * `tool.not-bundled` used to lead it: it refused any name outside
+ * {@link AuthoritySnapshot.tools}. It was deleted in VC-3, on the ground the
+ * Agent Tool Surface states — availability is enforcement, so a tool the Session
+ * was not handed cannot be called and needs no rule to say so. Pi resolves a
+ * tool by name and answers `Tool X not found` before `beforeToolCall` runs, and
+ * `sessionToolIds` gives the array and the Snapshot one source, so the rule had
+ * no call left that it could reach. It is not to be revived under its own name:
+ * a later per-call refusal over a tool a Session *does* hold — a revoked grant,
+ * a Role-scoped control verb — is a different question and takes a new id, so
+ * that the two are countable apart in the ledger.
  */
 export const AUTHORITY_RULE_IDS = [
-  /** A tool outside the Session's bundle, including one Volli does not offer at all. */
-  "tool.not-bundled",
   /** Any path resolving outside the Session workspace root. */
   "path.outside-workspace",
   /** Repository plumbing that rewrites what later commands will do. */
@@ -270,12 +321,14 @@ export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable";
  * it: writing a `pre-commit` hook is ordinary work, and so is a `git reset
  * --hard` in a checkout the person owns.
  *
- * Everything else only reports. `tool.not-bundled` is a refusal an override
- * cannot honour: a tool that is not loaded cannot be called into existence by
- * consent. The hard-deny rules are the opposite case — perfectly grantable and
- * not to be granted, because a login item, a disabled certificate check or a
- * weakened SIP outlives the Session that asked for it, and a person answering a
- * question mid-task is not in a position to weigh that.
+ * Everything else only reports. The hard-deny rules are the case where consent
+ * could be honoured and must not be: a login item, a disabled certificate check
+ * or a weakened SIP outlives the Session that asked for it, and a person
+ * answering a question mid-task is not in a position to weigh that. The other
+ * case — a refusal no "yes" could carry out — left this pack with
+ * `tool.not-bundled`, whose example was the clearest of all: a tool that is not
+ * loaded cannot be called into existence by consent. Any rule proposed for this
+ * pack still has to answer that question before it is placed on either side.
  *
  * `path.outside-workspace` and `command.git-escapes-workspace` are here on a
  * reason that has since expired. Seatbelt denied them whatever this layer
