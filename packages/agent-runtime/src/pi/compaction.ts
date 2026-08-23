@@ -218,7 +218,7 @@ export interface CompactionInput {
   /** The durable branch, already read through {@link conversationPath}. */
   path: readonly Entry[];
   models: Models;
-  /** The model the summary is generated on — Model Access's `utility` purpose. */
+  /** The model currently selected in this Session's chat. */
   model: Model<Api>;
   /** The executor's rule, already resolved from the configured policy. */
   settings: CompactionSettings;
@@ -240,7 +240,7 @@ export interface CompactionInput {
  *
  * No reasoning level is passed. A summarizer is asked to restructure text it has
  * been handed, not to think about it, and paying for reasoning tokens on
- * background work is the opposite of what the `utility` purpose is for.
+ * context maintenance would add cost without improving the checkpoint.
  */
 export async function compactSession(input: CompactionInput): Promise<CompactionOutcome> {
   // `getOrThrow`, not a failure arm. `prepareCompaction` is pure and has no path

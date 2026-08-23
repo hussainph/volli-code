@@ -67,6 +67,37 @@ describe("composer delivery", () => {
     expect(removeQueued(queue, "a")).toEqual([{ id: "b", text: "second" }]);
   });
 
+  // Unqueue and edit are the same gesture, and neither may lose the file the
+  // row carried: the files come back WITH the words, for the strip to hold
+  // again (VC-137).
+  it("gives an unqueued message's attachments back with its words", () => {
+    const attachments = [
+      {
+        linkId: "link-1",
+        blobHash: "ab".repeat(32),
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: 2048,
+      },
+    ];
+    const queue = [
+      { id: "a", text: "first" },
+      { id: "b", text: "second", attachments },
+    ];
+
+    expect(unqueueLast(queue)).toEqual({
+      queue: [{ id: "a", text: "first" }],
+      text: "second",
+      attachments,
+    });
+    expect(takeQueued(queue, "b")).toEqual({
+      queue: [{ id: "a", text: "first" }],
+      text: "second",
+      attachments,
+    });
+  });
+
   it("drains one message, and only into an idle attached Session", () => {
     const queue = [
       { id: "a", text: "first" },

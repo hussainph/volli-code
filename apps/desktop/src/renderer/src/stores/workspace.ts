@@ -17,9 +17,10 @@
  * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
  * Diff tabs landing where you left them after lazy content reload, issue #109,
  * or the Project Files workspace that must resume where you left it, decisions
- * #55/#56), while `nav`, `expandedDirs` and `expandedSessionGroups` stay session-only — nav resetting to
- * Home on relaunch is a settled decision (see ui.ts's history) and now applies
- * per workspace. The partialize below prunes each record down to that persisted
+ * #55/#56), while `nav`, `expandedSessionGroups`, and Home's close-return
+ * `homeTabHistory` stay session-only — nav resetting to Home on
+ * relaunch is a settled decision (see ui.ts's history) and now applies per
+ * workspace. The partialize below prunes each record down to that persisted
  * set; merge rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale
  * values so old localStorage can never smuggle in an invalid view/sort/ticket
  * id — or an unusable tab record.
@@ -48,8 +49,10 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 import {
   HOME_BOARD_TAB_ID,
+  closeHomeTabHistory,
   isHomeBoardTab,
   sanitizeHomeActiveTab,
+  visitHomeTab,
 } from "@renderer/components/home/home-tabs";
 import {
   TICKET_BODY_TAB_ID,
@@ -76,9 +79,16 @@ import { useSessionsStore } from "@renderer/stores/sessions";
  * Ticket detail is a state of Home's BOARD TAB, so only a Home selection made
  * while that tab is in front clears `openTicketId` (see setNav).
  *
- * `nav` is not persisted, so renaming the keys needs no migration.
+ * `nav` is session-only (never persisted — see the module doc), so no
+ * shipped build ever wrote one of these keys into `volli:workspace`. `"files"`
+ * named the primary nav item through VC-121, then retired once every file
+ * click had somewhere to land inside a session (VC-122). {@link
+ * resolvePersistedNav} still maps a persisted `"files"` onto `"home"` on read
+ * — the same tolerant-read `RETIRED_TICKET_RAIL_MODES` gives a retired rail
+ * page — as insurance against a foreign or hand-edited `volli:workspace`
+ * blob, even though no build actually needs the migration.
  */
-export type NavKey = "home" | "files" | "configure";
+export type NavKey = "home" | "configure";
 
 /** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";
@@ -124,8 +134,6 @@ export interface TicketTabsState {
 
 export interface WorkspaceUiState {
   nav: NavKey;
-  /** Absolute paths of expanded file-tree directories (collapsed = absent). */
-  expandedDirs: readonly string[];
   /**
    * Ticket ids whose Previous-band group is open in the sidebar (collapsed =
    * absent, so the band's steady state is collapsed and a fresh project starts
@@ -136,9 +144,9 @@ export interface WorkspaceUiState {
    * component state would follow the reader from one project to the next and
    * open groups belonging to tickets they are no longer looking at.
    *
-   * Session-only, like `expandedDirs`: which stacks you opened while hunting
-   * for something is a fact about this sitting, not a preference worth
-   * restoring, and "collapsed" is the answer this band is designed around.
+   * Session-only: which stacks you opened while hunting for something is a
+   * fact about this sitting, not a preference worth restoring, and
+   * "collapsed" is the answer this band is designed around.
    */
   expandedSessionGroups: readonly string[];
   /** Board vs. list rendering of the ticket set. Persisted. */
@@ -162,25 +170,32 @@ export interface WorkspaceUiState {
    */
   ticketDiffViewStates: Record<string, Record<string, unknown>>;
   /**
-   * The Project Files tab workspace for this project (decisions #55/#56) —
-   * always rooted in the project's Main checkout. Persisted, so the strip
-   * survives navigation, project switches, and relaunch; contents reload
-   * lazily on return.
+   * Home's Main-checkout File-tab workspace for this project (decisions
+   * #55/#56) — always rooted in the project's Main checkout. Persisted, so
+   * the strip survives navigation, project switches, and relaunch; contents
+   * reload lazily on return.
+   *
+   * Named `projectFiles` rather than `homeFiles`: the field predates Home's
+   * adoption of it (VC-121) — it was the retired Files page's only tab list —
+   * and renaming a persisted JSON key would need a migration a field rename
+   * buys nothing for. The Home-prefixed actions below (`previewHomeFile` &co)
+   * are its only writers now; nothing outside Home reads or writes it.
    */
   projectFiles: FileWorkspaceState;
   /**
-   * Serialized Monaco per-tab view state (cursor, selection, folding, scroll),
-   * keyed by relPath — what makes returning to a tab land exactly where you
-   * left it after the contents reload lazily (decision #55). Persisted, and
-   * NEVER file contents: only the editor's own opaque snapshot. Typed
-   * `unknown` on purpose so this store stays editor-agnostic.
+   * Serialized Monaco per-tab view state (cursor, selection, folding, scroll)
+   * for Home's File tabs, keyed by relPath — what makes returning to a tab
+   * land exactly where you left it after the contents reload lazily
+   * (decision #55). Persisted, and NEVER file contents: only the editor's own
+   * opaque snapshot. Typed `unknown` on purpose so this store stays
+   * editor-agnostic.
    */
   projectFileViewStates: Record<string, unknown>;
   /**
    * Which tab is in front on Home. {@link HOME_BOARD_TAB_ID} for the permanent
-   * Board tab, else a terminal session id or a `chat:<sessionId>` id — the same
-   * mixed id space `ticketTabs[].active` uses, which the bare word cannot
-   * collide with (both others are UUID-shaped).
+   * Board tab, a terminal session id, a `chat:<sessionId>` id, or a
+   * `file:<relPath>` id. Prefixes separate chat/File identity from UUID-shaped
+   * terminals and from the bare permanent word.
    *
    * PERSISTED, and that is the whole of VC-54's scope 4. What it points at is
    * resident (`chat-sessions.ts`'s `openTabs`), so this is not a receipt for
@@ -194,11 +209,16 @@ export interface WorkspaceUiState {
    * as it does for a Ticket. Full strip restoration is VC-105.
    */
   homeActiveTab: string;
+  /**
+   * Home tabs in least-to-most-recent visit order. Session-only: it answers
+   * where closing an active File tab returns during this app run, while VC-105
+   * owns durable restoration of the whole strip.
+   */
+  homeTabHistory: readonly string[];
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   nav: "home",
-  expandedDirs: [],
   expandedSessionGroups: [],
   boardView: "board",
   boardSort: DEFAULT_TICKET_SORT,
@@ -208,7 +228,45 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   projectFiles: EMPTY_FILE_WORKSPACE,
   projectFileViewStates: {},
   homeActiveTab: HOME_BOARD_TAB_ID,
+  homeTabHistory: [],
 };
+
+/**
+ * Retired `NavKey` values a past build could have written, mapped onto the
+ * page that absorbed them — same idiom as `ticket-rail-model.ts`'s
+ * `RETIRED_TICKET_RAIL_MODES`. A Map rather than an object literal for the
+ * same reason that one is: the lookup key came from a past build's JSON, and
+ * an object would answer `"toString"` with a function off the prototype
+ * chain.
+ */
+const RETIRED_NAV_KEYS: ReadonlyMap<string, NavKey> = new Map([["files", "home"]]);
+
+/**
+ * Rehydrate a persisted `nav` value onto the page this build should open.
+ *
+ * There is deliberately NO "a key this build still offers stands" branch, and
+ * that is the one place this parts company with `ticket-rail-model.ts`'s
+ * `resolvePersistedRailMode`, the idiom it otherwise mirrors. `railMode` is
+ * genuinely persisted, so keeping a still-valid key is the whole point there.
+ * `nav` is session-only and "nav resets to Home on relaunch" is a settled
+ * decision (see the module doc), so a stored value must never be able to
+ * choose the landing page — honouring a `"configure"` here would quietly
+ * reverse that decision for exactly the hand-edited blob this read exists to
+ * survive.
+ *
+ * So every input lands on Home today: a retired key through {@link
+ * RETIRED_NAV_KEYS}, everything else through {@link DEFAULT_WORKSPACE_UI}. The
+ * map still earns its place by recording WHERE a retired page went, so a key
+ * that ever retires onto something other than the default resolves correctly
+ * rather than silently stranding on it.
+ */
+export function resolvePersistedNav(stored: { nav?: unknown }): NavKey {
+  if (typeof stored.nav === "string") {
+    const landing = RETIRED_NAV_KEYS.get(stored.nav);
+    if (landing !== undefined) return landing;
+  }
+  return DEFAULT_WORKSPACE_UI.nav;
+}
 
 /** The active-tab id of the always-present Ticket Body tab — the fallback when a
  * file/session tab closes. Persisted wire value is still `"doc"`. */
@@ -306,7 +364,6 @@ interface WorkspaceState {
    * whole of the rule.
    */
   setNav(projectId: string, nav: NavKey): void;
-  setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   /** Opens or closes one ticket's Previous-band group in the sidebar. */
   setSessionGroupExpanded(projectId: string, ticketId: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
@@ -320,6 +377,17 @@ interface WorkspaceState {
    * "the Board tab means the plain board" lives.
    */
   setHomeActiveTab(projectId: string, tabId: string): void;
+  /** Preview a Main-checkout file and bring its Home tab to the front atomically. */
+  previewHomeFile(projectId: string, relPath: string): void;
+  /** Pin a Main-checkout file and bring its Home tab to the front atomically. */
+  pinHomeFile(projectId: string, relPath: string): void;
+  /** Bring an already-open Main-checkout File tab to the front. */
+  activateHomeFile(projectId: string, relPath: string): void;
+  /**
+   * Close a Home File tab. When active, return through MRU Home-tab history,
+   * considering `openSessionTabIds` as the live non-file tabs in the strip.
+   */
+  closeHomeFile(projectId: string, relPath: string, openSessionTabIds: readonly string[]): void;
   /**
    * THE seam for "Home is now in front", optionally bringing `tabId` forward.
    *
@@ -353,7 +421,7 @@ interface WorkspaceState {
    * now, no matter where the project's nav currently is. Switches this
    * project onto Home AND onto Home's Board tab (ticket detail renders only
    * there — `home-surface.tsx` — so a caller that skips either step can set
-   * `openTicketId` while nav stays on Files, or while a Home Session tab is in
+   * `openTicketId` while nav stays on Configure, or while a Home Session tab is in
    * front, and the promised detail view never appears; the nav half was the
    * composer kickoff bug, and the tab half is its VC-54 twin), opens the
    * ticket's full-page detail, and selects the same ticket in the board
@@ -435,30 +503,11 @@ interface WorkspaceState {
    * `file:<relPath>`, a `diff:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /**
-   * Single-click in the Project Files navigator: open `relPath` in the
-   * replaceable preview slot and focus it (decision #56). Thin delegation to
-   * `previewFile` — every tab rule lives in @volli/shared, never here.
-   */
-  previewProjectFile(projectId: string, relPath: string): void;
-  /**
-   * Double-click or an explicit Pin action: make `relPath` a persistent tab
-   * (opening it when it isn't open yet). Delegates to `pinFile`.
-   */
-  pinProjectFile(projectId: string, relPath: string): void;
-  /**
    * The first edit of a preview tab promotes it to persistent (decision #56:
    * a dirty tab is never replaced). Safe to fire on every keystroke — the pure
    * `markFileEdited` returns unchanged state once the tab is persistent.
    */
   markProjectFileEdited(projectId: string, relPath: string): void;
-  /** Tab-strip click: focus an already-open tab. Delegates to `activateFile`. */
-  activateProjectFile(projectId: string, relPath: string): void;
-  /**
-   * Close `relPath`'s tab (focus falls to its neighbour, per `closeFile`) and
-   * drop its remembered view state — a closed tab's cursor is meaningless, and
-   * keeping it would let the persisted map grow without bound as tabs churn.
-   */
-  closeProjectFile(projectId: string, relPath: string): void;
   /**
    * Remember the editor's serialized view state for `relPath` (cursor,
    * selection, folding, scroll). `viewState` stays `unknown`: it is Monaco's
@@ -466,7 +515,7 @@ interface WorkspaceState {
    * inspects it — nor does it ever hold file contents.
    *
    * Ignored for a path that is not an open tab, which upholds the same
-   * invariant `closeProjectFile` and the rehydrate sanitizer do: view state
+   * invariant `closeHomeFile` and the rehydrate sanitizer do: view state
    * exists only for tabs that exist.
    */
   setProjectFileViewState(projectId: string, relPath: string, viewState: unknown): void;
@@ -714,6 +763,11 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
   );
 }
 
+/** Record the current Home tab and then the one being brought forward. */
+function homeHistoryAfterVisit(current: WorkspaceUiState, nextTabId: string): readonly string[] {
+  return visitHomeTab(visitHomeTab(current.homeTabHistory, current.homeActiveTab), nextTabId);
+}
+
 /** The project's record merged with `changes` — spread into `set()`. */
 function patchWorkspace(
   state: WorkspaceState,
@@ -726,10 +780,12 @@ function patchWorkspace(
 
 /**
  * Run one pure Project Files transition (@volli/shared's `previewFile` &co)
- * over `projectId`'s workspace. All five tab actions are the same three lines,
- * and a transition that returns its input by identity (a redundant pin, a
- * close of a file that isn't open) must leave the store untouched so
- * subscribers don't re-render for a no-op.
+ * over `projectId`'s workspace. `markProjectFileEdited` is its one remaining
+ * caller — the Home-prefixed actions read/write `projectFiles` directly, and
+ * the Files-page actions this helper used to also serve retired with the page
+ * (VC-122) — but the shape stays: a transition that returns its input by
+ * identity (marking a tab that is already pinned) must leave the store
+ * untouched so subscribers don't re-render for a no-op.
  */
 function applyProjectFiles(
   state: WorkspaceState,
@@ -766,7 +822,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
             // every Home selection, because the clear belongs to that TAB
             // (decision 2), not to the nav item. With a Session tab in front the
             // ticket is not on screen to be left, and the ordinary round trip
-            // Home → Files → Home would otherwise discard it for nothing
+            // Home → Configure → Home would otherwise discard it for nothing
             // visible.
             const clearsTicket = nav === "home" && isHomeBoardTab(current.homeActiveTab);
             return patchWorkspace(
@@ -777,24 +833,12 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
-        setDirExpanded(projectId, dirPath, expanded) {
-          set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            if (current.expandedDirs.includes(dirPath) === expanded) return state;
-            return patchWorkspace(state, projectId, {
-              expandedDirs: expanded
-                ? [...current.expandedDirs, dirPath]
-                : current.expandedDirs.filter((path) => path !== dirPath),
-            });
-          });
-        },
-
         setSessionGroupExpanded(projectId, ticketId, expanded) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            // Same no-op guard `setDirExpanded` keeps, for the same reason: this
-            // fires from a row in a band that re-renders on every activity
-            // refresh, and a `set` that changes nothing still notifies.
+            // No-op guard: this fires from a row in a band that re-renders on
+            // every activity refresh, and a `set` that changes nothing still
+            // notifies subscribers.
             if (current.expandedSessionGroups.includes(ticketId) === expanded) return state;
             return patchWorkspace(state, projectId, {
               expandedSessionGroups: expanded
@@ -816,28 +860,120 @@ export function createWorkspaceStore(storage?: StateStorage) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             if (current.homeActiveTab === tabId) return state;
-            return patchWorkspace(state, projectId, { homeActiveTab: tabId });
+            return patchWorkspace(state, projectId, {
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        previewHomeFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = previewFile(current.projectFiles, relPath);
+            const tabId = fileTabId(relPath);
+            return patchWorkspace(state, projectId, {
+              nav: "home",
+              projectFiles,
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        pinHomeFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = activateFile(pinFile(current.projectFiles, relPath), relPath);
+            const tabId = fileTabId(relPath);
+            return patchWorkspace(state, projectId, {
+              nav: "home",
+              projectFiles,
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        activateHomeFile(projectId, relPath) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
+            const projectFiles = activateFile(current.projectFiles, relPath);
+            const tabId = fileTabId(relPath);
+            return patchWorkspace(state, projectId, {
+              nav: "home",
+              projectFiles,
+              homeActiveTab: tabId,
+              homeTabHistory: homeHistoryAfterVisit(current, tabId),
+            });
+          });
+        },
+
+        closeHomeFile(projectId, relPath, openSessionTabIds) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = closeFile(current.projectFiles, relPath);
+            if (projectFiles === current.projectFiles) return state;
+
+            const closedTabId = fileTabId(relPath);
+            const projectFileViewStates = { ...current.projectFileViewStates };
+            delete projectFileViewStates[relPath];
+            if (current.homeActiveTab !== closedTabId) {
+              return patchWorkspace(state, projectId, {
+                projectFiles,
+                projectFileViewStates,
+                homeTabHistory: current.homeTabHistory.filter((tabId) => tabId !== closedTabId),
+              });
+            }
+
+            const close = closeHomeTabHistory({
+              history: current.homeTabHistory,
+              closedTabId,
+              openTabIds: [
+                HOME_BOARD_TAB_ID,
+                ...openSessionTabIds,
+                ...projectFiles.tabs.map((tab) => fileTabId(tab.relPath)),
+              ],
+            });
+            const activeFile = parseFileTabId(close.active);
+            return patchWorkspace(state, projectId, {
+              projectFiles:
+                activeFile === null ? projectFiles : activateFile(projectFiles, activeFile),
+              projectFileViewStates,
+              homeActiveTab: close.active,
+              homeTabHistory: close.history,
+            });
           });
         },
 
         openHome(projectId, tabId) {
-          set((state) =>
-            patchWorkspace(
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            return patchWorkspace(
               state,
               projectId,
-              tabId === undefined ? { nav: "home" } : { nav: "home", homeActiveTab: tabId },
-            ),
-          );
+              tabId === undefined
+                ? { nav: "home" }
+                : {
+                    nav: "home",
+                    homeActiveTab: tabId,
+                    homeTabHistory: homeHistoryAfterVisit(current, tabId),
+                  },
+            );
+          });
         },
 
         openHomeBoard(projectId) {
-          set((state) =>
-            patchWorkspace(state, projectId, {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            return patchWorkspace(state, projectId, {
               nav: "home",
               homeActiveTab: HOME_BOARD_TAB_ID,
+              homeTabHistory: homeHistoryAfterVisit(current, HOME_BOARD_TAB_ID),
               openTicketId: null,
-            }),
-          );
+            });
+          });
         },
 
         openTicket(projectId, ticketId) {
@@ -1042,44 +1178,17 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
-        previewProjectFile(projectId, relPath) {
-          set((state) =>
-            applyProjectFiles(state, projectId, (files) => previewFile(files, relPath)),
-          );
-        },
-
-        pinProjectFile(projectId, relPath) {
-          set((state) => applyProjectFiles(state, projectId, (files) => pinFile(files, relPath)));
-        },
-
         markProjectFileEdited(projectId, relPath) {
           set((state) =>
             applyProjectFiles(state, projectId, (files) => markFileEdited(files, relPath)),
           );
         },
 
-        activateProjectFile(projectId, relPath) {
-          set((state) =>
-            applyProjectFiles(state, projectId, (files) => activateFile(files, relPath)),
-          );
-        },
-
-        closeProjectFile(projectId, relPath) {
-          set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            const projectFiles = closeFile(current.projectFiles, relPath);
-            if (projectFiles === current.projectFiles) return state;
-            const projectFileViewStates = { ...current.projectFileViewStates };
-            delete projectFileViewStates[relPath];
-            return patchWorkspace(state, projectId, { projectFiles, projectFileViewStates });
-          });
-        },
-
         setProjectFileViewState(projectId, relPath, viewState) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             // Only an OPEN tab may hold view state. A closing tab's editor
-            // unmounts AFTER `closeProjectFile` has already dropped its entry
+            // unmounts AFTER `closeHomeFile` has already dropped its entry
             // and emits one last view state bound to the path it was showing;
             // accepting that write would re-insert exactly what the close just
             // pruned, and the map would grow without bound as tabs churn.
@@ -1173,8 +1282,7 @@ export function createWorkspaceStore(storage?: StateStorage) {
           ),
         }),
         // Rebuild full records from the pruned persisted pair: everything not
-        // persisted (nav, expandedDirs, expandedSessionGroups) rehydrates to
-        // the defaults.
+        // persisted (nav, expandedSessionGroups) rehydrates to the defaults.
         merge: (persisted, current) => {
           // Null-prototype for the same reason the sanitizers use one: project
           // ids are persisted JSON keys, and `__proto__` among them must not
@@ -1186,7 +1294,16 @@ export function createWorkspaceStore(storage?: StateStorage) {
             // A non-object record (null from a corrupt write) would throw
             // inside sanitizePersistedUi's property reads — treat it as empty.
             const record = typeof ui === "object" && ui !== null ? ui : {};
-            byProject[projectId] = { ...DEFAULT_WORKSPACE_UI, ...sanitizePersistedUi(record) };
+            byProject[projectId] = {
+              ...DEFAULT_WORKSPACE_UI,
+              ...sanitizePersistedUi(record),
+              // `nav` is not part of `PersistedWorkspaceUi` (it is session-only —
+              // see the module doc), so no shipped build wrote one here. Read
+              // and mapped anyway, the same tolerant-read every other field in
+              // this record gets, in case a foreign or hand-edited blob carries
+              // a retired page name.
+              nav: resolvePersistedNav(record),
+            };
           }
           return { ...current, byProject };
         },

@@ -212,6 +212,28 @@ export interface BlobLinkView {
 }
 
 /**
+ * A defensive read of one {@link BlobLinkView}, for values that crossed a
+ * persistence boundary — a chat draft's strip, a held message's files, a
+ * Ticket-composer draft. Anything but the exact shape (with a real hash) is
+ * not an attachment, and a hydration site drops it rather than the draft it
+ * rode in on — the same stance `isPromptResource` takes for skill bodies.
+ */
+export function isBlobLinkView(value: unknown): value is BlobLinkView {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const view = value as Record<string, unknown>;
+  return (
+    (view["linkId"] === null || typeof view["linkId"] === "string") &&
+    typeof view["blobHash"] === "string" &&
+    isBlobHash(view["blobHash"]) &&
+    typeof view["label"] === "string" &&
+    typeof view["originalName"] === "string" &&
+    typeof view["mime"] === "string" &&
+    typeof view["sizeBytes"] === "number" &&
+    Number.isFinite(view["sizeBytes"])
+  );
+}
+
+/**
  * One image handed to a model as input for a single turn.
  *
  * `data` is raw base64 with no `data:` prefix, matching Pi's `ImageContent`.
@@ -267,6 +289,47 @@ export function resolveAttachment(repoRelPath: string | null, mime: string): Att
   // refuses — snapshotting it would buy a frozen copy nobody can use over the
   // live file the ref already names.
   return isInlinableImageMime(mime) ? "ref-and-snapshot" : "ref";
+}
+
+/** The `app_state` row holding the new-Ticket composer's draft. SHARED BETWEEN PROCESSES: the renderer writes it (`board/new-ticket/draft.ts`) and main reads it at boot to keep the draft's unowned Blobs alive — see {@link draftAttachmentHashes}. */
+export const NEW_TICKET_DRAFT_APP_STATE_KEY = "volli:new-ticket-draft";
+
+/**
+ * The Blob hashes a stored new-Ticket draft still names, for boot-time
+ * collection to retain (VC-137).
+ *
+ * A Ticket-composer draft's files are imported the moment they are chosen —
+ * eagerly, so an oversized one is refused while the file is still in hand —
+ * which leaves them as UNOWNED Blobs until the Ticket exists to link them.
+ * Collection reclaims exactly that class at boot… which would also reclaim a
+ * draft's own files the moment the app relaunched, silently turning a
+ * persisted attachment into a broken thumbnail. So the sweep skips whatever
+ * the stored draft names.
+ *
+ * Pure and defensive: a malformed or absent value simply retains nothing, so a
+ * hand-edited row can at worst leak bytes (collected once the draft is fixed or
+ * cleared), never crash a boot.
+ */
+export function draftAttachmentHashes(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== "object" || parsed === null) return [];
+  const draft = (parsed as Record<string, unknown>)["draft"];
+  if (typeof draft !== "object" || draft === null) return [];
+  const attachments = (draft as Record<string, unknown>)["attachments"];
+  if (!Array.isArray(attachments)) return [];
+  const hashes: string[] = [];
+  for (const entry of attachments) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const hash = (entry as Record<string, unknown>)["blobHash"];
+    if (typeof hash === "string" && isBlobHash(hash)) hashes.push(hash);
+  }
+  return hashes;
 }
 
 /** Inserts `-${n}` before the extension (`spec.png` → `spec-2.png`); an extensionless name gets it appended (`notes` → `notes-2`). */

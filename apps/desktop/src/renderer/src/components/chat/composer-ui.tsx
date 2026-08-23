@@ -59,8 +59,8 @@ import {
   PromptInputTools,
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import {
-  COMPOSER_VERBS,
   expandCommandInvocation,
+  offeredComposerVerbs,
   visibleModels,
   type HiddenModelRef,
   type ComposerVerb,
@@ -96,6 +96,7 @@ import {
   unqueueLast,
   type ComposerIntent,
   type QueuedMessage,
+  type TakenQueued,
 } from "@renderer/chat/session-model";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
@@ -143,6 +144,15 @@ export interface SessionComposerProps {
   promptTemplates?: readonly PromptTemplate[];
   /** The `/` picker's second supply: skills, delivered as message-scoped RESOURCE blocks. */
   skills?: readonly SkillReference[];
+  /**
+   * The verbs the `/` picker offers — the actions that run instead of
+   * sending. Caller's supply, because the offer rule reads Session facts this
+   * box does not have (whether a turn is live is here as `working`; whether
+   * there is a reply to copy is not). The fallback when absent is the same
+   * rule with no reply behind it, so a caller that passes nothing still gets
+   * an honest list rather than every verb regardless of state.
+   */
+  verbs?: readonly ComposerVerb[];
   /** `@` picker rows — the project file index, ranked by the shared grammar. */
   files?: readonly IndexedFile[];
   /** The `@` picker opened; a cache-gated index refresh is worth kicking. */
@@ -182,10 +192,25 @@ export interface SessionComposerProps {
   onAttachFiles?(files: readonly File[]): void;
   onRemoveAttachment?(attachment: BlobLinkView): void;
   /**
+   * A queued row came back for editing, and its files return with it (VC-137).
+   * The parent owns the strip, so the row's attachments hand back through
+   * here rather than the box minting a second copy of them.
+   */
+  onRestoreAttachments?(attachments: readonly BlobLinkView[]): void;
+  /**
    * The selected model takes no image input, so the affordance says so rather
    * than letting a picture be attached to a model that cannot see it.
    */
   imagesUnsupported?: boolean;
+  /**
+   * The model picker's open state, when a caller needs to open it from
+   * elsewhere — `/model`'s press is the one there is. Optional and
+   * uncontrolled by default, so a composer that never opens it by typing
+   * keeps its own state exactly as before.
+   */
+  modelPickerOpen?: boolean;
+  /** The other half of a controlled model picker — the popover's own close travels back through here. */
+  onModelPickerOpenChange?(open: boolean): void;
   className?: string;
 }
 
@@ -194,11 +219,81 @@ const NO_SKILLS: readonly SkillReference[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
 const NO_ATTACHMENTS: readonly BlobLinkView[] = [];
 /**
- * The two verb supplies, both module constants, because the picker's ranking
- * memo takes this as a dependency and a fresh array per render would rank the
- * whole file index again on every keystroke.
+ * The fallback verb supplies, precomputed for the four combinations of the two
+ * facts this box holds by itself.
+ *
+ * Module scope rather than a `useMemo`, for two independent reasons: the
+ * picker's ranking memo takes `verbs` as a dependency, so a fresh array per
+ * render would re-rank the whole file index on every keystroke; and this
+ * component's body must stay hook-free, because the tests call it directly to
+ * read the tree it returns (`SessionComposer.type`).
+ *
+ * Only what this box can see is claimed — `hasReply` and `hasProject` read
+ * false, so the honest consequence is a shorter list rather than a row that
+ * would refuse the press. The plane passes its own supply, where all four
+ * facts are real; this is for the caller that has no Session behind it.
  */
-const NO_VERBS: readonly ComposerVerb[] = [];
+const FALLBACK_VERBS = {
+  idle: {
+    withModels: offeredComposerVerbs({
+      working: false,
+      hasReply: false,
+      hasModels: true,
+      hasProject: false,
+    }),
+    none: offeredComposerVerbs({
+      working: false,
+      hasReply: false,
+      hasModels: false,
+      hasProject: false,
+    }),
+  },
+  working: {
+    withModels: offeredComposerVerbs({
+      working: true,
+      hasReply: false,
+      hasModels: true,
+      hasProject: false,
+    }),
+    none: offeredComposerVerbs({
+      working: true,
+      hasReply: false,
+      hasModels: false,
+      hasProject: false,
+    }),
+  },
+} as const;
+
+function fallbackVerbs(working: boolean, hasModels: boolean): readonly ComposerVerb[] {
+  return FALLBACK_VERBS[working ? "working" : "idle"][hasModels ? "withModels" : "none"];
+}
+
+/**
+ * One row out of the queue and back into the box, in the ONE order that keeps
+ * its files (VC-137).
+ *
+ * The attachments rejoin the strip BEFORE the row leaves the queue, because
+ * the plane reads the strip to tell "this row came back" (keep its links) from
+ * "this row was deleted" (detach them) — see `detachableRowAttachments`.
+ * Restoring after the removal would read as a delete and drop the very links
+ * the edit needs.
+ *
+ * Both ways back — the row's Edit action and `⌫` on an empty box — go through
+ * here rather than each spelling the order out, because two copies of an
+ * order-critical rule is one copy too many for the next person to reorder.
+ *
+ * `false` when the queue refused the change, so the caller leaves the text be.
+ */
+function takeRowBack(
+  taken: TakenQueued,
+  onRestoreAttachments: ((attachments: readonly BlobLinkView[]) => void) | undefined,
+  onQueuedChange: (next: readonly QueuedMessage[]) => boolean | void,
+): boolean {
+  if (taken.attachments !== undefined && taken.attachments.length > 0) {
+    onRestoreAttachments?.(taken.attachments);
+  }
+  return onQueuedChange(taken.queue) !== false;
+}
 
 /**
  * MEMOIZED, and this is the boundary that keeps typing off the stream's clock.
@@ -231,6 +326,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   onStop,
   promptTemplates = NO_TEMPLATES,
   skills = NO_SKILLS,
+  verbs,
   files = NO_FILES,
   onFilePickerOpen,
   interactionOpen = false,
@@ -239,7 +335,10 @@ export const SessionComposer = React.memo(function SessionComposer({
   attachments = NO_ATTACHMENTS,
   onAttachFiles,
   onRemoveAttachment,
+  onRestoreAttachments,
   imagesUnsupported = false,
+  modelPickerOpen,
+  onModelPickerOpenChange,
   className,
 }: SessionComposerProps) {
   // An attachment makes an otherwise-empty message a real one (VC-50): a
@@ -272,11 +371,16 @@ export const SessionComposer = React.memo(function SessionComposer({
   // while a skill of that name is still installed — rename or remove it between
   // edit and re-submit and the reference goes out plain, exactly as if the user
   // had typed it fresh against today's skills directory.
+  //
+  // The FILES are the opposite: text cannot carry them, so they go back to
+  // the strip (VC-137) — unqueue must never be a way to lose a screenshot the
+  // message still needs, and ⏎ will carry them again exactly as before. Both
+  // ways back share that order through {@link takeRowBack}.
   const editQueued = (id: string) => {
     const taken = takeQueued(queued, id);
     if (!taken) return;
     editedQueueId = id;
-    if (onQueuedChange(taken.queue) === false) return;
+    if (!takeRowBack(taken, onRestoreAttachments, onQueuedChange)) return;
     // Prepending keeps whatever is already typed rather than trading one draft
     // for another — unqueue must never be a way to lose a sentence.
     onValueChange(value.trim().length > 0 ? `${taken.text}\n${value}` : taken.text);
@@ -291,12 +395,13 @@ export const SessionComposer = React.memo(function SessionComposer({
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
       skills={skills}
-      // Offered only while the Session is idle. A verb RUNS — it is not queued
-      // and it does not join a turn in flight — so mid-turn it would be a row
-      // naming something the runtime is about to refuse. Typing it anyway
-      // still reaches the runtime and still gets that refusal, in words; what
-      // the list does not do is invite it.
-      verbs={working ? NO_VERBS : COMPOSER_VERBS}
+      // The caller's supply, or the same offer rule with no reply behind it.
+      // A verb RUNS — it is not queued and does not join a turn in flight —
+      // so the verbs a live turn would refuse are already out of whichever
+      // list this is, decided by `offeredComposerVerbs` beside the rule
+      // itself. Typing one anyway still reaches the press, which hands the
+      // words back in words, exactly as a runtime refusal does.
+      verbs={verbs ?? fallbackVerbs(working, models.length > 0)}
       files={files}
       onFilePickerOpen={onFilePickerOpen}
       textareaRef={textareaRef}
@@ -410,11 +515,20 @@ export const SessionComposer = React.memo(function SessionComposer({
         <PromptInputBody>
           {/* Above the text, not below it: the strip is part of the message
               being written, and a person scanning what they are about to send
-              reads top to bottom. */}
+              reads top to bottom.
+
+              `w-full`, AND IT IS LOAD-BEARING. `PromptInputBody` is
+              `display:contents`, so this strip is a flex CHILD of the vendored
+              `InputGroup` — which is `items-center` and flips to a COLUMN
+              once the footer's block-end addon mounts. In a column, `center`
+              is the CROSS axis: a shrink-to-fit strip sat mid-composer with
+              its one thumbnail floating over the textarea's centre while
+              everything around it ran edge to edge (VC-137). `w-full` is the
+              same rule the textarea below already follows. */}
           <AttachmentStrip
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
-            className="px-3 pt-2"
+            className="w-full px-3 pt-2"
           />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
@@ -429,6 +543,7 @@ export const SessionComposer = React.memo(function SessionComposer({
             onSteer={() => send("steer")}
             queued={queued}
             onQueuedChange={onQueuedChange}
+            onRestoreAttachments={onRestoreAttachments}
           />
         </PromptInputBody>
 
@@ -528,6 +643,8 @@ export const SessionComposer = React.memo(function SessionComposer({
               selectionProviderLabel={selectionProviderLabel}
               disabled={modelChoiceDisabled}
               onChange={onSelectionChange}
+              open={modelPickerOpen}
+              onOpenChange={onModelPickerOpenChange}
             />
             {/* A peer of the model pill, not a property of it. Effort is the
                 per-task decision and model is the set-and-forget one, so the
@@ -681,6 +798,7 @@ function ComposerTextarea({
   onSteer,
   queued,
   onQueuedChange,
+  onRestoreAttachments,
 }: {
   value: string;
   ready: boolean;
@@ -690,6 +808,8 @@ function ComposerTextarea({
   onSteer(): void;
   queued: readonly QueuedMessage[];
   onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
+  /** The row's files return to the strip — see {@link SessionComposerProps.onRestoreAttachments}. */
+  onRestoreAttachments?(attachments: readonly BlobLinkView[]): void;
 }) {
   const caret = React.useContext(ComposerCaretContext);
   return (
@@ -751,7 +871,7 @@ function ComposerTextarea({
           event.preventDefault();
           const taken = unqueueLast(queued);
           if (!taken) return;
-          if (onQueuedChange(taken.queue) === false) return;
+          if (!takeRowBack(taken, onRestoreAttachments, onQueuedChange)) return;
           onValueChange(taken.text);
         }
       }}
@@ -1114,14 +1234,29 @@ export function ModelPill({
   selectionProviderLabel,
   disabled,
   onChange,
+  open: openProp,
+  onOpenChange,
 }: {
   models: readonly ComposerModel[];
   selection: ComposerModelSelection;
   selectionProviderLabel?: string;
   disabled: boolean;
   onChange(next: ComposerModelSelection): void;
+  /** Controlled open, for the caller that opens this list by typing (`/model`). */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }) {
-  const [open, setOpen] = React.useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  // Controlled when `open` is present, uncontrolled otherwise — the ordinary
+  // Radix shape, so a caller that never types `/model` notices nothing. The
+  // internal state stays the uncontrolled half and is written either way:
+  // a popover that closes itself while controlled must not leave the local
+  // half stuck open for the next uncontrolled mount.
+  const setOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
+  const open = openProp ?? uncontrolledOpen;
   // First-appearance order: the catalog's own ordering is the harness's answer
   // to "which provider matters", and re-sorting it here would be our opinion.
   const providers = models.reduce<Array<{ id: string; label: string }>>((result, model) => {

@@ -22,10 +22,8 @@ import {
 } from "@earendil-works/pi-agent-core/node";
 import {
   getSupportedThinkingLevels,
-  type Api,
   type AssistantMessage,
   type CredentialStore,
-  type Model,
   type Models,
   type UserMessage,
 } from "@earendil-works/pi-ai";
@@ -43,7 +41,6 @@ import {
   type CompactionReason,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
-  type ModelSelection,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -54,6 +51,7 @@ import {
   type RuntimeSessionIdentity,
   type SessionRuntimeSpec,
   type TurnObservation,
+  type UtilityCompletion,
 } from "@volli/shared";
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
@@ -156,28 +154,13 @@ export interface PiRuntimeHostOptions {
    */
   retryBackoffMs?: (attempt: number) => number;
   /**
-   * The model background work runs on, read at the moment it is needed.
-   *
-   * Model Access's `utility` purpose — "cost-efficient background work" —
-   * falling back to `global`, which is a resolution the composition root already
-   * owns: Role in, purpose out, in one place. A callback rather than a value
-   * because a Session outlives a settings change, and the next summary should
-   * run on the model that is configured now.
-   *
-   * Absent, or resolving to a model this collection does not know, falls back to
-   * the Session's own model. A summary generated on the expensive model is a
-   * cost surprise; a summary not generated at all is a Session that dead-ends,
-   * and between those two the fallback is not a close call.
-   */
-  utilityModel?: () => ModelSelection | null;
-  /**
    * The compaction policy every attachment is run under, read at the moment it
    * is needed rather than captured at attach.
    *
-   * A callback for {@link PiRuntimeHostOptions.utilityModel}'s reason: a Session
-   * outlives a settings change, and the next compaction should happen under the
-   * policy configured now — a switch flipped in Settings that only took effect
-   * on the Sessions started after it would be a switch that does not work.
+   * A callback because a Session outlives a settings change, and the next
+   * compaction should happen under the policy configured now — a switch flipped
+   * in Settings that only took effect on the Sessions started after it would be
+   * a switch that does not work.
    *
    * Absent, this runs {@link DEFAULT_COMPACTION_POLICY}: automatic compaction
    * on, no model limited, which is the behaviour of every caller that has never
@@ -197,7 +180,6 @@ interface PiRuntimeHost {
     identity: RuntimeSessionIdentity,
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
-  utilityModel: () => ModelSelection | null;
   compactionPolicy: () => CompactionPolicy;
 }
 
@@ -236,14 +218,64 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     executionEnvFactory:
       options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
-    utilityModel: options.utilityModel ?? (() => null),
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
   };
   return {
     inspectModelAccess: (input) =>
       inspectPiModelAccess({ models: host.models, credentials: host.credentials }, host.now, input),
     startSession: (spec) => attachSession(host, spec),
+    completeUtility: (input) => runUtilityCompletion(host, input),
   };
+}
+
+/**
+ * One utility completion on an explicit model, read back as plain text.
+ *
+ * The executor half of the port — the caller resolved and validated the
+ * model; this runs it and refuses rather than substitutes. A model this
+ * collection does not hold throws, a failed stop reason throws, and an
+ * answer with no text throws: the caller keeps its heuristic title and logs,
+ * which is the whole of the contract on this side.
+ */
+async function runUtilityCompletion(
+  host: PiRuntimeHost,
+  input: UtilityCompletion,
+): Promise<string> {
+  const model = host.models.getModel(input.model.providerId, input.model.modelId);
+  if (model === undefined) {
+    throw new Error(
+      `Model ${input.model.providerId}/${input.model.modelId} is not in this runtime's catalog.`,
+    );
+  }
+  const message = await host.models.completeSimple(
+    model,
+    { systemPrompt: input.systemPrompt, messages: [queuedUserMessage(input.user)] },
+    {
+      // The same translation Pi's own agent makes for a Session at "off"
+      // (agent.js: thinkingLevel === "off" → reasoning omitted): SimpleStreamOptions
+      // has no "off" value, and omitting the option IS the off-path, not a
+      // default-level request. Every other level passes through verbatim.
+      ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
+  );
+  if (hasFailedStopReason(message)) {
+    throw new Error(sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."));
+  }
+  // Agent message tokens only. `thinking` blocks are dropped here rather than
+  // filtered downstream, because a caller that runs a model at a reasoning
+  // level it did not want (titling does, on every model that cannot be turned
+  // off) must never see the thinking at all — a reasoning span is not an
+  // answer, and the shape of one varies per provider.
+  let text = "";
+  for (const block of message.content) {
+    if (block.type === "text") text += block.text;
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    throw new Error("The utility completion returned no text.");
+  }
+  return trimmed;
 }
 
 /** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */
@@ -1079,17 +1111,6 @@ async function attachSession(
     };
 
     /**
-     * The model the summary is generated on: Model Access's `utility` purpose,
-     * or this Session's own model when the host names none this collection has.
-     */
-    const summarizationModel = (): Model<Api> => {
-      const selection = host.utilityModel();
-      const utility =
-        selection === null ? undefined : models.getModel(selection.providerId, selection.modelId);
-      return utility ?? agent.state.model;
-    };
-
-    /**
      * The rule this Session compacts under right now, from the policy configured
      * right now.
      *
@@ -1190,53 +1211,78 @@ async function attachSession(
       instructions?: string;
     }): Promise<CompactionOutcome> => {
       const { reason, path, signal, instructions } = input;
-      const outcome = await compactSession({
-        sidecar,
-        path,
-        models,
-        model: summarizationModel(),
-        settings: compactionSettings(),
-        ...(signal === undefined ? {} : { signal }),
-        ...(instructions === undefined ? {} : { customInstructions: instructions }),
-      });
-      // Pi found nothing to compact — an empty history, or one already ending in
-      // a summary. Nothing happened, so nothing is reported: the caller that
-      // needed this to work is the one that has something to say about it.
-      if (outcome.kind === "skipped") return outcome;
-      if (outcome.kind === "compacted") {
-        // The elided context, from the same rule the replay path applies.
-        //
-        // Replacing this array is safe only because every caller has made it
-        // so, and none of them by the `isStreaming` check alone: that check is
-        // separated from this line by a provider call, and what it answered
-        // before is not what it would answer now. The threshold path holds
-        // {@link contextRewrite} across both, the manual path holds it and
-        // refuses rather than waits, and the overflow path runs inside its own
-        // run's `agent_end`, where every other caller has already been turned
-        // away. Take that away and a turn started mid-summary is one this line
-        // overwrites — its message and its reply gone from the model's context
-        // while both remain in the ledger and on screen.
-        agent.state.messages = outcome.messages;
+      // Compaction has no turn of its own, so `working` cannot explain the
+      // multi-second summary to the person waiting for it. This transient pair
+      // does — without becoming recovery history that could revive a spinner
+      // after the attachment that started it has gone away.
+      await commitObservation({ kind: "compaction-progress", state: "started", reason });
+      const finishProgress = () =>
+        commitObservation({ kind: "compaction-progress", state: "finished", reason });
+      try {
+        const outcome = await compactSession({
+          sidecar,
+          path,
+          models,
+          // Compaction is part of this chat's continuity, so its summary is
+          // generated by the model currently selected in the chat pane.
+          model: agent.state.model,
+          settings: compactionSettings(),
+          ...(signal === undefined ? {} : { signal }),
+          ...(instructions === undefined ? {} : { customInstructions: instructions }),
+        });
+        // Pi found nothing to compact — an empty history, or one already ending
+        // in a summary. Nothing happened, so nothing is reported: the caller
+        // that needed this to work is the one that has something to say about
+        // it. The live marker still has to leave, because it has no durable
+        // outcome that can dismiss it.
+        if (outcome.kind === "skipped") {
+          await finishProgress();
+          return outcome;
+        }
+        if (outcome.kind === "compacted") {
+          // The elided context, from the same rule the replay path applies.
+          //
+          // Replacing this array is safe only because every caller has made it
+          // so, and none of them by the `isStreaming` check alone: that check is
+          // separated from this line by a provider call, and what it answered
+          // before is not what it would answer now. The threshold path holds
+          // {@link contextRewrite} across both, the manual path holds it and
+          // refuses rather than waits, and the overflow path runs inside its own
+          // run's `agent_end`, where every other caller has already been turned
+          // away. Take that away and a turn started mid-summary is one this line
+          // overwrites — its message and its reply gone from the model's context
+          // while both remain in the ledger and on screen.
+          agent.state.messages = outcome.messages;
+        }
+        await commitObservation(
+          await persistObservation(
+            outcome.kind === "compacted"
+              ? {
+                  kind: "compaction",
+                  state: "compacted",
+                  reason,
+                  entryId: outcome.entry.id,
+                  // Floored where a provider's arithmetic becomes a durable
+                  // count, for the reason a context window is: the ledger holds
+                  // whole tokens, and a fractional one would recover and then
+                  // fail to decode.
+                  tokensBefore: Math.floor(outcome.entry.tokensBefore),
+                  tokensAfter: estimatedContextTokens(outcome.messages),
+                }
+              : { kind: "compaction", state: "failed", reason, message: outcome.message },
+          ),
+        );
+        // A compacted or failed observation is the durable terminal fact. The
+        // Session runtime removes the transient marker as it records that fact,
+        // so sending a second finish signal would race the boundary it draws.
+        return outcome;
+      } catch (error) {
+        // Reachable only above that commit — once the durable outcome lands
+        // nothing else here can throw — so the marker is always still open and
+        // needs an explicit finish before the failure propagates.
+        await finishProgress();
+        throw error;
       }
-      await commitObservation(
-        await persistObservation(
-          outcome.kind === "compacted"
-            ? {
-                kind: "compaction",
-                state: "compacted",
-                reason,
-                entryId: outcome.entry.id,
-                // Floored where a provider's arithmetic becomes a durable
-                // count, for the reason a context window is: the ledger holds
-                // whole tokens, and a fractional one would recover and then
-                // fail to decode.
-                tokensBefore: Math.floor(outcome.entry.tokensBefore),
-                tokensAfter: estimatedContextTokens(outcome.messages),
-              }
-            : { kind: "compaction", state: "failed", reason, message: outcome.message },
-        ),
-      );
-      return outcome;
     };
 
     /**

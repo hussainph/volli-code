@@ -43,8 +43,17 @@ export function isUntitledChatSession(title: string | null): boolean {
  * optimistic writes above are the ONLY thing moving these labels, so a rename
  * the durable store refused would otherwise leave every chat surface asserting
  * a title the ledger does not have, with nothing on the way to correct it.
+ *
+ * `refineFrom` is the automatic path's rider (VC-81): the first user message,
+ * passed ONLY by the heuristic auto-title so main can derive a sharper title
+ * behind this write. Every human rename omits it, which is what holds title
+ * calls at zero for a Session a person named.
  */
-export async function renameChatSession(sessionId: string, title: string): Promise<boolean> {
+export async function renameChatSession(
+  sessionId: string,
+  title: string,
+  refineFrom?: string,
+): Promise<boolean> {
   const trimmed = title.trim();
   if (trimmed.length === 0) return false;
 
@@ -57,7 +66,11 @@ export async function renameChatSession(sessionId: string, title: string): Promi
   // WebGPU engine) — four lines are not worth pulling a terminal renderer into
   // the chat core.
   try {
-    const result = await window.api.sessions.rename({ sessionId, title: trimmed });
+    const result = await window.api.sessions.rename({
+      sessionId,
+      title: trimmed,
+      ...(refineFrom !== undefined && refineFrom.trim().length > 0 ? { refineFrom } : {}),
+    });
     if (result.ok) return true;
     toastError(`Rename failed: ${result.error}`);
   } catch (error) {
@@ -97,6 +110,24 @@ function titlesOf(sessionId: string): ChatTitleSites {
     }
   }
   return { slice, rows };
+}
+
+/**
+ * Applies a retitle main performed on its own (VC-81 auto-titling) to every
+ * label this process is holding.
+ *
+ * No optimistic write and no rollback, because this is not this window's
+ * mutation: the durable write already succeeded before the push was sent, so
+ * there is nothing to be optimistic about and nothing to put back. It exists
+ * because the write happened somewhere with no renderer behind it — the CLI
+ * door has no window at all — and `session.retitle` bypasses the runtime
+ * publish (see this file's header), so no live subscriber would otherwise
+ * learn the title changed until an unrelated refresh.
+ */
+export function applyRemoteChatTitle(sessionId: string, title: string): void {
+  const trimmed = title.trim();
+  if (trimmed.length === 0) return;
+  writeTitle(sessionId, trimmed, titlesOf(sessionId));
 }
 
 /** Writes `title` to every site {@link titlesOf} found. */

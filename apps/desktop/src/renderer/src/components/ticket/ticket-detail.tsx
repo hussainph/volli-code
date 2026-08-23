@@ -60,6 +60,7 @@ import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/do
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
+import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -667,8 +668,47 @@ export function TicketDetail({
     },
     [projectId, revalidateSeenRevision, ticket.id],
   );
+  /**
+   * Where a file this ticket's chat names opens (VC-120). Chat paths arrive
+   * RAW — absolute when a tool spelled them that way — so they are translated
+   * first (`resolveChatOpenTarget`): this ticket's worktree (or a repo path
+   * spelled absolutely) stays here as a file tab; another ticket's worktree
+   * opens THAT ticket's workspace with the tab in place; a path no checkout
+   * contains toasts instead of opening a pane whose only content is an error.
+   * `@file` chips pass through unchanged (already venue-relative). Worktrees
+   * and the project path are read at click time so this callback — handed to
+   * every transcript turn — keeps a stable identity.
+   */
   const openFile = React.useCallback(
-    (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
+    (path: string) => {
+      const projectPath = useProjectsStore
+        .getState()
+        .projects.find((project) => project.id === projectId)?.path;
+      if (projectPath === undefined) {
+        // No project record to translate against — keep the old pass-through
+        // rather than dropping the click on the floor.
+        openTicketFile(projectId, ticket.id, path);
+        return;
+      }
+      const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
+      const target = resolveChatOpenTarget({
+        path,
+        projectPath,
+        worktrees: chatWorktreeRefs(tickets),
+        scope: { kind: "ticket", ticketId: ticket.id },
+      });
+      if (target.kind === "outside") {
+        toastError(`${path} is outside this project.`);
+        return;
+      }
+      // Ticket scope never yields `project-file`, but the type is handled
+      // honestly: the same relPath as this ticket's file tab.
+      const targetTicketId = target.kind === "ticket-file" ? target.ticketId : ticket.id;
+      openTicketFile(projectId, targetTicketId, target.relPath);
+      if (targetTicketId !== ticket.id) {
+        useWorkspaceStore.getState().openTicketWorkspace(projectId, targetTicketId);
+      }
+    },
     [openTicketFile, projectId, ticket.id],
   );
   const previewFileFromRail = React.useCallback(
@@ -957,6 +997,8 @@ export function TicketDetail({
           in the main column below it. */}
         {terminalFocused ? null : (
           <TicketTabStrip
+            projectId={projectId}
+            ticketId={ticket.id}
             tabs={tabs}
             activeTabId={activeTab.id}
             creating={creating || creatingChat}

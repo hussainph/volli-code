@@ -22,6 +22,24 @@ import type { CliIpcDeps } from "./cli-ipc";
 const STATUS: CliToolStatus = {
   link: { path: "/home/me/.local/bin/volli", state: "ours", target: "/shim/volli" },
   path: { binDir: "/home/me/.local/bin", state: "reachable" },
+  environment: {
+    loginPath: "/usr/bin:/home/me/.local/bin",
+    session: {
+      path: "/volli/bin:/usr/bin:/home/me/.local/bin",
+      provenance: "adopted",
+      interactiveProvenance: "already-complete",
+      tools: {
+        git: "/usr/bin/git",
+        gh: "/opt/homebrew/bin/gh",
+        node: "/opt/homebrew/bin/node",
+        pnpm: "/opt/homebrew/bin/pnpm",
+      },
+      dependencies: null,
+      installCommand: null,
+    },
+    systemPathIssues: [],
+    credentialHelperIssues: [],
+  },
   socket: { path: "/profiles/volli.sock", live: true },
   wrappers: { commands: ["claude"] },
   shell: { name: "zsh", supported: true, chainActive: true },
@@ -60,6 +78,17 @@ describe("registerCliIpcHandlers", () => {
     register();
 
     await expect(invoke("volli:cli-status")).resolves.toEqual({ ok: true, status: STATUS });
+  });
+
+  it("passes a project root to the status measurement", async () => {
+    const status = vi.fn<CliIpcDeps["status"]>(async () => STATUS);
+    register({ status });
+
+    await expect(invoke("volli:cli-status", { cwd: "/work/acme" })).resolves.toEqual({
+      ok: true,
+      status: STATUS,
+    });
+    expect(status).toHaveBeenCalledWith({ cwd: "/work/acme" });
   });
 
   it("probes without repairing on a plain doctor run", async () => {

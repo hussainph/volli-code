@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
-import { HOME_BOARD_TAB_ID, resolveHomeTabs, sanitizeHomeActiveTab } from "./home-tabs";
+import {
+  HOME_BOARD_TAB_ID,
+  closeHomeTabHistory,
+  resolveHomeTabs,
+  sanitizeHomeActiveTab,
+  visitHomeTab,
+} from "./home-tabs";
 
 /** The default input: a hydrated project with nothing open and the Board recorded. */
 function input(over: Partial<Parameters<typeof resolveHomeTabs>[0]> = {}) {
@@ -114,6 +120,19 @@ describe("resolveHomeTabs — restoring the Session that was in front on relaunc
     ).toEqual({ active: HOME_BOARD_TAB_ID, restore: SETTLED });
   });
 
+  it("needs no durable Session lookup when a restored File tab is already open", () => {
+    expect(
+      resolveHomeTabs(
+        input({
+          tabIds: ["file:src/app.ts"],
+          recorded: "file:src/app.ts",
+          durableChatIds: undefined,
+          hydrated: false,
+        }),
+      ),
+    ).toEqual({ active: "file:src/app.ts", restore: SETTLED });
+  });
+
   it("needs no restore when the recorded Session already has its tab open", () => {
     const tab = chatTabId("sess-9");
     expect(
@@ -128,6 +147,41 @@ describe("resolveHomeTabs — restoring the Session that was in front on relaunc
       active: HOME_BOARD_TAB_ID,
       restore: SETTLED,
     });
+  });
+});
+
+describe("Home tab visit history", () => {
+  it("keeps tabs in most-recently-visited order without duplicates", () => {
+    const history = visitHomeTab(
+      visitHomeTab(visitHomeTab([], HOME_BOARD_TAB_ID), "chat:one"),
+      "file:a.ts",
+    );
+
+    expect(visitHomeTab(history, "chat:one")).toEqual([HOME_BOARD_TAB_ID, "file:a.ts", "chat:one"]);
+    expect(visitHomeTab(history, "file:a.ts")).toBe(history);
+  });
+
+  it("returns to the most recently visited tab that is still open", () => {
+    expect(
+      closeHomeTabHistory({
+        history: [HOME_BOARD_TAB_ID, "chat:one", "file:a.ts", "file:b.ts"],
+        closedTabId: "file:b.ts",
+        openTabIds: [HOME_BOARD_TAB_ID, "chat:one", "file:a.ts"],
+      }),
+    ).toEqual({
+      active: "file:a.ts",
+      history: [HOME_BOARD_TAB_ID, "chat:one", "file:a.ts"],
+    });
+  });
+
+  it("skips closed history and falls back to Board", () => {
+    expect(
+      closeHomeTabHistory({
+        history: ["chat:closed", "file:closed.ts"],
+        closedTabId: "file:closed.ts",
+        openTabIds: [HOME_BOARD_TAB_ID],
+      }),
+    ).toEqual({ active: HOME_BOARD_TAB_ID, history: [HOME_BOARD_TAB_ID] });
   });
 });
 

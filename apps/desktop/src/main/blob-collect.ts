@@ -15,6 +15,12 @@
  * Run at startup rather than as a cascade off the last unlink: collection is
  * housekeeping, and doing it inline would make an ordinary detach do file I/O
  * on the user's turn.
+ *
+ * ONE deliberate exception (VC-137): a Blob a STORED new-Ticket draft still
+ * names is not garbage — it is a persisted attachment waiting for its Ticket,
+ * and collecting it would turn a restored draft's thumbnail into a hole. The
+ * caller passes those hashes as `retain`; clearing or creating the draft is
+ * what releases them back to the next boot's sweep.
  */
 import type Database from "better-sqlite3";
 import { deleteBlob, listUnlinkedBlobHashes } from "./db/blobs-repo";
@@ -26,7 +32,8 @@ export interface BlobCollectionReport {
 }
 
 /**
- * Removes every Blob no link names.
+ * Removes every Blob no link names — except the ones `retain` holds, which a
+ * stored draft still names (see the module doc).
  *
  * Bytes go first, then the row. Getting cut off between the two is survivable
  * in that order and not in the other: a row whose bytes are gone is
@@ -39,9 +46,11 @@ export interface BlobCollectionReport {
 export function collectUnlinkedBlobs(
   db: Database.Database,
   blobsRootPath: string,
+  retain: ReadonlySet<string> = new Set(),
 ): BlobCollectionReport {
   const collected: string[] = [];
   for (const hash of listUnlinkedBlobHashes(db)) {
+    if (retain.has(hash)) continue;
     removeBlob(blobsRootPath, hash);
     deleteBlob(db, hash);
     collected.push(hash);

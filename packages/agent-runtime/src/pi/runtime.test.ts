@@ -46,8 +46,8 @@ import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } fro
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
-/** A second catalog entry, so "which model summarized" has a visible answer. */
-const UTILITY_MODEL_ID = "claude-utility-mini";
+/** A second catalog entry, so a chat-model change has a visible summary answer. */
+const CHAT_MODEL_ID = "claude-chat-model";
 const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
 
 // --- scripted model stream -------------------------------------------------
@@ -4356,57 +4356,41 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
-  /** Drive one Session to the reserve and report which model each call used. */
-  async function modelsCalled(
-    utilityModel: PiRuntimeHostOptions["utilityModel"],
-  ): Promise<string[]> {
+  /** Drive one Session to the reserve after changing the model selected in chat. */
+  async function modelsCalledAfterChatModelChange(): Promise<string[]> {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(overflowing(calls, settles("## Goal\nsummarized elsewhere")), [
+      models: modelsWithStream(overflowing(calls, settles("## Goal\nsummarized in chat")), [
         { id: MODEL_ID, reasoning: true },
-        { id: UTILITY_MODEL_ID },
+        { id: CHAT_MODEL_ID },
       ]),
-      ...(utilityModel === undefined ? {} : { utilityModel }),
     });
     const handle = await runtime.startSession(attachment.spec);
     await handle.submitUserMessage("remember the marker");
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
     await handle.submitUserMessage(PASTED);
     await handle.submitUserMessage("carry on");
     await handle.close();
     return calls.map((call) => call.model);
   }
 
-  it("summarizes on the utility model the host names", async () => {
-    const utility = {
-      providerId: PROVIDER_ID,
-      modelId: UTILITY_MODEL_ID,
-      reasoningLevel: "off",
-    } as const;
+  it("summarizes on the model selected in the Session's chat", async () => {
+    const chatModel = `${PROVIDER_ID}/${CHAT_MODEL_ID}`;
 
-    expect(await modelsCalled(() => utility)).toEqual([
+    expect(await modelsCalledAfterChatModelChange()).toEqual([
       SESSION_MODEL,
-      SESSION_MODEL,
-      `${PROVIDER_ID}/${UTILITY_MODEL_ID}`,
-      SESSION_MODEL,
+      chatModel,
+      chatModel,
+      chatModel,
     ]);
-  });
-
-  it("falls back to the Session's own model rather than not summarizing", async () => {
-    // Three ways to have no utility model — no host answer at all, a host with
-    // nothing configured, and a host naming a model this collection does not
-    // know — and one outcome: the summary is generated, on the model at hand.
-    const unknown = {
-      providerId: PROVIDER_ID,
-      modelId: "never-provisioned",
-      reasoningLevel: "off",
-    } as const;
-    const onlyTheSessionModel = Array.from({ length: 4 }, () => SESSION_MODEL);
-
-    expect(await modelsCalled(undefined)).toEqual(onlyTheSessionModel);
-    expect(await modelsCalled(() => null)).toEqual(onlyTheSessionModel);
-    expect(await modelsCalled(() => unknown)).toEqual(onlyTheSessionModel);
   });
 });
 
@@ -4710,7 +4694,11 @@ describe("the compaction policy a Session is run under", () => {
   async function driveTo(
     occupied: number,
     policy: PiRuntimeHostOptions["compactionPolicy"],
-  ): Promise<{ calls: ProviderCall[]; compacted: CompactionObservation[] }> {
+  ): Promise<{
+    calls: ProviderCall[];
+    compacted: CompactionObservation[];
+    observations: RuntimeObservation[];
+  }> {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
@@ -4723,7 +4711,11 @@ describe("the compaction policy a Session is run under", () => {
     await handle.submitUserMessage(PASTED);
     await handle.submitUserMessage("carry on");
     await handle.close();
-    return { calls, compacted: compactions(attachment.observations) };
+    return {
+      calls,
+      compacted: compactions(attachment.observations),
+      observations: attachment.observations,
+    };
   }
 
   it("leaves a Session compacting at the executor's own reserve when nothing is configured", async () => {
@@ -4735,7 +4727,7 @@ describe("the compaction policy a Session is run under", () => {
   });
 
   it("compacts earlier for a model told to keep more room free", async () => {
-    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
+    const { calls, compacted, observations } = await driveTo(BETWEEN_RESERVES, () => ({
       autoCompaction: true,
       modelLimits: [{ ...LIMIT, reserveTokens: 32_768 }],
     }));
@@ -4745,6 +4737,9 @@ describe("the compaction policy a Session is run under", () => {
     expect(calls).toHaveLength(4);
     expect(compacted).toEqual([
       expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    expect(observations.filter(({ kind }) => kind === "compaction-progress")).toEqual([
+      expect.objectContaining({ state: "started", reason: "threshold" }),
     ]);
     expect(calls[3]?.messages).toContain("compacted into the following summary");
   });
@@ -4930,6 +4925,37 @@ describe("compacting because somebody asked", () => {
     const turn = calls[3]?.messages ?? "";
     expect(turn).toContain("compacted into the following summary");
     expect(turn).not.toContain("first answer");
+    await handle.close();
+  });
+
+  it("reports a manual compaction while its summary is pending", async () => {
+    const attachment = fixture();
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation([], async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    const compacting = handle.compact();
+    await summarizing.promise;
+
+    expect(attachment.observations.filter(({ kind }) => kind === "compaction-progress")).toEqual([
+      expect.objectContaining({ kind: "compaction-progress", state: "started", reason: "manual" }),
+    ]);
+
+    release.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
     await handle.close();
   });
 
@@ -5284,5 +5310,205 @@ describe("autoRetryDelayMs", () => {
     expect(autoRetryDelayMs(3)).toBeLessThan(4100);
     expect(autoRetryDelayMs(9)).toBeGreaterThanOrEqual(8000);
     expect(autoRetryDelayMs(9)).toBeLessThan(8100);
+  });
+});
+
+// --- completeUtility -------------------------------------------------------
+
+/**
+ * A `Models` whose `streamSimple` answers one call with a fixed reply, while
+ * recording what the runtime asked for. `completeSimple` is Pi's own
+ * `streamSimple(...).result()`, so scripting the stream scripts both.
+ */
+function utilityModels(
+  reply: {
+    text?: string;
+    thinking?: string;
+    stopReason?: "stop" | "error" | "aborted";
+    errorMessage?: string;
+  },
+  onCall?: (call: {
+    model: Model<string>;
+    context: Context;
+    options: { reasoning?: string; signal?: AbortSignal } | undefined;
+  }) => void,
+): Models {
+  const faux = fauxProvider({
+    api: "anthropic-messages",
+    provider: PROVIDER_ID,
+    models: [{ id: MODEL_ID, reasoning: true }],
+  });
+  const models = createModels();
+  models.setProvider({
+    ...faux.provider,
+    streamSimple: ((model, context, options) => {
+      onCall?.({
+        model: model as Model<string>,
+        context,
+        options: options as { reasoning?: string } | undefined,
+      });
+      const stream = createAssistantMessageEventStream();
+      const message = baseMessage(model as Model<string>);
+      message.stopReason = reply.stopReason ?? "stop";
+      if (reply.errorMessage !== undefined) message.errorMessage = reply.errorMessage;
+      if (reply.text !== undefined) {
+        message.content.push({ type: "text", text: reply.text });
+        stream.push({ type: "text_start", contentIndex: 0, partial: message });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: reply.text, partial: message });
+        stream.push({ type: "text_end", contentIndex: 0, content: reply.text, partial: message });
+      }
+      if (reply.thinking !== undefined) {
+        message.content.push({ type: "thinking", thinking: reply.thinking });
+      }
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end(message);
+      return stream;
+    }) as typeof faux.provider.streamSimple,
+  });
+  return models;
+}
+
+describe("completeUtility", () => {
+  it("runs the named model with the prompt and the requested reasoning, and resolves its text", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }, (call) => calls.push(call)),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "The login button is broken",
+      }),
+    ).resolves.toBe("Fix the login flow");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.model.id).toBe(MODEL_ID);
+    expect(calls[0]!.context.systemPrompt).toBe("Title this conversation.");
+    expect(calls[0]!.context.messages).toEqual([
+      { role: "user", content: "The login button is broken", timestamp: expect.any(Number) },
+    ]);
+    expect(calls[0]!.options).toEqual({});
+  });
+
+  it("passes a non-off reasoning level through verbatim", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }, (call) => calls.push(call)),
+    });
+    await runtime.completeUtility({
+      model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "low" },
+      systemPrompt: "Title this conversation.",
+      user: "The login button is broken",
+    });
+    expect(calls[0]!.options).toEqual({ reasoning: "low" });
+  });
+
+  it("hands the caller's deadline to the provider", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }, (call) => calls.push(call)),
+    });
+    // Background work has nobody waiting on it, so an unanswered request must
+    // be abandonable rather than pending for the life of the process.
+    const signal = AbortSignal.timeout(30_000);
+    await runtime.completeUtility({
+      model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+      systemPrompt: "Title this conversation.",
+      user: "The login button is broken",
+      signal,
+    });
+    expect(calls[0]!.options).toEqual({ signal });
+  });
+
+  it("throws when the model is not in the runtime's catalog", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: "not-a-model", reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("not in this runtime's catalog");
+  });
+
+  it("throws on a failed stop reason, with the failure's message", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error", errorMessage: "Provider refused the call." }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("Provider refused the call.");
+  });
+
+  it("states the failure itself when a failed stop reason carries no message", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error" }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("The utility completion failed.");
+  });
+
+  it("throws when the answer holds no text", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({}),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("returned no text");
+  });
+
+  it("throws when the answer is reasoning alone, with no text blocks", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ thinking: "pondering" }),
+    });
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).rejects.toThrow("returned no text");
+  });
+
+  it("returns agent message tokens only, never the reasoning beside them", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({
+        text: "Fix the login flow",
+        thinking: "The user wants a title. Six words maximum.",
+      }),
+    });
+    // Titling runs at a reasoning level it did not ask for on every model that
+    // cannot be turned off, so the thinking must not reach the caller at all.
+    await expect(
+      runtime.completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "low" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      }),
+    ).resolves.toBe("Fix the login flow");
   });
 });

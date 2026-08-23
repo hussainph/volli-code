@@ -12,6 +12,7 @@ import type {
   HarnessEventNotice,
   SessionActivityNotice,
   SessionHarnessNotice,
+  SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionStartedNotice,
   UpdateUiState,
@@ -139,6 +140,26 @@ export function broadcastSessionActivity(notice: SessionActivityNotice): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
     window.webContents.send("volli:session-activity" satisfies VolliIpcEvent, notice);
+  }
+}
+
+/**
+ * Announce a retitle main made on its own behalf (VC-81 auto-titling).
+ *
+ * Every other retitle is a renderer action that moves its own labels
+ * optimistically as it goes. This one has no renderer behind it — the CLI door
+ * has no window at all — and `session.retitle` reaches the ledger WITHOUT the
+ * runtime publish, so no live subscriber is told. Without this the model's
+ * title is durably correct and invisible until an unrelated refresh, which is
+ * the whole feature failing to appear.
+ */
+export function broadcastSessionRetitled(sessionId: string, title: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send(
+      "volli:session-retitled" satisfies VolliIpcEvent,
+      { sessionId, title } satisfies SessionRetitledEvent,
+    );
   }
 }
 

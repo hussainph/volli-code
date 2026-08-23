@@ -39,7 +39,6 @@ import type {
   SessionRpcIpcEvent,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
-  ShippedEditorThemeId,
   TerminalBusyResult,
   TerminalDataEvent,
   TerminalExitEvent,
@@ -54,6 +53,7 @@ import type {
   BootstrapResult,
   CliDoctorInput,
   CliDoctorResult,
+  CliStatusInput,
   CliStatusResult,
   CommentCreateInput,
   BlobAttachInput,
@@ -67,6 +67,9 @@ import type {
   DataChangedEvent,
   DirChangedEvent,
   DirPathInput,
+  ExternalAppListResult,
+  ExternalAppOpenFileInput,
+  ExternalAppOpenWorktreeInput,
   FileChangedEvent,
   FileIndexInput,
   FileIndexResult,
@@ -109,6 +112,7 @@ import type {
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
+  SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
@@ -160,6 +164,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeStatusResult,
   WorktreeWatchErrorEvent,
+  WorktreeRevealInput,
 } from "../ipc/contract";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -407,7 +412,15 @@ const api = {
     /** A ticket's Session listing rows, newest first — backs the right-rail linked-sessions list. */
     listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
       invoke("volli:session-list-for-ticket", input),
-    /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
+    /**
+     * Renames a session (project- or ticket-scoped); the title is trimmed and
+     * must be non-empty in main.
+     *
+     * `refineFrom` rides along on the automatic heuristic rename only (VC-81):
+     * main may then derive a sharper title with one model call. The result
+     * still answers the rename — the refinement is best effort behind it, and
+     * its failures keep the title this call just wrote.
+     */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
     /**
@@ -428,6 +441,18 @@ const api = {
       ipcRenderer.on("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to retitles main performed itself (VC-81 auto-titling).
+     * Renderer-originated renames move their own labels and never arrive
+     * here; this carries the ones nothing on screen would otherwise learn.
+     */
+    onRetitled: (callback: (event: SessionRetitledEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRetitledEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-retitled" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-retitled" satisfies VolliIpcEvent, listener);
     },
     /**
      * Subscribes to canonical harness events (harness-events): a hook the
@@ -623,7 +648,8 @@ const api = {
    * socket, wrappers, shell chain — measured fresh per call, never cached.
    */
   cli: {
-    status: (): Promise<CliStatusResult> => invoke("volli:cli-status"),
+    status: (input?: CliStatusInput): Promise<CliStatusResult> =>
+      input === undefined ? invoke("volli:cli-status") : invoke("volli:cli-status", input),
     /** A real `volli doctor` run through the user's login shell; `fix` repairs first. */
     doctor: (input: CliDoctorInput): Promise<CliDoctorResult> => invoke("volli:cli-doctor", input),
   },
@@ -642,6 +668,17 @@ const api = {
       invoke("volli:prompt-templates", input),
     /** Reveals the resolved file in Finder. */
     reveal: (input: FilePathInput): Promise<Result> => invoke("volli:file-reveal", input),
+    /** The installed subset of the allowlisted external-editor catalogue. */
+    listExternalApps: (): Promise<ExternalAppListResult> => invoke("volli:external-app-list"),
+    /** Opens a resolved main- or ticket-worktree file/folder in one known external app. */
+    openInExternalApp: (input: ExternalAppOpenFileInput): Promise<Result> =>
+      invoke("volli:external-app-open-file", input),
+    /** Opens the ticket's live worktree root in one known external app. */
+    openWorktreeInExternalApp: (input: ExternalAppOpenWorktreeInput): Promise<Result> =>
+      invoke("volli:external-app-open-worktree", input),
+    /** Reveals the ticket's live worktree root in Finder without accepting a renderer path. */
+    revealWorktree: (input: WorktreeRevealInput): Promise<Result> =>
+      invoke("volli:worktree-reveal", input),
     /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
     watch: (input: FilePathInput): Promise<Result> => invoke("volli:file-watch", input),
     unwatch: (input: FilePathInput): Promise<Result> => invoke("volli:file-unwatch", input),
@@ -941,25 +978,12 @@ const api = {
    * reach the user's own ghostty config (#67).
    */
   theme: {
-    /** The resolved terminal chain for a scope, plus the editor id and the project's per-surface override. */
+    /** The resolved terminal chain for a scope, plus the project's per-surface override. */
     state: (input: ThemeStateInput = {}): Promise<ThemeStateResult> =>
       invoke("volli:theme-state", input),
     /**
-     * Persists the global Monaco/shiki theme id; `null` clears it so the editor
-     * derives from the resolved appearance. Resolves with the fresh state FOR
-     * THE CALLER'S SCOPE (#123) — pass the project the window is showing, or
-     * `null` from the global scope. The write is global either way; the scope
-     * only decides what the answer describes.
+     * Persists one project's per-surface override; `null` clears it back to inheriting.
      */
-    setGlobalEditor: (
-      editorThemeId: ShippedEditorThemeId | null,
-      projectId: string | null = null,
-    ): Promise<ThemeStateResult> =>
-      invoke(
-        "volli:theme-set-global-editor",
-        projectId === null ? { editorThemeId } : { editorThemeId, projectId },
-      ),
-    /** Persists one project's per-surface override; `null` clears it back to inheriting. */
     setProject: (
       projectId: string,
       override: ProjectThemeOverride | null,

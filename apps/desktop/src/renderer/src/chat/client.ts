@@ -18,7 +18,7 @@
  * that has to be right; its transport and its container are details it names
  * requirements for.
  */
-import type { SessionStreamOverlay } from "@volli/session-engine";
+import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@volli/session-engine";
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   BlobLinkView,
@@ -37,7 +37,12 @@ import {
   type ChatSessionFrame,
   type ChatTranscriptState,
 } from "@renderer/chat/transcript";
-import { chatSessionFrame, chatSessionOverlay, rejectedReceipt } from "@renderer/chat/wire";
+import {
+  chatSessionCompactionProgress,
+  chatSessionFrame,
+  chatSessionOverlay,
+  rejectedReceipt,
+} from "@renderer/chat/wire";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 /**
@@ -157,6 +162,8 @@ export interface ChatSessionWrites {
     sessionId: string,
     frames: readonly ChatSessionFrame[],
     overlays: readonly SessionStreamOverlay[],
+    progress?: readonly SessionStreamCompactionProgress[],
+    clearLiveCompaction?: boolean,
   ): void;
   setProjection(sessionId: string, projection: SessionPresentationProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
@@ -423,6 +430,7 @@ export class ChatSessionClient {
   // and silently drop the missing middle of a sentence.
   readonly #frames = new Map<number, ChatSessionFrame>();
   #overlays: SessionStreamOverlay[] = [];
+  #compactionProgress: SessionStreamCompactionProgress[] = [];
   #lastEventId: string | null = null;
   /**
    * Which open owns the stream. Bumped by every reconnect and by dispose, so a
@@ -770,6 +778,7 @@ export class ChatSessionClient {
     this.#cancelFlush = null;
     this.#frames.clear();
     this.#overlays = [];
+    this.#compactionProgress = [];
     this.#subscription?.unsubscribe();
     this.#subscription = null;
     this.#detachStore();
@@ -785,6 +794,11 @@ export class ChatSessionClient {
    */
   async #open(cursor: string | null): Promise<boolean> {
     const generation = (this.#generation += 1);
+    // A compaction marker says what this particular live subscription knows.
+    // It is not recoverable state: if the stream is replaced, wait for its fresh
+    // baseline rather than letting the previous connection's spinner linger.
+    this.#compactionProgress = [];
+    this.#writes().applyStream(this.sessionId, [], [], [], true);
     this.#subscription?.unsubscribe();
     this.#subscription = null;
     this.#reconnectable = false;
@@ -856,19 +870,21 @@ export class ChatSessionClient {
   }
 
   #receive(emission: unknown): void {
-    const overlay = chatSessionOverlay(emission);
-    if (overlay !== null) {
-      this.#overlays.push(overlay);
-    } else {
-      const frame = chatSessionFrame(emission);
-      if (frame === null) return;
+    // Each arm of the stream in turn, first match wins; an emission none of
+    // them recognizes is dropped rather than drawn.
+    const progress = chatSessionCompactionProgress(emission);
+    const overlay = progress === null ? chatSessionOverlay(emission) : null;
+    const frame = progress === null && overlay === null ? chatSessionFrame(emission) : null;
+    if (progress !== null) this.#compactionProgress.push(progress);
+    else if (overlay !== null) this.#overlays.push(overlay);
+    else if (frame !== null) {
       this.#frames.set(frame.sequence, frame);
       // Not gated behind the paint, unlike the fold below. A permission ask
       // reaches the user through the projection, and a Session that stopped to
       // ask must not wait on a frame callback an occluded window is seconds away
       // from running.
       if (movesProjection(frame)) this.#refreshProjection();
-    }
+    } else return;
     if (this.#cancelFlush !== null) return;
     this.#cancelFlush = this.#scheduler.schedule(() => {
       this.#flush();
@@ -886,9 +902,11 @@ export class ChatSessionClient {
     this.#cancelFlush = null;
     const frames = [...this.#frames.values()];
     const overlays = this.#overlays;
+    const progress = this.#compactionProgress;
     this.#frames.clear();
     this.#overlays = [];
-    this.#writes().applyStream(this.sessionId, frames, overlays);
+    this.#compactionProgress = [];
+    this.#writes().applyStream(this.sessionId, frames, overlays, progress);
   }
 
   /**
@@ -1024,6 +1042,12 @@ export class ChatSessionClient {
    * Retitles this Session from a just-delivered message, if nothing has named
    * it yet. A non-null title was explicitly set by a person, including one
    * that happens to read `Chat 1`, so automatic naming never replaces it.
+   *
+   * The rename carries the first user message with it (VC-81), which asks
+   * main to derive a sharper title behind this write with one model call.
+   * Main owns the model ladder, the call, and the guard that a person's
+   * rename during the call wins; an unavailable model or a refusal simply
+   * leaves the heuristic name that is already on screen.
    */
   #autoTitle(body: string, attachments: readonly BlobLinkView[]): void {
     const title = this.#slice()?.projection?.session.title ?? null;
@@ -1039,7 +1063,11 @@ export class ChatSessionClient {
     const subject = autoTitleFromMessage(body) ?? attachments[0]?.label;
     /* v8 ignore next -- submit refuses a message with neither text nor attachments */
     if (subject === undefined) return;
-    void renameChatSession(this.sessionId, subject);
+    // The model reads the same first user message the heuristic read: the body
+    // when there are words, the attachment's label when there are not.
+    /* v8 ignore next -- submit refuses a message with no text AND no attachments */
+    const firstMessage = body.trim().length > 0 ? body : (attachments[0]?.label ?? "");
+    void renameChatSession(this.sessionId, subject, firstMessage);
   }
 
   #writes(): ChatSessionWrites {

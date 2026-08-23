@@ -1,30 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isShippedEditorThemeId, SHIPPED_EDITOR_THEME_IDS } from "./editor-themes";
+import { editorThemeForAppearance } from "./editor-themes";
 
-describe("SHIPPED_EDITOR_THEME_IDS", () => {
-  it("lists unique non-empty catalog ids", () => {
-    expect(SHIPPED_EDITOR_THEME_IDS.length).toBeGreaterThanOrEqual(18);
-    expect(new Set(SHIPPED_EDITOR_THEME_IDS).size).toBe(SHIPPED_EDITOR_THEME_IDS.length);
-    for (const id of SHIPPED_EDITOR_THEME_IDS) {
-      expect(id.length).toBeGreaterThan(0);
-    }
+describe("editorThemeForAppearance", () => {
+  it("answers Vitesse Light for light and Vitesse Dark for dark", () => {
+    expect(editorThemeForAppearance("light")).toBe("vitesse-light");
+    expect(editorThemeForAppearance("dark")).toBe("vitesse-dark");
   });
 
-  it("includes the ember default and common picker targets", () => {
-    expect(SHIPPED_EDITOR_THEME_IDS).toContain("one-dark-pro");
-    expect(SHIPPED_EDITOR_THEME_IDS).toContain("nord");
-    expect(SHIPPED_EDITOR_THEME_IDS).toContain("tokyo-night");
-  });
-});
+  it("has exactly one distinct fixed theme for each resolved appearance", () => {
+    const pair = [editorThemeForAppearance("light"), editorThemeForAppearance("dark")];
 
-describe("isShippedEditorThemeId", () => {
-  it("accepts every shipped id and rejects unknowns", () => {
-    for (const id of SHIPPED_EDITOR_THEME_IDS) {
-      expect(isShippedEditorThemeId(id)).toBe(true);
-    }
-    expect(isShippedEditorThemeId("volli-dark")).toBe(false);
-    expect(isShippedEditorThemeId("not-a-theme")).toBe(false);
-    expect(isShippedEditorThemeId("")).toBe(false);
+    expect(pair).toEqual(["vitesse-light", "vitesse-dark"]);
+    expect(new Set(pair)).toHaveLength(2);
   });
 });

@@ -16,6 +16,8 @@
  */
 import * as React from "react";
 import { toast } from "sonner";
+
+import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -31,7 +33,14 @@ import type {
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import { errorMessage, readSkillResources, type PromptResource } from "@volli/shared";
+import {
+  errorMessage,
+  offeredComposerVerbs,
+  readSkillResources,
+  type ComposerVerbMoment,
+  type ComposerVerbName,
+  type PromptResource,
+} from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -68,29 +77,37 @@ import {
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
 import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
-import { CompactionBoundary } from "@renderer/components/chat/compaction-boundary-ui";
+import {
+  CompactionBoundary,
+  CompactionProgress,
+} from "@renderer/components/chat/compaction-boundary-ui";
 import {
   answerInteraction,
   composerModelSelection,
   composerPress,
   coordinateQueuedMutation,
   coordinateQueuedSteerStart,
+  detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  lastAssistantText,
   messageCopyText,
   messageRoute,
   resolvingWith,
+  restoreStripAttachments,
   sameInteractionId,
   sameMessages,
   sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
+  visibleBlocker,
   steerRollbackState,
   steerQueuedMessage,
   settledHeldIds,
   withdrawInteraction,
+  type ComposerVerbPress,
   type CatalogState,
   type HeldDispatchOutcome,
   type SessionBlockerActs,
@@ -231,6 +248,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
   const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
   const setDraft = useChatDraftsStore((state) => state.setDraft);
+  const setDraftAttachments = useChatDraftsStore((state) => state.setDraftAttachments);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
   const beginQueuedSteer = useChatDraftsStore((state) => state.beginQueuedSteer);
   const markHeld = useChatDraftsStore((state) => state.markHeld);
@@ -243,6 +261,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   // once, and one boolean disables every other card's controls while one of
   // them is in flight.
   const [resolving, setResolving] = React.useState<ReadonlySet<string>>(EMPTY_RESOLVING);
+  // A dismiss is a view choice, never a Session mutation. It lasts only while
+  // this exact error remains current; a cleared or changed error earns its row
+  // back without requiring a retry just to make it visible again.
+  const [dismissedBlockerKey, setDismissedBlockerKey] = React.useState<string | null>(null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -252,7 +274,8 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   // render re-renders the whole box once per streamed frame.
   const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
 
-  const { messages, durableMessages, queue, working, deliverable, projection } = session;
+  const { messages, durableMessages, queue, working, deliverable, projection, liveCompaction } =
+    session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
@@ -376,6 +399,13 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
    * not to the box: they have to survive the composer's memo, ride the queued
    * copy, and be readable by {@link send} at the moment ⏎ is pressed.
    *
+   * And they are part of the Session's DRAFT (VC-137), which is why every strip
+   * change writes through to the chat-drafts store and the strip is seeded
+   * from it on mount: the words survive a tab switch and a relaunch, and the
+   * files beside them must survive exactly the same events. The links live in
+   * main, owned by the Session — so the bytes survive boot collection too, and
+   * the strip's thumbs still render after a relaunch.
+   *
    * A repository file resolves to an `@` reference instead of a copy, and that
    * reference is appended to the draft — the same text the `@` picker would
    * have inserted, so both routes to a repository file end in one thing.
@@ -385,7 +415,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     attachFiles,
     remove: removeAttachment,
     clear: clearAttachments,
-    discardPending: discardPendingAttachments,
+    reset: resetAttachments,
   } = useAttachments({
     owner: { sessionId },
     onRefInsert: (relPath) => {
@@ -394,24 +424,41 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       setDraft(sessionId, input.length === 0 ? `@${relPath} ` : `${input} @${relPath} `);
     },
     onError: (message) => toast.error(message),
+    onChange: (next) => setDraftAttachments(sessionId, next),
   });
   // Read at submit rather than closed over, so `send` keeps its identity while
   // the strip changes underneath it.
   const attachmentsRef = React.useRef(attachments);
   attachmentsRef.current = attachments;
-  // The strip dies with the pane (VC-50). Its links were made at attach time,
-  // and nothing else — no draft store, no message — points at them until ⏎
-  // carries them into one; a pane that unmounted (or switched Sessions) with
-  // files still in the strip would strand those links: invisible, unremovable,
-  // spending the Session's image budget and materializing on every boot.
-  // `discardPending` reads the hook's own synchronously-kept ref, so a message
-  // sent in this same tick (send() clears the strip before returning) keeps
-  // every link it references.
-  React.useEffect(
-    () => () => {
-      void discardPendingAttachments();
+  // Seed the strip from the persisted draft, once per Session. The pane is
+  // keyed by sessionId at every call site, so a remount is a new Session's
+  // plane — but the ref guard keeps a same-key remount (React strict-mode
+  // double effects, or a future call site without a key) from wiping a strip
+  // that changed between the first seed and now.
+  const seededSession = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (seededSession.current === sessionId) return;
+    seededSession.current = sessionId;
+    const persisted = useChatDraftsStore.getState().drafts[sessionId]?.attachments ?? [];
+    if (persisted.length > 0) resetAttachments(persisted);
+  }, [resetAttachments, sessionId]);
+  /**
+   * A pulled-back row's files rejoin the strip (VC-137) — the merge rule and
+   * the links it strands both live in `restoreStripAttachments`.
+   *
+   * `attachmentsRef` is written here rather than left to the next render: the
+   * composer calls this and then `onQueuedChange` in the same tick, and the
+   * removal path reads the ref to know which files came BACK rather than went
+   * away — a stale ref there would detach the links it is deciding to keep.
+   */
+  const restoreAttachments = React.useCallback(
+    (incoming: readonly BlobLinkView[]) => {
+      const { strip, detach } = restoreStripAttachments(attachmentsRef.current, incoming);
+      for (const shadowed of detach) void removeAttachment(shadowed);
+      attachmentsRef.current = strip;
+      resetAttachments(strip);
     },
-    [discardPendingAttachments, sessionId],
+    [removeAttachment, resetAttachments],
   );
 
   const dispatch = React.useCallback(
@@ -452,13 +499,18 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
+      // The strip's durable copy empties BEFORE the hold, so the one flush
+      // `dispatchHeldMessage` performs carries both halves of the same
+      // transition — the message leaving the box WITH its files, and the box
+      // no longer holding them — in a single durable write window.
+      if (attachmentsRef.current.length > 0) setDraftAttachments(sessionId, []);
       dispatch(text, (message) => deliver(message, intent), resources, attachmentsRef.current);
       // The strip belongs to the message that just left, not to the box. It is
       // cleared rather than detached: the links stay, because the message the
       // agent received refers to them.
       clearAttachments();
     },
-    [clearAttachments, deliver, dispatch],
+    [clearAttachments, deliver, dispatch, sessionId, setDraftAttachments],
   );
 
   // What the Session is holding for you, from the two records that say it — see
@@ -494,15 +546,34 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       const entry = removed[0]!;
       const current = sessionsStore.getState().sessions[sessionId];
       const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
-      return coordinateQueuedMutation({
+      const gone = coordinateQueuedMutation({
         queueBacked,
         claim: () => claimQueued(entry.id),
         consumeClaim: () => dequeueClaimed(entry.id),
         releaseClaim: () => releaseQueuedClaim(entry.id),
         dropHeld: () => dropHeld(sessionId, entry.id),
       });
+      if (!gone) return false;
+      // A removed row's files lose their links too (VC-137) — which of them,
+      // and why an edited row's do not, is `detachableRowAttachments`.
+      for (const attachment of detachableRowAttachments(
+        entry.attachments,
+        attachmentsRef.current,
+      )) {
+        void removeAttachment(attachment);
+      }
+      return true;
     },
-    [claimQueued, dequeueClaimed, dropHeld, releaseQueuedClaim, sessionId, sessionsStore, strip],
+    [
+      claimQueued,
+      dequeueClaimed,
+      dropHeld,
+      removeAttachment,
+      releaseQueuedClaim,
+      sessionId,
+      sessionsStore,
+      strip,
+    ],
   );
 
   const onSteerQueued = React.useCallback(
@@ -612,13 +683,51 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   pendingRef.current = pending;
   const answering = pending !== null && composerAnswerPrompt(pending) !== null;
 
+  // The Session's most recent reply — what `/copy` copies. Held in a ref as
+  // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
+  // prop of the memoized composer, so the press must read the latest text
+  // without the handler re-creating itself once per streamed frame.
+  const lastReply = React.useMemo(() => lastAssistantText(messages), [messages]);
+  const lastReplyRef = React.useRef<string | null>(lastReply);
+  lastReplyRef.current = lastReply;
+  // The facts every verb's offer rule reads, gathered once (`ComposerVerbMoment`).
+  //
+  // Memoized on the four booleans rather than on their sources, because the
+  // sources move far more often than the answers do: a streaming transcript
+  // re-renders this plane every frame, and re-ranking the picker each time
+  // would put a sort of the whole file index on the stream's clock. The
+  // booleans change only at turn boundaries — `hasReply` goes false again
+  // whenever a new user message is the newest row, and true when that turn
+  // speaks — which is a handful of changes per turn instead of hundreds.
+  const verbMoment = React.useMemo<ComposerVerbMoment>(
+    () => ({
+      working,
+      hasReply: lastReply !== null,
+      hasModels: composerModels.length > 0,
+      hasProject: projectId !== null,
+    }),
+    [composerModels.length, lastReply, projectId, working],
+  );
+  // Read by the press, which must judge the moment it happens in rather than
+  // the one the handler was built in.
+  const verbMomentRef = React.useRef(verbMoment);
+  verbMomentRef.current = verbMoment;
+  const verbSupply = React.useMemo(() => offeredComposerVerbs(verbMoment), [verbMoment]);
+  // `/model`'s target: the pill's own list, opened by typing instead of
+  // clicking. Lives here because the press that opens it is decided here.
+  const [modelPickerOpen, setModelPickerOpen] = React.useState(false);
+
   // What the composer's two caret-driven pickers rank over. All of it is
   // project-scoped: the file index is the one the editor's `@` already uses,
   // the templates are `.volli/commands/` over the global tier, and the skills
   // are `.agents/skills/` — explicit `/` references, never ambient injection.
   const fileIndex = useFileIndex(projectId);
   const files = fileIndex.getIndex();
-  const { templates: promptTemplates, skills } = usePromptTemplates(projectId);
+  const {
+    templates: promptTemplates,
+    skills,
+    reload: reloadPromptSupply,
+  } = usePromptTemplates(projectId);
 
   // The landing travels back to the card. A decision the harness never heard has
   // to say so where it was taken — the card is the only thing on screen at that
@@ -656,33 +765,113 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   );
 
   /**
-   * The press that sends nothing.
+   * What each verb DOES, keyed by name.
    *
-   * `/compact` is a request the runtime performs, so it takes none of
-   * {@link dispatch}'s road: there is no message to hold, nothing for the
-   * strip to hand back, and a durable copy of it already exists as the command
-   * itself. The words still leave the box on the press, because they have
-   * stopped being a draft — and they come back if nothing took them, which is
-   * the composer's standing promise and the reason a refusal here is never
-   * just a red line. Every way this does not happen is a refusal, including
-   * the two that are not failures: a turn still running, and a history with
-   * nothing left to summarize.
+   * A `Record` on the closed {@link ComposerVerbName} rather than a switch:
+   * add a verb and this table fails to compile, naming the one with no act.
+   * The switch it replaced could not do that — it sat in a void-returning
+   * callback, where TypeScript asks nothing of a missing arm, so a new verb
+   * would have been offered by the picker and then quietly done nothing.
    *
-   * Returned only over an empty box: a refusal that arrives after the reader
-   * has started typing again must not overwrite what they are writing.
+   * The return value answers one question: did it happen? `void` means yes,
+   * with nothing further to say. A promise resolving `false` is a refusal that
+   * only became knowable after the press — the clipboard saying no, the
+   * runtime declining a compaction only it can judge — and it is what
+   * {@link verbPress} restores the draft on. Each act owns its own words:
+   * whether a particular thing succeeded is not a sentence this table can
+   * write for all six.
    */
-  const compactNow = React.useCallback(
-    (instructions: string | null) => {
+  const verbActs = React.useMemo<
+    Record<ComposerVerbName, (instructions: string | null) => void | Promise<boolean>>
+  >(
+    () => ({
+      // The runtime performs this one, and it alone can see the refusal that
+      // is not a failure: a history with nothing left to summarize.
+      compact: (instructions) => compactContext(instructions),
+      copy: () => {
+        const text = lastReplyRef.current;
+        // Unreachable: `COPY_VERB.refusal` already required a settled reply,
+        // and the press checks it before reaching this table.
+        if (text === null) return;
+        return navigator.clipboard.writeText(text).then(
+          () => {
+            toast.success("Copied last reply");
+            return true;
+          },
+          () => {
+            toastError("Couldn't copy — the clipboard refused");
+            return false;
+          },
+        );
+      },
+      // The pill's own list, opened by typing instead of clicking.
+      model: () => setModelPickerOpen(true),
+      // The refresh reports itself: re-reading two directories is a round trip
+      // that can fail, and a toast fired beside the request rather than after
+      // its answer would be claiming a refresh that had not happened yet — or
+      // one that never did.
+      reload: () =>
+        reloadPromptSupply().then((refreshed) => {
+          if (refreshed) toast.success("Commands and skills refreshed");
+          return refreshed;
+        }),
+      settings: () => setSettingsOpen(true),
+      // Volli's credentials live in Model Access, not in a verb — the verb is
+      // the door, the page is the room.
+      login: () => setSettingsOpen(true, "model-access"),
+    }),
+    [compactContext, reloadPromptSupply, setSettingsOpen],
+  );
+
+  /**
+   * One verb press, and the contract all six keep.
+   *
+   * Every verb press lands here and none of them sends a message, which is the
+   * whole difference from the fallback arm. Three rules, in the order they are
+   * checked:
+   *
+   * **A refusal the press can see never takes the words.** Trailing words a
+   * verb does not read, or a moment the verb cannot act in, leave the draft
+   * exactly where it is and say why in a toast. Never a silent red line.
+   *
+   * **The moment is judged by the verb.** `verb.refusal` is the same function
+   * `offeredComposerVerbs` filtered the picker with, so a verb the list did
+   * not offer is a verb this refuses, in the words that row's absence meant.
+   * What the picker offers and what a press performs cannot disagree, because
+   * they are not two rules that agree — they are one function asked twice.
+   *
+   * **An act that runs takes the words with it, and hands them back if it did
+   * not happen.** They stopped being a draft the moment the act began. A
+   * refusal only knowable afterwards restores them — asynchronously, and only
+   * over an empty box, so a reader who started typing again is never
+   * overwritten. Every verb keeps this, not just the two that used to.
+   */
+  const verbPress = React.useCallback(
+    (press: ComposerVerbPress) => {
+      const { verb, instructions } = press;
+      if (instructions !== null && !verb.takesInstructions) {
+        // The words stay put rather than clearing first: this press never
+        // happened, and the toast is the sentence that says why.
+        toastError(`/${verb.name} takes no instructions`);
+        return;
+      }
+      const refusal = verb.refusal(verbMomentRef.current);
+      if (refusal !== null) {
+        toastError(refusal);
+        return;
+      }
       const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
       setDraft(sessionId, "");
-      void compactContext(instructions).then((accepted) => {
-        if (accepted) return;
+      const act = verbActs[verb.name](instructions);
+      if (act === undefined) return;
+      void act.then((happened) => {
+        if (happened) return;
         if ((useChatDraftsStore.getState().drafts[sessionId]?.text ?? "") === "") {
           setDraft(sessionId, typed);
         }
       });
     },
-    [compactContext, sessionId, setDraft],
+    [sessionId, setDraft, verbActs],
   );
 
   /**
@@ -701,10 +890,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     (text: string, intent: ComposerIntent) => {
       const press = composerPress(pendingRef.current, text);
       if (press.kind === "answer") answerTyped(press.interactionId, press.submission, text);
-      else if (press.kind === "compact") compactNow(press.instructions);
+      else if (press.kind === "verb") verbPress(press);
       else send(text, intent);
     },
-    [answerTyped, compactNow, send],
+    [answerTyped, send, verbPress],
   );
 
   const withdraw = React.useCallback(
@@ -763,6 +952,9 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   const liveTurn = working ? (turns.at(-1) ?? null) : null;
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
+  const dismissBlocker = React.useCallback((dismissKey: string) => {
+    setDismissedBlockerKey(dismissKey);
+  }, []);
 
   const blockerActs = React.useMemo<SessionBlockerActs>(
     () => ({
@@ -778,11 +970,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
-      // The transport latch is the surface's own state; retiring it is the
-      // reader's call, not a recovery (VC-97).
-      dismiss: () => dismissError(),
+      dismissError: () => dismissError(),
+      dismiss: dismissBlocker,
     }),
-    [dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [dismissBlocker, dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
@@ -794,7 +985,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
         .map((provider) => ({ id: provider.id, label: provider.label })),
     [providers],
   );
-  const blocker = sessionBlocker(
+  const candidateBlocker = sessionBlocker(
     {
       sessionError: session.sessionError,
       attention: projection?.attention ?? EMPTY_ATTENTION,
@@ -806,6 +997,13 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     blockerActs,
     interactions.length > 0,
   );
+  const blockerPresentation = visibleBlocker(candidateBlocker, dismissedBlockerKey);
+  React.useEffect(() => {
+    if (blockerPresentation.dismissedKey !== dismissedBlockerKey) {
+      setDismissedBlockerKey(blockerPresentation.dismissedKey);
+    }
+  }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
+  const blocker = blockerPresentation.blocker;
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
@@ -842,6 +1040,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
                     />
                   ),
                 )}
+                {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
                 {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
               </ContentColumn>
             )}
@@ -899,6 +1098,9 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
               // controlled view the Lab can mount without a bridge.
               promptTemplates={promptTemplates}
               skills={skills}
+              verbs={verbSupply}
+              modelPickerOpen={modelPickerOpen}
+              onModelPickerOpenChange={setModelPickerOpen}
               files={files}
               onFilePickerOpen={fileIndex.refresh}
               // One thing parks above the composer at a time; a pending
@@ -926,6 +1128,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
               attachments={attachments}
               onAttachFiles={(picked) => void attachFiles(picked)}
               onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
+              onRestoreAttachments={restoreAttachments}
               imagesUnsupported={imagesUnsupported}
             />
           </ComposerInteractionStack>
@@ -1056,11 +1259,13 @@ export const TurnRunningMark = React.memo(function TurnRunningMark({
 
 /* ---------------------------------------------------------------- blocked */
 
-function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
+export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
   return (
+    // The composer overlay ignores hits so its empty padding does not cover the
+    // transcript. This row carries recovery controls, so it must opt back in.
     <div
       className={cn(
-        "mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
+        "pointer-events-auto mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
         blocker.tone === "error" ? "border-destructive/30" : "border-border",
       )}
     >
@@ -1128,10 +1333,9 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           {blocker.secondaryAction.label}
         </Button>
       ) : null}
-      {/* The one row that reports this surface's own latch — Retry stays for
-          the recovery, and this retires the row when the reader has read it.
-          An icon, not a labeled button: it competes with nothing, and the row's
-          words are the retry's business, not its. */}
+      {/* Every error can be retired locally without claiming its recovery has
+          happened. An icon, not a labeled button: it competes with nothing,
+          and the row's words are the recovery's business, not its. */}
       {blocker.dismiss ? (
         <Button
           size="icon-xs"

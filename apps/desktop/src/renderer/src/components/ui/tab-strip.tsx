@@ -2,9 +2,11 @@
  * The app's one tab strip.
  *
  * Three surfaces drew this object before: Project Files
- * (`files/file-tab-strip.tsx`), the ticket detail (`ticket/ticket-tabs.tsx`)
- * and Home's own strip (`home/home-tab-strip.tsx`). Large stretches of the
- * three were byte-identical — the same transition string, the same
+ * (`files/file-tab-strip.tsx`, retired with the Files page — VC-122), the
+ * ticket detail (`ticket/ticket-tabs.tsx`) and Home's own strip
+ * (`home/home-tab-strip.tsx`, which absorbed Project Files' tab vocabulary
+ * when that page retired). Large stretches of the three were byte-identical —
+ * the same transition string, the same
  * hover-revealed close, the same unsaved dot, the same strip container, the
  * same roving-tabindex helper written out three times — and the comments in all
  * three admitted it ("same technique as…", "mirroring the ticket tab strip…").
@@ -40,9 +42,11 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 // so a strip states only its width.
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
+import { scrollTabsWithWheel } from "./tab-scroll";
 
 export type TabVariant = "folder" | "pill";
 
@@ -130,6 +134,23 @@ export function TabStrip({
   ...props
 }: TabStripProps) {
   const folder = variant === "folder";
+  const scrollerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+
+    // Trackpads already produce a horizontal delta. A mouse needs Shift+wheel
+    // to reach clipped tabs; React's wheel listener is passive, so this must
+    // be a native listener for preventDefault to keep the gesture on the strip.
+    const onWheel = (event: WheelEvent) => {
+      scrollTabsWithWheel(scroller, event);
+    };
+
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, []);
+
   return (
     <div
       data-slot="tab-strip"
@@ -145,6 +166,8 @@ export function TabStrip({
       {...props}
     >
       <div
+        ref={scrollerRef}
+        data-slot="tab-scroll"
         className={cn(
           "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           folder ? "items-end px-2" : "items-center",
@@ -224,6 +247,13 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   dirty?: boolean;
   /** Treatments on the label itself: italic for a preview, struck for an exit. */
   labelClassName?: string;
+  /**
+   * Reveal the label word by word when it CHANGES (VC-81's landing-title
+   * motion). Opt-in: only chat Session tabs carry it — a file tab's label
+   * swaps on every save and a reveal there would read as the strip stuttering.
+   * Never animates on first mount, and never under reduced motion.
+   */
+  revealLabel?: boolean;
   /** Non-null while this tab is being renamed in place. */
   renaming?: TabRenaming | null;
   /** Not `onSelect`, which a div already owns as a DOM event. */
@@ -242,6 +272,7 @@ export function Tab({
   closable = true,
   dirty = false,
   labelClassName,
+  revealLabel = false,
   renaming = null,
   onActivate,
   onClose,
@@ -320,7 +351,9 @@ export function Tab({
         // A plain span, not a button: the tab div above is the `role="tab"`
         // that click, Enter and Space activate, so there is no nested
         // interactive control inside it.
-        <span className={cn("max-w-40 truncate", labelClassName)}>{label}</span>
+        <span className={cn("max-w-40 truncate", labelClassName)}>
+          {revealLabel ? <TitleReveal text={label} /> : label}
+        </span>
       )}
       {hint !== undefined && !renamingNow ? (
         // Dimmer than the tab's own muted ink so it stays subordinate on an

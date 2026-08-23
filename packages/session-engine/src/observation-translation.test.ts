@@ -191,6 +191,30 @@ describe("live observation translation", () => {
     ]);
   });
 
+  it("streams a compaction's live progress without turning it into history", async () => {
+    const { translate, sink } = composition();
+
+    await translate({ kind: "compaction-progress", state: "started", reason: "manual" });
+    await translate({ kind: "compaction-progress", state: "finished", reason: "manual" });
+
+    expect(sink.observations).toEqual([
+      {
+        id: "pi:compaction-progress:started:1",
+        kind: "context.compaction-progress",
+        state: "started",
+        reason: "manual",
+        occurredAt: 1000,
+      },
+      {
+        id: "pi:compaction-progress:finished:2",
+        kind: "context.compaction-progress",
+        state: "finished",
+        reason: "manual",
+        occurredAt: 1001,
+      },
+    ]);
+  });
+
   it("leaves a message mid-word alone when its turn compacts around it", async () => {
     const { translate, sink } = composition();
 
@@ -1066,6 +1090,11 @@ describe("cold replay translation", () => {
       },
       activity({ state: "started" }),
       activity({ state: "progress", output: { content: "partial" } }),
+      // Both edges of a compaction wait, for the same reason: the operation
+      // that emitted them did not survive the restart being replayed, so a
+      // recovered spinner would never be retired by anything.
+      { kind: "compaction-progress", state: "started", reason: "manual" },
+      { kind: "compaction-progress", state: "finished", reason: "manual" },
       {
         kind: "message-settled",
         turnId: "turn-1",

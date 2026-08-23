@@ -975,6 +975,20 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ sessionId: "s1", title: "   " }])).toBe(false);
     });
 
+    it("accepts the optional auto-title rider", () => {
+      expect(guard([{ sessionId: "s1", title: "New title", refineFrom: "Fix the parser" }])).toBe(
+        true,
+      );
+    });
+
+    it("rejects a non-string rider", () => {
+      expect(guard([{ sessionId: "s1", title: "New title", refineFrom: 1 }])).toBe(false);
+    });
+
+    it("rejects a blank rider — there is no message to title from", () => {
+      expect(guard([{ sessionId: "s1", title: "New title", refineFrom: "   " }])).toBe(false);
+    });
+
     it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
     });
@@ -1529,6 +1543,61 @@ describe("FILE_IPC descriptor table", () => {
     }
   });
 
+  describe("volli:external-app-list", () => {
+    const { guard, invalidError } = FILE_IPC["volli:external-app-list"];
+
+    it("takes no input", () => {
+      expect(guard([])).toBe(true);
+      expect(guard([{}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("external app target channels", () => {
+    const file = FILE_IPC["volli:external-app-open-file"];
+    const worktree = FILE_IPC["volli:external-app-open-worktree"];
+    const revealWorktree = FILE_IPC["volli:worktree-reveal"];
+
+    it("accepts a safe-shaped external-app file target and rejects an unknown app id", () => {
+      expect(
+        file.guard([{ projectId: "p1", ticketId: "t1", relPath: "src/main.ts", appId: "vscode" }]),
+      ).toBe(true);
+      expect(
+        file.guard([
+          { projectId: "p1", ticketId: "t1", relPath: "src/main.ts", appId: "android-studio" },
+        ]),
+      ).toBe(true);
+      expect(file.guard([{ projectId: "p1", relPath: "src/main.ts", appId: "unknown" }])).toBe(
+        false,
+      );
+    });
+
+    it("rejects malformed external-app file targets", () => {
+      expect(file.guard([null])).toBe(false);
+      expect(file.guard([{ projectId: 1, relPath: "x.ts", appId: "vscode" }])).toBe(false);
+      expect(file.guard([{ projectId: "p1", relPath: 1, appId: "vscode" }])).toBe(false);
+      expect(file.guard([])).toBe(false);
+    });
+
+    it("accepts a ticket worktree target and rejects every missing or malformed part", () => {
+      expect(worktree.guard([{ projectId: "p1", ticketId: "t1", appId: "terminal" }])).toBe(true);
+      expect(worktree.guard([null])).toBe(false);
+      expect(worktree.guard([{ projectId: 1, ticketId: "t1", appId: "terminal" }])).toBe(false);
+      expect(worktree.guard([{ projectId: "p1", ticketId: 1, appId: "terminal" }])).toBe(false);
+      expect(worktree.guard([{ projectId: "p1", ticketId: "t1", appId: "unknown" }])).toBe(false);
+    });
+
+    it("accepts only a project/ticket pair for worktree reveal", () => {
+      expect(revealWorktree.guard([{ projectId: "p1", ticketId: "t1" }])).toBe(true);
+      expect(revealWorktree.guard([null])).toBe(false);
+      expect(revealWorktree.guard([{ projectId: 1, ticketId: "t1" }])).toBe(false);
+      expect(revealWorktree.guard([{ projectId: "p1", ticketId: 1 }])).toBe(false);
+    });
+  });
+
   describe("volli:dir-watch / volli:dir-unwatch (shared DirPathInput shape)", () => {
     const channels = ["volli:dir-watch", "volli:dir-unwatch"] as const;
 
@@ -1659,11 +1728,15 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 10 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(10);
+    it("covers all 14 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(14);
       expect(FILE_CHANNELS).toContain("volli:prompt-templates");
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");
+      expect(FILE_CHANNELS).toContain("volli:external-app-list");
+      expect(FILE_CHANNELS).toContain("volli:external-app-open-file");
+      expect(FILE_CHANNELS).toContain("volli:external-app-open-worktree");
+      expect(FILE_CHANNELS).toContain("volli:worktree-reveal");
       expect(FILE_CHANNELS).toContain("volli:dir-watch");
       expect(FILE_CHANNELS).toContain("volli:dir-unwatch");
     });
@@ -1690,65 +1763,34 @@ describe("THEME_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:theme-set-global-editor", () => {
-    const { guard, invalidError } = THEME_IPC["volli:theme-set-global-editor"];
-
-    it("accepts an authored catalog id or null to derive from the app theme", () => {
-      expect(guard([{ editorThemeId: "nord" }])).toBe(true);
-      expect(guard([{ editorThemeId: null }])).toBe(true);
-    });
-
-    it("accepts the caller's project scope and rejects a non-string one", () => {
-      expect(guard([{ editorThemeId: "nord", projectId: "p1" }])).toBe(true);
-      expect(guard([{ editorThemeId: "nord", projectId: 7 }])).toBe(false);
-    });
-
-    it("rejects a missing or non-nullable-string editorThemeId", () => {
-      expect(guard([{}])).toBe(false);
-      expect(guard([{ editorThemeId: 7 }])).toBe(false);
-      expect(guard([])).toBe(false);
-    });
-
-    it("rejects a non-catalog string id", () => {
-      expect(guard([{ editorThemeId: "volli-dark" }])).toBe(false);
-      expect(guard([{ editorThemeId: "not-a-theme" }])).toBe(false);
-      expect(guard([{ editorThemeId: "" }])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid editor theme");
+  describe("the retired volli:theme-set-global-editor channel", () => {
+    it("is absent from the descriptor table", () => {
+      // VC-123: the editor has no persisted theme, so it has no write channel.
+      // A guard left behind would keep an unreachable id reachable over IPC.
+      expect(THEME_IPC).not.toHaveProperty("volli:theme-set-global-editor");
     });
   });
 
   describe("volli:theme-set-project", () => {
     const { guard, invalidError } = THEME_IPC["volli:theme-set-project"];
-    const override = {
-      terminalThemeName: "Nord",
-      editorThemeId: null,
-    };
+    const override = { terminalThemeName: "Nord" };
 
     it("accepts a per-surface override and a null (clear-to-inherit)", () => {
       expect(guard([{ projectId: "p1", override }])).toBe(true);
       expect(guard([{ projectId: "p1", override: null }])).toBe(true);
     });
 
-    it("rejects a partial override shape or a missing project", () => {
-      expect(guard([{ projectId: "p1", override: { terminalThemeName: "x" } }])).toBe(false);
+    it("rejects a missing project or a non-string terminal name", () => {
       expect(guard([{ override }])).toBe(false);
+      expect(guard([{ projectId: "p1", override: { terminalThemeName: 7 } }])).toBe(false);
+      expect(guard([{ projectId: "p1", override: {} }])).toBe(false);
     });
 
-    it("accepts a shipped catalog editorThemeId and rejects a non-catalog id", () => {
+    it("ignores a stale editorThemeId from an older renderer", () => {
+      // Rejecting the whole override for a field nothing reads would turn a
+      // retired picker into a broken terminal theme (VC-123).
       expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "nord" } }])).toBe(
         true,
-      );
-      expect(
-        guard([{ projectId: "p1", override: { ...override, editorThemeId: "volli-dark" } }]),
-      ).toBe(false);
-      expect(
-        guard([{ projectId: "p1", override: { ...override, editorThemeId: "not-a-theme" } }]),
-      ).toBe(false);
-      expect(guard([{ projectId: "p1", override: { ...override, editorThemeId: "" } }])).toBe(
-        false,
       );
     });
 
@@ -1918,9 +1960,8 @@ describe("THEME_IPC descriptor table", () => {
     });
 
     it("covers the whole theme surface", () => {
-      expect(THEME_CHANNELS).toHaveLength(9);
+      expect(THEME_CHANNELS).toHaveLength(8);
       expect(THEME_CHANNELS).toContain("volli:theme-state");
-      expect(THEME_CHANNELS).toContain("volli:theme-set-global-editor");
       expect(THEME_CHANNELS).toContain("volli:theme-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-terminal-overlay-write");
       expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-global");
@@ -2191,15 +2232,19 @@ describe("HARNESS_IPC descriptor table", () => {
 });
 
 describe("CLI_IPC descriptor table", () => {
-  describe("volli:cli-status (no-arg request)", () => {
+  describe("volli:cli-status", () => {
     const { guard, invalidError } = CLI_IPC["volli:cli-status"];
 
-    it("accepts an empty args tuple", () => {
+    it("accepts a host-wide read or a project root", () => {
       expect(guard([])).toBe(true);
+      expect(guard([{ cwd: "/work/acme" }])).toBe(true);
+      expect(guard([{}])).toBe(true);
     });
 
-    it("rejects stray arguments", () => {
+    it("rejects a non-string project root or stray arguments", () => {
+      expect(guard([{ cwd: 42 }])).toBe(false);
       expect(guard(["junk"])).toBe(false);
+      expect(guard([{ cwd: "/work/acme" }, "extra"])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {

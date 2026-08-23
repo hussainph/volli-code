@@ -47,6 +47,7 @@ import {
   readMonacoState,
   readSeededProjects,
   seedProjects,
+  startTerminalSession,
   waitForChildExit,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -187,37 +188,53 @@ async function waitForReadyWindowOrExit(run, label, timeout = WINDOW_READY_TIMEO
   throw new Error(`${label} did not become ready within ${timeout}ms: ${diagnostic}`);
 }
 
-function navButton(page, label) {
-  return page
-    .locator('[data-sidebar-presentation="expanded"]')
-    .getByRole("button", { name: label, exact: true });
+function homeFilesPanel(page) {
+  return page.getByTestId("home-files-panel");
 }
 
-function treeFile(page, relPath) {
-  return page.locator(`[data-testid="file-tree-file"][data-rel-path="${relPath}"]`);
+/** One row in the Home Files navigator's current folder — `relPath` is always
+ * the full project-relative path (`ticket-files-panel.tsx`'s `FileRow`). */
+function fileRow(page, relPath) {
+  return homeFilesPanel(page).locator(`[data-testid="ticket-files-row"][data-path="${relPath}"]`);
 }
 
+function homeFileTab(page, relPath) {
+  return page.locator(`[data-testid="home-file-tab"][data-rel-path="${relPath}"]`);
+}
+
+/**
+ * Open `TARGET` as a Home File tab, idempotent across repeated calls: once the
+ * tab exists this just re-activates it. The Home rail (and the Files page
+ * inside it) only exists beside a Session or File tab, never over the Board,
+ * so the first call starts a terminal Session to reveal it.
+ */
 async function openRealDocument(page, needle = "lifecycle") {
-  const filesWorkbench = page.locator('[data-testid="files-workbench"]');
-  if ((await filesWorkbench.count()) === 0) {
-    const files = navButton(page, "Files");
-    await waitUntil("expanded Files navigation", async () =>
-      (await files.isVisible().catch(() => false)) ? true : null,
+  const tab = homeFileTab(page, TARGET);
+  if ((await tab.count()) === 1) {
+    await tab.click();
+  } else {
+    const rail = page.getByTestId("home-rail");
+    if ((await rail.count()) === 0) {
+      await startTerminalSession(page);
+      await waitUntil("Home rail to appear", async () => (await rail.count()) === 1, {
+        timeout: 20000,
+      });
+    }
+    await page.getByTestId("home-rail-tab-files").click();
+    await waitUntil(
+      "Home Files panel",
+      async () => ((await homeFilesPanel(page).count()) === 1 ? true : null),
+      { timeout: 15000 },
     );
-    await files.click();
-  }
-  await waitUntil(
-    "Project Files workbench",
-    async () => ((await filesWorkbench.count()) === 1 ? true : null),
-    { timeout: 15000 },
-  );
 
-  const src = page.locator('[data-testid="file-tree-dir"][data-rel-path="src"]');
-  await waitUntil("src directory row", async () => ((await src.count()) === 1 ? true : null));
-  if ((await treeFile(page, TARGET).count()) === 0) await src.click();
-  const row = treeFile(page, TARGET);
-  await waitUntil(TARGET, async () => ((await row.count()) === 1 ? true : null));
-  await row.click();
+    await waitUntil("src/ row", async () =>
+      (await fileRow(page, "src").count()) === 1 ? true : null,
+    );
+    await fileRow(page, "src").click();
+    const row = fileRow(page, TARGET);
+    await waitUntil(TARGET, async () => ((await row.count()) === 1 ? true : null));
+    await row.click();
+  }
 
   return waitUntil(
     `real editable Monaco for ${TARGET}`,
@@ -270,8 +287,8 @@ async function waitForSeededProjectReady(page, projectPath) {
   await waitUntil("seeded project selection", async () => {
     const sidebar = page.locator('[data-sidebar-presentation="expanded"]');
     const selectedName = sidebar.getByText(PROJECT.name, { exact: true });
-    const files = navButton(page, "Files");
-    return (await selectedName.count()) === 1 && (await files.isVisible().catch(() => false))
+    const board = page.getByRole("button", { name: "New ticket", exact: true });
+    return (await selectedName.count()) === 1 && (await board.isVisible().catch(() => false))
       ? true
       : null;
   });

@@ -183,6 +183,19 @@ function overlayOf(throughSequence: number, messageId: string, text: string): un
   };
 }
 
+function compactionProgressOf(
+  throughSequence: number,
+  state: "started" | "finished" = "started",
+): unknown {
+  return {
+    kind: "compaction",
+    sessionId: SESSION.id,
+    throughSequence,
+    state,
+    reason: "threshold",
+  };
+}
+
 function sliceOf(overrides: Partial<ChatSessionSlice> = {}): ChatSessionSlice {
   return {
     projection: null,
@@ -775,6 +788,21 @@ describe("stream folding", () => {
     scheduler.paint();
 
     expect(slice()!.transcript.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("folds a live compaction and clears it before reconnecting", async () => {
+    const { rpc, scheduler, slice, stream } = await adopted();
+
+    stream().send("0", compactionProgressOf(0));
+    scheduler.paint();
+    expect(slice()!.transcript.liveCompaction).toEqual({ throughSequence: 0, reason: "threshold" });
+
+    stream().start();
+    stream().fail(new Error("socket hang up"));
+    await settle();
+
+    expect(rpc.streams).toHaveLength(2);
+    expect(slice()!.transcript.liveCompaction).toBeNull();
   });
 
   it("ignores an emission that is neither a frame nor an overlay", async () => {
@@ -1568,7 +1596,48 @@ describe("auto-title on delivery", () => {
     ).resolves.toBe("delivered");
     await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
+    // One call, not two: the heuristic title and the message a model may
+    // sharpen it from travel together, so no window exists between them in
+    // which the title could change out from under the refinement's baseline.
+    expect(renameMock).toHaveBeenCalledWith({
+      sessionId,
+      title: "Fix the parser",
+      refineFrom: "Fix the parser\nmore detail",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("refines an attachment-only message from the file label", async () => {
+    const { client, sessionId } = await readyWithTitle(null);
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+
+    await expect(
+      client.submit(
+        {
+          id: "m1",
+          text: "",
+          attachments: [
+            {
+              linkId: "l1",
+              blobHash: "a".repeat(64),
+              label: "shot.png",
+              originalName: "shot.png",
+              mime: "image/png",
+              sizeBytes: 12,
+            },
+          ],
+        },
+        "steer",
+      ),
+    ).resolves.toBe("delivered");
+    await settle();
+
+    expect(renameMock).toHaveBeenCalledWith({
+      sessionId,
+      title: "shot.png",
+      refineFrom: "shot.png",
+    });
     vi.unstubAllGlobals();
   });
 
@@ -1590,7 +1659,11 @@ describe("auto-title on delivery", () => {
     store.getState().setProjection(sessionId, projectionWithTitle(null));
     await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
+    expect(renameMock).toHaveBeenCalledWith({
+      sessionId,
+      title: "Fix the parser",
+      refineFrom: "Fix the parser",
+    });
     vi.unstubAllGlobals();
   });
 

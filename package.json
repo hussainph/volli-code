@@ -1,6 +1,6 @@
 {
   "name": "volli-code",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "A local-first macOS workspace for tickets, coding sessions, worktrees, and review.",
   "license": "Apache-2.0",
@@ -16,6 +16,7 @@
     "test": "vp run -r test",
     "test:coverage": "vp run -r test:coverage",
     "smoke:pi": "pnpm run build && node apps/desktop/e2e/pi-ticket-chat-smoke.mjs && node apps/desktop/e2e/pi-project-chat-smoke.mjs && node apps/desktop/e2e/pi-sessions-host-smoke.mjs",
+    "smoke:docs-shots": "pnpm run build && env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/docs-shots.mjs",
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check"

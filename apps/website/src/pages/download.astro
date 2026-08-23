@@ -4,35 +4,37 @@ import "../styles/global.css";
 
 const repositoryUrl = "https://github.com/hussainph/volli-code";
 const releasesUrl = `${repositoryUrl}/releases`;
+const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
+const description =
+  "Download the Volli alpha for Apple silicon Macs — one build, served straight from GitHub Releases.";
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
-    <meta
-      name="description"
-      content="Download Volli Code for macOS — stable and canary builds, served straight from GitHub Releases."
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
     <link rel="canonical" href="https://volli.app/download/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://volli.app/download/" />
-    <meta property="og:title" content="Download Volli Code" />
-    <meta
-      property="og:description"
-      content="Download Volli Code for macOS — stable and canary builds, served straight from GitHub Releases."
-    />
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Download Volli Code" />
-    <meta
-      name="twitter:description"
-      content="Download Volli Code for macOS — stable and canary builds, served straight from GitHub Releases."
-    />
+    <meta property="og:title" content="Download Volli — alpha for Apple silicon" />
+    <meta property="og:description" content={description} />
+    {/* Same card as the homepage: a shared download link should still look like
+        Volli, and the card is about the product, not the page. */}
+    <meta property="og:image" content="https://volli.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Volli — the workspace for parallel coding agents" />
+    <meta property="og:site_name" content="Volli" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Download Volli — alpha for Apple silicon" />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="https://volli.app/og.png" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Download Volli Code</title>
+    <title>Download Volli — alpha for Apple silicon</title>
     <noscript>
       <style>
         [data-live] {
@@ -42,6 +44,7 @@ const docsUrl = "https://docs.volli.app";
     </noscript>
   </head>
   <body>
+    <a class="skip-link" href="#download">Skip to download</a>
     <main class="download-main">
       <header class="download-topbar">
         <a class="footer-brand download-brand" href="/" aria-label="Volli home">
@@ -54,44 +57,85 @@ const docsUrl = "https://docs.volli.app";
         </nav>
       </header>
 
-      <section class="download-intro">
-        <h1>Download Volli Code</h1>
+      <section class="download-intro" id="download">
+        <span class="alpha-pill">Alpha</span>
+        <h1>Download Volli</h1>
         <p class="download-sub">
-          macOS builds, served straight from <a href={releasesUrl}>GitHub Releases</a>. Prefer to
-          build it yourself? Follow the <a href={`${docsUrl}/start/install/`}>install guide</a>.
+          One build, for Apple silicon Macs (M1 and later), served straight from <a
+            href={releasesUrl}>GitHub Releases</a
+          >. This is an early alpha: expect rough edges and changes between builds. Prefer to build
+          it yourself? Follow the <a href={`${docsUrl}/start/install/`}>install guide</a>.
         </p>
         <p class="platform-note" data-platform-note hidden>
-          Volli Code currently ships for macOS only.
+          Volli runs on macOS only, and this build is Apple silicon only — there is no Intel or
+          Windows build today.
         </p>
       </section>
 
-      <section class="channel-grid" aria-label="Release channels">
-        <article class="channel-card" data-channel="stable">
+      <section class="channel-grid" aria-label="Alpha build">
+        <article class="channel-card channel-card--alpha" data-channel="alpha">
           <header class="channel-head">
-            <h2>Stable</h2>
+            <h2>Alpha</h2>
+            <span class="channel-badge" data-prerelease-badge>Prerelease</span>
           </header>
-          <p class="channel-tagline">The recommended build.</p>
+          <p class="channel-tagline">
+            The current build. Apple silicon, signed and notarized, and it updates itself when a
+            newer alpha ships.
+          </p>
           <div class="channel-body" data-slot="body">
-            <p class="channel-status" data-live>Checking the latest version…</p>
+            <p class="channel-status" data-live>Checking the latest build…</p>
             <p class="channel-status"><a href={releasesUrl}>Browse releases on GitHub</a></p>
           </div>
         </article>
+      </section>
 
-        <article class="channel-card channel-card--canary" data-channel="canary">
-          <header class="channel-head">
-            <h2>Canary</h2>
-            <span class="channel-badge">Prerelease</span>
-          </header>
-          <p class="channel-tagline">The newest changes, before they stabilize.</p>
-          <div class="channel-body" data-slot="body">
-            <p class="channel-status" data-live>Checking the latest version…</p>
-            <p class="channel-status"><a href={releasesUrl}>Browse releases on GitHub</a></p>
+      <section class="alpha-terms" aria-labelledby="alpha-terms-heading">
+        <h2 id="alpha-terms-heading">What you're signing up for</h2>
+        <dl>
+          <div>
+            <dt>Supported Macs</dt>
+            <dd>
+              Apple silicon (M1 and later) on macOS. There is no Intel or universal build yet.
+            </dd>
           </div>
-        </article>
+          <div>
+            <dt>Stability</dt>
+            <dd>
+              Alpha. Features move, and a build can change behavior you were relying on. Don't point
+              it at work you can't afford to lose track of.
+            </dd>
+          </div>
+          <div>
+            <dt>Updates</dt>
+            <dd>
+              The app checks GitHub Releases, downloads a newer alpha in the background, and installs
+              it when you quit.
+            </dd>
+          </div>
+          <div>
+            <dt>Your data</dt>
+            <dd>
+              Projects, tickets, chat history, and worktrees stay on your Mac. Model requests go to
+              the provider you pick in Model Access. <a href={`${docsUrl}/start/install/`}
+                >Where it all lives</a
+              >.
+            </dd>
+          </div>
+          <div>
+            <dt>Feedback and bugs</dt>
+            <dd>
+              Open a <a href={issuesUrl}>GitHub issue</a>. For anything security-related, use <a
+                href={`${repositoryUrl}/security/advisories/new`}>private vulnerability reporting</a
+              > instead.
+            </dd>
+          </div>
+        </dl>
       </section>
 
       <p class="download-all-releases">
-        Every build, with notes and checks, lives on <a href={releasesUrl}>GitHub Releases</a>.
+        Every build, including earlier canaries and their notes, lives on <a href={releasesUrl}
+          >GitHub Releases</a
+        >.
       </p>
     </main>
 
@@ -102,20 +146,23 @@ const docsUrl = "https://docs.volli.app";
       </a>
       <nav aria-label="Footer">
         <a href="/download/">Download</a>
-        <a href="https://docs.volli.app">Docs</a>
+        <a href={docsUrl}>Docs</a>
+        <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
         <a href={repositoryUrl}>GitHub</a>
-        <a href={`${repositoryUrl}#readme`}>Readme</a>
+        <a href={releasesUrl}>Releases</a>
+        <a href={`${repositoryUrl}/security/policy`}>Security</a>
+        <a href={issuesUrl}>Feedback</a>
       </nav>
     </footer>
 
     <script>
       import {
-        emphasizedChannel,
         formatBytes,
         formatPublishedDate,
         isMacPlatform,
-        resolveDownloadFeed,
-        type ChannelBuild,
+        primaryArtifact,
+        resolveAlphaBuild,
+        type AlphaBuild,
         type Release,
       } from "../lib/releases";
 
@@ -142,7 +189,7 @@ const docsUrl = "https://docs.volli.app";
         return [status, linkLine];
       }
 
-      function buildNodes(build: ChannelBuild, emphasized: boolean): HTMLElement[] {
+      function buildNodes(build: AlphaBuild): HTMLElement[] {
         const nodes: HTMLElement[] = [];
 
         const meta = el("p", "channel-version");
@@ -151,10 +198,13 @@ const docsUrl = "https://docs.volli.app";
         if (published) meta.append(el("span", "channel-version-date", published));
         nodes.push(meta);
 
+        // One primary press. Every other artifact stays reachable, but only the
+        // dmg gets the ember treatment — two primaries is no recommendation.
+        const primary = primaryArtifact(build);
         const list = el("div", "artifact-list");
         for (const artifact of build.artifacts) {
-          const primary = emphasized && artifact.kind === "dmg";
-          const row = el("a", primary ? "artifact artifact--primary" : "artifact");
+          const isPrimary = artifact === primary;
+          const row = el("a", isPrimary ? "artifact artifact--primary" : "artifact");
           row.href = artifact.url;
           const label =
             artifact.kind === "dmg"
@@ -177,8 +227,8 @@ const docsUrl = "https://docs.volli.app";
         return nodes;
       }
 
-      function render(channel: "stable" | "canary", nodes: HTMLElement[]): void {
-        const body = document.querySelector(`[data-channel="${channel}"] [data-slot="body"]`);
+      function render(nodes: HTMLElement[]): void {
+        const body = document.querySelector('[data-channel="alpha"] [data-slot="body"]');
         if (!body) return;
         body.replaceChildren(...nodes);
       }
@@ -194,27 +244,26 @@ const docsUrl = "https://docs.volli.app";
         } catch {
           // Rate limit (60 req/hr unauthenticated) or offline — keep a
           // working path to the same builds instead of a dead end.
-          const fallback = () =>
-            statusLine("Couldn’t reach GitHub just now.", "Get it from GitHub Releases", RELEASES_URL);
-          render("stable", fallback());
-          render("canary", fallback());
+          render(
+            statusLine("Couldn't reach GitHub just now.", "Get it from GitHub Releases", RELEASES_URL),
+          );
           return;
         }
 
-        const feed = resolveDownloadFeed(releases);
-        const emphasis = emphasizedChannel(feed);
-        render(
-          "stable",
-          feed.stable
-            ? buildNodes(feed.stable, emphasis === "stable")
-            : statusLine("No stable release yet — Canary is the newest build.", "Watch for the first stable on GitHub", RELEASES_URL),
-        );
-        render(
-          "canary",
-          feed.canary
-            ? buildNodes(feed.canary, emphasis === "canary")
-            : statusLine("No canary build published right now.", "Browse releases on GitHub", RELEASES_URL),
-        );
+        const build = resolveAlphaBuild(releases);
+        if (!build) {
+          render(
+            statusLine("No build published right now.", "Browse releases on GitHub", RELEASES_URL),
+          );
+          return;
+        }
+
+        // The badge states what GitHub says, rather than assuming: a promoted
+        // stable tag must not keep wearing "Prerelease".
+        if (!build.prerelease) {
+          document.querySelector("[data-prerelease-badge]")?.remove();
+        }
+        render(buildNodes(build));
       }
 
       if (!isMacPlatform(navigator.userAgent, navigator.platform)) {

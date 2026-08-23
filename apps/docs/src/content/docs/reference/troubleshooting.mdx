@@ -27,8 +27,9 @@ open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-Install the local CLI from Volli, or run the command in a terminal companion
-opened by the app. The app's terminal companions already receive `volli` on
+Open **Settings → CLI** to see which executable and shell integration Volli
+detected. Run **Doctor**, then use **Fix & Re-run** to regenerate the parts
+Volli owns. Terminal companions opened by the app already receive `volli` on
 `PATH`.
 
 ## `pnpm install` fails on a native module
@@ -43,14 +44,17 @@ Then run `pnpm install` again if needed.
 
 ## My ticket worktree is still on disk
 
-Volli retains worktrees when a ticket is archived. It does not force-remove a
-worktree with uncommitted work.
-
-After the branch is landed, remove the worktree yourself:
+Archiving a ticket retains its worktree, and Volli refuses to remove a worktree
+with uncommitted work. Use **Remove worktree…** from the ticket context menu
+after the branch is landed, or remove it yourself:
 
 ```sh
 git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-<slug>
 ```
+
+For tickets in Done, **Settings → General → Done worktree retention** controls
+when Volli can reclaim a clean folder automatically. **Keep worktree** exempts a
+ticket from that cleanup.
 
 ## A shortcut does nothing
 

@@ -12,7 +12,11 @@
  * can break silently: appends that must not collapse, a baseline that must not
  * outlive the settle it predates, and an orphan that must not become a message.
  */
-import type { SessionStreamOverlay, TranscriptDelta } from "@volli/session-engine";
+import type {
+  SessionStreamCompactionProgress,
+  SessionStreamOverlay,
+  TranscriptDelta,
+} from "@volli/session-engine";
 import { scrubSessionEventPayload } from "@volli/shared";
 import type { SessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -43,6 +47,14 @@ function overlay(
   delta: TranscriptDelta,
 ): SessionStreamOverlay {
   return { kind: "overlay", sessionId: "session-1", throughSequence, messageId, delta };
+}
+
+function compactionProgress(
+  throughSequence: number,
+  state: SessionStreamCompactionProgress["state"],
+  reason: SessionStreamCompactionProgress["reason"] = "threshold",
+): SessionStreamCompactionProgress {
+  return { kind: "compaction", sessionId: "session-1", throughSequence, state, reason };
 }
 
 /** The baseline every message's first delta is, keyed on one provider part. */
@@ -366,6 +378,78 @@ describe("appendFrames overlays", () => {
 
     expect(removed.overlay.size).toBe(0);
     expect(removed.messages).toEqual([]);
+  });
+});
+
+describe("live compaction", () => {
+  it("keeps a compaction visible until it finishes or records its durable outcome", () => {
+    const started = appendFrames(
+      EMPTY_TRANSCRIPT,
+      [],
+      [],
+      [compactionProgress(1, "started", "manual")],
+    );
+
+    expect(started.liveCompaction).toEqual({ throughSequence: 1, reason: "manual" });
+
+    const explicitlyFinished = appendFrames(
+      started,
+      [],
+      [],
+      [compactionProgress(1, "finished", "manual")],
+    );
+    expect(explicitlyFinished.liveCompaction).toBeNull();
+
+    const restarted = appendFrames(explicitlyFinished, [], [], [compactionProgress(1, "started")]);
+    const recorded = appendFrames(restarted, [compacted(2)]);
+    expect(recorded.liveCompaction).toBeNull();
+
+    // An old live packet delayed behind the durable boundary cannot resurrect
+    // the spinner it was meant to retire.
+    expect(appendFrames(recorded, [], [], [compactionProgress(1, "started")])).toBe(recorded);
+  });
+
+  it("drops the spinner when the attachment that was summarizing goes away", () => {
+    const started = appendFrames(EMPTY_TRANSCRIPT, [], [], [compactionProgress(1, "started")]);
+    expect(started.liveCompaction).not.toBeNull();
+
+    const closed = appendFrames(started, [
+      frame(2, { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "interrupted" }),
+    ]);
+
+    // Nothing durable will ever retire this wait now, so the fold has to.
+    expect(closed.liveCompaction).toBeNull();
+  });
+
+  it("ignores a finish that belongs to no wait it is holding", () => {
+    // Nothing live: the finish has nothing to clear and must not mint state.
+    expect(appendFrames(EMPTY_TRANSCRIPT, [], [], [compactionProgress(3, "finished")])).toBe(
+      EMPTY_TRANSCRIPT,
+    );
+
+    // A finish from *before* the wait on screen is a straggler from an earlier
+    // compaction, and retiring the current one on its word would blank a
+    // spinner that is still turning.
+    const started = appendFrames(EMPTY_TRANSCRIPT, [], [], [compactionProgress(5, "started")]);
+    const stale = appendFrames(started, [], [], [compactionProgress(4, "finished")]);
+    expect(stale.liveCompaction).toEqual({ throughSequence: 5, reason: "threshold" });
+  });
+
+  it("holds one identity per wait, and swaps it only when the wait changes", () => {
+    const started = appendFrames(EMPTY_TRANSCRIPT, [], [], [compactionProgress(5, "started")]);
+
+    // A redundant repeat of the same start must not repaint the transcript.
+    const repeated = appendFrames(started, [], [], [compactionProgress(5, "started")]);
+    expect(repeated).toBe(started);
+    expect(repeated.liveCompaction).toBe(started.liveCompaction);
+
+    // Same sequence, different reason: a different wait, so the copy changes.
+    const requested = appendFrames(started, [], [], [compactionProgress(5, "started", "manual")]);
+    expect(requested.liveCompaction).toEqual({ throughSequence: 5, reason: "manual" });
+
+    // Same reason, later sequence: also a different wait.
+    const later = appendFrames(started, [], [], [compactionProgress(6, "started")]);
+    expect(later.liveCompaction).toEqual({ throughSequence: 6, reason: "threshold" });
   });
 });
 

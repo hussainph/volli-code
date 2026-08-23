@@ -46,11 +46,10 @@
 /* --- the surface --------------------------------------------------------- */
 
 /*
- * Document Mode wears the app's tokens. Source Mode wears the editor catalog's,
- * and should: a syntax theme owns its own pixels, which is the whole of
- * decision 6 (see editor-theme-catalog.ts). A document is not that surface — it
- * is prose on a page, in the app's own face, and every construct in it is
- * already painted from tokens below. It cannot sit on One Dark Pro's panel.
+ * Document Mode wears the app's tokens. Source Mode shares those tokens for
+ * its furniture but leaves syntax colours to the fixed Vitesse pair. A document
+ * is not that surface — it is prose on a page, in the app's own face, and every
+ * construct in it is already painted from tokens below.
  *
  * The split cannot be two Monaco themes: `setTheme` is global to the window
  * (the vendored shiki wire even routes `create({theme})` through it), and the
@@ -90,6 +89,13 @@
   --vscode-scrollbarSlider-activeBackground: var(--muted-foreground);
 }
 
+/* Chromium can paint the focused EditContext element's native caret at the
+   editor origin even though Monaco puts it behind the editor. Monaco's cursor
+   layer is the cursor that follows the actual document selection. */
+.volli-document-mode .monaco-editor .native-edit-context {
+  caret-color: transparent;
+}
+
 /* The caret is the one editor color Monaco emits as a literal rule instead of a
    variable (its `viewCursors` theming participant), so it takes a rule of its
    own. Ink, not `--primary` as the terminal's cursor is: a block cursor is a
@@ -102,12 +108,12 @@
 }
 
 /*
- * Prose is one color. Token colors (`.mtk1`…) are the catalog theme's, every
- * shipped catalog theme is dark, and a document renders on whatever the canvas
- * is — so in a light appearance they are unreadable, and there is nothing
- * honest to derive them from. Document Mode does not need them: the decorations
- * below paint every markdown construct from app tokens, and a fenced block
- * reads as a block by its face and its `--card` ground rather than by syntax.
+ * Prose is one color. Token colors (`.mtk1`…) belong to Vitesse's syntax pair,
+ * while a document renders on whatever the canvas is — so letting them through
+ * would make prose compete with app-token copy. Document Mode does not need
+ * them: the decorations below paint every markdown construct from app tokens,
+ * and a fenced block reads as a block by its face and its `--card` ground rather
+ * than by syntax.
  *
  * The specificity is a deliberate TIE with those decoration rules — two classes
  * each — so this must stay ABOVE them in the file. Monaco concatenates the

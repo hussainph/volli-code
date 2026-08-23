@@ -10,8 +10,9 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("General");
     expect(html).toContain("Appearance");
     expect(html).toContain("Harness Runtimes");
-    // The CLI install is silent and background (VC-52), so its detection pane
-    // is app-wide by nature: one host, one link, one login shell.
+    // The CLI install is silent and background (VC-52), so its host-level
+    // detection lives app-wide; the pane may also read the selected project's
+    // Git configuration without becoming a project setting.
     expect(html).toContain("CLI");
     // Orphan cleanup is app-wide (the sweep walks every project), so it lives
     // here rather than on the per-project Configure page.

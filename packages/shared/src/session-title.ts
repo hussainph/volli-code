@@ -2,6 +2,19 @@
 export const SESSION_TITLE_MAX_LENGTH = 48;
 
 /**
+ * Cuts `text` to the Session-title length budget on a word boundary, with an
+ * ellipsis. The shared budget discipline for every generated title, heuristic
+ * and model-sourced alike.
+ */
+export function truncateSessionTitle(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= SESSION_TITLE_MAX_LENGTH) return collapsed;
+  const cut = collapsed.slice(0, SESSION_TITLE_MAX_LENGTH);
+  const wordBoundary = cut.lastIndexOf(" ");
+  return `${wordBoundary === -1 ? cut : cut.slice(0, wordBoundary)}…`;
+}
+
+/**
  * A compact Session title taken from the first visible line of a message.
  *
  * The heuristic is intentionally local and deterministic: naming a Session
@@ -11,10 +24,7 @@ export function autoTitleFromMessage(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
     const collapsed = line.replace(/\s+/g, " ").trim();
     if (collapsed.length === 0) continue;
-    if (collapsed.length <= SESSION_TITLE_MAX_LENGTH) return collapsed;
-    const cut = collapsed.slice(0, SESSION_TITLE_MAX_LENGTH);
-    const wordBoundary = cut.lastIndexOf(" ");
-    return `${wordBoundary === -1 ? cut : cut.slice(0, wordBoundary)}…`;
+    return truncateSessionTitle(collapsed);
   }
   return null;
 }

@@ -444,7 +444,7 @@ describe("removeProject", () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useWorkspaceStore.getState().setNav(only.id, "files");
+    useWorkspaceStore.getState().setNav(only.id, "configure");
 
     await store.getState().removeProject(only.id);
 

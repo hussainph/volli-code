@@ -1,5 +1,11 @@
-import { TICKET_STATUS_LABELS } from "@volli/shared";
-import type { AgentError, AgentErrorCode, DoctorCheck, TicketStatus } from "@volli/shared";
+import { SESSION_ENV_TOOLS, TICKET_STATUS_LABELS } from "@volli/shared";
+import type {
+  AgentError,
+  AgentErrorCode,
+  DoctorCheck,
+  SessionEnvRepair,
+  TicketStatus,
+} from "@volli/shared";
 
 import { renderDoctorReport } from "./doctor";
 
@@ -415,6 +421,27 @@ function renderStableLines(command: string, data: unknown): string | null {
         const value = data[key];
         return `${key}  ${value === null || value === undefined ? "-" : terminalSafeInline(value)}`;
       });
+    // The env block (VC-94): the environment the session will run in, keyed
+    // like every other line so an agent reads it in the same pass it reads
+    // its identity. `-` means measured and not found; a missing block means
+    // the answering process had no env facts at all.
+    if (isRecord(data["env"])) {
+      const env = data["env"];
+      const envValue = (value: unknown): string =>
+        value === null || value === undefined ? "-" : terminalSafeInline(value);
+      lines.push(`env.path  ${envValue(env["path"])}`);
+      lines.push(`env.provenance  ${envValue(env["provenance"])}`);
+      // The second pass's answer, directly under the first (VC-94's A3): the
+      // two are separate facts about one PATH, so they read as one statement
+      // rather than a fact and an unrelated aside. `pending` here means the
+      // interactive shell has not been folded in yet.
+      lines.push(`env.interactiveProvenance  ${envValue(env["interactiveProvenance"])}`);
+      const tools = isRecord(env["tools"]) ? env["tools"] : {};
+      for (const tool of SESSION_ENV_TOOLS) {
+        lines.push(`env.tools.${tool}  ${envValue(tools[tool])}`);
+      }
+      lines.push(`env.dependencies  ${envValue(env["dependencies"])}`);
+    }
     if (data["degraded"] === true) lines.push("degraded  true");
     return lines.join("\n");
   }
@@ -451,12 +478,31 @@ function renderStableLines(command: string, data: unknown): string | null {
  * Renders server JSON directly or as the command's stable text contract.
  * See {@link RenderOptions} for the v1 TTY/pipe-identical output contract.
  */
+const isString = (field: unknown): field is string => typeof field === "string";
+const isStringArray = (field: unknown): boolean => Array.isArray(field) && field.every(isString);
+
+/**
+ * The repair block, believed only when every field it renders is present and
+ * shaped as main sends it. Anything else renders as no repair rather than as
+ * a half-invented one — the report speaks only measured facts.
+ */
+function sessionEnvRepair(value: unknown): SessionEnvRepair | undefined {
+  if (!isRecord(value)) return undefined;
+  return isString(value["path"]) &&
+    isString(value["provenance"]) &&
+    isString(value["interactiveProvenance"]) &&
+    isStringArray(value["added"]) &&
+    isStringArray(value["interactiveAdded"])
+    ? (value as unknown as SessionEnvRepair)
+    : undefined;
+}
+
 /** `doctor`'s reply is already a report; only its shape needs checking. */
 function doctorReport(data: unknown): string | null {
-  if (typeof data !== "object" || data === null) return null;
-  const { checks, summary } = data as { checks?: unknown; summary?: unknown };
+  if (!isRecord(data)) return null;
+  const { checks, summary } = data;
   if (!Array.isArray(checks) || typeof summary !== "string") return null;
-  return renderDoctorReport(checks as DoctorCheck[], summary);
+  return renderDoctorReport(checks as DoctorCheck[], summary, sessionEnvRepair(data["pathRepair"]));
 }
 
 function renderCliTextSuccess(command: string, data: unknown): string {

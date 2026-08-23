@@ -39,12 +39,9 @@ import {
   APPEARANCE_APP_STATE_KEY,
   isAppearance,
   parseCanvas,
-  parseGlobalEditorThemeId,
-  serializeGlobalEditorThemeId,
   THEME_APP_STATE_KEY,
-  THEME_EDITOR_APP_STATE_KEY,
 } from "@volli/shared";
-import type { Appearance, Canvas, ShippedEditorThemeId } from "@volli/shared";
+import type { Appearance, Canvas } from "@volli/shared";
 import type { FirstPaintHint } from "../../ipc/contract";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
@@ -163,21 +160,6 @@ export function setFirstPaintHint(db: Database.Database, hint: FirstPaintHint, n
   );
 }
 
-// ── the editor surface (decision 6: its own surface, its own row) ────────────
-
-/** The authored global editor theme id, or null when unset (the shipped default editor theme, appearance-independent). */
-export function getGlobalEditorThemeId(db: Database.Database): ShippedEditorThemeId | null {
-  return parseGlobalEditorThemeId(readAppState(db, THEME_EDITOR_APP_STATE_KEY));
-}
-
-/**
- * Upserts the global editor theme id. `null` clears it back to the shipped
- * default editor theme, independent of appearance.
- */
-export function setGlobalEditorThemeId(
-  db: Database.Database,
-  editorThemeId: ShippedEditorThemeId | null,
-  now: number,
-): void {
-  setAppState(db, THEME_EDITOR_APP_STATE_KEY, serializeGlobalEditorThemeId(editorThemeId), now);
-}
+// The editor surface has no row here any more (VC-123). It reads its theme
+// from the resolved appearance, which is `APPEARANCE_APP_STATE_KEY` above. An
+// upgraded database may still carry a `theme_editor` row; nothing reads it.

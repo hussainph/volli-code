@@ -11,6 +11,7 @@ import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle"
 import { toast } from "sonner";
 
 import App from "./App";
+import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
@@ -29,7 +30,7 @@ import { initTerminalAppearance } from "./terminal/appearance";
  *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
 const INTERRUPT_TOAST_DURATION_MS = 8000;
 
-/** Full-window failure panel — mirrors the app's empty-state styling (see files-page.tsx). */
+/** Full-window failure panel — mirrors the app's empty-state styling (see main-content.tsx's EmptyProjectsState). */
 function BootErrorPanel({ error }: { error: string }) {
   return (
     <div className="flex h-svh w-full flex-col items-center justify-center gap-2 bg-background text-center">
@@ -90,6 +91,15 @@ async function main() {
       <App />
     </StrictMode>,
   );
+
+  // Auto-title landings (VC-81). A retitle main performed itself has no
+  // renderer behind it to move labels the way a rename does, and
+  // `session.retitle` skips the runtime publish, so this push is what makes
+  // the model's title appear. No toast: nobody asked for it, and the label
+  // changing IS the feedback.
+  window.api.sessions.onRetitled((event) => {
+    applyRemoteChatTitle(event.sessionId, event.title);
+  });
 
   // Backward-move interrupt announcements (issue #78, CONCEPT #20): automation
   // only ever de-escalates, and never silently — the move that Esc'd live

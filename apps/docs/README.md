@@ -32,11 +32,13 @@ reachable by URL, it just won't appear in the navigation.
 `src/styles/volli.css` maps Starlight's `--sl-*` custom properties onto Volli's
 palette. The values come from two places, and both are upstream of this file:
 
-- Page, text, border, and ember values match `apps/website/src/styles/global.css`.
-- The readable accent `#ff966c` is the app's generated `--primary-text` token,
-  the ember solved onto a dark background at APCA Lc60. Fills use `#e8652a`;
-  text uses `#ff966c`, because ember at full strength fails contrast as body
-  copy. This is the same rule the desktop app follows.
+- Page, text, border, and brand-accent values match
+  `apps/website/src/styles/global.css`.
+- The readable accent `#ff966c` is the default canvas's generated
+  `--primary-text` token, solved onto a dark background at APCA Lc60. Fills use
+  `#e8652a`; text uses `#ff966c`, because the fill color fails contrast as body
+  copy. This fixed docs-site palette is a public-brand choice, not a constraint
+  on the desktop app's theme engine.
 
 If either of those upstream palettes changes, update `volli.css` to match rather
 than letting the sites drift.

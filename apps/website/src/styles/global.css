@@ -57,23 +57,187 @@ a:focus-visible {
   border: 0;
 }
 
+/* Skip link: the landing page opens on a large interactive demo, so a keyboard
+   user needs one press to reach the heading and the download CTA. */
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  top: 12px;
+  left: 12px;
+  padding: 10px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #161616;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 520;
+  transform: translateY(-160%);
+  transition: transform 180ms var(--ease-out);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/* Alpha status marker. Used above both page headings, so a visitor reads the
+   maturity of the thing before the pitch for it. */
+.alpha-pill {
+  display: inline-flex;
+  margin: 0 0 16px;
+  padding: 4px 11px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgb(232 101 42 / 45%);
+  border-radius: 999px;
+  color: #ff9a68;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Site header — the wordmark and the routes a launch visitor looks for, present
+   before the fold rather than only in the footer. */
+.site-header {
+  display: flex;
+  width: 100%;
+  max-width: 1312px;
+  min-height: 56px;
+  margin: 0 auto;
+  padding: 22px 40px 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.site-brand {
+  padding-top: 0;
+}
+
+.site-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 26px;
+}
+
+.site-header nav a {
+  min-height: 44px;
+  color: #717174;
+  font-size: 13px;
+  line-height: 44px;
+  transition: color 160ms ease;
+}
+
+.site-header nav a:hover {
+  color: var(--text);
+}
+
+.site-nav-cta {
+  padding: 0 15px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text) !important;
+  font-weight: 560;
+  line-height: 34px !important;
+  min-height: 34px !important;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.site-nav-cta:hover {
+  border-color: #454545;
+  background: #161616;
+}
+
+/* Hero — one centered column, kept short so the demo below it climbs into the
+   fold. The promise, the alpha contract and the primary CTA still precede the
+   demo in the DOM (VC-64 P0); they just take far less vertical room doing it. */
+.hero {
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 46px 40px 0;
+  text-align: center;
+}
+
+.hero-headline {
+  max-width: 20ch;
+  margin: 0 auto 18px;
+  color: var(--text);
+  font-size: clamp(32px, 3.9vw, 50px);
+  font-weight: 420;
+  letter-spacing: -0.05em;
+  line-height: 1.13;
+  text-wrap: balance;
+}
+
+.hero-lede {
+  max-width: 54ch;
+  margin: 0 auto;
+  color: var(--muted);
+  font-size: clamp(15.5px, 1.2vw, 17px);
+  font-weight: 360;
+  letter-spacing: -0.012em;
+  line-height: 1.58;
+  text-wrap: pretty;
+}
+
+.hero-cta {
+  justify-content: center;
+  padding-top: 22px;
+}
+
+/* A wrapping row, not a sentence with punctuation between links. The literal
+   "·" separators collapsed against the links and "Report a problem" broke
+   across lines mid-phrase; flex gaps space it and nowrap keeps each label
+   whole. */
+.hero-alpha-note {
+  display: flex;
+  max-width: 58ch;
+  margin: 16px auto 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px 18px;
+  color: var(--quiet);
+  font-size: 12.5px;
+  font-weight: 380;
+  line-height: 1.5;
+}
+
+.hero-alpha-note a {
+  color: #c98a63;
+  text-decoration: underline;
+  text-decoration-color: rgb(201 138 99 / 30%);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  white-space: nowrap;
+  transition:
+    color 180ms ease,
+    text-decoration-color 180ms ease;
+}
+
+.hero-alpha-note a:hover {
+  color: #ff966c;
+  text-decoration-color: #ff966c;
+}
+
+@media (max-width: 460px) {
+  .hero-alpha-note {
+    gap: 6px 14px;
+  }
+}
+
 .hero-shell {
-  padding: 40px 40px 0;
+  padding: 26px 40px 0;
 }
 
 .hero-shell .volli-demo {
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
-}
-
-.hero-preview-label {
-  width: 100%;
-  max-width: 1280px;
-  margin: 14px auto 0;
-  color: var(--quiet);
-  font-size: 12px;
-  letter-spacing: 0.01em;
 }
 
 .footer-brand img {
@@ -261,7 +425,7 @@ a:focus-visible {
   stroke-width: 0.8;
 }
 
-.statement-copy h1 {
+.statement-copy .statement-headline {
   max-width: 520px;
   margin: 0 0 24px;
   color: var(--text);
@@ -269,35 +433,6 @@ a:focus-visible {
   font-weight: 420;
   letter-spacing: -0.05em;
   line-height: 1.13;
-}
-
-.headline-lead {
-  display: block;
-  color: var(--text);
-  font-weight: 420;
-}
-
-.morphing-text {
-  position: relative;
-  display: block;
-  min-height: 1.16em;
-  color: var(--ember);
-  font-weight: 390;
-  isolation: isolate;
-  white-space: nowrap;
-}
-
-.morphing-text__word {
-  position: absolute;
-  inset: 0 auto auto 0;
-  display: block;
-  max-width: 100%;
-  will-change: filter, opacity;
-}
-
-.morphing-text__word--next {
-  opacity: 0;
-  filter: blur(80px);
 }
 
 .visually-hidden {
@@ -412,6 +547,10 @@ footer {
   padding: 0 0 56px;
   align-items: center;
   justify-content: space-between;
+  /* Seven links plus the wordmark do not fit one row below ~900px. Without the
+     wrap the nav simply ran off the page and collided with the wordmark. */
+  flex-wrap: wrap;
+  gap: 0 32px;
   border-top: 1px solid #202020;
 }
 
@@ -429,7 +568,10 @@ footer {
 footer nav {
   display: flex;
   padding-top: 28px;
-  gap: 26px;
+  flex-wrap: wrap;
+  /* No row gap: the links already carry a 44px line box, so a second row is
+     spaced by the tap target itself. */
+  gap: 0 26px;
 }
 
 footer nav a {
@@ -444,8 +586,8 @@ footer nav a:hover {
   color: var(--text);
 }
 
-/* Download page — one reading column, two channel cards. States (loading /
-   no-stable / API failure) share the card frame so nothing jumps. */
+/* Download page — one reading column, one build card (VC-64). States (loading /
+   nothing-published / API failure) share the card frame so nothing jumps. */
 
 .download-main {
   width: 100%;
@@ -530,7 +672,7 @@ footer nav a:hover {
 
 .channel-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 460px);
   gap: 20px;
 }
 
@@ -544,7 +686,7 @@ footer nav a:hover {
   background: #101010;
 }
 
-.channel-card--canary {
+.channel-card--alpha {
   background: linear-gradient(155deg, rgb(232 101 42 / 7%), transparent 42%), #101010;
 }
 
@@ -673,6 +815,69 @@ footer nav a:hover {
   white-space: nowrap;
 }
 
+/* The alpha contract, stated where the download is — not buried in docs. Every
+   row answers a question a first-time visitor would otherwise have to guess. */
+.alpha-terms {
+  margin: 56px 0 0;
+  padding: 28px 28px 6px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #0d0d0d;
+}
+
+.alpha-terms h2 {
+  margin: 0 0 22px;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 480;
+  letter-spacing: -0.02em;
+}
+
+.alpha-terms dl {
+  display: grid;
+  margin: 0;
+  gap: 18px;
+}
+
+.alpha-terms dl > div {
+  display: grid;
+  grid-template-columns: 152px minmax(0, 1fr);
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #1c1c1c;
+}
+
+.alpha-terms dl > div:last-child {
+  border-bottom: 0;
+}
+
+.alpha-terms dt {
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 520;
+  letter-spacing: -0.01em;
+}
+
+.alpha-terms dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 380;
+  line-height: 1.6;
+}
+
+.alpha-terms a {
+  color: #ff966c;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 150 108 / 38%);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 180ms ease;
+}
+
+.alpha-terms a:hover {
+  text-decoration-color: #ff966c;
+}
+
 .download-all-releases {
   margin: 40px 0 0;
   color: var(--quiet);
@@ -683,6 +888,14 @@ footer nav a:hover {
 @media (max-width: 1050px) {
   .hero-shell {
     padding: 24px 24px 0;
+  }
+
+  .site-header {
+    padding: 18px 24px 0;
+  }
+
+  .hero {
+    padding: 36px 24px 0;
   }
 
   .statement-section {
@@ -723,11 +936,49 @@ footer nav a:hover {
   .channel-card {
     min-height: 0;
   }
+
+  /* Term over definition: a 152px label column leaves the answer too narrow to
+     read once the viewport is this small. */
+  .alpha-terms dl > div {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
 }
 
 @media (max-width: 560px) {
   .hero-shell {
     padding: 16px 16px 0;
+  }
+
+  .site-header {
+    /* Stacked, so the wordmark needs room to breathe above the row of routes
+       rather than the 4px it had — and the top padding should read as a margin,
+       not as the page starting flush against the notch. */
+    padding: 20px 20px 0;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .site-header nav {
+    gap: 0 18px;
+  }
+
+  .hero {
+    padding: 20px 20px 0;
+  }
+
+  .hero-headline {
+    max-width: 18ch;
+    font-size: clamp(29px, 8.4vw, 36px);
+  }
+
+  .hero-lede {
+    font-size: 15px;
+  }
+
+  .hero-alpha-note {
+    font-size: 12px;
   }
 
   .download-main {
@@ -738,11 +989,15 @@ footer nav a:hover {
     padding: 56px 0 32px;
   }
 
+  .alpha-terms {
+    padding: 22px 20px 4px;
+  }
+
   .statement-section {
     padding: 70px 20px 80px;
   }
 
-  .statement-copy h1 {
+  .statement-copy .statement-headline {
     margin-bottom: 24px;
   }
 
@@ -786,10 +1041,15 @@ footer nav a:hover {
     width: calc(100% - 40px);
     padding-bottom: 32px;
     align-items: flex-start;
+    /* Side by side, the wordmark and a seven-link nav overlapped. Stacked, the
+       nav wraps into rows under it. */
+    flex-direction: column;
+    gap: 0;
   }
 
   footer nav {
-    gap: 18px;
+    padding-top: 10px;
+    gap: 0 18px;
   }
 }
 
@@ -803,9 +1063,5 @@ footer nav a:hover {
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
-  }
-
-  .morphing-text__word--next {
-    display: none;
   }
 }

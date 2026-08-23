@@ -48,7 +48,9 @@ import { toastError } from "@renderer/lib/toast";
  * App-wide preferences (the sidebar-footer gear overlay). Project-scoped
  * automation lives in the separate per-project Configure nav tab
  * (components/pages/configure-page.tsx); everything here applies across every
- * project. Grouped into categories via the shared {@link SettingsShell}.
+ * project. CLI's host facts also live here; its read can include the selected
+ * project's Git configuration without turning that configuration into a setting.
+ * Grouped into categories via the shared {@link SettingsShell}.
  */
 export function SettingsPage({
   initialCategoryKey,

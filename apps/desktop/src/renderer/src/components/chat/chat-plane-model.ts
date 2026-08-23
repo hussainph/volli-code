@@ -7,6 +7,7 @@
  * streamed token is allowed to repaint.
  */
 import type {
+  BlobLinkView,
   ModelAccessModel,
   ModelAccessProvider,
   ModelAccessState,
@@ -17,7 +18,7 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { findComposerVerb, REASONING_LEVELS } from "@volli/shared";
+import { findComposerVerb, REASONING_LEVELS, type ComposerVerb } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { composerAnswer, type InteractionSubmission } from "@renderer/chat/interaction";
@@ -177,14 +178,47 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 }
 
 /**
+ * The plain text of the Session's most recent reply, or null.
+ *
+ * What `/copy` copies. Walks back from the end of the transcript over the
+ * assistant messages of the latest turn and returns the first one that said
+ * anything — the final answer, wherever in the turn it landed — and stops at
+ * the first user message, because a turn that has produced no words yet has
+ * no "last reply", and silently handing back the PREVIOUS turn's words would
+ * be a copy that looked right and pasted wrong.
+ *
+ * Reasoning and tool parts are not prose and do not travel: the clipboard
+ * gets what a reader would call the reply, not the transcript's internals.
+ * A message whose text parts are all whitespace has not said anything, the
+ * same rule the transcript's own prose rendering follows.
+ */
+export function lastAssistantText(messages: readonly UIMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role !== "assistant") {
+      // The turn ended without a word: an older reply is not "the last reply".
+      if (message.role === "user") return null;
+      continue;
+    }
+    const text = message.parts
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n\n")
+      .trim();
+    if (text.length > 0) return text;
+  }
+  return null;
+}
+
+/**
  * What one press of the composer turns out to have been.
  *
  * Three things, and a message is still what every press is unless something
  * more specific claims it. An **answer** is what a press becomes while a
  * question is standing open above the box that can take its words
  * ({@link composerAnswer}, which owns the rule and the reasons). A **verb** is
- * what a draft that is nothing but `/compact` becomes: an operation the client
- * runs, with no message sent at all (`composer-verb.ts`).
+ * what a draft that is nothing but a `/name` from the verb registry becomes:
+ * an operation the client runs, with no message sent at all
+ * (`composer-verb.ts`).
  *
  * It is a decision rather than a mode, and that distinction is the whole
  * design: the composer is not put into an answering state that a reader has to
@@ -205,8 +239,11 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
  */
 export type ComposerPress =
   | { kind: "answer"; interactionId: string; submission: InteractionSubmission }
-  | { kind: "compact"; instructions: string | null }
+  | { kind: "verb"; verb: ComposerVerb; instructions: string | null }
   | { kind: "message" };
+
+/** The verb arm of a press, named for the handler that performs it. */
+export type ComposerVerbPress = Extract<ComposerPress, { kind: "verb" }>;
 
 export function composerPress(
   pending: RendererSessionInteraction | null,
@@ -218,12 +255,11 @@ export function composerPress(
   }
   const invocation = findComposerVerb(text);
   if (invocation === null) return { kind: "message" };
-  // Switched rather than assumed: `ComposerVerbName` is closed, so a second
-  // verb stops this compiling instead of being quietly compacted.
-  switch (invocation.verb.name) {
-    case "compact":
-      return { kind: "compact", instructions: invocation.instructions };
-  }
+  // The verb travels with the press rather than being flattened into one arm
+  // per name: every verb is the same kind of press, and the switch that
+  // performs it lives where the acts do (the plane), where `ComposerVerbName`
+  // stays closed and a new verb still stops the compiling.
+  return { kind: "verb", verb: invocation.verb, instructions: invocation.instructions };
 }
 
 export type HeldDispatchOutcome = "delivered" | "recorded" | "refused" | "held";
@@ -381,6 +417,30 @@ export async function coordinateQueuedSteerStart(
 }
 
 /**
+ * The message a steer actually delivers, rebuilt from whichever of the two
+ * records name it.
+ *
+ * A queue-only row — no held copy at all — is exactly what the release queue
+ * already holds. A held row's own text and resources win over the queue's,
+ * and so do its attachments (VC-137): the held copy is the durable one, and
+ * the queue's serves only as a fallback for a held row this build wrote
+ * before attachments rode it at all.
+ */
+function steerMessage(
+  held: HeldMessage | undefined,
+  queued: QueuedMessage | undefined,
+): QueuedMessage | undefined {
+  if (held === undefined) return queued;
+  const attachments = held.attachments ?? queued?.attachments;
+  return {
+    id: held.id,
+    text: held.text,
+    ...(held.resources === undefined ? {} : { resources: held.resources }),
+    ...(attachments === undefined ? {} : { attachments }),
+  };
+}
+
+/**
  * Moves one existing strip row into the active turn without changing its id.
  *
  * A queue-only row gains its durable held copy before dequeue. An unsent
@@ -400,14 +460,7 @@ export async function steerQueuedMessage(
   if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
     return "stale";
   }
-  const message: QueuedMessage | undefined =
-    held === undefined
-      ? queued
-      : {
-          id: held.id,
-          text: held.text,
-          ...(held.resources === undefined ? {} : { resources: held.resources }),
-        };
+  const message: QueuedMessage | undefined = steerMessage(held, queued);
   if (message === undefined) return "stale";
   // A click cannot improve a queue while the Session cannot steer. In
   // particular, never manufacture a release-queue copy for a held-only row:
@@ -464,13 +517,75 @@ export function heldStrip(
       id: entry.id,
       text: entry.text,
       // The row is also what `beginQueuedSteer` persists back, so the skill
-      // resources riding the held copy must survive the round trip (VC-49).
+      // resources riding the held copy must survive the round trip (VC-49) —
+      // and so must the files (VC-137): a strip row that redraws without its
+      // attachments is a message the person believes still carries them.
       ...(entry.resources === undefined ? {} : { resources: entry.resources }),
+      ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
     });
   }
   for (const entry of queue)
     if (!drawn.has(entry.id) && !durableMessageIds.has(entry.id)) rows.push(entry);
   return rows;
+}
+
+/**
+ * The strip a pulled-back row rejoins, and the links that rejoin strands.
+ *
+ * Merged BY HASH: the strip may never draw one picture twice, and one link to
+ * a Blob serves either purpose. The row's own view wins a collision with a
+ * file staged for the NEXT message — the row is the thing being edited, so its
+ * link is the one a re-send should carry — which leaves the shadowed staged
+ * view holding a link nothing on screen names any more. {@link
+ * RestoredStrip.detach} is that list, and dropping it is what keeps an
+ * invisible link from being left behind.
+ *
+ * Pure and beside the plane rather than inside it: this rule and {@link
+ * detachableRowAttachments} are two halves of ONE invariant — the files come
+ * back BEFORE the row leaves the queue, and the removal reads the strip this
+ * returns to tell "came back" from "was deleted" — so they are worth the gate
+ * together, which a `.tsx` callback could not be.
+ */
+export interface RestoredStrip {
+  /** The strip after the row's files rejoined it, row's copies last. */
+  strip: readonly BlobLinkView[];
+  /** Staged views the row's copy shadowed; their links now name nothing. */
+  detach: readonly BlobLinkView[];
+}
+
+/** See {@link RestoredStrip}. Nothing coming back leaves the strip exactly as it was. */
+export function restoreStripAttachments(
+  staged: readonly BlobLinkView[],
+  incoming: readonly BlobLinkView[],
+): RestoredStrip {
+  if (incoming.length === 0) return { strip: staged, detach: [] };
+  const returning = new Set(incoming.map((entry) => entry.blobHash));
+  const kept: BlobLinkView[] = [];
+  const detach: BlobLinkView[] = [];
+  for (const entry of staged) {
+    if (returning.has(entry.blobHash)) detach.push(entry);
+    else kept.push(entry);
+  }
+  return { strip: [...kept, ...incoming], detach };
+}
+
+/**
+ * Which of a REMOVED row's files must also lose their links (VC-137).
+ *
+ * A removed row is the one queued-message ending that detaches: no message
+ * will ever name those files again — unlike a delivered turn, whose links the
+ * transcript's parts now reference. The exception is a Blob already back in
+ * the strip, which an edited row restored a moment ago and the next send still
+ * needs. Links are per row rather than per bytes, so a second link to the same
+ * Blob is a different link and survives either way.
+ */
+export function detachableRowAttachments(
+  row: readonly BlobLinkView[] | undefined,
+  staged: readonly BlobLinkView[],
+): readonly BlobLinkView[] {
+  if (row === undefined || row.length === 0) return [];
+  const stagedHashes = new Set(staged.map((view) => view.blobHash));
+  return row.filter((attachment) => !stagedHashes.has(attachment.blobHash));
 }
 
 /** Cold adoption is not reconciled until its first projection snapshot exists. */
@@ -557,12 +672,12 @@ export interface SessionBlockerState {
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
   /**
-   * Present only where the row reports renderer-local state the reader may
-   * retire without anyone's permission — the Session's own transport latch.
-   * Durable facts (attention, the catalog, the pinned model) carry no dismiss:
-   * they block typing for reasons a click cannot change, and a row that hid
-   * one would be promising the typing works when it does not.
+   * A renderer-local identity for a dismissible error. The Session ledger stays
+   * intact: the view hides this exact report until it clears or changes, then a
+   * later error is shown again.
    */
+  dismissKey?: string;
+  /** Every error can be dismissed locally; waiting and setup rows remain visible. */
   dismiss?: SessionBlockerAction;
 }
 
@@ -588,8 +703,10 @@ export interface SessionBlockerActs {
   openSettings(): void;
   /** Opens Model Access AT the named provider's sign-in — never merely the category. */
   signIn(providerId: string): void;
-  /** Retires the transport latch the error row reports; see {@link SessionBlockerState.dismiss}. */
-  dismiss(): void;
+  /** Clears the Session's own transport latch, which is not a durable fact. */
+  dismissError(): void;
+  /** Hides one rendered error locally; a changed or re-raised report returns. */
+  dismiss(dismissKey: string): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -614,9 +731,9 @@ export function terminalCompanionTabId(
  * Four sources, in the order they answer:
  *
  * 1. `sessionError` — this Session's own transport. If the stream is gone the
- *    attention we hold is a memory, so it does not get to speak over it. It is
- *    also the one row carrying a dismiss, because it alone reports state this
- *    surface owns rather than a durable fact about the harness.
+ *    attention we hold is a memory, so it does not get to speak over it.
+ *    Every error row can be dismissed locally; a dismiss never edits the
+ *    durable fact and the row returns when its report clears or changes.
  * 2. `sessionModel` — the Session is pinned to a model this profile cannot run.
  *    It outranks the attention because every failure such a Session will ever
  *    raise is downstream of this one fact, the harness's own report of it names
@@ -643,50 +760,62 @@ export function sessionBlocker(
   const retry: SessionBlockerAction = { label: "Retry", act: acts.recover };
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
+  const dismiss = (key: string) => () => acts.dismiss(key);
   if (input.sessionError !== null) {
-    return {
-      message: input.sessionError,
-      detail: null,
-      tone: "error",
-      action: retry,
-      // The latch is this surface's own state, so the reader may retire it —
-      // the failure it names stays recoverable through Retry either way.
-      dismiss: { label: "Dismiss", act: acts.dismiss },
-    };
+    const dismissKey = `session-error:${input.sessionError}`;
+    return errorBlocker(
+      {
+        message: input.sessionError,
+        detail: null,
+        action: retry,
+      },
+      dismissKey,
+      () => {
+        acts.dismissError();
+        acts.dismiss(dismissKey);
+      },
+    );
   }
   // Only a catalog that has answered may accuse the Session's model: while it
   // loads, every model reads as unavailable.
   const sessionModel = input.catalogState === "ready" ? input.sessionModel : null;
   if (sessionModel !== null && sessionModel.state !== "available") {
+    const dismissKey = `session-model:${sessionModel.providerId}:${sessionModel.state}`;
     return sessionModel.state === "authentication-required"
-      ? {
-          // The same fact the harness reports as `auth_required`, read before a
-          // message is spent on it instead of after. The action goes STRAIGHT
-          // to this provider's sign-in — the row already knows who — rather
-          // than to a category the user would then have to search. What it
-          // does NOT carry is the exact-run Retry beside it: nothing has run.
-          message: `Sign-in required for ${sessionModel.providerLabel}`,
-          detail: null,
-          tone: "error",
-          action: { label: "Sign in", act: () => acts.signIn(sessionModel.providerId) },
-        }
-      : {
-          // No action, because the two this row could offer are both wrong.
-          // Settings writes the app DEFAULT, copied into a Session at birth and
-          // never re-read, so it cannot repin this one; Retry re-runs a model
-          // that is gone. The pill directly under this row is the repair, and a
-          // ready catalog means it is already offering something runnable.
-          message: `Model unavailable for ${sessionModel.providerLabel}`,
-          detail: null,
-          tone: "error",
-          action: null,
-        };
+      ? errorBlocker(
+          {
+            // The same fact the harness reports as `auth_required`, read before a
+            // message is spent on it instead of after. The action goes STRAIGHT
+            // to this provider's sign-in — the row already knows who — rather
+            // than to a category the user would then have to search. What it
+            // does NOT carry is the exact-run Retry beside it: nothing has run.
+            message: `Sign-in required for ${sessionModel.providerLabel}`,
+            detail: null,
+            action: { label: "Sign in", act: () => acts.signIn(sessionModel.providerId) },
+          },
+          dismissKey,
+          dismiss(dismissKey),
+        )
+      : errorBlocker(
+          {
+            // No action, because the two this row could offer are both wrong.
+            // Settings writes the app DEFAULT, copied into a Session at birth and
+            // never re-read, so it cannot repin this one; Retry re-runs a model
+            // that is gone. The pill directly under this row is the repair, and a
+            // ready catalog means it is already offering something runnable.
+            message: `Model unavailable for ${sessionModel.providerLabel}`,
+            detail: null,
+            action: null,
+          },
+          dismissKey,
+          dismiss(dismissKey),
+        );
   }
   const attention = input.attention.primary;
   if (attention) {
     return asked && answeredByCard(attention.kind)
       ? null
-      : attentionBlocker(attention, retry, retryRuntime, settings);
+      : attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss);
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -715,12 +844,16 @@ export function sessionBlocker(
   // being none — and from the Session's own transport. Settings is the action
   // because saving a preference is what re-asks the catalog.
   if (input.catalogError !== null && !asked) {
-    return {
-      message: "Models unavailable",
-      detail: input.catalogError,
-      tone: "error",
-      action: settings,
-    };
+    const dismissKey = `catalog-error:${input.catalogError}`;
+    return errorBlocker(
+      {
+        message: "Models unavailable",
+        detail: input.catalogError,
+        action: settings,
+      },
+      dismissKey,
+      dismiss(dismissKey),
+    );
   }
   return null;
 }
@@ -728,6 +861,43 @@ export function sessionBlocker(
 /** The two attention kinds a card standing on screen already answers. */
 function answeredByCard(kind: SessionAttention["kind"]): boolean {
   return kind === "input_required" || kind === "permission_required";
+}
+
+function errorBlocker(
+  input: Omit<SessionBlockerState, "tone" | "dismissKey" | "dismiss">,
+  dismissKey: string,
+  dismiss: () => void,
+): SessionBlockerState {
+  return {
+    ...input,
+    tone: "error",
+    dismissKey,
+    dismiss: { label: "Dismiss", act: dismiss },
+  };
+}
+
+/**
+ * A local dismissal survives only while the same error is still current. A
+ * cleared or changed report releases it, so the next error can surface without
+ * needing a durable mutation merely to make a row visible again.
+ */
+export function visibleBlocker(
+  blocker: SessionBlockerState | null,
+  dismissedKey: string | null,
+): { blocker: SessionBlockerState | null; dismissedKey: string | null } {
+  const retainedDismissal =
+    dismissedKey !== null && dismissedKey === blocker?.dismissKey ? dismissedKey : null;
+  return { blocker: retainedDismissal === null ? blocker : null, dismissedKey: retainedDismissal };
+}
+
+function attentionDismissKey(attention: SessionAttention): string {
+  const scheduledAt =
+    attention.kind === "rate_limited"
+      ? attention.retryAt
+      : attention.kind === "quota_exhausted"
+        ? attention.resetAt
+        : null;
+  return JSON.stringify(["attention", attention.id, attention.kind, attention.detail, scheduledAt]);
 }
 
 /**
@@ -752,14 +922,19 @@ function providerRecovery(input: {
   detail: string | null;
   settings: SessionBlockerAction;
   retryRuntime: SessionBlockerAction;
+  dismissKey: string;
+  dismiss(): void;
 }): SessionBlockerState {
-  return {
-    message: input.message,
-    detail: input.detail,
-    tone: "error",
-    action: input.settings,
-    secondaryAction: input.retryRuntime,
-  };
+  return errorBlocker(
+    {
+      message: input.message,
+      detail: input.detail,
+      action: input.settings,
+      secondaryAction: input.retryRuntime,
+    },
+    input.dismissKey,
+    input.dismiss,
+  );
 }
 
 /**
@@ -770,7 +945,9 @@ function providerRecovery(input: {
  * has to be answered here, not silently absorbed into whichever branch was
  * cheapest to reach.
  *
- * Which kinds earn a button, and why the rest do not:
+ * Which kinds earn a recovery button, and why the rest do not. Every error
+ * also carries a local Dismiss, which hides the current report without claiming
+ * it is repaired.
  *
  * - **Settings + Retry** — Pi auth/configuration recovery sends you to Model
  *   Access, where signing in now happens, and then retries the exact failed run
@@ -787,35 +964,51 @@ function providerRecovery(input: {
  *   every attempt it makes on its own; the run itself is still there to try
  *   again, and re-running it is not the same act as re-establishing a
  *   connection that never dropped.
- * - **Nothing** — `context_limit_reached` (the runtime has already compacted
- *   this Session and been refused again, so there is nothing left to summarize
- *   and no button that could); `quota_exhausted` (a spent allowance is
- *   not retryable and no local setting refills it); `partial_turn_interrupted`
- *   (a stopped turn left the composer usable — resending is typing, not
- *   recovering); `input_required` and `permission_required` (the answer lives on
- *   the interaction card, which outranks this row entirely).
+ * - **No recovery** — `context_limit_reached` (the runtime has already compacted
+ *   this Session and been refused again, so there is nothing left to summarize);
+ *   `quota_exhausted` (a spent allowance is not retryable and no local setting
+ *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
+ *   usable — resending is typing, not recovering); `input_required` and
+ *   `permission_required` (the answer lives on the interaction card, which
+ *   outranks this row entirely).
  */
 function attentionBlocker(
   attention: SessionAttention,
   retry: SessionBlockerAction,
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
+  dismiss: (dismissKey: string) => void,
 ): SessionBlockerState {
   const detail = attention.detail;
+  const dismissKey = attentionDismissKey(attention);
+  const dismissAttention = () => dismiss(dismissKey);
   switch (attention.kind) {
     case "auth_required":
-      return providerRecovery({ message: "Sign-in required", detail, settings, retryRuntime });
+      return providerRecovery({
+        message: "Sign-in required",
+        detail,
+        settings,
+        retryRuntime,
+        dismissKey,
+        dismiss: dismissAttention,
+      });
     case "configuration_invalid":
       return providerRecovery({
         message: "Configuration invalid",
         detail,
         settings,
         retryRuntime,
+        dismissKey,
+        dismiss: dismissAttention,
       });
     case "transport_retrying":
       return { message: "Reconnecting", detail, tone: "waiting", action: retry };
     case "adapter_disconnected":
-      return { message: "Disconnected", detail, tone: "error", action: retry };
+      return errorBlocker(
+        { message: "Disconnected", detail, action: retry },
+        dismissKey,
+        dismissAttention,
+      );
     case "rate_limited":
       return {
         message: `Rate limited${untilClause(attention.retryAt)}`,
@@ -824,18 +1017,25 @@ function attentionBlocker(
         action: retry,
       };
     case "quota_exhausted":
-      return {
-        message: `Quota exhausted${untilClause(attention.resetAt)}`,
-        detail,
-        tone: "error",
-        action: null,
-      };
+      return errorBlocker(
+        { message: `Quota exhausted${untilClause(attention.resetAt)}`, detail, action: null },
+        dismissKey,
+        dismissAttention,
+      );
     case "context_limit_reached":
-      return { message: "Context limit reached", detail, tone: "error", action: null };
+      return errorBlocker(
+        { message: "Context limit reached", detail, action: null },
+        dismissKey,
+        dismissAttention,
+      );
     case "partial_turn_interrupted":
       return { message: "Turn interrupted", detail, tone: "waiting", action: null };
     case "adapter_unrecoverable":
-      return { message: "Session stopped", detail, tone: "error", action: retryRuntime };
+      return errorBlocker(
+        { message: "Session stopped", detail, action: retryRuntime },
+        dismissKey,
+        dismissAttention,
+      );
     case "input_required":
       return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
     case "permission_required":

@@ -47,10 +47,12 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
+  SessionEnvInteractiveProvenance,
+  SessionEnvProvenance,
+  SessionEnvTool,
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
-  ShippedEditorThemeId,
   SkillReference,
   TerminalBusyResult,
   TerminalIoResult,
@@ -62,6 +64,7 @@ import type {
   TicketStatus,
   TicketStatusEntry,
   VenueSnapshot,
+  WorkspaceDependenciesStatus,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -209,6 +212,29 @@ export interface BlobLinkDraftsInput {
 export interface SessionRenameInput {
   sessionId: string;
   title: string;
+  /**
+   * Present only on the automatic heuristic rename (VC-81): the first user
+   * message, from which main may derive a sharper title with one model call
+   * once this rename has stuck.
+   *
+   * A rider on the rename rather than a channel of its own, because it is the
+   * same surface and the same moment — `docs/BOUNDARIES.md` asks new work to
+   * migrate the raw channels it touches, not to add another beside them. It
+   * also removes the window a second round-trip opened, in which the title
+   * could change between the write and the request that names its baseline.
+   * A person's rename never carries it, which is what keeps title calls at
+   * zero for a Session someone named.
+   */
+  refineFrom?: string;
+}
+
+/**
+ * A retitle main performed on its own (VC-81 auto-titling), pushed so live
+ * surfaces can move their labels the same way a renderer rename does.
+ */
+export interface SessionRetitledEvent {
+  sessionId: string;
+  title: string;
 }
 
 /** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
@@ -312,6 +338,45 @@ export interface FilePathInput {
   projectId: string;
   ticketId?: string;
   relPath: string;
+}
+
+/** A known macOS app that can open a safely resolved Files target. */
+export type ExternalAppId =
+  | "vscode"
+  | "cursor"
+  | "zed"
+  | "xcode"
+  | "android-studio"
+  | "terminal"
+  | "iterm2"
+  | "ghostty"
+  | "warp";
+
+export type ExternalAppKind = "editor" | "terminal";
+
+/** Renderer-safe app metadata; bundle ids and application paths stay in main. */
+export interface ExternalApp {
+  id: ExternalAppId;
+  label: string;
+  kind: ExternalAppKind;
+}
+
+/** A file or folder target plus one allowlisted external application. */
+export interface ExternalAppOpenFileInput extends FilePathInput {
+  appId: ExternalAppId;
+}
+
+/** The ticket's live worktree root plus one allowlisted external application. */
+export interface ExternalAppOpenWorktreeInput {
+  projectId: string;
+  ticketId: string;
+  appId: ExternalAppId;
+}
+
+/** A ticket's live worktree root, resolved in main before Finder sees it. */
+export interface WorktreeRevealInput {
+  projectId: string;
+  ticketId: string;
 }
 
 /**
@@ -509,9 +574,9 @@ export interface VolliDataIpcContract {
 export type DataIpcChannel = keyof VolliDataIpcContract;
 
 /**
- * Global artifacts + `@file` refs (docs/plans/global-artifacts.md) plus the
- * Project Files workspace (issue #106) — the file channels
- * `src/main/volli-fs.ts` owns.
+ * Global artifacts + `@file` refs (docs/plans/global-artifacts.md), the
+ * Project Files workspace (issue #106), and Files' external-app launch/reveal
+ * surface — the file channels `src/main/volli-fs.ts` owns.
  */
 export interface VolliFileIpcContract {
   /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
@@ -524,6 +589,20 @@ export interface VolliFileIpcContract {
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
   /** Reveals the resolved file in Finder. */
   "volli:file-reveal": { args: [input: FilePathInput]; result: Result };
+  /** The currently installed allowlisted editor and terminal applications. */
+  "volli:external-app-list": { args: []; result: ExternalAppListResult };
+  /** Launches one allowlisted application with a safe main- or worktree-scoped file path. */
+  "volli:external-app-open-file": {
+    args: [input: ExternalAppOpenFileInput];
+    result: Result;
+  };
+  /** Launches one allowlisted application with the ticket's resolved worktree root. */
+  "volli:external-app-open-worktree": {
+    args: [input: ExternalAppOpenWorktreeInput];
+    result: Result;
+  };
+  /** Reveals the ticket's resolved worktree root in Finder. */
+  "volli:worktree-reveal": { args: [input: WorktreeRevealInput]; result: Result };
   /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */
   "volli:file-watch": { args: [input: FilePathInput]; result: Result };
   "volli:file-unwatch": { args: [input: FilePathInput]; result: Result };
@@ -658,7 +737,56 @@ export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
  * by `src/main/cli-status.ts`. Every field is detection, not configuration:
  * the pane this feeds exists because the install is silent, and a silent
  * install with no truthful surface is indistinguishable from a broken one.
+ *
+ * `CliSessionPathStatus` keeps Session PATH separate from the interactive
+ * login-shell PATH: the two paths must be comparable in Settings because one
+ * is what a person's shell says and the other is what Session commands inherit.
  */
+/** One known malformed entry in macOS's system login-PATH configuration. */
+export interface CliSystemPathIssue {
+  kind: "dotnet-cli-tools-literal-tilde";
+  /** The root-owned `/etc/paths.d/*` file containing the entry. */
+  file: string;
+  /** The literal value `path_helper` appends to every login PATH. */
+  entry: string;
+}
+
+/** A known Git credential helper that can hang a headless Session on a GUI prompt. */
+export interface CliCredentialHelperIssue {
+  kind: "osxkeychain-may-prompt-gui";
+  helper: "osxkeychain";
+  /**
+   * Git's `local` and `worktree` scopes both mean this project's
+   * configuration. `unknown` is Git's own word for a source it does not
+   * classify — Apple's `/usr/bin/git` reports its Xcode-bundled gitconfig,
+   * the file that enables `osxkeychain` on a stock Mac, exactly this way.
+   */
+  scope: "system" | "global" | "repo-local" | "command" | "unknown";
+  /** The config file or command source Git itself reported for the helper. */
+  location: string;
+}
+
+export interface CliSessionPathStatus {
+  /** The exact colon-delimited PATH a Session command inherits. */
+  path: string;
+  /** What the non-interactive boot adoption could establish. */
+  provenance: SessionEnvProvenance;
+  /** What the later interactive pass could establish, if it has landed. */
+  interactiveProvenance: SessionEnvInteractiveProvenance;
+  /** Where each tool a Session contract requires resolves, or `null` when it does not. */
+  tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /** Project-scoped dependency state; `null` when no project workspace was supplied. */
+  dependencies: WorkspaceDependenciesStatus;
+  /**
+   * The command that installs the scoped workspace's dependencies, judged by
+   * its lockfile (`@volli/shared`'s `workspaceInstallCommand`); `null` when
+   * no project workspace was supplied or none encloses it. Settings/alert
+   * vocabulary only — `volli identify`'s env block deliberately stays the
+   * exact field set the contract published.
+   */
+  installCommand: string | null;
+}
+
 export interface CliToolStatus {
   /** `~/.local/bin/volli`: `ours` links this app's shim; `foreign`/`not-symlink` were left alone. */
   link: {
@@ -668,6 +796,19 @@ export interface CliToolStatus {
   };
   /** Whether the login shell reaches `~/.local/bin`; `unknown` means the shell could not be asked. */
   path: { binDir: string; state: "reachable" | "missing" | "unknown" };
+  /**
+   * Both PATH facts the app can otherwise accidentally conflate: the login
+   * shell's current answer and the PATH Session commands will actually get.
+   * `loginPath: null` means that shell could not be asked, never an empty PATH.
+   */
+  environment: {
+    loginPath: string | null;
+    session: CliSessionPathStatus;
+    /** A read-only diagnosis of known malformed system PATH entries. */
+    systemPathIssues: CliSystemPathIssue[];
+    /** A read-only diagnosis of GUI-capable credential helpers for the scoped project. */
+    credentialHelperIssues: CliCredentialHelperIssue[];
+  };
   /** The agent socket this launch owns; `live` is measured at call time, not latched at boot. */
   socket: { path: string; live: boolean };
   /** Harness wrapper command names the last runtime regeneration produced. */
@@ -681,6 +822,11 @@ export interface CliToolStatus {
 }
 
 export type CliStatusResult = { ok: true; status: CliToolStatus } | { ok: false; error: string };
+
+/** A project root for the Session environment and Git credential reports, when one is in scope. */
+export interface CliStatusInput {
+  cwd?: string;
+}
 
 /** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
 export interface CliDoctorInput {
@@ -697,7 +843,7 @@ export type CliDoctorResult =
 
 /** The Settings → CLI surface (`src/main/cli-ipc.ts`). */
 export interface VolliCliIpcContract {
-  "volli:cli-status": { args: []; result: CliStatusResult };
+  "volli:cli-status": { args: [input?: CliStatusInput]; result: CliStatusResult };
   "volli:cli-doctor": { args: [input: CliDoctorInput]; result: CliDoctorResult };
 }
 
@@ -707,22 +853,6 @@ export type CliIpcChannel = keyof VolliCliIpcContract;
 
 /** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
 export interface ThemeStateInput {
-  projectId?: string;
-}
-
-/**
- * Persists the global Monaco/shiki theme id (`app_state.theme_editor`).
- * `null` clears it back to the shipped default editor theme, independent of
- * appearance.
- */
-export interface ThemeSetGlobalEditorInput {
-  editorThemeId: ShippedEditorThemeId | null;
-  /**
-   * The scope the CALLER is in — not a second write target (#123). The write
-   * is global from every scope; this only says which scope's state to answer
-   * with, so a window showing a project that overrides a surface keeps wearing
-   * that override instead of being repainted to the new global.
-   */
   projectId?: string;
 }
 
@@ -744,16 +874,12 @@ export type TerminalOverlayWriteInput = {
 
 /**
  * What a scope needs that `volli:data-bootstrap` cannot ship: the resolved
- * TERMINAL chain (which has to be read off the filesystem), plus the editor id
- * and the migration-013 row those two surfaces still live on. The app surface is
- * not here — its `{canvas, appearance}` pair rides the bootstrap payload.
+ * TERMINAL chain (which has to be read off the filesystem) and the
+ * migration-013 row that surface still lives on. The app surface is not here —
+ * its `{canvas, appearance}` pair rides the bootstrap payload — and neither is
+ * the editor, which since VC-123 is derived from that pair rather than stored.
  */
 export interface ThemeStatePayload {
-  /**
-   * Global Monaco/shiki theme id from `app_state`. `null` means the shipped
-   * default editor theme (appearance-independent) — never a resolved token set.
-   */
-  editorThemeId: ShippedEditorThemeId | null;
   /** The scoping project's per-surface override; null when unscoped or fully inheriting. */
   projectOverride: ProjectThemeOverride | null;
   /** The project the state was resolved for, echoed back; null for the global scope. */
@@ -840,17 +966,8 @@ export type TerminalOverlayWriteResult = Result<{
  * ships — so a canvas write answers with a bare ack rather than fresh state.
  */
 export interface VolliThemeIpcContract {
-  /** The resolved terminal chain for a scope, plus the editor id and the migration-013 row. */
+  /** The resolved terminal chain for a scope, plus the migration-013 row. */
   "volli:theme-state": { args: [input: ThemeStateInput]; result: ThemeStateResult };
-  /**
-   * Persists the global editor theme id (`app_state.theme_editor`). `null` clears
-   * it back to the shipped default editor theme, independent of appearance.
-   * Resolves with fresh state.
-   */
-  "volli:theme-set-global-editor": {
-    args: [input: ThemeSetGlobalEditorInput];
-    result: ThemeStateResult;
-  };
   /** Persists one project's per-surface override (migration 013); `null` clears it. */
   "volli:theme-set-project": { args: [input: ThemeSetProjectInput]; result: ThemeSetProjectResult };
   /**
@@ -1224,6 +1341,14 @@ export type VolliIpcEvent =
   // so every window can surface the automated de-escalation where the mover is
   // looking (a toast with a jump-to-ticket action) — never silently.
   | "volli:sessions-interrupted"
+  // A Session was retitled by main rather than by a person (VC-81's auto-title
+  // model call). Every other retitle originates in the renderer, which moves
+  // its own labels optimistically; this one has no such writer, and
+  // `session.retitle` goes straight to the ledger WITHOUT the runtime publish
+  // (see chat/rename.ts), so nothing on screen would learn the title changed
+  // until an unrelated refresh. The durable write is still the truth — this
+  // only tells the windows to catch up.
+  | "volli:session-retitled"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.
@@ -1625,6 +1750,9 @@ export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
  * when the ~20k entry cap was hit.
  */
 export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
+
+/** The installed subset of the allowlisted editor and terminal catalogue. */
+export type ExternalAppListResult = Result<{ apps: ExternalApp[] }>;
 
 /** The composer's `/` picker is project-scoped, exactly like the file index. */
 export interface PromptTemplateIndexInput {

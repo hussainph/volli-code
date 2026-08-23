@@ -17,17 +17,33 @@
  *
  *   1. A fresh profile lands on Home with the Board tab in front, the board
  *      showing, and NO auto-opened Session anywhere (VC-54 scope 2).
- *   2. The Sessions nav item is gone; the nav is Home / Files / Configure.
+ *   2. The Sessions nav item is gone, and Files retired with it (VC-122): the
+ *      nav is Home / Configure, nothing else.
  *   3. "+ New Session" opens a Project Session tab beside the Board, and the
  *      Board tab is not closable.
+ *   3a. The Home rail's Files page lists and live-watches the Main checkout;
+ *       click/double-click preview and pin a Home File tab, whose close returns
+ *       to the previously visited Session tab.
+ *   3b. Opening a file from a nested folder LEAVES THE NAVIGATOR IN THAT
+ *       FOLDER. The rail is rendered from one position in the tree; from two it
+ *       would remount on the Session→File switch and reset itself to the
+ *       project root, so the click would undo its own browse.
  *   4. Selecting the Board tab returns to the board with the Session tab still
  *      on the strip — and the terminal under it is never unmounted.
  *   5. Opening a ticket HIDES the Home strip; leaving the ticket restores it,
  *      with the Session tab still there.
- *   6. Switching to Files and back keeps the same live terminal mounted (the
- *      keep-alive seam CLAUDE.md protects).
- *   7. Relaunch: the terminal tab is gone with its PTY and Home falls back to
+ *   6. Relaunch: the terminal tab is gone with its PTY and Home falls back to
  *      the permanent Board tab, rather than to a stranded empty surface.
+ *
+ * A check that used to sit here ("switching to Files and back keeps the same
+ * live terminal mounted") retired with VC-122's primary-nav removal: it
+ * proved Home's flat navigator and the (now-gone) primary sidebar tree shared
+ * one ref-counted directory watch without one's cleanup silencing the
+ * other's. With the tree gone, a main-checkout root watch has exactly one
+ * consumer left — this rail's own Files page — so there is no second
+ * consumer left to prove survives. Check 3a's live-root-listing assertion
+ * already covers what remains true: the panel's own watch fires while it is
+ * mounted.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -36,6 +52,9 @@
  *     pnpm run build
  *     node apps/desktop/e2e/home-taxonomy-smoke.mjs
  */
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+
 import {
   launch,
   makeGitRepo,
@@ -138,13 +157,15 @@ try {
     },
   );
 
-  await attempt(2, "the nav is Home / Files / Configure — the Sessions page is gone", async () => {
+  await attempt(2, "the nav is Home / Configure — Sessions and Files are both gone", async () => {
     const sessions = await page.getByRole("button", { name: "Sessions", exact: true }).count();
+    const files = await page.getByRole("button", { name: "Files", exact: true }).count();
     const home = await page.getByRole("button", { name: "Home", exact: true }).count();
+    const configure = await page.getByRole("button", { name: "Configure", exact: true }).count();
     const board = await page.getByRole("button", { name: "Board", exact: true }).count();
     return {
-      ok: sessions === 0 && home === 1 && board === 0,
-      detail: `sessionsNav=${sessions} homeNav=${home} boardNav=${board}`,
+      ok: sessions === 0 && files === 0 && home === 1 && configure === 1 && board === 0,
+      detail: `sessionsNav=${sessions} filesNav=${files} homeNav=${home} configureNav=${configure} boardNav=${board}`,
     };
   });
 
@@ -160,6 +181,118 @@ try {
       return {
         ok: labels.length === 2 && labels[0] === "Board" && boardClose === 0 && !board,
         detail: `tabs=${JSON.stringify(labels)} boardClose=${boardClose} boardShown=${board}`,
+      };
+    },
+  );
+
+  await attempt(
+    "3a",
+    "the Home rail browses live Project Files; preview/pin tabs close back to the previous Session",
+    async () => {
+      const terminalTab = strip(page).getByRole("tab").filter({ hasNotText: "Board" }).first();
+      const terminalLabel = await terminalTab.getAttribute("aria-label");
+      const panesBefore = await terminalCanvasCount(page);
+
+      await page.getByTestId("home-rail-tab-files").click();
+      const filesPanel = page.getByTestId("home-files-panel");
+      await waitUntil("Home Project Files panel", async () => (await filesPanel.count()) === 1);
+      const readme = filesPanel.locator('[data-testid="ticket-files-row"][data-path="README.md"]');
+      await waitUntil("README in Home Files", async () => (await readme.count()) === 1);
+
+      // The panel's current level is under a real non-recursive dir watch. A
+      // file appearing on disk has to arrive without a manual refresh.
+      await fs.writeFile(join(projectPath, "appeared.md"), "# appeared\n", "utf8");
+      const appeared = filesPanel.locator(
+        '[data-testid="ticket-files-row"][data-path="appeared.md"]',
+      );
+      await waitUntil("live root listing update", async () => (await appeared.count()) === 1, {
+        timeout: 15000,
+      });
+
+      await readme.click();
+      const fileTab = page.locator('[data-testid="home-file-tab"][data-rel-path="README.md"]');
+      await waitUntil(
+        "README Home preview tab",
+        async () =>
+          (await fileTab.count()) === 1 &&
+          (await fileTab.getAttribute("data-preview")) === "true" &&
+          (await fileTab.getAttribute("aria-selected")) === "true",
+      );
+
+      await readme.dblclick();
+      await waitUntil(
+        "README Home tab pinned",
+        async () => (await fileTab.getAttribute("data-preview")) !== "true",
+      );
+      if (process.env.VOLLI_SMOKE_SCREENSHOT) {
+        await page.screenshot({ path: process.env.VOLLI_SMOKE_SCREENSHOT, fullPage: true });
+      }
+
+      await fileTab.getByTestId("tab-close").click();
+      await waitUntil("README Home tab closed", async () => (await fileTab.count()) === 0);
+      const activeAfterClose = await strip(page)
+        .locator('[role="tab"][aria-selected="true"]')
+        .getAttribute("aria-label");
+      const panesAfter = await terminalCanvasCount(page);
+
+      return {
+        ok:
+          terminalLabel !== null &&
+          activeAfterClose === terminalLabel &&
+          panesBefore > 0 &&
+          panesAfter === panesBefore,
+        detail: `return=${activeAfterClose} expected=${terminalLabel} panes=${panesBefore}→${panesAfter}`,
+      };
+    },
+  );
+
+  await attempt(
+    "3b",
+    "opening a file from a nested folder leaves the Home navigator standing in it",
+    async () => {
+      await fs.mkdir(join(projectPath, "docs"), { recursive: true });
+      await fs.writeFile(join(projectPath, "docs", "guide.md"), "# guide\n", "utf8");
+
+      await page.getByTestId("home-rail-tab-files").click();
+      const filesPanel = page.getByTestId("home-files-panel");
+      const docsRow = filesPanel.locator('[data-testid="ticket-files-row"][data-path="docs"]');
+      await waitUntil("docs folder in Home Files", async () => (await docsRow.count()) === 1, {
+        timeout: 15000,
+      });
+
+      // Walk INTO the folder: the header's mono line becomes the way back out.
+      await docsRow.click();
+      const upOut = filesPanel.getByTestId("home-files-up");
+      await waitUntil(
+        "navigator inside docs/",
+        async () => (await upOut.getAttribute("aria-label")) === "Leave docs",
+      );
+
+      const guideRow = filesPanel.locator(
+        '[data-testid="ticket-files-row"][data-path="docs/guide.md"]',
+      );
+      await waitUntil("guide.md listed in docs/", async () => (await guideRow.count()) === 1);
+
+      // The regression this guards: opening the file switches the Home tab from
+      // a Session to a File, and the rail must survive that switch intact.
+      await guideRow.click();
+      const guideTab = page.locator('[data-testid="home-file-tab"][data-rel-path="docs/guide.md"]');
+      await waitUntil(
+        "guide.md Home preview tab",
+        async () =>
+          (await guideTab.count()) === 1 &&
+          (await guideTab.getAttribute("aria-selected")) === "true",
+      );
+
+      const stillInside = await upOut.getAttribute("aria-label");
+      const siblingStillListed = await guideRow.count();
+
+      await guideTab.getByTestId("tab-close").click();
+      await waitUntil("guide.md tab closed", async () => (await guideTab.count()) === 0);
+
+      return {
+        ok: stillInside === "Leave docs" && siblingStillListed === 1,
+        detail: `navigatorAfterOpen=${stillInside ?? "reset to root"} siblingRows=${siblingStillListed}`,
       };
     },
   );
@@ -207,18 +340,25 @@ try {
     },
   );
 
-  await attempt(6, "a nav round trip to Files unmounts no live terminal", async () => {
-    const before = await terminalCanvasCount(page);
-    await page.getByRole("button", { name: "Files", exact: true }).click();
-    const duringFiles = await terminalCanvasCount(page);
-    await page.getByRole("button", { name: "Home", exact: true }).click();
-    await waitUntil("Home's strip to come back", async () => (await strip(page).count()) > 0);
-    const after = await terminalCanvasCount(page);
-    return {
-      ok: before > 0 && duringFiles === before && after === before,
-      detail: `panes ${before} → files:${duringFiles} → ${after}`,
-    };
-  });
+  // Check 6 used to live here ("a nav round trip to Files unmounts no live
+  // terminal") — see the module doc for why it retired with VC-122 rather
+  // than being ported: the second watch consumer it cross-checked against is
+  // gone.
+
+  // `volli:workspace` writes through a debounced SQLite bridge. Observe the
+  // empty File workspace durably before releasing this renderer; otherwise a
+  // fast smoke can relaunch against the pinned value written just before Close.
+  await waitUntil("closed Home File tab to persist", () =>
+    page.evaluate(async (projectId) => {
+      const boot = await window.api.data.bootstrap();
+      if (!boot.ok) return false;
+      const raw = boot.data.appState["volli:workspace"];
+      if (typeof raw !== "string") return false;
+      const parsed = JSON.parse(raw);
+      const record = parsed?.state?.byProject?.[projectId];
+      return record === undefined || record?.projectFiles?.tabs?.length === 0;
+    }, PROJECT.id),
+  );
 
   await app.close();
 
@@ -228,7 +368,7 @@ try {
     await page.waitForLoadState("domcontentloaded");
 
     await attempt(
-      7,
+      6,
       "relaunch: the dead terminal tab is gone and Home falls back to the Board tab",
       async () => {
         await waitUntil("Home's strip to mount", async () => (await strip(page).count()) > 0);

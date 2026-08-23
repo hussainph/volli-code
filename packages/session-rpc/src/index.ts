@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
-  isSessionStreamOverlay,
+  isSessionStreamFrame,
   type ModelAccessSnapshot,
   type SessionClientCommand,
   type SessionRuntime,
@@ -8,6 +8,7 @@ import {
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
+  type SessionStreamCompactionProgress,
   type SessionStreamFrame,
   type SessionStreamOverlay,
   type SessionStartResult,
@@ -63,12 +64,15 @@ export type RendererSessionStreamFrame = Omit<SessionStreamFrame, "event"> & {
 };
 
 /** A streamed Session emission with executor identity and adapter-native detail removed. */
-export type RendererSessionStreamEmission = RendererSessionStreamFrame | SessionStreamOverlay;
+export type RendererSessionStreamEmission =
+  | RendererSessionStreamFrame
+  | SessionStreamOverlay
+  | SessionStreamCompactionProgress;
 
 /** The durable arm carries no `kind` of its own, mirroring the runtime's own test. */
-function isRendererStreamOverlay(
+function isRendererStreamTransient(
   emission: RendererSessionStreamEmission,
-): emission is SessionStreamOverlay {
+): emission is SessionStreamOverlay | SessionStreamCompactionProgress {
   return "kind" in emission;
 }
 
@@ -723,11 +727,13 @@ export function createSessionRouter() {
           const sourceFailure: { current: { error: unknown } | null } = { current: null };
           const unsubscribe = await ctx.runtime.subscribe(
             { sessionId: input.sessionId, afterSequence },
-            // An overlay passes through untouched: `rendererFrame` exists to
+            // Live emissions pass through untouched: `rendererFrame` exists to
             // keep runtime identity and recovery locators behind the server
-            // boundary, and a transient message part carries neither.
+            // boundary, and no transient arm carries either. Asked as the
+            // negation of the durable arm so a third transient arm needs no
+            // edit here.
             (emission) =>
-              queue.push(isSessionStreamOverlay(emission) ? emission : rendererFrame(emission)),
+              queue.push(isSessionStreamFrame(emission) ? rendererFrame(emission) : emission),
             // The runtime's drain died behind this subscription. Ended like an
             // overflow — buffered contiguous frames still drain, then the
             // stream closes with an error instead of a clean `done`, because a
@@ -752,7 +758,7 @@ export function createSessionRouter() {
             // reconnect from an overlay id therefore replays durable history and
             // is served a fresh baseline.
             for await (const emission of queue) {
-              yield isRendererStreamOverlay(emission)
+              yield isRendererStreamTransient(emission)
                 ? tracked(String(emission.throughSequence), emission)
                 : tracked(String(emission.sequence), emission);
             }

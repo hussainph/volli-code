@@ -21,10 +21,15 @@
  * is closed, decided one level up in `SessionComposer`.
  */
 import * as React from "react";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
+import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
+import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
 import { NoteIcon } from "@phosphor-icons/react/dist/csr/Note";
+import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
@@ -37,6 +42,7 @@ import {
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import type { ComposerPickerMode, ComposerPickerRow } from "@renderer/chat/composer-picker";
+import type { ComposerVerbName } from "@volli/shared";
 import { cn } from "@renderer/lib/utils";
 
 /** The group heading each mode files its rows under. Nouns, not sentences. */
@@ -193,16 +199,37 @@ export const ComposerPicker = React.memo(function ComposerPicker({
 });
 
 /**
+ * One glyph per verb, because the glyph names the ACT and not the category —
+ * the category is already the group heading's job. Two arrows closing onto one
+ * line is a history collapsed into a summary; the pill's own caret is the model
+ * list, so typing `/model` and clicking the pill wear the same mark; arrows in
+ * a circle re-read the disk.
+ *
+ * A `Record` on the closed name union rather than a `switch`: add a verb and
+ * this fails to compile naming the verb that has no glyph. The switch this
+ * replaced could not do that — it sat inside an `if` in a function with more
+ * to return, so a missing arm just fell through.
+ */
+const VERB_ICONS: Record<ComposerVerbName, React.ComponentType<{ className?: string }>> = {
+  compact: ArrowsInLineVerticalIcon,
+  copy: CopyIcon,
+  model: CaretUpDownIcon,
+  reload: ArrowsClockwiseIcon,
+  settings: GearIcon,
+  login: SignInIcon,
+};
+
+/**
  * Outline throughout — a scannable list is outline except for its own
  * exceptions, and this list has none: every row is the same kind of thing.
  * The artifact glyph differs from the file glyph because they ARE different
  * things, not because one is emphasised.
  */
 function RowIcon({ row }: { row: ComposerPickerRow }) {
-  // Two arrows closing onto one line — a history collapsed into a summary,
-  // which is the act rather than the category. A second verb would want its
-  // own glyph rather than inheriting this one.
-  if (row.kind === "verb") return <ArrowsInLineVerticalIcon className="size-3.5 shrink-0" />;
+  if (row.kind === "verb") {
+    const VerbIcon = VERB_ICONS[row.verb.name];
+    return <VerbIcon className="size-3.5 shrink-0" />;
+  }
   if (row.kind === "command") return <TerminalWindowIcon className="size-3.5 shrink-0" />;
   if (row.kind === "skill") return <BookOpenIcon className="size-3.5 shrink-0" />;
   return row.artifact ? (

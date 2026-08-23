@@ -627,6 +627,7 @@ export interface SettledAssistantMessage {
 export type RuntimeObservation =
   | AttachmentObservation
   | TurnObservation
+  | CompactionProgressObservation
   | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
@@ -684,6 +685,21 @@ export interface TurnObservation {
 export const COMPACTION_REASONS = ["threshold", "overflow", "manual"] as const;
 
 export type CompactionReason = (typeof COMPACTION_REASONS)[number];
+
+/**
+ * The executor is currently preparing a context summary.
+ *
+ * This is deliberately transient. A summary that lands or fails has its own
+ * durable {@link CompactionObservation}; this only lets a live Session say why
+ * it is briefly not producing a reply. Keeping it out of recovery prevents a
+ * restarted attachment from reviving a spinner for work that was interrupted.
+ */
+export interface CompactionProgressObservation {
+  kind: "compaction-progress";
+  state: "started" | "finished";
+  reason: CompactionReason;
+  occurredAt?: number;
+}
 
 /**
  * The Session's context was summarized — or an attempt to summarize it failed.
@@ -928,6 +944,31 @@ export interface RuntimeAttachmentHandle {
   readonly recovery: RuntimeRecoveryRef | undefined;
 }
 
+/**
+ * One standalone utility completion: prompt in, text out, nothing else.
+ *
+ * The third door on the runtime, beside Session start and Model Access
+ * inspection — what a background job like auto-titling runs through so it
+ * stays structurally outside the chat: no Session is created, no attachment,
+ * no transcript and no ledger entry. The caller owns which model this runs
+ * on, resolved and validated against its own policy first; the runtime is the
+ * executor, not the chooser, and refuses a model it does not hold rather than
+ * substituting one (no silent fallback).
+ */
+export interface UtilityCompletion {
+  /** The model the caller's policy resolved; its reasoning level is sent as-is. */
+  model: ModelSelection;
+  systemPrompt: string;
+  /** The single user message. */
+  user: string;
+  /**
+   * The caller's deadline. Background work has no one waiting on it, so a
+   * provider that never answers must not leave a promise pending for the life
+   * of the process.
+   */
+  signal?: AbortSignal;
+}
+
 /** The singular runtime port. Not a registry; there is exactly one executor. */
 export interface AgentRuntime {
   /** Inspect provider accounts and models without exposing runtime credentials or native types. */
@@ -936,4 +977,10 @@ export interface AgentRuntime {
     signal?: AbortSignal;
   }): Promise<ModelAccessSnapshot>;
   startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle>;
+  /**
+   * Run one utility completion and resolve its text. Throws when the model is
+   * not one this runtime holds or the call failed; a caller that cannot afford
+   * the throw (a title that keeps its heuristic) catches and logs.
+   */
+  completeUtility(input: UtilityCompletion): Promise<string>;
 }

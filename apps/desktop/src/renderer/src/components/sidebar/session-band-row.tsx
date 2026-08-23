@@ -347,10 +347,11 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
  * the band — and a derived id needs no channel between them.
  *
  * The list is unmounted while the group is collapsed, so this names nothing in
- * that state. That is the same trade Radix's `Collapsible` makes in
- * `file-tree.tsx` one section up, and it is the right side of it: keeping every
- * hidden row mounted to satisfy the reference would cost the band exactly the
- * density this grouping exists to buy.
+ * that state. That is the same trade Radix's `Collapsible` made in the sidebar
+ * file tree that used to sit one section up (retired with the Files nav item,
+ * VC-122), and it is the right side of it: keeping every hidden row mounted to
+ * satisfy the reference would cost the band exactly the density this grouping
+ * exists to buy.
  */
 export function sessionGroupPanelId(ticketId: string): string {
   return `session-group-${ticketId}`;
@@ -386,7 +387,8 @@ export function sessionGroupPanelId(ticketId: string): string {
  * tens of times a day, which is the frequency where motion should be reduced
  * rather than added, and animating the list's height would be layout and paint
  * inside a scroll container this band can fill. The caret's `transform` is the
- * whole treatment — the same one `file-tree.tsx` settled on one section up.
+ * whole treatment — the same one the sidebar's file tree settled on before it
+ * retired (VC-122).
  */
 export const TicketGroupRow = React.memo(function TicketGroupRow({
   ticket,

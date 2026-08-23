@@ -1,19 +1,53 @@
 import starlight from "@astrojs/starlight";
+import sitemap from "@astrojs/sitemap";
 import { defineConfig } from "astro/config";
 
 export default defineConfig({
   output: "static",
   site: "https://docs.volli.app",
+  // Generated from the route list rather than hand-written, so a new doc page
+  // cannot ship unlisted. `public/robots.txt` points crawlers at it.
   integrations: [
+    sitemap(),
     starlight({
       title: "Volli Code",
       description:
-        "Documentation for Volli Code, a local-first macOS workspace for planning code work and running durable coding Sessions.",
+        "Documentation for Volli Code, a local-first macOS workspace for parallel coding agents.",
       logo: {
         src: "./src/assets/volli-icon-dark.png",
         alt: "Volli Code",
       },
       favicon: "/volli-icon-dark.png",
+      // Starlight already emits og:title/type/url/description/site_name and
+      // twitter:card=summary_large_image — but a large-image card with no image
+      // renders as nothing, so these two complete it. One card for all pages:
+      // the share is about the product, not the individual doc.
+      // Regenerate with `pnpm -C apps/website run og`.
+      head: [
+        {
+          tag: "meta",
+          attrs: { property: "og:image", content: "https://docs.volli.app/og.png" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:width", content: "1200" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:height", content: "630" },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content: "Volli Code documentation",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: { name: "twitter:image", content: "https://docs.volli.app/og.png" },
+        },
+      ],
       social: [
         {
           icon: "github",
@@ -53,12 +87,12 @@ export default defineConfig({
         },
         {
           // Ordered by the path through the product: plan on the board, open a
-          // ticket, understand Sessions and worktrees, then configure and theme.
+          // task, understand chats and worktrees, then configure and theme.
           label: "Using Volli",
           items: [
             { label: "The board", slug: "guides/board" },
             { label: "Ticket workspace", slug: "guides/ticket-workspace" },
-            { label: "Sessions and worktrees", slug: "guides/agents-and-worktrees" },
+            { label: "Chats and worktrees", slug: "guides/agents-and-worktrees" },
             { label: "Settings", slug: "guides/settings" },
             { label: "Theming", slug: "guides/theming" },
           ],

@@ -3,13 +3,9 @@
 /**
  * The context-menu primitives, and one policy that binds every item in them:
  * `icon` is REQUIRED — on {@link ContextMenuItem} and {@link ContextMenuSubTrigger}
- * alike — and is drawn at Phosphor's default weight, with no way to override it.
- *
- * Every action in a menu is a peer of every other, so a filled glyph here marks
- * nothing — and at 14px beside 13px text the mark is already the larger object.
- * Fill is reserved for the one item that is the exception among its neighbours;
- * a menu has none, which is why these primitives do not offer the choice. The
- * selection mark is no counter-example: it is the row's state, not an icon.
+ * alike — and is drawn at Phosphor's default outline weight. `iconWeight="fill"`
+ * is the deliberate exception for a surface whose visual requirement names it;
+ * a normal menu never gets fill as generic emphasis.
  *
  * Geometry comes from `menu-classes.ts` — this file states no menu size of its
  * own, so it cannot drift from the dropdown it is the right-click twin of.
@@ -65,14 +61,16 @@ function ContextMenuRadioGroup({
   return <ContextMenuPrimitive.RadioGroup data-slot="context-menu-radio-group" {...props} />;
 }
 
-/** Required `icon`, default weight, no override — see the module note. */
+/** Required `icon`, outline by default; `fill` is an explicit visual exception. */
 function ContextMenuSubTrigger({
   className,
   icon: ItemIcon,
+  iconWeight,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
   icon: Icon;
+  iconWeight?: "fill";
 }) {
   return (
     <ContextMenuPrimitive.SubTrigger
@@ -80,7 +78,7 @@ function ContextMenuSubTrigger({
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
       {...props}
     >
-      <ItemIcon aria-hidden />
+      <ItemIcon aria-hidden weight={iconWeight} />
       {children}
       <CaretRightIcon weight="bold" className="ml-auto" />
     </ContextMenuPrimitive.SubTrigger>
@@ -127,16 +125,18 @@ function ContextMenuContent({
   );
 }
 
-/** Required `icon`, default weight, no override — see the module note. */
+/** Required `icon`, outline by default; `fill` is an explicit visual exception. */
 function ContextMenuItem({
   className,
   variant = "default",
   icon: ItemIcon,
+  iconWeight,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
   variant?: "default" | "destructive";
   icon: Icon;
+  iconWeight?: "fill";
 }) {
   return (
     <ContextMenuPrimitive.Item
@@ -145,7 +145,7 @@ function ContextMenuItem({
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
       {...props}
     >
-      <ItemIcon aria-hidden />
+      <ItemIcon aria-hidden weight={iconWeight} />
       {children}
     </ContextMenuPrimitive.Item>
   );

@@ -2,7 +2,7 @@
  * What is actually true of the CLI install right now, for the Settings → CLI
  * pane (VC-52). Every field is a MEASUREMENT taken at call time — the link is
  * re-read from disk, the login PATH re-asked (cached per launch by
- * `login-path.ts`, and that cache is dropped the moment `ensureUserBinOnPath`
+ * `login-shell-path.ts`, and that cache is dropped the moment `ensureUserBinOnPath`
  * wires the profile, so the row reflects the wiring on the very launch that
  * performed it), the wrapper set read from what the last regeneration
  * resolved — because the pane exists to replace guessing with detection, and a
@@ -15,7 +15,12 @@
 import { lstat, readlink } from "node:fs/promises";
 import { basename } from "node:path";
 
-import type { CliToolStatus } from "../ipc/contract";
+import type {
+  CliCredentialHelperIssue,
+  CliSessionPathStatus,
+  CliSystemPathIssue,
+  CliToolStatus,
+} from "../ipc/contract";
 import { LEGACY_GLOBAL_CLI_LINK, loginPathHasUserBin, userCliLinkPath } from "./agent-tools";
 
 export interface CliStatusDeps {
@@ -28,6 +33,12 @@ export interface CliStatusDeps {
   /** Measured at call time (`agentSocket.live()`) — never a boot latch. */
   socketLive(): boolean;
   loginShellPath(): Promise<string | null>;
+  /** The actual Session environment, optionally scoped to a project workspace. */
+  sessionEnvironment(cwd: string | null): Promise<CliSessionPathStatus>;
+  /** Known malformed `/etc/paths.d` entries, read-only and never repaired here. */
+  systemPathIssues(): Promise<CliSystemPathIssue[]>;
+  /** Known GUI-capable Git credential helpers for the scoped project, never repaired here. */
+  credentialHelperIssues(cwd: string | null): Promise<CliCredentialHelperIssue[]>;
   /** Wrapper command names the last harness-runtime regeneration produced. */
   wrapperCommands(): readonly string[];
   /** The user's login shell binary (`resolveShell`). */
@@ -55,14 +66,22 @@ async function linkState(
   }
 }
 
-export async function readCliStatus(deps: CliStatusDeps): Promise<CliToolStatus> {
+export async function readCliStatus(
+  deps: CliStatusDeps,
+  cwd: string | null = null,
+): Promise<CliToolStatus> {
   const shimPath = deps.shimPath();
   const isOurs = (target: string): boolean =>
     target === shimPath || deps.managedTargets.includes(target);
   const link = await linkState(userCliLinkPath(deps.home), isOurs);
   const legacyPath = deps.legacyLinkPath ?? LEGACY_GLOBAL_CLI_LINK;
   const legacy = await linkState(legacyPath, isOurs);
-  const loginPath = await deps.loginShellPath();
+  const [loginPath, session, systemPathIssues, credentialHelperIssues] = await Promise.all([
+    deps.loginShellPath(),
+    deps.sessionEnvironment(cwd),
+    deps.systemPathIssues(),
+    deps.credentialHelperIssues(cwd),
+  ]);
   const shellName = basename(deps.shellFile);
   return {
     link: { path: userCliLinkPath(deps.home), ...link },
@@ -75,6 +94,7 @@ export async function readCliStatus(deps: CliStatusDeps): Promise<CliToolStatus>
             ? "reachable"
             : "missing",
     },
+    environment: { loginPath, session, systemPathIssues, credentialHelperIssues },
     socket: { path: deps.socketPath, live: deps.socketLive() },
     wrappers: { commands: [...deps.wrapperCommands()] },
     shell: {

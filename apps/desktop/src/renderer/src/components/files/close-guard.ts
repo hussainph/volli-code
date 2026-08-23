@@ -8,8 +8,8 @@
  * other remains open is always safe (no confirm / no discard). Confirmation
  * only fires when this is the last open representation of that path.
  *
- * The React half (files-page / ticket-detail) only performs what these return:
- * prompt or don't, then close or don't.
+ * The React half (home-surface / ticket-detail) only performs what these
+ * return: prompt or don't, then close or don't.
  */
 
 /** What closing a tab requires right now. */

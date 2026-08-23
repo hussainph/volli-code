@@ -13,6 +13,8 @@ function render(referenced: TicketFileRefRow[], worktree: TicketWorktreeEntry[])
   return renderToStaticMarkup(
     <TooltipProvider>
       <TicketFilesList
+        projectId="project-1"
+        ticketId="ticket-1"
         referenced={referenced}
         worktree={worktree}
         onPreviewFile={noop}

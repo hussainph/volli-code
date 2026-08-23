@@ -1,11 +1,23 @@
 ---
 title: Concepts
-description: The terms Volli uses for projects, tickets, Sessions, worktrees, and local history.
+description: Translate tasks, agent chats, branches, and review into the terms Volli uses in its UI and documentation.
 sidebar:
   label: Concepts
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Use this page when a Volli label is unfamiliar. The table translates the common
+workflow into the terms you see in the app.
+
+| What you want to do | Volli term |
+| --- | --- |
+| Plan and track a unit of work | **Ticket** |
+| State the task's outcome and constraints | **Ticket Body** |
+| Run an agent conversation | **Chat** |
+| Keep a durable record of a chat or terminal | **Session** |
+| Give a task its own Git checkout | **Ticket worktree** |
+| Inspect a task's branch changes | **Change Set** |
 
 These terms have the same meaning across the app and its documentation.
 
@@ -14,45 +26,57 @@ These terms have the same meaning across the app and its documentation.
 **Project.** A tracked codebase folder. Removing it from Volli does not remove
 the folder from disk.
 
-**Ticket.** A board card that holds a title, status, and Ticket Body. A ticket
-can provide the context for a Ticket Session and its worktree.
+**Home.** The project's tabbed workspace. A project opens here. Its first tab is
+the Board and cannot be closed. Project chats and Project Files open as tabs
+beside it.
 
-**Ticket Body.** The ticket's canonical Markdown scope and starting instruction.
-It is part of the ticket record, not a repository file.
+**Ticket.** A task on the board. It holds a title, status, and Ticket Body. A
+ticket can provide the context for a ticket chat and its worktree.
 
-**Ticket workspace.** The expanded working surface for one ticket. Its body,
-Sessions, files, properties, and change set appear together here.
+**Ticket Body.** The task's Markdown brief and starting instruction. It is part
+of the ticket record, not a repository file.
+
+**Ticket workspace.** The working surface for one task. Its main tabs hold the
+Ticket Body, chats, files, and diffs. Its rail groups repository state,
+properties, and chats under Now, with separate Diffs and Files views.
 
 **Display ID.** The project-local handle shown to people, such as `VC-12`.
 
-## Sessions
+## Chats
 
-**Session.** A durable identity and locally ordered history for an agentic
-conversation. It exists before a runtime attaches and remains openable after
-its attachment, turn, or run ends.
+**Session.** The durable record for a chat or terminal. It remains available
+after its live connection, turn, or run ends.
 
-**Ticket Session.** A structured Pi-backed Session with one Ticket's context
-and worktree. Its runtime receives a generated Runtime Brief from the ticket.
+**Chat.** Volli's built-in agent conversation. It uses the model you choose in
+Model Access and shows the agent's messages, tool steps, and questions in the
+app.
 
-**Project Session.** A structured Pi-backed Session for the project's main
-checkout. It has no Ticket context.
+**Ticket chat.** A chat for one task. It carries the ticket's Body and resolved
+context, and works in the ticket's worktree.
+
+**Project chat.** A chat for broad project work, started from Home. It works in
+your main checkout and can create and edit tickets. Use it to turn a rough idea
+into tasks.
 
 **Model Access.** The accounts, subscriptions, credentials, and models that
-Volli can truthfully use. You select a default model here before opening a
-structured Session. Credentials do not enter Session history.
+Volli can use. Choose a default model here before you start a chat. Credentials
+do not enter chat history.
 
-**Terminal companion.** A manual terminal or external TUI harness you open for
-work in a project or worktree. It is separate from structured Session execution.
+**Terminal companion.** A manual terminal or external TUI you open for work in
+a project or worktree: Claude Code, Codex, OpenCode, or your own. Open it from
+the caret beside **Chat**. Volli never opens one as a fallback when a chat
+fails.
 
 ## Git work
 
-**Ticket worktree.** An isolated checkout for a ticket. Volli creates its
+**Ticket worktree.** An isolated Git checkout for a task. Volli creates its
 branch as `volli/<DISPLAY-ID>-<slug>` and stores the checkout under
-`~/.volli/worktrees/`.
+`~/.volli/worktrees/`. A worktree is disposable checkout state. Volli can
+recreate it from the retained branch after cleanup.
 
 **Main checkout.** The repository folder you added as a project.
 
-**Change set.** Committed and uncommitted work in a ticket worktree, measured
+**Change Set.** Committed and uncommitted work in a ticket worktree, measured
 against its base branch.
 
 **Ticket Files.** The files in a ticket's worktree.
@@ -69,8 +93,8 @@ message, command outcome, interaction, attachment outcome, or recovery signal.
 **Receipt.** The recorded outcome of a Command: accepted, rejected, completed,
 or unreconciled.
 
-**Attention.** A reconstructed view that shows when a Session needs recovery
-or input. It is derived from Session history rather than a source of truth.
+**Attention.** A reconstructed view that shows when a Session needs recovery or
+input. It is derived from Session history rather than a source of truth.
 
 ## In development
 
@@ -84,11 +108,11 @@ available to configure yet.
   <LinkCard
     title="The board"
     href="/guides/board/"
-    description="See the five columns and the ticket work they hold."
+    description="See the five columns that organize your tasks."
   />
   <LinkCard
-    title="Sessions and worktrees"
+    title="Chats and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="Understand structured execution and isolation in practice."
+    description="Understand how agent chats and isolated checkouts work together."
   />
 </CardGrid>

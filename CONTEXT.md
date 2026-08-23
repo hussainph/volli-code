@@ -1,11 +1,11 @@
 # Volli Code
 
-Local-first planner and execution workspace. This glossary is the canonical project language. The Session terms below define the target architecture; code and tests remain authoritative for current behavior until the migration lands.
+Local-first planner and execution workspace. This glossary is the canonical project language. Some Session and Automation terms below describe planned architecture; code and tests remain authoritative for current behavior.
 
 ## Language
 
 **Ticket**:
-A board card and, once it enters Doing, a terminal workspace. Its content doubles as the agent's starting prompt.
+A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket workspace; moving it to Doing records work state but does not start a Session.
 
 **Ticket Body**:
 The ticket's canonical Markdown scope and starting instruction, authored by a human or agent. It is part of the ticket record, not a file or Artifact.
@@ -20,19 +20,22 @@ A Ticket Body file reference that no longer resolves in that ticket's context.
 _Avoid_: missing Attachment, broken Artifact
 
 **Ticket workspace**:
-The expanded working surface for one ticket, where its Ticket Body, sessions, files, artifacts, and Change Set coexist.
+The expanded working surface for one ticket. Its main tabs hold the Ticket Body, Sessions, files, and diffs; its Now, Diffs, and Files rail keeps repository state, properties, Session history, and file navigation beside them.
 _Avoid_: ticket worktree, artifact view
 
 **Home**:
 The project-level tabbed workspace, and the app's landing page. Its permanent
-first tab is the Board; the project's own Project Sessions open as tabs beside
-it. Opening a ticket takes Home over: the Ticket workspace fills the surface and
-Home's tab strip steps aside, so only one tab strip is ever on screen.
-_Avoid_: Board (for the page), Sessions page, dashboard
+first tab is the Board; the project's own Project Sessions and Project Files
+open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
+fills the surface and Home's tab strip steps aside, so only one tab strip is
+ever on screen.
+_Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
 **Project Files**:
-The project-level repository workspace for browsing and editing the Main checkout.
-_Avoid_: global files, project file tab
+Main-checkout files opened as tabs in Home, browsed from a Files page in Home's
+own rail. Not a first-class nav item or a standalone page (retired VC-122; the
+rail page and tabs are VC-121).
+_Avoid_: global files, project file tab, Files page, Files nav
 
 **Ticket Files**:
 The ticket-workspace view of files in that ticket's worktree.
@@ -45,8 +48,9 @@ processes, the Agent Runtime, UI surfaces, and execution venues. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
-Each Session has a Role, an Authority Snapshot, and a model policy. Reconnect,
-restart, and recovery may replace its live executor attachment without changing
+Each Session has a Role and model policy. The planned authority model also
+freezes an Authority Snapshot at Session start. Reconnect, restart, and recovery
+may replace its live executor attachment without changing
 that identity. A model change is an explicit recorded action, never a silent
 fallback.
 _Avoid_: pane session, split session, harness process, terminal pane, UI tab
@@ -62,11 +66,12 @@ involvement, and is recorded in Session history exactly as a Ticket Session is.
 _Avoid_: harness mode, agent mode, plan mode, scratch session
 
 **Authority Snapshot**:
-The durable policy granted to one Session when it starts: which actions are
-automatic, which require a decision, which are forbidden, and the classifier
-model allowed to help within deterministic boundaries. A Settings change does
-not silently change a running Session's authority; changing authority is an
-explicit Session action.
+The planned durable policy granted to one Session when it starts: which actions
+are automatic, which require a decision, which are forbidden, and the
+classifier model allowed to help within deterministic boundaries. The current
+desktop host does not supply one, so the authority gate is inactive. In the
+target model, a Settings change does not silently change a running Session's
+authority; changing authority is an explicit Session action.
 _Avoid_: permission preset (when meaning live authority), auto-approve flag
 
 **Session Event**:
@@ -100,7 +105,7 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. Only the threshold is policy: a profile-wide
+and each one is a Session Event. Only the threshold is policy: an app-wide
 switch decides whether a Session compacts before it is asked to, and a model may
 be given its own reserve. Switching the threshold off never withholds the
 recovery an overflow triggers.
@@ -108,8 +113,9 @@ _Avoid_: truncation, trimming history, pruning the transcript
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
-Session Role, work location, model policy, Authority Snapshot, prompt resources,
-and scoped tools; it emits runtime observations and tool requests without owning
+Session Role, work location, model policy, prompt resources, scoped tools, and
+an Authority Snapshot when the host supplies one; it emits runtime observations
+and tool requests without owning
 durable Session or Ticket state. Pi is its initial acknowledged substrate, but
 Pi types and events never become renderer or Session contracts. The package may
 depend on Node but never Electron or DOM APIs, so Electron main can host it
@@ -125,9 +131,9 @@ silently falls back to another model or account.
 _Avoid_: harness profile, provider picker (when meaning the complete access model)
 
 **Web Access**:
-The profile-wide decision about whether Volli may reach the Internet on a
+The app-wide decision about whether Volli may reach the Internet on a
 Session's behalf, and through whose search provider. Off is the default and the
-resting state: a profile that has configured no provider gives its Sessions no
+resting state: an app with no configured provider gives its Sessions no
 web tool at all, rather than a tool that refuses when called. A provider
 endpoint is a person's own configuration and is judged by its own admission
 policy when saved and again on every request; a URL the model supplies is not,

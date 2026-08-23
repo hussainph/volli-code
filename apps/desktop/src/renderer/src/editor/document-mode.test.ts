@@ -69,9 +69,18 @@ describe("document-mode.css surface", () => {
     expect(surface).toContain("--vscode-editor-placeholder-foreground: var(--muted-foreground);");
     expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--foreground\)/);
     expect(surface).toMatch(/--vscode-scrollbarSlider-background:\s*var\(--border\);/);
-    // The catalog theme's `#282c34` and friends enter as hex; nothing on this
+    // Vitesse theme colors enter as hex; nothing on this
     // surface may be one (`#` also catches a stray id selector in the block).
     expect(surface).not.toContain("#");
+  });
+
+  it("hides EditContext's native caret so Monaco renders the only caret", () => {
+    // Chromium can paint the focused native-edit-context caret at the editor's
+    // origin even though Monaco puts the element behind the editor. Monaco's
+    // cursor layer is the one that tracks the model selection.
+    expect(surface).toMatch(
+      /\.volli-document-mode \.monaco-editor \.native-edit-context\s*\{[^}]*caret-color:\s*transparent;/,
+    );
   });
 
   it("keeps every block's box paint on the whole-line element alone", () => {

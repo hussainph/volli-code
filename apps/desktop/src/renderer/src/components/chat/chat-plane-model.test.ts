@@ -14,10 +14,40 @@ import type {
   SessionInteractionPrompt,
   SessionInteractionResolution,
 } from "@volli/shared";
+import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
+import type { BlobLinkView } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
+/**
+ * Distinct Blobs under distinct links, so a merge by hash has something to
+ * collide and a detach has a link to name (VC-137).
+ */
+function file(hash: string, linkId: string): BlobLinkView {
+  return {
+    linkId,
+    blobHash: hash.repeat(32),
+    label: `${linkId}.png`,
+    originalName: `${linkId}.png`,
+    mime: "image/png",
+    sizeBytes: 2048,
+  };
+}
+
+/** One staged file, for the rows and steers that carry them (VC-137). */
+function blobLinkView(): BlobLinkView {
+  return {
+    linkId: "link-1",
+    blobHash: "ab".repeat(32),
+    label: "shot.png",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 2048,
+  };
+}
+
 import { createChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
+import type { QueuedMessage } from "@renderer/chat/session-model";
 
 import {
   answerInteraction,
@@ -25,18 +55,22 @@ import {
   composerPress,
   coordinateQueuedMutation,
   coordinateQueuedSteerStart,
+  detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
+  lastAssistantText,
   messageCopyText,
   messageRoute,
   resolvingWith,
+  restoreStripAttachments,
   sameInteractionId,
   sameMessages,
   sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
+  visibleBlocker,
   steerRollbackState,
   steerTurnIsCurrent,
   steerQueuedMessage,
@@ -55,7 +89,7 @@ function heldMessage(id: string, text: string, state: HeldMessage["state"]): Hel
 
 interface SteerHarnessInput {
   held?: readonly HeldMessage[];
-  queue?: readonly { id: string; text: string }[];
+  queue?: readonly QueuedMessage[];
   steerable?: boolean;
   submit?: QueuedSteerActs["submit"];
 }
@@ -204,6 +238,7 @@ const ACTS: SessionBlockerActs = {
   retryRuntime: NO_OP,
   openSettings: NO_OP,
   signIn: NO_OP,
+  dismissError: NO_OP,
   dismiss: NO_OP,
 };
 
@@ -281,41 +316,75 @@ describe("sessionBlocker", () => {
     expect(blocker?.action?.label).toBe("Retry");
   });
 
-  it("lets the reader retire the transport latch, and nothing durable", () => {
+  it("lets the reader dismiss every error, including durable attention", () => {
     const dismissed: string[] = [];
-    const acts: SessionBlockerActs = { ...ACTS, dismiss: () => dismissed.push("dismissed") };
-
-    // The Session's own transport latch is renderer-local state: the row may
-    // be retired without anyone's permission, Retry staying for the recovery.
-    const latch = sessionBlocker(
-      blockerInput({ sessionError: "Lost the Session stream: socket hang up" }),
-      acts,
-      false,
-    );
-    expect(latch?.dismiss?.label).toBe("Dismiss");
-    latch?.dismiss?.act();
-    expect(dismissed).toEqual(["dismissed"]);
-
-    // Durable facts are not dismissable — a click cannot sign a provider in,
-    // refill a quota, or resurrect a stopped adapter.
-    expect(
-      sessionBlocker(raised(attention("adapter_unrecoverable")), acts, false)?.dismiss,
-    ).toBeUndefined();
-    expect(
-      sessionBlocker(raised(attention("auth_required")), acts, false)?.dismiss,
-    ).toBeUndefined();
-    expect(
-      sessionBlocker(blockerInput({ catalogState: "empty" }), acts, false)?.dismiss,
-    ).toBeUndefined();
-    expect(
+    const dismissedSessionErrors: string[] = [];
+    const acts: SessionBlockerActs = {
+      ...ACTS,
+      dismissError: () => dismissedSessionErrors.push("dismissed"),
+      dismiss: (key) => dismissed.push(key),
+    };
+    const errors = [
+      sessionBlocker(
+        blockerInput({ sessionError: "Lost the Session stream: socket hang up" }),
+        acts,
+        false,
+      ),
+      sessionBlocker(raised(attention("adapter_unrecoverable")), acts, false),
+      sessionBlocker(raised(attention("auth_required")), acts, false),
       sessionBlocker(
         blockerInput({
           sessionModel: { providerId: "openai", providerLabel: "OpenAI", state: "unavailable" },
         }),
         acts,
         false,
-      )?.dismiss,
+      ),
+      sessionBlocker(
+        blockerInput({ catalogError: "ECONNRESET", catalogState: "error" }),
+        acts,
+        false,
+      ),
+    ];
+
+    for (const blocker of errors) {
+      expect(blocker?.tone).toBe("error");
+      expect(blocker?.dismiss?.label).toBe("Dismiss");
+      blocker?.dismiss?.act();
+    }
+    expect(dismissed).toHaveLength(errors.length);
+    expect(dismissedSessionErrors).toEqual(["dismissed"]);
+
+    // Waiting and setup rows name a current process or missing setup; neither
+    // is an error to hide.
+    expect(sessionBlocker(raised(rateLimited(null)), acts, false)?.dismiss).toBeUndefined();
+    expect(
+      sessionBlocker(blockerInput({ catalogState: "empty" }), acts, false)?.dismiss,
     ).toBeUndefined();
+  });
+
+  it("hides a dismissed error only until its report clears or changes", () => {
+    const stopped = sessionBlocker(raised(attention("adapter_unrecoverable")), ACTS, false);
+    const dismissKey = stopped?.dismissKey;
+
+    expect(dismissKey).toBeDefined();
+    expect(visibleBlocker(stopped, dismissKey ?? null)).toEqual({
+      blocker: null,
+      dismissedKey: dismissKey ?? null,
+    });
+    // A successful recovery clears the source; the same error can then be
+    // reported again instead of staying hidden for the rest of the view.
+    expect(visibleBlocker(null, dismissKey ?? null)).toEqual({ blocker: null, dismissedKey: null });
+    expect(visibleBlocker(stopped, null)).toEqual({ blocker: stopped, dismissedKey: null });
+
+    const reErrored = sessionBlocker(
+      raised(attention("adapter_unrecoverable", "stream closed again")),
+      ACTS,
+      false,
+    );
+    expect(visibleBlocker(reErrored, dismissKey ?? null)).toEqual({
+      blocker: reErrored,
+      dismissedKey: null,
+    });
   });
 
   it("keeps a harness attention the card cannot answer", () => {
@@ -327,19 +396,21 @@ describe("sessionBlocker", () => {
   it("sends both provider-owned recoveries to Settings with the failed run's retry beside it", () => {
     // Signing in happens inside Settings now, so the pair no longer forks on
     // whether a manual Ticket terminal exists to hand off to.
-    expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toEqual({
+    expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toMatchObject({
       message: "Sign-in required",
       detail: null,
       tone: "error",
       action: { label: "Settings", act: NO_OP },
       secondaryAction: { label: "Retry", act: NO_OP },
+      dismiss: { label: "Dismiss" },
     });
-    expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toEqual({
+    expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toMatchObject({
       message: "Configuration invalid",
       detail: null,
       tone: "error",
       action: { label: "Settings", act: NO_OP },
       secondaryAction: { label: "Retry", act: NO_OP },
+      dismiss: { label: "Dismiss" },
     });
   });
 
@@ -408,11 +479,12 @@ describe("sessionBlocker", () => {
         ACTS,
         false,
       ),
-    ).toEqual({
+    ).toMatchObject({
       message: "Model unavailable for OpenAI",
       detail: null,
       tone: "error",
       action: null,
+      dismiss: { label: "Dismiss" },
     });
   });
 
@@ -514,11 +586,12 @@ describe("sessionBlocker", () => {
       false,
     );
 
-    expect(blocker).toEqual({
+    expect(blocker).toMatchObject({
       message: "Models unavailable",
       detail: "ECONNRESET",
       tone: "error",
       action: { label: "Settings", act: NO_OP },
+      dismiss: { label: "Dismiss" },
     });
     // A card on screen is not a reason to hide it, but it IS a reason not to
     // add a second row about models to one.
@@ -531,14 +604,15 @@ describe("sessionBlocker", () => {
   });
 
   it("carries the harness's own wording under every attention it draws", () => {
-    expect(sessionBlocker(raised(attention("adapter_disconnected", "EPIPE")), ACTS, false)).toEqual(
-      {
-        message: "Disconnected",
-        detail: "EPIPE",
-        tone: "error",
-        action: { label: "Retry", act: NO_OP },
-      },
-    );
+    expect(
+      sessionBlocker(raised(attention("adapter_disconnected", "EPIPE")), ACTS, false),
+    ).toMatchObject({
+      message: "Disconnected",
+      detail: "EPIPE",
+      tone: "error",
+      action: { label: "Retry", act: NO_OP },
+      dismiss: { label: "Dismiss" },
+    });
   });
 
   it("answers every attention kind, and offers a button only where one can help", () => {
@@ -818,12 +892,44 @@ describe("composerPress", () => {
   });
 
   it("is a compaction when the whole draft is the verb", () => {
-    expect(composerPress(null, "/compact")).toEqual({ kind: "compact", instructions: null });
+    expect(composerPress(null, "/compact")).toEqual({
+      kind: "verb",
+      verb: COMPACT_VERB,
+      instructions: null,
+    });
     // What the picker leaves in the box, and what someone types after it.
-    expect(composerPress(null, "/compact ")).toEqual({ kind: "compact", instructions: null });
+    expect(composerPress(null, "/compact ")).toEqual({
+      kind: "verb",
+      verb: COMPACT_VERB,
+      instructions: null,
+    });
     expect(composerPress(null, "/compact keep the API work")).toEqual({
-      kind: "compact",
+      kind: "verb",
+      verb: COMPACT_VERB,
       instructions: "keep the API work",
+    });
+  });
+
+  it("is a verb press for every verb in the registry, words and all", () => {
+    // Every verb is the same kind of press: the name decides what runs, and
+    // whether the trailing words mean anything is the presser's question, not
+    // the picker's. `/settings` with words is still claimed — dropping them
+    // silently to make it "just a settings open" is the trap the whole-draft
+    // rule exists to prevent.
+    expect(composerPress(null, "/copy")).toEqual({
+      kind: "verb",
+      verb: COPY_VERB,
+      instructions: null,
+    });
+    expect(composerPress(null, "/settings now")).toEqual({
+      kind: "verb",
+      verb: SETTINGS_VERB,
+      instructions: "now",
+    });
+    expect(composerPress(null, "/login")).toEqual({
+      kind: "verb",
+      verb: LOGIN_VERB,
+      instructions: null,
     });
   });
 
@@ -895,6 +1001,100 @@ describe("messageCopyText", () => {
     ];
 
     expect(messageCopyText(messages)).toBeNull();
+  });
+});
+
+describe("lastAssistantText", () => {
+  it("returns the latest turn's words, tool work and all", () => {
+    const messages: readonly UIMessage[] = [
+      { id: "user-1", role: "user", parts: [{ type: "text", text: "What changed?" }] },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        // Tool work is not prose: the copy is the words, not the internals.
+        parts: [{ type: "reasoning", text: "Thinking it through", state: "done" }],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        parts: [{ type: "text", text: "The marker work." }],
+      },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("The marker work.");
+  });
+
+  it("joins several text parts with the feed's prose beat", () => {
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Two things." },
+          { type: "text", text: "Second thing." },
+        ],
+      },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("Two things.\n\nSecond thing.");
+  });
+
+  it("skips assistant messages that said nothing", () => {
+    // A turn can end on a tool call and then speak: the copy is the words,
+    // wherever in the turn they landed.
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Earlier answer." }],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "Thinking", state: "done" },
+          { type: "text", text: "   " },
+        ],
+      },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("Earlier answer.");
+  });
+
+  it("refuses to reach across a user message into an older turn", () => {
+    // A turn that has produced no words yet has no "last reply", and the
+    // previous turn's words would be a copy that looked right and pasted
+    // wrong.
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Older answer." }],
+      },
+      { id: "user-2", role: "user", parts: [{ type: "text", text: "And now?" }] },
+    ];
+
+    expect(lastAssistantText(messages)).toBeNull();
+  });
+
+  it("steps over bookkeeping rows without treating them as the turn's end", () => {
+    // A feed can close on a message that is neither side of the conversation
+    // (a system row). It is not a reply and not a new turn either — the words
+    // behind it are still the latest reply.
+    const messages: readonly UIMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "The marker work." }],
+      },
+      { id: "system-2", role: "system", parts: [{ type: "text", text: "bookkeeping" }] },
+    ];
+
+    expect(lastAssistantText(messages)).toBe("The marker work.");
+  });
+
+  it("returns null for an empty transcript", () => {
+    expect(lastAssistantText([])).toBeNull();
   });
 });
 
@@ -1354,6 +1554,45 @@ describe("steerQueuedMessage", () => {
     expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
   });
 
+  // The attachments half of the same promise (VC-137): steering a queued row
+  // must deliver the file that was attached when ⏎ was pressed — not a copy
+  // the rebuild silently stripped to its words.
+  it("hands a held row's attachments to submit when steered", async () => {
+    const attachments = [blobLinkView()];
+    const state = steerHarness({
+      held: [{ ...heldMessage("q1", "look at this", "unsent"), attachments }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "look at this", attachments });
+        expect(delivery).toBe("steer");
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+
+    expect(state.held()).toEqual([]);
+    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
+  });
+
+  // A held copy predating this feature (or one `beginQueuedSteer` has not yet
+  // touched) may carry no attachments field at all while the resident release
+  // queue still holds the row it came from — the queue observes an enqueue
+  // synchronously, before any held write. The queue's own copy is the fallback.
+  it("falls back to the queue copy's attachments when the held copy names none", async () => {
+    const attachments = [blobLinkView()];
+    const state = steerHarness({
+      held: [heldMessage("q1", "look at this", "unsent")],
+      queue: [{ id: "q1", text: "look at this", attachments }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "look at this", attachments });
+        expect(delivery).toBe("steer");
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+  });
+
   it("restores a refused queue-only row between its original neighbors", async () => {
     const state = steerHarness({
       queue: [
@@ -1605,6 +1844,84 @@ describe("heldStrip", () => {
     expect(heldStrip([{ ...heldMessage("m1", "/logos go", "unsent"), resources }], [])).toEqual([
       { id: "m1", text: "/logos go", resources },
     ]);
+  });
+
+  // Same rule for files (VC-137): a row that redraws without its attachments
+  // is a message the person believes still carries them.
+  it("keeps a held row's attachments on its strip row", () => {
+    const attachments = [blobLinkView()];
+    expect(heldStrip([{ ...heldMessage("m1", "look", "unsent"), attachments }], [])).toEqual([
+      { id: "m1", text: "look", attachments },
+    ]);
+  });
+});
+
+// The two halves of one invariant (VC-137): a pulled-back row's files rejoin
+// the strip BEFORE the row leaves the queue, and the removal path reads that
+// same strip to tell "came back" from "was deleted". Tested together, because
+// getting either one alone right is not the property that matters.
+describe("a queued row's files, coming back and going away", () => {
+  describe("restoreStripAttachments", () => {
+    it("leaves the strip exactly as it was when nothing came back", () => {
+      const staged = [file("ab", "link-1")];
+
+      expect(restoreStripAttachments(staged, [])).toEqual({ strip: staged, detach: [] });
+    });
+
+    it("appends the row's files after what was already staged", () => {
+      const staged = [file("ab", "link-1")];
+      const incoming = [file("cd", "link-2")];
+
+      expect(restoreStripAttachments(staged, incoming)).toEqual({
+        strip: [...staged, ...incoming],
+        detach: [],
+      });
+    });
+
+    // One Blob, two links: the row's is the one a re-send must carry, so the
+    // staged view loses — and its link has to go, or it is invisible forever.
+    it("lets the row's own view win a collision and strands the staged link", () => {
+      const shadowed = file("ab", "staged-link");
+      const rowsOwn = file("ab", "row-link");
+      const untouched = file("cd", "link-2");
+
+      expect(restoreStripAttachments([shadowed, untouched], [rowsOwn])).toEqual({
+        strip: [untouched, rowsOwn],
+        detach: [shadowed],
+      });
+    });
+  });
+
+  describe("detachableRowAttachments", () => {
+    it("has nothing to detach for a row that carried no files", () => {
+      expect(detachableRowAttachments(undefined, [])).toEqual([]);
+      expect(detachableRowAttachments([], [file("ab", "link-1")])).toEqual([]);
+    });
+
+    it("detaches every file of a row nothing restored", () => {
+      const row = [file("ab", "link-1"), file("cd", "link-2")];
+
+      expect(detachableRowAttachments(row, [])).toEqual(row);
+    });
+
+    // The whole point of the pairing: an edited row put these back a moment
+    // ago, so the removal that follows must not tear out the links it needs.
+    it("spares a file whose Blob is back in the strip", () => {
+      const restored = file("ab", "link-1");
+      const deleted = file("cd", "link-2");
+
+      expect(detachableRowAttachments([restored, deleted], [restored])).toEqual([deleted]);
+    });
+  });
+
+  // End to end across the pair, in the order the composer calls them.
+  it("keeps an edited row's links and drops a deleted row's", () => {
+    const carried = [file("ab", "link-1")];
+
+    const edited = restoreStripAttachments([], carried);
+    expect(detachableRowAttachments(carried, edited.strip)).toEqual([]);
+
+    expect(detachableRowAttachments(carried, [])).toEqual(carried);
   });
 });
 

@@ -4,6 +4,7 @@ import type {
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeSnapshot,
+  SessionStreamCompactionProgress,
   SessionStreamEmission,
   SessionStreamFrame,
   SessionStreamOverlay,
@@ -241,6 +242,16 @@ function overlay(throughSequence: number): SessionStreamOverlay {
     throughSequence,
     messageId: "assistant-1",
     delta: { op: "part.append", key: "text-1", text: "lo" },
+  };
+}
+
+function compactionProgress(throughSequence: number): SessionStreamCompactionProgress {
+  return {
+    kind: "compaction",
+    sessionId: "session-1",
+    throughSequence,
+    state: "started",
+    reason: "manual",
   };
 }
 
@@ -631,6 +642,25 @@ describe("Session tRPC router", () => {
     // unsuffixed, so a resubscribe from it still parses as a cursor.
     expect(transient.id).toBe("5");
     expect(transient.data).toEqual(overlay(5));
+  });
+
+  it("yields a transient compaction marker at its durable cursor", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(compactionProgress(5));
+    const transient = trackedValue((await pending).value);
+    await iterator.return?.();
+
+    expect(transient.id).toBe("5");
+    expect(transient.data).toEqual(compactionProgress(5));
   });
 
   it("answers a projection read with Session state alone and no transcript replay", async () => {

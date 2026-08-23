@@ -1,8 +1,9 @@
 /**
  * The chat transcript's durable state, folded forward from the Session stream.
  *
- * A Session stream is two arms — durable frames and transient overlay deltas —
- * and this is where the two meet: {@link appendFrames} is the whole fold, and
+ * A Session stream has one durable arm and two live ones — transcript deltas
+ * and compaction progress — and this is where they meet: {@link appendFrames}
+ * is the whole fold, and
  * everything else here is either the state it produces or a rule that fold
  * relies on to stay correct across batches. No React, no transport; every
  * function is total over its arguments so the fold is testable without
@@ -10,6 +11,7 @@
  */
 import {
   applyTranscriptDelta,
+  type SessionStreamCompactionProgress,
   type SessionStreamOverlay,
   type TranscriptOverlay,
 } from "@volli/session-engine";
@@ -71,6 +73,12 @@ export type TranscriptCompaction = {
   | { outcome: "failed"; detail: string }
 );
 
+/** A live compaction marker, deliberately smaller than the transient transport arm. */
+export interface LiveTranscriptCompaction {
+  throughSequence: number;
+  reason: CompactionReason;
+}
+
 /**
  * What the stream alone can say, kept between batches.
  *
@@ -116,6 +124,17 @@ export interface ChatTranscriptState {
    * first delta and the durable frame that settles it.
    */
   overlay: TranscriptOverlay;
+  /**
+   * The context summary currently running, or null once it finishes. Unlike a
+   * boundary, this is never history: an interrupted attachment must not revive
+   * it when the transcript is re-read.
+   */
+  liveCompaction: LiveTranscriptCompaction | null;
+  /**
+   * The newest durable compaction outcome. It rejects a delayed live marker
+   * that would otherwise redraw a spinner beneath the boundary that settled it.
+   */
+  lastCompactionSequence: number;
   /**
    * The last durable transcript sequence applied per message id — the staleness
    * guard's whole state.
@@ -165,6 +184,8 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   turnEpoch: 0,
   durableMessages: [],
   overlay: EMPTY_OVERLAY,
+  liveCompaction: null,
+  lastCompactionSequence: 0,
   durableSequences: EMPTY_DURABLE_SEQUENCES,
   messages: [],
   openedInteractions: EMPTY_INTERACTION_INDEX,
@@ -193,14 +214,18 @@ export function appendFrames(
   state: ChatTranscriptState,
   batch: readonly ChatSessionFrame[],
   overlays: readonly SessionStreamOverlay[] = [],
+  progress: readonly SessionStreamCompactionProgress[] = [],
+  clearLiveCompaction = false,
 ): ChatTranscriptState {
   const fresh = batch.filter((frame) => frame.sequence > state.throughSequence);
   const last = fresh.at(-1);
-  if (!last && overlays.length === 0) return state;
+  if (!last && overlays.length === 0 && progress.length === 0 && !clearLiveCompaction) return state;
 
   let turnActive = state.turnActive;
   let turnEpoch = state.turnEpoch;
   let overlay = state.overlay;
+  let liveCompaction = clearLiveCompaction ? null : state.liveCompaction;
+  let lastCompactionSequence = state.lastCompactionSequence;
   let promptResources = state.promptResources;
   // Collected, then appended once, and null while nothing has landed — which is
   // the whole of it: a batch that carried no compaction must hand back the very
@@ -233,7 +258,14 @@ export function appendFrames(
       promptResources = payload.input.resources.map((resource) => resource.name);
     }
     const compaction = compactionFrame(payload, frame.sequence, anchorId);
-    if (compaction !== null) (landed ??= []).push(compaction);
+    if (compaction !== null) {
+      (landed ??= []).push(compaction);
+      lastCompactionSequence = frame.sequence;
+      if (liveCompaction !== null && liveCompaction.throughSequence <= lastCompactionSequence) {
+        liveCompaction = null;
+      }
+    }
+    if (payload?.kind === "attachment.closed") liveCompaction = null;
     const settledMessage = frame.transcript?.message;
     if (settledMessage === undefined) continue;
     // A message with nothing to draw takes no position, so it is not somewhere a
@@ -256,9 +288,35 @@ export function appendFrames(
     if (settledAt !== undefined && emission.throughSequence < settledAt) continue;
     overlay = applyTranscriptDelta(overlay, emission.messageId, emission.delta);
   }
-  // A batch of nothing but stale or orphaned overlays folds to the state it was
-  // handed, and a fresh object here would repaint the transcript for nothing.
-  if (!last && overlay === state.overlay) return state;
+  for (const emission of progress) {
+    if (emission.state === "finished") {
+      if (liveCompaction !== null && emission.throughSequence >= liveCompaction.throughSequence) {
+        liveCompaction = null;
+      }
+      continue;
+    }
+    // A start always carries the sequence before its eventual durable outcome.
+    // An older one that arrives after that outcome cannot become live again.
+    if (emission.throughSequence < lastCompactionSequence) continue;
+    if (
+      liveCompaction === null ||
+      liveCompaction.throughSequence !== emission.throughSequence ||
+      liveCompaction.reason !== emission.reason
+    ) {
+      liveCompaction = { throughSequence: emission.throughSequence, reason: emission.reason };
+    }
+  }
+  // A batch of nothing but stale or orphaned transient state folds to the state
+  // it was handed, and a fresh object here would repaint the transcript for
+  // nothing.
+  if (
+    !last &&
+    overlay === state.overlay &&
+    liveCompaction === state.liveCompaction &&
+    lastCompactionSequence === state.lastCompactionSequence
+  ) {
+    return state;
+  }
 
   // These keep their previous identity when the batch had nothing for them,
   // which is the other half of the point: a batch of pure tool traffic must not
@@ -275,6 +333,8 @@ export function appendFrames(
     turnEpoch,
     durableMessages,
     overlay,
+    liveCompaction,
+    lastCompactionSequence,
     durableSequences,
     messages:
       durableMessages === state.durableMessages && overlay === state.overlay

@@ -1,6 +1,7 @@
 import { projectSession } from "@volli/shared";
 import type {
   CommandReceipt,
+  CompactionReason,
   ModelSelection,
   Session,
   SessionAttachment,
@@ -251,21 +252,46 @@ export interface SessionStreamOverlay {
   delta: TranscriptDelta;
 }
 
+/** A visible, live-only reason the Session is briefly waiting on a summary. */
+export interface SessionStreamCompactionProgress {
+  kind: "compaction";
+  sessionId: string;
+  /** The durable history the progress marker was emitted beside. */
+  throughSequence: number;
+  state: "started" | "finished";
+  reason: CompactionReason;
+}
+
+export type SessionStreamTransient = SessionStreamOverlay | SessionStreamCompactionProgress;
+
 /**
  * What a subscriber receives.
  *
  * The durable arm is the **bare** {@link SessionStreamFrame}, not a wrapped
  * one: every existing consumer validates a frame by its `sequence`, so leaving
- * it bare keeps them working untouched and simply ignoring overlays until a
+ * it bare keeps them working untouched and simply ignoring live state until a
  * surface opts in.
  */
-export type SessionStreamEmission = SessionStreamFrame | SessionStreamOverlay;
+export type SessionStreamEmission = SessionStreamFrame | SessionStreamTransient;
 
 /** The durable arm carries no `kind` of its own, which is the whole test. */
 export function isSessionStreamOverlay(
   emission: SessionStreamEmission,
 ): emission is SessionStreamOverlay {
-  return "kind" in emission;
+  return "kind" in emission && emission.kind === "overlay";
+}
+
+export function isSessionStreamCompactionProgress(
+  emission: SessionStreamEmission,
+): emission is SessionStreamCompactionProgress {
+  return "kind" in emission && emission.kind === "compaction";
+}
+
+/** Durable frames are the only arm that carries an event sequence of its own. */
+export function isSessionStreamFrame(
+  emission: SessionStreamEmission,
+): emission is SessionStreamFrame {
+  return !("kind" in emission);
 }
 
 /**
@@ -540,6 +566,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #histories = new Map<string, ProjectedHistory>();
   /** Insertion-ordered too, so the first key is the least recently folded Session. */
   readonly #overlays = new Map<string, SessionOverlayState>();
+  /** One active context rewrite per Session; both the runtime and the stream enforce it. */
+  readonly #compactionProgress = new Map<string, SessionStreamCompactionProgress>();
   #closed = false;
 
   constructor(private readonly ports: SessionRuntimePorts) {}
@@ -1597,6 +1625,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#publish([closed]);
     this.#bindings.delete(request.command.attachmentId);
     this.#overlays.delete(request.sessionId);
+    this.#compactionProgress.delete(request.sessionId);
     const receipt = await this.#recordDelivery(
       request.sessionId,
       request.command.attachmentId,
@@ -1694,6 +1723,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
       await this.#enqueue(subscriber, replay);
       await this.#enqueueOverlayBaselines(subscriber);
+      await this.#enqueueCompactionProgressBaseline(subscriber);
     } catch (error) {
       subscribers.delete(subscriber);
       throw error;
@@ -1791,6 +1821,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#subscribers.clear();
     this.#histories.clear();
     this.#overlays.clear();
+    this.#compactionProgress.clear();
     await this.#releaseBindingsAfterClose();
   }
 
@@ -1858,6 +1889,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       await this.#recordTranscriptDelta(spec.sessionId, observation);
       return;
     }
+    if (observation.kind === "context.compaction-progress") {
+      await this.#recordCompactionProgress(spec.sessionId, observation);
+      return;
+    }
     const base = {
       id: nativeObservationId(adapter.id, spec.sessionId, spec.attachmentId, observation.id),
       sessionId: spec.sessionId,
@@ -1920,6 +1955,9 @@ class DefaultSessionRuntime implements SessionRuntime {
         }
         break;
       case "context.compacted":
+        // The durable outcome replaces the transient loading state for every
+        // current subscriber and makes a late subscriber's baseline empty.
+        this.#compactionProgress.delete(spec.sessionId);
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
@@ -1930,6 +1968,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         });
         break;
       case "context.compaction_failed":
+        this.#compactionProgress.delete(spec.sessionId);
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
@@ -2015,6 +2054,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       // never durable. Dropping it beside the binding keeps the two ends
       // together.
       this.#overlays.delete(spec.sessionId);
+      this.#compactionProgress.delete(spec.sessionId);
     }
   }
 
@@ -2043,6 +2083,28 @@ class DefaultSessionRuntime implements SessionRuntime {
       messageId: observation.messageId,
       delta: observation.delta,
     });
+  }
+
+  /**
+   * The progress marker is deliberately not a Session Event: a restart stops
+   * the operation that emitted it, so retaining it would turn a past wait into
+   * a permanent spinner. Its durable sequence lets a renderer reject a marker
+   * that was already overtaken by that compaction's terminal event.
+   */
+  async #recordCompactionProgress(
+    sessionId: string,
+    observation: Extract<TranslatedObservation, { kind: "context.compaction-progress" }>,
+  ): Promise<void> {
+    const progress: SessionStreamCompactionProgress = {
+      kind: "compaction",
+      sessionId,
+      throughSequence: (await this.#history(sessionId)).throughSequence,
+      state: observation.state,
+      reason: observation.reason,
+    };
+    if (progress.state === "started") this.#compactionProgress.set(sessionId, progress);
+    else this.#compactionProgress.delete(sessionId);
+    await this.#publishCompactionProgress(progress);
   }
 
   /**
@@ -2480,10 +2542,18 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #publishOverlay(emission: SessionStreamOverlay): Promise<void> {
+    await this.#publishTransient(emission);
+  }
+
+  async #publishCompactionProgress(emission: SessionStreamCompactionProgress): Promise<void> {
+    await this.#publishTransient(emission);
+  }
+
+  async #publishTransient(emission: SessionStreamTransient): Promise<void> {
     const subscribers = this.#subscribers.get(emission.sessionId);
     if (!subscribers) return;
     await Promise.all(
-      [...subscribers].map((subscriber) => this.#appendOverlay(subscriber, emission)),
+      [...subscribers].map((subscriber) => this.#appendTransient(subscriber, emission)),
     );
   }
 
@@ -2520,7 +2590,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const overlay = this.#overlays.get(subscriber.sessionId);
     if (!overlay) return Promise.resolve();
     const baselines = [...overlay.messages].map(([messageId, message]) =>
-      this.#appendOverlay(subscriber, {
+      this.#appendTransient(subscriber, {
         kind: "overlay",
         sessionId: subscriber.sessionId,
         throughSequence: overlay.throughSequence,
@@ -2529,6 +2599,12 @@ class DefaultSessionRuntime implements SessionRuntime {
       }),
     );
     return Promise.all(baselines).then(() => undefined);
+  }
+
+  /** A reconnect sees an already-running compaction once, as its live baseline. */
+  #enqueueCompactionProgressBaseline(subscriber: Subscriber): Promise<void> {
+    const progress = this.#compactionProgress.get(subscriber.sessionId);
+    return progress ? this.#appendTransient(subscriber, progress) : Promise.resolve();
   }
 
   /**
@@ -2541,7 +2617,7 @@ class DefaultSessionRuntime implements SessionRuntime {
    *
    * How far the resulting promise reaches back is the listener's choice, not
    * this method's. A listener that awaits its own delivery holds the chain, and
-   * `#publishOverlay` awaits every subscriber's, so the adapter's emit is paced
+   * `#publishTransient` awaits every subscriber's, so the adapter's emit is paced
    * by the slowest of them — the same backpressure durable frames already get.
    * A listener that hands the emission to a buffer of its own resolves at once
    * and lets none of that through: the session-rpc subscription is exactly such
@@ -2550,7 +2626,7 @@ class DefaultSessionRuntime implements SessionRuntime {
    * what this seam owes is order and one delivery per emission, and a listener
    * that chooses to buffer answers for the buffer.
    */
-  #appendOverlay(subscriber: Subscriber, emission: SessionStreamOverlay): Promise<void> {
+  #appendTransient(subscriber: Subscriber, emission: SessionStreamTransient): Promise<void> {
     subscriber.draining = subscriber.draining
       .then(async () => {
         if (!subscriber.active) return;

@@ -101,4 +101,32 @@ describe("collectUnlinkedBlobs", () => {
   it("is safe to run when there is nothing to collect", () => {
     expect(collectUnlinkedBlobs(ctx.db, root)).toEqual({ collected: [] });
   });
+
+  // A stored new-Ticket draft's attachments are unowned Blobs by construction
+  // (no Ticket exists yet to link them) — the exact shape collection reclaims.
+  // Without this exception, a relaunch would eat a draft's persisted strip
+  // the moment it swept (VC-137).
+  it("spares an unlinked Blob a caller names as retained", async () => {
+    const draft = await attach(PNG, { unowned: true });
+
+    const report = collectUnlinkedBlobs(ctx.db, root, new Set([draft.blobHash]));
+
+    expect(report.collected).toEqual([]);
+    expect(blobExists(root, draft.blobHash)).toBe(true);
+    expect(getBlob(ctx.db, draft.blobHash)).toBeDefined();
+  });
+
+  it("collects a retained hash's neighbors normally, and releases it once retention lifts", async () => {
+    const keep = await attach(PNG, { unowned: true });
+    const drop = await attach(OTHER, { unowned: true });
+
+    const guarded = collectUnlinkedBlobs(ctx.db, root, new Set([keep.blobHash]));
+    expect(guarded.collected).toEqual([drop.blobHash]);
+    expect(blobExists(root, keep.blobHash)).toBe(true);
+
+    // The draft was cleared (create, or erasing the fields) — nothing retains
+    // this hash on the next boot, so the ordinary sweep reclaims it.
+    const released = collectUnlinkedBlobs(ctx.db, root);
+    expect(released.collected).toEqual([keep.blobHash]);
+  });
 });

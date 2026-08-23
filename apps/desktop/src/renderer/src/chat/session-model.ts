@@ -63,27 +63,39 @@ export function removeQueued(queue: readonly QueuedMessage[], id: string): Queue
   return queue.filter((entry) => entry.id !== id);
 }
 
+/** What one pulled-back-for-editing row leaves behind, and what comes with it. */
+export interface TakenQueued {
+  queue: QueuedMessage[];
+  text: string;
+  /** The row's files, back for the strip to hold again (VC-137). */
+  attachments?: readonly BlobLinkView[];
+}
+
 /**
  * `⌫` on an empty box. The newest queued message comes back to the textarea
  * rather than vanishing, so unqueue and edit are the same gesture and neither
- * one can lose typing.
+ * one can lose typing — or the files the row carried, which return to the
+ * strip rather than being detached: the message may still be sent.
  */
-export function unqueueLast(
-  queue: readonly QueuedMessage[],
-): { queue: QueuedMessage[]; text: string } | null {
+export function unqueueLast(queue: readonly QueuedMessage[]): TakenQueued | null {
   const last = queue[queue.length - 1];
   if (last === undefined) return null;
-  return { queue: queue.slice(0, -1), text: last.text };
+  return {
+    queue: queue.slice(0, -1),
+    text: last.text,
+    ...(last.attachments === undefined ? {} : { attachments: last.attachments }),
+  };
 }
 
 /** Pull one specific entry back for editing. Same rule as {@link unqueueLast}. */
-export function takeQueued(
-  queue: readonly QueuedMessage[],
-  id: string,
-): { queue: QueuedMessage[]; text: string } | null {
+export function takeQueued(queue: readonly QueuedMessage[], id: string): TakenQueued | null {
   const found = queue.find((entry) => entry.id === id);
   if (found === undefined) return null;
-  return { queue: removeQueued(queue, id), text: found.text };
+  return {
+    queue: removeQueued(queue, id),
+    text: found.text,
+    ...(found.attachments === undefined ? {} : { attachments: found.attachments }),
+  };
 }
 
 /**

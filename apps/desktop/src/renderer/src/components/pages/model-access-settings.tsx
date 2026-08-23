@@ -58,11 +58,28 @@ import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
-/** The rows of the Default models section, in resolution order. */
-const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string }[] = [
+/**
+ * The rows of the Default models section, in resolution order.
+ *
+ * `help` is the hover helper a row carries when its purpose is not obvious
+ * from its two-word label (VC-81 asked for one on the utility row): what the
+ * slot is FOR, so a person picking a model for it knows what the bill is for.
+ * The tooltip is a helper, not a tutorial — one thought, one hover.
+ *
+ * The Utility helper also names what happens when the slot is empty. Leaving
+ * it unset does not switch background work off; those calls fall to the model
+ * each chat is already running under. That is a fallback a person can be
+ * billed for, and CONTEXT.md's Model Access rule is that Volli never falls
+ * back to another model SILENTLY — so this is where it is said out loud.
+ */
+const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string; help?: string }[] = [
   { purpose: "global", label: "Project chats" },
   { purpose: "ticket", label: "Ticket Sessions" },
-  { purpose: "utility", label: "Utility" },
+  {
+    purpose: "utility",
+    label: "Utility",
+    help: "Background jobs: naming new chats, summarizing long conversations. Left unset, these run on the model the chat itself is using — an inexpensive model here keeps them cheap.",
+  },
 ];
 
 /** The Select value that says "no explicit choice — resolve the project default". */
@@ -210,11 +227,12 @@ export function ModelAccessSettings({
           </Button>
         }
       >
-        {PURPOSE_ROWS.map(({ purpose, label }) => (
+        {PURPOSE_ROWS.map(({ purpose, label, help }) => (
           <DefaultModelRow
             key={purpose}
             purpose={purpose}
             label={label}
+            help={help}
             selection={defaults[purpose]}
             models={models}
             offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
@@ -292,10 +310,16 @@ export function ModelAccessSettings({
  * than a blank: unset is a real, resolvable value, and a Select that shows
  * nothing when the purpose inherits would read as unconfigured — which is the
  * one thing it is not.
+ *
+ * A row with a `help` string carries it as a hover helper beside the label —
+ * rendered by {@link SettingsRow}, so every helper in Settings is the same
+ * glyph in the same place, and the slot explains itself without a paragraph
+ * under the control (CLAUDE.md's copy rule).
  */
 function DefaultModelRow({
   purpose,
   label,
+  help,
   selection,
   models,
   offerable,
@@ -305,6 +329,7 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
+  help?: string;
   selection: ModelSelection | null;
   models: readonly ModelAccessModel[];
   offerable: readonly ModelAccessModel[];
@@ -326,7 +351,11 @@ function DefaultModelRow({
         : "";
 
   return (
-    <SettingsRow label={label} testId={`default-model-${purpose}`}>
+    <SettingsRow
+      label={label}
+      {...(help === undefined ? {} : { help })}
+      testId={`default-model-${purpose}`}
+    >
       <Select
         value={value}
         disabled={disabled}

@@ -1,41 +1,44 @@
 ---
 import FeatureGlyph from "./FeatureGlyph.astro";
 
+// Chat-first, matching the shipped product (VC-64): Home opens on a board, a
+// chat is the thing you start, and a worktree is where ticket work happens.
+// Nothing here describes a feature that has not shipped.
 const items = [
   {
-    title: "Plan the Ticket",
+    title: "Turn ideas into tasks",
     description:
-      "Capture the scope, constraints, and review target in one durable board record before implementation begins.",
+      "Start with a rough goal. Create focused tasks yourself, or ask an agent to help break the work down.",
     illustration: "phases" as const,
   },
   {
-    title: "Start an isolated Session",
+    title: "Give each task context",
     description:
-      "Start a Pi-backed Ticket Session with the Ticket as its starting context. For implementation work, use the Ticket’s separate Git worktree.",
+      "Write the outcome, constraints, and review criteria before you start an agent. The task carries that context into its chat.",
     illustration: "agents" as const,
   },
   {
-    title: "Keep context and history",
+    title: "Run agents in parallel",
     description:
-      "Sessions retain their identity and locally ordered history through reconnects, restarts, and terminal changes.",
+      "Start a focused chat for each task. Volli gives every task its own Git worktree and branch, so each task works in a separate checkout.",
     illustration: "context" as const,
   },
   {
-    title: "Inspect changes and review",
+    title: "Return to the work",
     description:
-      "Use the live Change Set and review state to see a Ticket’s work relative to its base branch, before you move it forward.",
+      "Each task keeps its chat history. Leave, restart the app, and return to the same conversation later.",
+    illustration: "context" as const,
+  },
+  {
+    title: "Review each change",
+    description:
+      "Inspect a task’s changes against its base branch, read the files, and decide when the work is ready to move forward.",
     illustration: "phases" as const,
   },
   {
-    title: "Run work in parallel",
+    title: "Keep your TUI workflow",
     description:
-      "Keep multiple Tickets and Sessions moving without losing track of which work is active, blocked, or ready for review.",
-    illustration: "parallel" as const,
-  },
-  {
-    title: "Automations, in development",
-    description:
-      "Saved Automations will start Pi-backed Sessions from board triggers and carry instructions and outcomes into Ticket history. They are not available yet.",
+      "Open Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal in the same worktree whenever you want to drive it yourself.",
     illustration: "parallel" as const,
   },
 ];

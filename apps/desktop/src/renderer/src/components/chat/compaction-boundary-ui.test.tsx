@@ -14,7 +14,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { TranscriptCompaction } from "@renderer/chat/transcript";
 
-import { CompactionBoundary } from "./compaction-boundary-ui";
+import { CompactionBoundary, CompactionProgress } from "./compaction-boundary-ui";
 
 const compacted: TranscriptCompaction = {
   sequence: 12,
@@ -54,6 +54,29 @@ describe("a compaction that happened", () => {
     // The hedge the context meter puts on every estimated count. Nothing on
     // this row is one, so nothing here wears it.
     expect(html).not.toContain("~");
+  });
+});
+
+describe("a compaction in progress", () => {
+  it("is an obvious live status instead of a durable boundary", () => {
+    const html = renderToStaticMarkup(
+      <CompactionProgress compaction={{ throughSequence: 12, reason: "manual" }} />,
+    );
+
+    expect(html).toContain('role="status"');
+    expect(html).toContain("Compacting context…");
+    expect(html).toContain("Preparing a shorter working context");
+    expect(html).not.toContain('data-slot="separator"');
+  });
+
+  // The whole point of carrying `reason` to the view: a stall nobody asked for
+  // has to read differently from the one they just typed `/compact` for.
+  it.each(["threshold", "overflow"] as const)("says a %s compaction started itself", (reason) => {
+    const html = renderToStaticMarkup(
+      <CompactionProgress compaction={{ throughSequence: 12, reason }} />,
+    );
+
+    expect(html).toContain("Compacting context on its own…");
   });
 });
 

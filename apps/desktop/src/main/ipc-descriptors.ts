@@ -13,7 +13,6 @@ import {
   isHarnessTrustVerdict,
   isHexColor,
   isProjectThemeOverride,
-  isShippedEditorThemeId,
   isTicketPriority,
   isTicketStatus,
   isValidBranchName,
@@ -23,6 +22,7 @@ import {
   parseHarnessId,
 } from "@volli/shared";
 
+import { isExternalAppId } from "./external-apps";
 import type {
   CliIpcChannel,
   DataIpcChannel,
@@ -460,11 +460,14 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:session-rename"> => {
       if (args.length !== 1) return false;
       const [input] = args;
+      if (!isRecord(input)) return false;
+      if (typeof input["sessionId"] !== "string") return false;
+      if (typeof input["title"] !== "string" || input["title"].trim().length === 0) return false;
+      // The optional auto-title rider (VC-81): absent on a person's rename, a
+      // non-blank first message on the heuristic one.
+      const refineFrom = input["refineFrom"];
       return (
-        isRecord(input) &&
-        typeof input["sessionId"] === "string" &&
-        typeof input["title"] === "string" &&
-        input["title"].trim().length > 0
+        refineFrom === undefined || (typeof refineFrom === "string" && refineFrom.trim().length > 0)
       );
     },
     invalidError: "Invalid session title",
@@ -646,9 +649,9 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
 export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 
 // ---- file-IPC descriptor table ------------------------------------------
-// Exactly one entry per VolliFileIpcContract channel (the 7 file/artifact
-// channels `src/main/volli-fs.ts` owns). Every one of that module's handlers
-// falls back to the same "Invalid request" string on a bad shape.
+// Exactly one entry per VolliFileIpcContract channel (the file, artifact, and
+// external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
+// handlers falls back to the same "Invalid request" string on a bad shape.
 
 /** The `{ projectId, ticketId?, relPath }` shape shared by read/reveal/watch/unwatch. */
 function isFilePathInput(
@@ -657,6 +660,32 @@ function isFilePathInput(
   if (!isRecord(value)) return false;
   if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
   return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+}
+
+/** The file-path shape plus one closed app id — callers never name a bundle or command. */
+function isExternalAppOpenFileInput(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const appId = value["appId"];
+  return isFilePathInput(value) && isExternalAppId(appId);
+}
+
+/** The closed app id plus the two ids that name a ticket's worktree. */
+function isExternalAppOpenWorktreeInput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value["projectId"] === "string" &&
+    typeof value["ticketId"] === "string" &&
+    isExternalAppId(value["appId"])
+  );
+}
+
+/** The project/ticket pair needed to resolve a worktree root without trusting a path from renderer. */
+function isWorktreeRevealInput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value["projectId"] === "string" &&
+    typeof value["ticketId"] === "string"
+  );
 }
 
 /**
@@ -680,6 +709,25 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
   "volli:file-read": {
     guard: (args): args is IpcArgs<"volli:file-read"> =>
       args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:external-app-list": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:external-app-open-file": {
+    guard: (args): args is IpcArgs<"volli:external-app-open-file"> =>
+      args.length === 1 && isExternalAppOpenFileInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:external-app-open-worktree": {
+    guard: (args): args is IpcArgs<"volli:external-app-open-worktree"> =>
+      args.length === 1 && isExternalAppOpenWorktreeInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:worktree-reveal": {
+    guard: (args): args is IpcArgs<"volli:worktree-reveal"> =>
+      args.length === 1 && isWorktreeRevealInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:file-write": {
@@ -781,21 +829,6 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       return isRecord(input) && isCallerScope(input["projectId"]);
     },
     invalidError: "Invalid theme request",
-  },
-  "volli:theme-set-global-editor": {
-    // `projectId` names the CALLER's scope, never a second write target — it
-    // decides which scope's state the answer describes (#123).
-    // null = derive from app theme; otherwise only a shipped catalog id.
-    // `isShippedEditorThemeId` is the shared vocabulary the renderer catalog
-    // asserts against — an unknown string never reaches SQLite.
-    guard: (args): args is IpcArgs<"volli:theme-set-global-editor"> =>
-      args.length === 1 &&
-      isRecord(args[0]) &&
-      (args[0]["editorThemeId"] === null ||
-        (typeof args[0]["editorThemeId"] === "string" &&
-          isShippedEditorThemeId(args[0]["editorThemeId"]))) &&
-      isCallerScope(args[0]["projectId"]),
-    invalidError: "Invalid editor theme",
   },
   "volli:theme-set-project": {
     guard: (args): args is IpcArgs<"volli:theme-set-project"> => {
@@ -905,12 +938,17 @@ export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescrip
 export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcChannel[];
 
 // ---- CLI install-detection descriptor table --------------------------------
-// The Settings → CLI surface (VC-52): a status read with no arguments, and a
-// doctor run whose one flag says whether main should repair before probing.
+// The Settings → CLI surface (VC-52): a host-wide status read, optionally
+// scoped to a known project's dependency and Git credential roots, and a doctor
+// run whose one flag says whether main should repair before probing.
 
 export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:cli-status": {
-    guard: (args): args is [] => args.length === 0,
+    guard: (args): args is IpcArgs<"volli:cli-status"> =>
+      args.length === 0 ||
+      (args.length === 1 &&
+        isRecord(args[0]) &&
+        (args[0]["cwd"] === undefined || typeof args[0]["cwd"] === "string")),
     invalidError: "Invalid request",
   },
   "volli:cli-doctor": {

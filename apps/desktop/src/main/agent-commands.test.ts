@@ -3405,6 +3405,81 @@ describe("agent command service", () => {
   });
 });
 
+describe("identify env block (VC-94)", () => {
+  const report = {
+    path: "/profile/bin:/opt/homebrew/bin:/usr/bin",
+    provenance: "adopted" as const,
+    interactiveProvenance: "already-complete" as const,
+    tools: {
+      git: "/usr/bin/git",
+      gh: "/opt/homebrew/bin/gh",
+      node: "/opt/homebrew/bin/node",
+      pnpm: "/opt/homebrew/bin/pnpm",
+    },
+    dependencies: "installed" as const,
+  };
+
+  it("carries the env block on every identify answer, session and ticketless alike", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const askedCwds: string[] = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      sessionEnv: async (cwd) => {
+        askedCwds.push(cwd);
+        return report;
+      },
+    });
+
+    const inSession = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { socket: "/tmp/volli.sock" } },
+    });
+    expect(inSession).toMatchObject({ ok: true, data: { env: report, ticket: null } });
+
+    // The env seam is asked about the CALLER's cwd — the agent drives its own
+    // directory through bash, so where it stands is only knowable at ask time.
+    expect(askedCwds).toEqual(["/repo/volli"]);
+  });
+
+  it("omits the env block rather than inventing one when main has no env facts", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3", now: () => 100 });
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+    if (!response.ok) throw new Error("expected ok");
+    expect(response.data).not.toHaveProperty("env");
+  });
+});
+
 describe("doctor", () => {
   const observation = {
     pathEntries: ["/ud/bin", "/usr/bin"],
@@ -3536,9 +3611,17 @@ describe("doctor", () => {
 
   it("repairs before re-checking, so --fix reports the state it produced", async () => {
     const order: string[] = [];
+    const pathRepair = {
+      path: "/ud/bin:/opt/homebrew/bin:/Users/x/.bun/bin:/usr/bin",
+      provenance: "adopted" as const,
+      added: ["/opt/homebrew/bin"],
+      interactiveProvenance: "adopted" as const,
+      interactiveAdded: ["/Users/x/.bun/bin"],
+    };
     const doctor = doctorService({
       doctorRepair: async () => {
         order.push("repair");
+        return pathRepair;
       },
       doctorFacts: async () => {
         order.push("facts");
@@ -3556,8 +3639,9 @@ describe("doctor", () => {
       },
     });
 
-    await doctor({ ...observation, fix: true });
+    const response = await doctor({ ...observation, fix: true });
     expect(order).toEqual(["repair", "facts"]);
+    expect(response).toMatchObject({ ok: true, data: { pathRepair } });
   });
 
   it("does not repair unless asked", async () => {
@@ -3565,6 +3649,13 @@ describe("doctor", () => {
     await doctorService({
       doctorRepair: async () => {
         repaired = true;
+        return {
+          path: "/ud/bin",
+          provenance: "already-complete",
+          added: [],
+          interactiveProvenance: "already-complete",
+          interactiveAdded: [],
+        };
       },
     })(observation);
     expect(repaired).toBe(false);
@@ -4014,6 +4105,7 @@ describe("session.start", () => {
     );
     const startInputs: SessionStartInput[] = [];
     const kickoffs: { sessionId: string; text: string }[] = [];
+    const refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[] = [];
     const mutations: unknown[] = [];
     const notices: SessionStartedNotice[] = [];
     let id = 0;
@@ -4046,12 +4138,13 @@ describe("session.start", () => {
       submitSessionMessage: async (input) => {
         kickoffs.push(input);
       },
+      refineAutoTitle: (input) => refinements.push(input),
       onMutation: (change) => mutations.push(change),
       onSessionStarted: (notice) => notices.push(notice),
     });
     const execute = (args: Record<string, unknown>, env: Record<string, string> = {}) =>
       service.execute({ v: 1, cmd: "session.start", args, ctx: { cwd: "/repo/volli", env } });
-    return { service, execute, startInputs, kickoffs, mutations, notices };
+    return { service, execute, startInputs, kickoffs, refinements, mutations, notices };
   }
 
   it("starts through the product facade and answers in public ids only", async () => {
@@ -4124,6 +4217,57 @@ describe("session.start", () => {
     });
 
     expect(harness.startInputs[0]).toMatchObject({ title: "My review" });
+  });
+
+  it("requests one model refinement behind a heuristic kickoff title", async () => {
+    const harness = startHarness();
+
+    await harness.execute({
+      id: "VC-1",
+      message: "Validate VC-52 before release",
+    });
+
+    expect(harness.refinements).toEqual([
+      {
+        sessionId: startedSessionId,
+        firstMessage: "Validate VC-52 before release",
+        heuristicTitle: "Validate VC-52",
+      },
+    ]);
+  });
+
+  it("refines the stock kickoff too, from the message it actually sent", async () => {
+    const harness = startHarness();
+
+    await harness.execute({ id: "VC-1" });
+
+    expect(harness.refinements).toEqual([
+      {
+        sessionId: startedSessionId,
+        firstMessage: DEFAULT_KICKOFF_MESSAGE,
+        heuristicTitle: "Work on VC-1",
+      },
+    ]);
+  });
+
+  it("makes zero refinement requests for an explicit --title", async () => {
+    const harness = startHarness();
+
+    await harness.execute({ id: "VC-1", title: "My review" });
+
+    expect(harness.refinements).toEqual([]);
+  });
+
+  it("makes zero refinement requests when the kickoff never went out", async () => {
+    const harness = startHarness({ state: "needs-recovery" });
+
+    await harness.execute({ id: "VC-1", message: "Validate VC-52 before release" });
+
+    // A Session held for recovery has not sent this message and may never
+    // send it — titling from text nobody submitted would spend a model call
+    // on a conversation that did not happen. Same gate as the kickoff itself.
+    expect(harness.kickoffs).toEqual([]);
+    expect(harness.refinements).toEqual([]);
   });
 
   it("announces the start to every surface without moving the board", async () => {

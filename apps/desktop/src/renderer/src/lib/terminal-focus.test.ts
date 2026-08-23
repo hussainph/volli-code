@@ -128,10 +128,8 @@ describe("terminalFocusTargetForChrome", () => {
   });
 
   it("refuses on pages that host no terminal at all", () => {
-    // `setNav` keeps `openTicketId` whenever a Session tab is in front, so Files
-    // and Configure would otherwise offer to focus the ticket terminal behind
-    // them.
-    expect(terminalFocusTargetForChrome(chrome({ nav: "files" }))).toBeNull();
+    // `setNav` keeps `openTicketId` whenever a Session tab is in front, so
+    // Configure would otherwise offer to focus the ticket terminal behind it.
     expect(terminalFocusTargetForChrome(chrome({ nav: "configure" }))).toBeNull();
   });
 

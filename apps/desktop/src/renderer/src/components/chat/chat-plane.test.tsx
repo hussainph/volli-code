@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
 
-import { ChatTurn, type TurnContext } from "./chat-plane";
+import { ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
 
 const context: TurnContext = {
   onOpenFile: () => undefined,
@@ -73,5 +73,26 @@ describe("ChatTurn copy control", () => {
     });
 
     expect(html).toContain('aria-label="Copy"');
+  });
+});
+
+describe("SessionBlocker hit testing", () => {
+  it("opts back into pointer events within the composer overlay", () => {
+    const html = renderToStaticMarkup(
+      <div className="pointer-events-none">
+        <SessionBlocker
+          blocker={{
+            message: "Session stopped",
+            detail: "Stream ended without finish_reason",
+            tone: "error",
+            action: { label: "Retry", act: () => undefined },
+            dismiss: { label: "Dismiss", act: () => undefined },
+          }}
+        />
+      </div>,
+    );
+
+    expect(html).toMatch(/^<div class="pointer-events-none"><div class="[^"]*pointer-events-auto/);
+    expect(html).toContain('aria-label="Dismiss"');
   });
 });
