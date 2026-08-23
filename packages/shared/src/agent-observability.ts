@@ -278,13 +278,26 @@ export class ObservabilityReducer {
    */
   #authorityWaitByActivityId = new Map<string, number>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  /**
+   * An explicit field, not a constructor parameter property.
+   *
+   * `@volli/shared` exports raw TypeScript, and the repo's build and check
+   * scripts import it under Node's type-stripping loader, which refuses a
+   * parameter property outright (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`) because
+   * stripping one would have to emit an assignment rather than erase a type.
+   * One here takes down every script that touches this package's barrel.
+   */
+  readonly #now: () => number;
+
+  constructor(now: () => number = Date.now) {
+    this.#now = now;
+  }
 
   reduce(observation: RuntimeObservation): ObservabilityEvent | null {
     switch (observation.kind) {
       case "turn": {
         if (observation.state === "started") {
-          this.#turnStartedAt.set(observation.turnId, this.now());
+          this.#turnStartedAt.set(observation.turnId, this.#now());
           this.#authorityWaitByActivityId.clear();
           return null;
         }
@@ -294,7 +307,7 @@ export class ObservabilityReducer {
         // Through the same guard as every other duration: a clock that stepped
         // backwards between the two readings must not become a negative span.
         const durationMs =
-          startedAt === undefined ? undefined : measuredDuration(this.now() - startedAt);
+          startedAt === undefined ? undefined : measuredDuration(this.#now() - startedAt);
         return {
           kind: "turn",
           outcome: observation.state,
