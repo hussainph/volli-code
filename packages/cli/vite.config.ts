@@ -5,7 +5,9 @@ export default defineConfig({
   test: {
     environment: "node",
     coverage: {
-      include: ["src/**"],
+      // Sources, not fixtures: `src/__snapshots__` holds the captured CLI
+      // reference, which is text to compare against rather than code to run.
+      include: ["src/**/*.ts"],
       exclude: ["src/index.ts"],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

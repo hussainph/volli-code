@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { COLUMN_VOCABULARY, REASONING_LEVELS } from "@volli/shared";
+import {
+  cliVerbName,
+  COLUMN_VOCABULARY,
+  HARNESS_VOCABULARY,
+  REASONING_LEVELS,
+  REFERENCE_VERBS,
+  VERB_REGISTRY,
+  verbEntry,
+} from "@volli/shared";
 
-import { COMMAND_HELP, HARNESS_VOCABULARY, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
+import { CLI_MECHANICS, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
+
+/** The commands `volli help` publishes, as a caller types them. */
+const PUBLISHED_COMMANDS = REFERENCE_VERBS.map((entry) => cliVerbName(entry.key));
 
 describe("parseCliArgs", () => {
   it("parses ticket creation into a socket command without losing repeated labels", () => {
@@ -298,9 +309,8 @@ describe("parseCliArgs", () => {
   // The reference is what an agent can usefully DO. A verb whose only correct
   // caller is a file Volli generated is noise in it — the same call `hook` made.
   it("keeps the involuntary verbs out of the published command list", () => {
-    const names = COMMAND_HELP.map((entry) => entry.name);
-    expect(names).not.toContain("session harness");
-    expect(names).not.toContain("hook");
+    expect(PUBLISHED_COMMANDS).not.toContain("session harness");
+    expect(PUBLISHED_COMMANDS).not.toContain("hook");
   });
 
   it("routes the remaining published read, help, and explicit launch commands", () => {
@@ -552,7 +562,7 @@ describe("parseCliArgs", () => {
     if (result.ok) throw new Error("expected a usage error");
     expect(result.code).toBe("USAGE");
     expect(result.message.startsWith("Expected a Volli command (commands:")).toBe(true);
-    for (const name of COMMAND_HELP.map((entry) => entry.name)) {
+    for (const name of PUBLISHED_COMMANDS) {
       expect(result.message).toContain(name);
     }
   });
@@ -691,5 +701,83 @@ describe("doctor", () => {
     const parsed = parseCliArgs(["doctor", "--fix"]);
     if (!parsed.ok) throw new Error("expected a parse");
     expect(parsed.invocation.args["fix"]).toBe(true);
+  });
+});
+
+/**
+ * The seam VC-161 opened, held shut from both sides.
+ *
+ * An option is declared in the Verb Registry (name, kind, placeholder, help)
+ * and executed here (`parse`, `finalize`, `build`, the argument key it lands
+ * under). That split is deliberate — argv mechanics are the CLI's own
+ * projection detail, and keeping them out of `@volli/shared` is what lets
+ * `apps/desktop` read an argument spec for a tool schema without depending on
+ * this package. The cost of the split is that the two halves can drift, so
+ * every one of these asserts they cannot.
+ */
+describe("registry ↔ argv mechanics", () => {
+  const mechanicsEntries = Object.entries(CLI_MECHANICS).map(([key, mechanics]) => ({
+    key,
+    mechanics: mechanics!,
+  }));
+
+  it("keys every mechanics entry by a verb the registry declares", () => {
+    for (const { key } of mechanicsEntries) {
+      expect(verbEntry(key), key).toBeDefined();
+    }
+  });
+
+  it("names a real declared option for every mechanics option, with its declared kind", () => {
+    for (const { key, mechanics } of mechanicsEntries) {
+      const declared = new Map(verbEntry(key)!.options.map((option) => [option.name, option.kind]));
+      for (const [name, option] of Object.entries(mechanics.options)) {
+        expect(declared.get(name), `${key} ${name}`).toBe(option.kind);
+      }
+    }
+  });
+
+  it("gives every declared option mechanics, so nothing in the reference is unparseable", () => {
+    for (const { key, mechanics } of mechanicsEntries) {
+      for (const option of verbEntry(key)!.options) {
+        expect(Object.keys(mechanics.options), `${key} ${option.name}`).toContain(option.name);
+      }
+    }
+  });
+
+  // Adding a verb is adding a registry entry; this is the assertion that makes
+  // the CLI half of that true. A verb printed in the reference that no route
+  // answers would be a command an agent is told to run and cannot.
+  it("routes every command the reference publishes", () => {
+    for (const name of PUBLISHED_COMMANDS) {
+      const result = parseCliArgs(name.split(" "));
+      const message = result.ok ? "" : result.message;
+      expect(message.startsWith("Expected a Volli command"), name).toBe(false);
+    }
+  });
+
+  // The other direction: `hook` is dispatched in index.ts before argv reaches
+  // the parser, and must stay unroutable here however it is typed.
+  it("leaves the parser-bypassing verb unroutable", () => {
+    const result = parseCliArgs(["hook", "SessionStart"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.message.startsWith("Expected a Volli command")).toBe(true);
+  });
+
+  // Mechanics for a verb that is on no agent surface would be a route to
+  // something the registry does not publish anywhere.
+  it("holds mechanics only for verbs carrying a cli access mode", () => {
+    for (const { key } of mechanicsEntries) {
+      expect(verbEntry(key)!.accessModes, key).toContain("cli");
+    }
+  });
+
+  // Which verbs the walker cannot serve, named rather than inferred: `hook`
+  // takes two bare positionals and never walks the parser, `help` takes a
+  // command path or a topic word instead of an option table.
+  it("leaves exactly the two verbs the walker cannot serve without mechanics", () => {
+    const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
+      (entry) => entry.key,
+    );
+    expect(missing).toEqual(["hook", "help"]);
   });
 });
