@@ -9,12 +9,38 @@ VC-21.
 
 ## Status
 
-Both axes are off. Pi runs at its own defaults: ungated and uncontained.
+Containment is off. The gate is wired, pinned and durable, and refuses nothing
+by default.
 
-**The gate is off.** `SessionRuntimeSpec.authority` is optional and the desktop
-adapter supplies no Snapshot, so the Pi runtime installs no `beforeToolCall` at
-all and the rule pack, the fallback thresholds and the escalation port are never
-reached.
+**The gate is wired and observing.** Slice 7's minimal cut landed in VC-44:
+policy is a per-project `AuthorityPolicy` document in app-owned state (a
+`projects.authority_policy` column, migration 025), the desktop adapter builds an
+`AuthoritySnapshot` from it at every attach, and the Session Engine records that
+Snapshot onto `attachment.opened`. `rulePackId`/`rulePackHash` finally pin
+something: an `authority.denied` event carries an `attachmentId`, and the
+attachment carries the pack.
+
+The posture is data, with three values. `off` builds no Snapshot, so
+`SessionRuntimeSpec.authority` is absent and the Pi runtime installs no
+`beforeToolCall` — the explicit bypass, and what every Session ran under before
+VC-44. `observe` builds the Snapshot, records it, and still hands the runtime
+nothing. `enforce` hands it over and the pack binds.
+
+**`observe` is the default, and the reason is the read rule.** Enforcing the nine
+rules today refuses two things the product itself asks for: the skills index
+tells a Session to activate a skill by reading its `SKILL.md`, and a
+personal-tier skill lives at `<home>/.agents/skills/<slug>/SKILL.md` — outside
+every workspace, so `path.outside-workspace` refuses it. A ticket brief's
+reference to the Main checkout reads the same way. The same bytes stay readable
+through `execute`, because no rule judges command operands, so enforcing would
+teach the model to reach for `cat` where `read` was refused. Slice 1 is what
+makes `enforce` the right default.
+
+One thing did change for `enforce`: `path.outside-workspace` and
+`command.git-escapes-workspace` moved into `OVERRIDABLE_AUTHORITY_RULES`. They
+were hard denials because Seatbelt refused them regardless and consent was moot;
+with no sandbox a person's "yes" would actually be carried out, and the skills
+case above is a read a reasonable person plainly wants.
 
 **Containment is off.** `executionEnvFactory` now defaults to Pi's own
 `NodeExecutionEnv`, so nothing wraps process execution in Seatbelt and nothing
@@ -228,12 +254,19 @@ else.
 
 ## What becomes durable
 
-Policy becomes data: a per-project rule pack and a settings surface, with
-defaults, so changing authority does not require shipping a build. The
-`AuthoritySnapshot` is persisted at attach, which finally gives `rulePackId` and
-`rulePackHash` something to pin — today they are written into a live spec that no
-reader ever compares, and `authority.denied` records a cause with no record of
-the pack that produced it.
+Policy becomes data: a per-project document with defaults, so changing authority
+does not require shipping a build. The `AuthoritySnapshot` is persisted at
+attach, which finally gives `rulePackId` and `rulePackHash` something to pin —
+they used to be written into a live spec that no reader ever compared, while
+`authority.denied` recorded a cause with no record of the pack that produced it.
+
+VC-44 landed the document, the store and the persisted Snapshot. Two things it
+deliberately did not do. The **rule pack stays compiled**: what became data is
+the posture, the judge and the per-actor policy, not the rules, because
+rules-as-data needs a rule language before it needs a store. And there is **no
+settings surface** — the column is written by nothing yet, so every project runs
+on defaults until one exists. `volli authority defaults|effective` was scoped as
+a nice-to-have and split out rather than shipped.
 
 ## Slices
 
@@ -249,7 +282,11 @@ Each is independently shippable and independently valuable.
 5. **The injection probe** over tool output.
 6. **Network allowlist and the Tier 3 classifier, together.** Never separately:
    the moment egress opens, the argument for no classifier expires.
-7. **Policy as data**, and the persisted snapshot.
+7. **Policy as data**, and the persisted snapshot. *(Minimal cut landed in
+   VC-44: the policy document, the app-owned store, the Snapshot built at attach
+   and recorded on the attachment, and `observe` as the day-one posture. Still
+   open: a settings surface to write it, the CLI inspection verbs, and the rule
+   pack itself becoming data.)*
 8. **The file-tool boundary** — one enforcement layer, TOCTOU seam closed.
 
 ## What this supersedes

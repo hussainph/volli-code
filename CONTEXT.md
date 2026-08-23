@@ -66,13 +66,30 @@ involvement, and is recorded in Session history exactly as a Ticket Session is.
 _Avoid_: harness mode, agent mode, plan mode, scratch session
 
 **Authority Snapshot**:
-The planned durable policy granted to one Session when it starts: which actions
-are automatic, which require a decision, which are forbidden, and the
-classifier model allowed to help within deterministic boundaries. The current
-desktop host does not supply one, so the authority gate is inactive. In the
-target model, a Settings change does not silently change a running Session's
-authority; changing authority is an explicit Session action.
+The durable policy granted to one Session when it starts: which actions are
+automatic, which require a decision, which are forbidden, and the classifier
+model allowed to help within deterministic boundaries. Built at every
+attachment from the project's Authority Policy and recorded on the attachment,
+so a refusal can name the rule pack that produced it. A Settings change does
+not silently change a running Session's authority: the Snapshot is pinned for
+the life of the attachment, and a policy change applies at the next one.
 _Avoid_: permission preset (when meaning live authority), auto-approve flag
+
+**Authority Policy**:
+The per-project document an Authority Snapshot is built from: the enforcement
+posture, the judgment mode, the fallback thresholds, and what each actor kind
+may do. It is app-owned state, never a file in the worktree and never
+repo-committed — a policy store the agent can write would let the thing being
+governed author its own permissions. Built-in defaults with per-project
+departures; a project list that names `$defaults` extends rather than replaces.
+_Avoid_: rule pack (that is the compiled rules the policy runs), settings
+
+**Enforcement posture**:
+What a project's Authority Policy does with the rule pack. `off` builds no
+Snapshot, so no gate is installed and the Session runs at the runtime's own
+defaults. `observe` pins and records the Snapshot and installs no gate. `enforce`
+hands the Snapshot to the runtime and the pack binds. `observe` is the default.
+_Avoid_: auto mode (that is the judgment mode), permission mode
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,

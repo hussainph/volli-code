@@ -247,6 +247,42 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
+  it("adds projects.authority_policy as a nullable JSON column (migration 025)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "projects")).toContain("authority_policy");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    // NULL is the default and means "inherit every built-in default", so an
+    // existing project needs no backfill to be governed correctly.
+    expect(db.prepare("SELECT authority_policy FROM projects WHERE id = 'p1'").get()).toEqual({
+      authority_policy: null,
+    });
+    db.close();
+  });
+
+  it("refuses an authority_policy that is not JSON (migration 025)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    // A column whose whole contract is "this is JSON" fails at the write, not
+    // several layers up in a parser that would then have to invent a policy for
+    // the corpse.
+    expect(() =>
+      db.prepare("UPDATE projects SET authority_policy = 'enforce' WHERE id = 'p1'").run(),
+    ).toThrow();
+    db.close();
+  });
+
   it("adds tickets.pr_url as a nullable column (migration 009)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);

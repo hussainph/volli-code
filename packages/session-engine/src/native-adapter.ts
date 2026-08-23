@@ -1,4 +1,5 @@
 import type {
+  AuthoritySnapshot,
   ModelSelection,
   RuntimeObservation,
   SessionAttachmentContinuity,
@@ -121,6 +122,23 @@ export type ReleaseReason = "requested" | "shutdown" | "replaced" | "adapter_fai
 
 export interface BindingHandle {
   readonly native: SessionNativeReference;
+  /**
+   * The Authority Snapshot this binding runs under, for the Session Engine to
+   * record onto the attachment (VC-44).
+   *
+   * Read the same way and at the same moment as {@link BindingHandle.native}:
+   * once, straight after `attach` resolves, on the way to writing
+   * `attachment.opened`. That is what makes the Snapshot durable without giving
+   * this package any part in constructing one — the Engine owns Session history
+   * and the adapter owns policy, and neither has to learn the other's job.
+   *
+   * Optional on the interface and null-able in the answer, which are two
+   * different absences. An adapter that predates authority (a terminal
+   * companion) does not implement the field at all; an adapter that implements
+   * it answers `null` for a Session whose project turned the gate off. Both
+   * record as `null`, because both mean the same thing about the attachment.
+   */
+  readonly authority?: AuthoritySnapshot | null;
   dispatch(command: HarnessCommand): Promise<DeliveryReceipt>;
   reconcile(cursor: SessionNativeDetail | null): Promise<Reconciliation>;
   /** Called only after every fact in the returned reconciliation batch commits durably. */

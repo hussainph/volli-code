@@ -58,7 +58,7 @@ import { isInternalNavigationTarget } from "./navigation";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
-import { getProjectById, listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
@@ -813,6 +813,16 @@ app.whenReady().then(async () => {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
+              // The policy this attachment will be pinned to (VC-44), read from
+              // app-owned state and never from the tree the Session is about to
+              // edit. Resolved per attach for the reason the web ports are: what
+              // a Session may do is fixed when it starts, so a Settings change
+              // never lands mid-turn.
+              authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
+              // What history already holds, so the Session-wide fallback
+              // threshold is measured against the Session rather than against
+              // this one attachment.
+              priorAuthorityDenials: projection.authorityDenials,
               // The skills this Session was started with, as recorded ahead of
               // its first attachment (`SessionSkillPorts`). Read from the
               // durable record on EVERY attach — never from disk — so a

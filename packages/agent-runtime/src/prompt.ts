@@ -108,12 +108,21 @@ const AUTHORITY_SOURCES: Record<RuntimeSessionRole, string> = {
  * main checkout — and the allowance is anchored to the task and the user:
  * file content never creates the need, which is what lets a Session refuse a
  * poisoned README without a hard rule. Writes and destructive commands stay
- * instructed against because this instruction is currently the only layer —
- * the authority gate is unwired and containment is off
+ * instructed against because this instruction is still effectively the only
+ * layer: containment is off, and the authority gate defaults to `observe`, which
+ * pins a Snapshot and refuses nothing
  * (docs/plans/authority-two-axis-rearchitecture.md). Loosening the write side
  * waits for that plan's slices 1–2, so instruction-loosening and enforcement
  * land as a pair. The credentials sentence previews slice 1's secrets
  * denylist, so instruction and future enforcement converge on one shape.
+ *
+ * The read sentence is also the sharpest reason `enforce` is not yet the
+ * default. It names the reference-only main checkout and sibling worktrees as
+ * legitimate reads, and `path.outside-workspace` refuses exactly those — so a
+ * project that turns enforcement on today has a system prompt and a rule pack
+ * that contradict each other. Slice 1 resolves it by giving both layers one read
+ * policy; until then the contradiction is confined to a posture nobody is on by
+ * default.
  */
 function workspaceLayer(role: RuntimeSessionRole, workspacePath: string): string {
   return [

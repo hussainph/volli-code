@@ -4,6 +4,7 @@
  */
 
 import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
+import type { AuthoritySnapshot } from "./authority";
 
 export interface Session {
   id: string;
@@ -289,6 +290,25 @@ export interface SessionAttachment {
   venue: SessionExecutionVenue;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
+  /**
+   * The policy this attachment ran under, recorded when it opened (VC-44).
+   *
+   * On the attachment rather than on the Session, because that is the unit the
+   * Snapshot is pinned to: policy is frozen for the life of one attachment and
+   * re-resolved at the next, so a Session that reattached after a Settings edit
+   * has genuinely run under two policies and history has to be able to say so.
+   * `authority.denied` already carries `attachmentId`, so a refusal read back
+   * long after the pack changed resolves through this field to the exact
+   * `rulePackId` and `rulePackHash` that produced it — which is the whole of what
+   * pinning was for, and what it could not do while nothing persisted the
+   * Snapshot.
+   *
+   * `null` is a real and permanent answer, not a migration gap. A Session whose
+   * project sets `enforcement: "off"` is handed no Snapshot at all, and every
+   * attachment written before VC-44 has none either; both mean "this ran at the
+   * runtime's own defaults", which is the same fact.
+   */
+  authority: AuthoritySnapshot | null;
 }
 
 /** A local machine, cloud sandbox, or other execution venue. */

@@ -622,6 +622,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } },
+        authority: null,
       },
     });
     expect(
@@ -669,6 +670,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-1", detail: null },
+        authority: null,
       },
     });
     await control.observe({
@@ -801,6 +803,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-2", detail: null },
+        authority: null,
       },
     });
     const prompts = [
@@ -926,6 +929,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-3", detail: null },
+        authority: null,
       },
     });
     await control.observe({
@@ -1071,6 +1075,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-4", detail: null },
+        authority: null,
       },
     });
     await control.observe({

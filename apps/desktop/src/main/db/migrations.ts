@@ -867,6 +867,47 @@ CREATE TABLE secrets (
 );
 `;
 
+/**
+ * Migration 025: the durable authority policy store (VC-44, slice 7 of
+ * `docs/plans/authority-two-axis-rearchitecture.md`).
+ *
+ * One nullable JSON column, `NULL` = inherit every built-in default, taking
+ * 019's shape for 019's reason: the payload is a variable-shaped document, no
+ * column set describes it, and nobody asks `WHERE authority_policy = ?`.
+ *
+ * **The column stores DEPARTURES, never the resolved policy.** That is the one
+ * decision here worth reading twice, and it is the opposite of what migration
+ * 019 chose — 019 stores the full observed record because a project's picker had
+ * to stay answerable against a global snapshot that might no longer contain its
+ * model. Authority has no such coupling and the opposite hazard: a project that
+ * stored its resolved policy would freeze today's defaults into every project
+ * that ever opened a settings pane, so tightening a default later would silently
+ * skip exactly the projects someone had touched. `resolveAuthorityPolicy` splices
+ * the defaults in at read time, which is what makes a changed default reach
+ * every project that never disagreed with it.
+ *
+ * **Why the database and not a file in the repo.** This is the ticket's
+ * non-negotiable. A policy store the agent can write is a privilege-escalation
+ * loop: the thing being governed would author its own permissions. Claude Code's
+ * classifier refuses to read `autoMode` out of repo-local settings for exactly
+ * this reason, because a checked-in file — or a build step that writes one —
+ * arrives with the repository. The database is under Electron's `userData`,
+ * outside every Session workspace and outside every worktree, so no file tool
+ * reaches it. Say the limit honestly: the capability axis is off and no rule
+ * judges command operands, so a Session's `execute` tool can still reach this
+ * file through an ordinary shell command. `writableRoots` in VC-45 is what
+ * closes that. What this placement buys today is that policy is never *sourced*
+ * from the tree the agent is editing.
+ *
+ * `json_valid` follows 019 and 024: a column whose whole contract is "this is
+ * JSON" should fail at the write, not several layers up inside a parser that
+ * then has to invent a policy for the corpse.
+ */
+const MIGRATION_025_PROJECT_AUTHORITY_POLICY = `
+ALTER TABLE projects ADD COLUMN authority_policy TEXT
+  CHECK (authority_policy IS NULL OR json_valid(authority_policy));
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -980,6 +1021,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "projects agent config — the per-project skills, harness and model Configure writes",
     sql: MIGRATION_024_PROJECT_AGENT_CONFIG,
     apply: applyMigration024ProjectAgentConfig,
+  },
+  {
+    version: 25,
+    name: "projects.authority_policy — the per-project authority departures, app-owned",
+    sql: MIGRATION_025_PROJECT_AUTHORITY_POLICY,
   },
 ];
 

@@ -865,6 +865,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         // the fallback this attach exists to refuse (#38), because
         // `#rehydrateBinding` trusts the persisted directory over a fresh read.
         native: wrapNativeBinding(site.directory, adapter.runtime, handle.native),
+        // The policy this attachment opened under, read off the handle exactly
+        // as `native` is and written down once, here (VC-44). This is the only
+        // place an Authority Snapshot becomes durable, which is what lets a
+        // later `authority.denied` — which carries this `attachmentId` — name
+        // the rule pack that produced it. An adapter that does not answer runs
+        // no policy, and records none.
+        authority: handle.authority ?? null,
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),
@@ -1014,6 +1021,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         venue: input.location.venue,
         continuity: input.request.command.continuity,
         native: null,
+        // An attach that failed ran nothing, so it was governed by nothing. The
+        // Snapshot is not merely unknown here — there was no attachment for one
+        // to be pinned to, and writing the policy that *would* have applied
+        // would put a claim in history that no call was ever judged against.
+        authority: null,
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });

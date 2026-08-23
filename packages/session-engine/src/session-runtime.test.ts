@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { RuntimeObservation, SessionEvent, SessionLedgerIds } from "@volli/shared";
+import type {
+  AuthoritySnapshot,
+  RuntimeObservation,
+  SessionEvent,
+  SessionLedgerIds,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -101,6 +106,8 @@ class FakeAdapter implements NativeHarnessAdapter {
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: RuntimeObservation | null = null;
   releaseReasons: string[] = [];
+  /** The policy this fake binding reports running under (VC-44). */
+  authority: AuthoritySnapshot | null = null;
 
   async attach(
     spec: Parameters<NativeHarnessAdapter["attach"]>[0],
@@ -115,6 +122,7 @@ class FakeAdapter implements NativeHarnessAdapter {
     if (this.attachFailure) throw this.attachFailure;
     return {
       native: { id: "native-session-1", detail: { provider: "fake" } },
+      authority: this.authority,
       dispatch: async (command) => {
         this.dispatches += 1;
         this.commands.push(command);
@@ -692,6 +700,55 @@ describe("SessionRuntime native adapter contract", () => {
 
     releaseDispatch.resolve();
     await expect(Promise.all([message, steering])).resolves.toHaveLength(2);
+  });
+
+  it("records the binding's Authority Snapshot on the attachment, so a denial can name its pack", async () => {
+    // VC-44's third acceptance criterion, end to end. An `authority.denied`
+    // event carries an `attachmentId` and nothing else about the policy that
+    // refused; the pack it cites is resolved through the attachment recorded
+    // here, which is what makes a denial interpretable long after the pack has
+    // moved on — and comparable between two attachments of the same Session.
+    const adapter = new FakeAdapter();
+    const authority: AuthoritySnapshot = {
+      mode: "auto",
+      location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+      rulePackId: "volli.builtin",
+      rulePackHash: "dca89a93",
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    };
+    adapter.authority = authority;
+    const { runtime } = composition({ adapter });
+
+    const sessionId = await createAndAttach(runtime);
+    const snapshot = await runtime.snapshot({ sessionId });
+    const opened = snapshot.frames.find(
+      ({ event }) => event.payload.kind === "attachment.opened",
+    )!.event;
+
+    expect(
+      opened.payload.kind === "attachment.opened" && opened.payload.attachment.authority,
+    ).toEqual(authority);
+  });
+
+  it("records no Snapshot for a binding that runs no gate", async () => {
+    // An adapter that answers nothing — a terminal companion — and a project
+    // that turned the gate off both land here, because both mean the same thing
+    // about the attachment: nothing governed it.
+    const { runtime } = composition({ adapter: new FakeAdapter() });
+
+    const sessionId = await createAndAttach(runtime);
+    const snapshot = await runtime.snapshot({ sessionId });
+    const opened = snapshot.frames.find(
+      ({ event }) => event.payload.kind === "attachment.opened",
+    )!.event;
+
+    expect(
+      opened.payload.kind === "attachment.opened" && opened.payload.attachment.authority,
+    ).toBeNull();
   });
 
   it("buffers startup observations until the attachment is durable", async () => {
@@ -2425,6 +2482,7 @@ describe("SessionRuntime native adapter contract", () => {
         venue,
         continuity: "native_resume",
         native: null,
+        authority: null,
       },
     });
     await expect(
@@ -2662,6 +2720,7 @@ describe("SessionRuntime native adapter contract", () => {
         venue,
         continuity: "native_resume",
         native: { id: "corrupt", detail: { kind: "wrong" } as never },
+        authority: null,
       },
     });
     await expect(
@@ -2976,6 +3035,7 @@ describe("SessionRuntime native adapter contract", () => {
           id: "locator-native",
           detail: { kind: "volli.native-binding.v1", profileId: "native" },
         },
+        authority: null,
       },
     });
     await expect(
@@ -3034,6 +3094,7 @@ describe("SessionRuntime native adapter contract", () => {
           venue,
           continuity: "native_resume",
           native: { id: `envelope-native-${label}`, detail },
+          authority: null,
         },
       });
       await expect(

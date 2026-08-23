@@ -17,6 +17,8 @@ import {
   encodeSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
+import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
+import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
   Session,
@@ -48,6 +50,20 @@ const attachment: SessionAttachment = {
   venue: { id: "local", kind: "local" },
   continuity: "fresh",
   native: { id: "native-1", detail: { runtime: "session" } },
+  authority: null,
+};
+
+/** A Snapshot as it sits in history, for the decode cases below. */
+const recordedAuthority: AuthoritySnapshot = {
+  mode: "auto",
+  location: "worktree",
+  enforcement: "enforce",
+  judgmentMode: "ask",
+  tools: ["read"],
+  rulePackId: BUILTIN_RULE_PACK_ID,
+  rulePackHash: BUILTIN_RULE_PACK_HASH,
+  classifierModel: null,
+  fallback: { consecutiveDenials: 3, sessionDenials: 20 },
 };
 
 const interaction: SessionInteraction = {
@@ -581,6 +597,101 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     expect(() => openedAttachment({ ...attachment, native: { id: 7, detail: null } })).toThrow(
       "payload.attachment.native.id must be a string",
     );
+  });
+
+  it("round-trips a recorded Authority Snapshot, so a denial can name the pack that ruled", () => {
+    const authority: AuthoritySnapshot = {
+      mode: "auto",
+      location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+      rulePackId: BUILTIN_RULE_PACK_ID,
+      rulePackHash: BUILTIN_RULE_PACK_HASH,
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    };
+
+    const decoded = openedAttachment({ ...attachment, authority });
+
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("reads an attachment written before authority was recorded as governed by nothing", () => {
+    // Every attachment in history predates VC-44 and carries no `authority` key.
+    // Refusing to decode without one would make those Sessions unopenable rather
+    // than merely quiet about the policy they ran under.
+    const { authority: _dropped, ...legacy } = attachment;
+
+    expect(openedAttachment(legacy)).toEqual({
+      kind: "attachment.opened",
+      attachment: { ...legacy, authority: null },
+    });
+  });
+
+  it("keeps a tool name this build no longer offers, because history outlives a vocabulary", () => {
+    // The record is most valuable precisely here: it is how a reader learns that
+    // the Session which made a call held a tool that has since been retired.
+    const decoded = openedAttachment({
+      ...attachment,
+      authority: { ...recordedAuthority, tools: ["read", "a_tool_that_was_retired"] },
+    });
+
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority?.tools).toEqual([
+      "read",
+      "a_tool_that_was_retired",
+    ]);
+  });
+
+  it("rejects a corrupt Authority Snapshot rather than guessing what governed a Session", () => {
+    expect(() => openedAttachment({ ...attachment, authority: "enforce" })).toThrow(
+      "payload.attachment.authority must be an object",
+    );
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, enforcement: "off" } }),
+    ).toThrow("payload.attachment.authority.enforcement has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, mode: "manual" } }),
+    ).toThrow("payload.attachment.authority.mode has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, location: "orbit" } }),
+    ).toThrow("payload.attachment.authority.location has an unsupported value");
+    expect(() =>
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, judgmentMode: "vibes" },
+      }),
+    ).toThrow("payload.attachment.authority.judgmentMode has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: "read" } }),
+    ).toThrow("payload.attachment.authority.tools must be an array");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: [7] } }),
+    ).toThrow("payload.attachment.authority.tools[0] must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackId: 1 } }),
+    ).toThrow("payload.attachment.authority.rulePackId must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackHash: 1 } }),
+    ).toThrow("payload.attachment.authority.rulePackHash must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, classifierModel: 1 } }),
+    ).toThrow("payload.attachment.authority.classifierModel must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, fallback: null } }),
+    ).toThrow("payload.attachment.authority.fallback must be an object");
+    expect(() =>
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, fallback: { consecutiveDenials: "three" } },
+      }),
+    ).toThrow("payload.attachment.authority.fallback.consecutiveDenials must be an integer");
+    expect(() =>
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, fallback: { consecutiveDenials: 3 } },
+      }),
+    ).toThrow("payload.attachment.authority.fallback.sessionDenials must be an integer");
   });
 
   it("rejects malformed attention, prompts, and answers", () => {

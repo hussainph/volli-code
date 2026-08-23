@@ -214,6 +214,9 @@ describe("buildExportDocument — populated db", () => {
         skillModes: null,
         sessionHarness: null,
         sessionModel: null,
+        // No recorded departure, so this project inherits every authority
+        // default (migration 025).
+        authorityPolicy: null,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.
@@ -472,6 +475,7 @@ describe("buildExportDocument — populated db", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: null,
+        authority: null,
       },
       failure: { code: "spawn_failed", detail: "shell missing", diagnostic: null },
     });
