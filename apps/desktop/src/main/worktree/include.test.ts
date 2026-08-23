@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { compileIncludePattern, copyIncludedFiles, isIncluded } from "./include";
+import {
+  DEFAULT_PRUNED_DIRS,
+  compileIncludePattern,
+  copyIncludedFiles,
+  isIncluded,
+} from "./include";
 
 let dirs: string[] = [];
 
@@ -188,6 +193,31 @@ describe("copyIncludedFiles", () => {
     expect(existsSync(join(worktree, "node_modules"))).toBe(false);
   });
 
+  it("never descends into another ecosystem's dependency or build tree either", async () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    write(project, ".env", "SECRET=1");
+    // The same walk cost and the same `.env*` correctness trap as node_modules,
+    // on the checkouts whose ecosystem nobody measured here (VC-160): a Python
+    // virtualenv, a Rust/Maven target dir, Go's vendored source, bundler's gems.
+    write(project, ".venv/lib/python3.12/site-packages/pkg/.env.example", "NOT_MINE=1");
+    write(project, "venv/lib/pkg/.env", "NOT_MINE=1");
+    write(project, "__pycache__/module.cpython-312.pyc", "\0");
+    write(project, ".tox/py312/bin/.env", "NOT_MINE=1");
+    write(project, "target/debug/build/.env", "NOT_MINE=1");
+    write(project, "vendor/github.com/pkg/.env", "NOT_MINE=1");
+    write(project, ".gradle/8.5/checksums/.env", "NOT_MINE=1");
+    write(project, ".bundle/gems/rails/.env", "NOT_MINE=1");
+
+    const { copied } = await copyIncludedFiles(project, worktree);
+
+    expect(copied).toEqual([".env"]);
+    // Every name on the list, not the subset that happened to get fixtures.
+    for (const pruned of DEFAULT_PRUNED_DIRS) {
+      expect(existsSync(join(worktree, pruned))).toBe(false);
+    }
+  });
+
   it("descends into a pruned directory a .worktreeinclude line asks for by name", async () => {
     const project = tempDir("proj");
     const worktree = tempDir("wt");
@@ -201,6 +231,26 @@ describe("copyIncludedFiles", () => {
     // suddenly walked back in as a side effect of asking for one corner.
     expect(copied).toEqual(["node_modules/.bin/local-tool"]);
   });
+
+  it.each([...DEFAULT_PRUNED_DIRS])(
+    "honors that escape hatch for %s, as for every name on the widened prune list",
+    async (pruned) => {
+      const project = tempDir("proj");
+      const worktree = tempDir("wt");
+      // Real, uncommitted local config genuinely can live under one of these: a
+      // `.pth` or hand-edited activate hook in a virtualenv, or `.bundle/config`
+      // holding a private gem server's credentials — the stated exception to the
+      // membership rule, and the reason this hatch has to work for EVERY name
+      // rather than the one that happened to get a fixture.
+      write(project, ".worktreeinclude", `${pruned}/keep/mine.local\n`);
+      write(project, `${pruned}/keep/mine.local`, "API=1\n");
+      write(project, `${pruned}/lib/theirs.cfg`, "NOT_MINE=1");
+
+      const { copied } = await copyIncludedFiles(project, worktree);
+
+      expect(copied).toEqual([`${pruned}/keep/mine.local`]);
+    },
+  );
 
   it("keeps the prune when the only mention of the directory is a negation", async () => {
     const project = tempDir("proj");

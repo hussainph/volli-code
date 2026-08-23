@@ -65,7 +65,7 @@ import { createDesktopSessionEngine, watchSessionActivity } from "./session-cont
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
-import { describeDbOpenFailure } from "./db-open-failure";
+import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
@@ -604,10 +604,13 @@ app.whenReady().then(async () => {
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it
     // is classified here, once: a native-ABI failure names the Node
-    // incompatibility and the fix instead of a bare NODE_MODULE_VERSION
-    // number (VC-76).
-    dbHandle = { ok: false, error: describeDbOpenFailure(error) };
-    console.error("[volli] failed to open database:", dbHandle.error);
+    // incompatibility and a fix its reader can carry out instead of a bare
+    // NODE_MODULE_VERSION number (VC-76). Which fix that is depends on who is
+    // looking, so the audience is stated rather than assumed (VC-160) — and the
+    // log keeps the raw message plus the dev-loop remedy either way, so a
+    // packaged user's report is still diagnosable.
+    dbHandle = { ok: false, error: describeDbOpenFailure(error, { dev: isDev }) };
+    console.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
   // The one Session Engine in the process, wrapped once so every durable write
   // anywhere downstream — the runtime's turns, the agent socket's commands, the
@@ -1084,10 +1087,12 @@ app.whenReady().then(async () => {
   // unregistered, the renderer's Model Access page would toast Electron's
   // nameless "No handler registered" instead of the actual problem (VC-76).
   if (sessionRuntime === null) {
+    // `dbHandle.error` is already a complete sentence naming the failure (see
+    // db-open-failure.ts's CONTRACT), so it is passed through rather than
+    // wrapped — a second "the local database failed to open" in front of it read
+    // as two restatements of one fact to the user (VC-160).
     registerDegradedSessionRpcIpcHandlers(
-      dbHandle.ok
-        ? "The agent runtime is unavailable."
-        : `The local database failed to open: ${dbHandle.error}`,
+      dbHandle.ok ? "The agent runtime is unavailable." : dbHandle.error,
     );
   }
   // Signing in is a Model Access task, not a Session one, so it gets its own
@@ -1102,17 +1107,13 @@ app.whenReady().then(async () => {
     // surface must answer with the recorded (already-classified) reason — a
     // Node-ABI failure names the incompatibility, not a generic "unavailable"
     // (VC-76).
-    dbHandle.ok
-      ? undefined
-      : `Sign-in is unavailable — the local database failed to open: ${dbHandle.error}`,
+    dbHandle.ok ? undefined : `Sign-in is unavailable. ${dbHandle.error}`,
   );
   // The Web Access surface, on its own door beside sign-in and for the same
   // reason: one of its arguments is an API key.
   registerWebAccessIpcHandlers(
     webAccess,
-    dbHandle.ok
-      ? undefined
-      : `Web access settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+    dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
   );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
