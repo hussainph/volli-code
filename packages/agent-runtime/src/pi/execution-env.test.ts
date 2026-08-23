@@ -226,6 +226,43 @@ describe("piExecutionEnv", () => {
     }
   });
 
+  /**
+   * The containment half of VC-119's export boundary.
+   *
+   * Volli's exporter runs in Electron main and is configured from a Settings
+   * row rather than from the environment — but a developer debugging a
+   * collector will have `OTEL_*` in the shell that launched the app, and the
+   * app's own process environment is what a tool call would otherwise inherit.
+   * Nothing a model runs may see where telemetry goes, be able to redirect it,
+   * or read a collector credential out of the environment.
+   *
+   * It holds by construction rather than by a filter: this environment is an
+   * allowlist ({@link UNSANDBOXED_VARIABLES}), so a variable is absent unless
+   * somebody names it. The test is here to make removing that allowlist a test
+   * failure rather than a silent leak.
+   */
+  it("never hands a command the host's OpenTelemetry configuration", async () => {
+    const restore = hostVariables({
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4318",
+      OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer host-secret",
+      OTEL_SERVICE_NAME: "volli",
+      OTEL_SDK_DISABLED: "false",
+      OTEL_TRACES_EXPORTER: "otlp",
+    });
+    const env = await piExecutionEnv(workspace());
+    try {
+      // `env | grep` prints nothing when no name matches, so anything before
+      // `done` is telemetry configuration reaching a model's shell.
+      await expect(env.exec("env | grep '^OTEL_' || true; echo done")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "done\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      restore();
+      await env.cleanup();
+    }
+  });
+
   it("gives a command an empty PATH when neither host nor caller supplies one", async () => {
     const restore = hostVariables({ PATH: undefined });
     const env = await piExecutionEnv(workspace());
@@ -252,6 +289,7 @@ describe("scopedEnvironment", () => {
         SSH_AUTH_SOCK: "/private/tmp/ssh-agent.sock",
         LANG: "C.UTF-8",
         GITHUB_TOKEN: "host-secret",
+        OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer host-secret",
       }),
     ).toEqual({ PATH: "/usr/local/bin:/bin", LANG: "C.UTF-8" });
   });
