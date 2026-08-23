@@ -10,6 +10,7 @@ export * from "./harness";
 export * from "./verb-registry";
 export * from "./agent-surface";
 export * from "./agent-runtime";
+export * from "./agent-observability";
 export * from "./model-access-policy";
 export * from "./model-access-sign-in";
 export * from "./compaction-policy";
