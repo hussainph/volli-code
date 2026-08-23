@@ -23,6 +23,12 @@
  * keyring): nothing was asked, no prompt was raised, so the rows are left for a
  * healthier launch.
  *
+ * **A row nobody needs is dropped without asking anything.** A name already
+ * stored the new way has nothing left to carry, so it goes first, ahead of the
+ * availability question. Otherwise the person who re-pasted their key while the
+ * keychain was asleep would keep a row that defers forever, and buy a boot-time
+ * prompt every launch for a key that would be discarded the moment it opened.
+ *
  * **Nothing here is logged, and nothing here throws.** The cipher's own failure
  * text is dropped rather than wrapped: a layer that was handed the plaintext is
  * not a layer whose words Volli repeats. The counts this returns are facts about
@@ -103,19 +109,33 @@ export function migrateLegacySafeStorageSecrets(
     "SELECT name, ciphertext FROM legacy_safe_storage_secrets",
   ).all();
   if (rows.length === 0) return { carried: 0, dropped: 0, deferred: 0 };
-  // Asked before decrypting anything: a `false` here means no key material is
-  // reachable, so there is nothing to gain from trying the rows and something
-  // to lose from deleting them.
-  if (!keychainAnswers()) {
-    return { carried: 0, dropped: 0, deferred: rows.length };
-  }
 
   const forget = prepared<[string]>(db, "DELETE FROM legacy_safe_storage_secrets WHERE name = ?");
   let carried = 0;
   let dropped = 0;
+  // Superseded rows go first, and cost nothing to answer: whether a name is
+  // already stored the new way is a question for this profile, not for the
+  // keychain. Doing it here rather than inside the loop below is what stops a
+  // re-pasted key from leaving behind a row that defers, and prompts, forever.
+  const pending: LegacyRow[] = [];
   for (const row of rows) {
+    if (hasSecret(db, row.name)) {
+      forget.run(row.name);
+      dropped += 1;
+    } else {
+      pending.push(row);
+    }
+  }
+  if (pending.length === 0) return { carried: 0, dropped, deferred: 0 };
+  // Asked before decrypting anything, and only once something actually needs
+  // opening: a `false` here means no key material is reachable, so there is
+  // nothing to gain from trying the rows and something to lose from deleting
+  // them.
+  if (!keychainAnswers()) return { carried: 0, dropped, deferred: pending.length };
+
+  for (const row of pending) {
     const key = openOrNull(row.ciphertext);
-    if (key !== null && !hasSecret(db, row.name)) {
+    if (key !== null) {
       writeSecret(db, row.name, key, now());
       carried += 1;
     } else {

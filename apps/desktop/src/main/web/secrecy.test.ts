@@ -259,8 +259,8 @@ describe("where a stored API key can and cannot be seen", () => {
 
     // `volli:app-state-set` takes any key and any string the renderer likes.
     // Web Access lives outside it in both directions: the renderer cannot write
-    // the provider setting around the endpoint policy, and cannot read the
-    // ciphertext back out of the bootstrap.
+    // the provider setting around the endpoint policy, and cannot read the key
+    // back out of the bootstrap.
     await invoke(
       "volli:app-state-set",
       "volli:web-access",

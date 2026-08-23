@@ -181,7 +181,7 @@ describe("carrying the web-search keys out of the keychain", () => {
     expect(legacyNames()).toEqual([BRAVE_SEARCH_KEY_SECRET]);
   });
 
-  it("never overwrites a key the person pasted since", () => {
+  it("never overwrites a key the person pasted since, and does not ask to", () => {
     storeTheOldWay(BRAVE_SEARCH_KEY_SECRET, KEY);
     // The deferred case above, followed by a re-paste: the old key must not
     // come back and displace the one that is actually in use.
@@ -194,6 +194,40 @@ describe("carrying the web-search keys out of the keychain", () => {
     });
     expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).toBe("BSA-the-key-in-use-now");
     expect(legacyNames()).toEqual([]);
+    // Whose key wins is a question about this profile, so the keychain is never
+    // consulted about a row that had already lost.
+    expect(cipher.availabilityChecks).toBe(0);
+    expect(cipher.asked).toEqual([]);
+  });
+
+  it("drops a superseded row even while the keychain is asleep, so it stops deferring", () => {
+    storeTheOldWay(BRAVE_SEARCH_KEY_SECRET, KEY);
+    storeTheOldWay(EXA_SEARCH_KEY_SECRET, EXA_KEY);
+    // Re-pasted Brave during the outage; Exa still only exists as ciphertext.
+    writeSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET, "BSA-the-key-in-use-now", 1);
+    cipher.available = false;
+
+    // Deferring the row that was already replaced would mean asking the
+    // keychain about it again on every launch, forever, for a key that would be
+    // thrown away the moment it opened. Only Exa is worth another launch.
+    expect(migrateLegacySafeStorageSecrets(ctx.db)).toEqual({
+      carried: 0,
+      dropped: 1,
+      deferred: 1,
+    });
+    expect(legacyNames()).toEqual([EXA_SEARCH_KEY_SECRET]);
+
+    // And once every remaining row has been superseded too, the pass stops
+    // touching the keychain at all rather than deferring an empty errand.
+    writeSecret(ctx.db, EXA_SEARCH_KEY_SECRET, "exa-also-pasted-by-hand", 2);
+    cipher.availabilityChecks = 0;
+    expect(migrateLegacySafeStorageSecrets(ctx.db)).toEqual({
+      carried: 0,
+      dropped: 1,
+      deferred: 0,
+    });
+    expect(legacyNames()).toEqual([]);
+    expect(cipher.availabilityChecks).toBe(0);
   });
 
   it("treats a ciphertext that opens to nothing as no key at all", () => {
