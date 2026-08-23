@@ -74,8 +74,22 @@ function syntheticRun(runId: string): ObservabilityEvent[] {
       responseModelId: "claude-sonnet-4-20250514",
       runId,
     },
-    { kind: "tool", activityKind: "read-file", outcome: "completed", durationMs: 12, runId },
-    { kind: "tool", activityKind: "run-command", outcome: "failed", durationMs: 2100, runId },
+    {
+      kind: "tool",
+      activityKind: "read-file",
+      toolId: "read",
+      outcome: "completed",
+      durationMs: 12,
+      runId,
+    },
+    {
+      kind: "tool",
+      activityKind: "run-command",
+      toolId: "bash",
+      outcome: "failed",
+      durationMs: 2100,
+      runId,
+    },
     { kind: "authority", outcome: "denied", cause: "call.unreadable", runId },
     {
       kind: "compaction",
@@ -133,8 +147,8 @@ describe.skipIf(!enabled)("Jaeger OTLP smoke (VOLLI_JAEGER_INTEGRATION=1)", () =
     expect(spans.map((span) => span.operationName).toSorted()).toEqual(
       [
         "chat claude-sonnet-4",
-        "execute_tool read-file",
-        "execute_tool run-command",
+        "execute_tool read",
+        "execute_tool bash",
         "volli.agent.attachment",
         "volli.agent.attachment",
         "volli.agent.attention",
@@ -151,14 +165,17 @@ describe.skipIf(!enabled)("Jaeger OTLP smoke (VOLLI_JAEGER_INTEGRATION=1)", () =
     expect(tag(attempt, "gen_ai.provider.name")).toBe("anthropic");
     expect(tag(attempt, "gen_ai.usage.input_tokens")).toBe(12_400);
     expect(tag(attempt, "gen_ai.usage.cache_read.input_tokens")).toBe(11_800);
-    expect(tag(attempt, "gen_ai.response.finish_reasons")).toBe("toolUse");
+    // A list on the wire, as the convention types it. How a collector renders a
+    // list tag back is its own business — Jaeger has used both a JSON string and
+    // a repeated tag — so this checks the value survived, not its spelling.
+    expect(JSON.stringify(tag(attempt, "gen_ai.response.finish_reasons"))).toContain("toolUse");
     expect(tag(attempt, "volli.usage.cost_usd")).toBeCloseTo(0.0271, 6);
     // Jaeger reports duration in microseconds; the attempt was measured at
     // 1420ms, so a zero here means timing did not survive the wire.
     expect(attempt?.duration).toBe(1_420_000);
 
     // A failed tool is red in the UI; a refusal and a drop report are not.
-    const failedTool = spans.find((span) => span.operationName === "execute_tool run-command");
+    const failedTool = spans.find((span) => span.operationName === "execute_tool bash");
     expect(tag(failedTool, "error")).toBe(true);
     expect(
       tag(

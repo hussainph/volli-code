@@ -76,7 +76,7 @@ const SCOPE_NAME = "volli.agent";
  * Deliberately not the app version: this names the *vocabulary* a stored trace
  * was written under, so a reader can tell whether two traces are comparable.
  */
-const SCOPE_VERSION = "2";
+const SCOPE_VERSION = "3";
 
 /** OTLP over HTTP puts each signal on its own path. */
 const TRACES_PATH = "/v1/traces";
@@ -193,9 +193,10 @@ export function traceIdForRun(runId: string): string {
     }
     return hash.toString(16).padStart(8, "0");
   };
-  // Two 8-hex halves each doubled: 32 lowercase hex characters, never all zero
-  // (the offsets are non-zero and FNV-1a of any input from them is too).
-  return `${half(0x811c_9dc5)}${half(0x01000193)}${half(0xdead_beef)}${half(0xcafe_babe)}`;
+  // Four independent 8-hex quarters, one per offset: 32 lowercase hex
+  // characters, never all zero (the offsets are non-zero and FNV-1a of any
+  // input from them is too).
+  return `${half(0x811c_9dc5)}${half(0x0100_0193)}${half(0xdead_beef)}${half(0xcafe_babe)}`;
 }
 
 /**
@@ -451,10 +452,22 @@ export class OtlpObservabilityExporter implements ObservabilityExporter {
     return counter;
   }
 
+  /**
+   * Bucket boundaries are advice given once, when the instrument is first
+   * created — the SDK reads them at creation and ignores them afterwards, which
+   * is why they ride on the measurement rather than being configured here: the
+   * mapper is the only module that knows which metrics the convention
+   * prescribes boundaries for.
+   */
   #histogram(measurement: ObservabilityMetric): Histogram {
     const existing = this.#histograms.get(measurement.name);
     if (existing !== undefined) return existing;
-    const histogram = this.#meter.createHistogram(measurement.name, { unit: measurement.unit });
+    const histogram = this.#meter.createHistogram(measurement.name, {
+      unit: measurement.unit,
+      ...(measurement.buckets === undefined
+        ? {}
+        : { advice: { explicitBucketBoundaries: [...measurement.buckets] } }),
+    });
     this.#histograms.set(measurement.name, histogram);
     return histogram;
   }

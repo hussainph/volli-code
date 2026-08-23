@@ -229,7 +229,11 @@ describe("OtlpObservabilityExporter", () => {
       exported.find((metric) => metric.descriptor.name === name)!;
     expect(byName("volli.agent.tool.call.count").dataPoints).toContainEqual(
       expect.objectContaining({
-        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+        attributes: {
+          "gen_ai.tool.name": "read-file",
+          "volli.tool.kind": "read-file",
+          "volli.tool.outcome": "failed",
+        },
         value: 1,
       }),
     );
@@ -239,14 +243,23 @@ describe("OtlpObservabilityExporter", () => {
     expect(byName("volli.agent.model.request.count").dataPoints).toContainEqual(
       expect.objectContaining({
         attributes: expect.objectContaining({
+          "gen_ai.operation.name": "chat",
           "gen_ai.provider.name": "anthropic",
           "gen_ai.request.model": "claude-sonnet-4",
-          "gen_ai.response.finish_reasons": "error",
+          "gen_ai.response.finish_reasons": ["error"],
           "error.type": "rate-limit",
         }),
         value: 1,
       }),
     );
+    // The convention's bucket boundaries survive the trip through the SDK: an
+    // instrument created without them silently falls back to the default
+    // latency buckets, which put every token count in the overflow.
+    const tokenBuckets = byName("gen_ai.client.token.usage").dataPoints[0]?.value;
+    expect((tokenBuckets as { buckets: { boundaries: number[] } }).buckets.boundaries).toEqual([
+      1, 4, 16, 64, 256, 1024, 4096, 16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216,
+      67_108_864,
+    ]);
     expect(JSON.stringify(exported)).not.toContain("run-a");
   });
 

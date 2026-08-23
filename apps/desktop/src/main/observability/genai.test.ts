@@ -8,6 +8,23 @@ import {
 
 import { observabilityMetrics, observabilitySpan } from "./genai";
 
+/**
+ * The bucket boundaries the GenAI convention prescribes, written out here
+ * rather than imported from the module under test.
+ *
+ * Importing the constant would make this assertion agree with whatever the
+ * mapper happens to say; the point is to check it against the convention, so
+ * the numbers are quoted independently and a typo in either copy fails.
+ */
+const TOKEN_BUCKETS = [
+  1, 4, 16, 64, 256, 1024, 4096, 16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216,
+  67_108_864,
+];
+
+const DURATION_BUCKETS = [
+  0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+];
+
 const attempt: ObservabilityEvent = {
   kind: "provider-attempt",
   providerId: "anthropic",
@@ -47,7 +64,8 @@ describe("observabilitySpan — provider attempts", () => {
         "gen_ai.system": "anthropic",
         "gen_ai.request.model": "claude-sonnet-4",
         "gen_ai.response.model": "claude-sonnet-4-20250514",
-        "gen_ai.response.finish_reasons": "stop",
+        // A list, because the convention types this attribute as one.
+        "gen_ai.response.finish_reasons": ["stop"],
         "gen_ai.response.time_to_first_chunk": 300,
         "gen_ai.usage.input_tokens": 100,
         "gen_ai.usage.output_tokens": 200,
@@ -135,7 +153,25 @@ describe("observabilitySpan — product events", () => {
     expect(interrupted.failed).toBe(false);
   });
 
-  it("names a tool span after Volli's activity kind, never a model-supplied name", () => {
+  it("names a tool span after Volli's own tool id when it has one", () => {
+    const span = observabilitySpan({
+      kind: "tool",
+      activityKind: "fetch-url",
+      toolId: "web_search",
+      outcome: "completed",
+      durationMs: 55,
+      runId: "run-2",
+    });
+    // The id distinguishes what the capability class cannot: `web_search` and
+    // `web_fetch` are both `fetch-url`.
+    expect(span.name).toBe("execute_tool web_search");
+    expect(span.attributes["gen_ai.tool.name"]).toBe("web_search");
+    // The class is kept beside it — it is the axis that survives the tool list
+    // changing, and the only one an unnamed call still has.
+    expect(span.attributes["volli.tool.kind"]).toBe("fetch-url");
+  });
+
+  it("falls back to the activity kind for a tool it has no name for", () => {
     const span = observabilitySpan({
       kind: "tool",
       activityKind: "run-command",
@@ -268,9 +304,10 @@ describe("observabilityMetrics", () => {
           unit: "{request}",
           value: 1,
           attributes: {
+            "gen_ai.operation.name": "chat",
             "gen_ai.provider.name": "anthropic",
             "gen_ai.request.model": "claude-sonnet-4",
-            "gen_ai.response.finish_reasons": "stop",
+            "gen_ai.response.finish_reasons": ["stop"],
           },
         },
         {
@@ -279,22 +316,27 @@ describe("observabilityMetrics", () => {
           unit: "s",
           value: 1.2,
           attributes: {
+            "gen_ai.operation.name": "chat",
             "gen_ai.provider.name": "anthropic",
             "gen_ai.request.model": "claude-sonnet-4",
-            "gen_ai.response.finish_reasons": "stop",
+            "gen_ai.response.finish_reasons": ["stop"],
           },
+          buckets: DURATION_BUCKETS,
         },
         {
+          // A histogram, not a counter: the convention defines this name as a
+          // distribution, and a sum under it would be read as one.
           name: "gen_ai.client.token.usage",
-          instrument: "counter",
+          instrument: "histogram",
           unit: "{token}",
           value: 100,
           attributes: {
+            "gen_ai.operation.name": "chat",
             "gen_ai.provider.name": "anthropic",
             "gen_ai.request.model": "claude-sonnet-4",
             "gen_ai.token.type": "input",
-            "volli.token.type": "input",
           },
+          buckets: TOKEN_BUCKETS,
         },
         {
           name: "volli.agent.cost.usage",
@@ -310,6 +352,19 @@ describe("observabilityMetrics", () => {
     );
     expect(metrics.filter((metric) => metric.name === "gen_ai.client.token.usage")).toHaveLength(5);
     expect(metrics.every((metric) => !("volli.run.id" in metric.attributes))).toBe(true);
+    // `gen_ai.operation.name` and `gen_ai.token.type` are both Required on the
+    // two metrics whose convention names Volli borrows. Every token series
+    // carries them, including the three whose type words are Volli's own.
+    expect(
+      metrics
+        .filter((metric) => metric.name === "gen_ai.client.token.usage")
+        .map((metric) => metric.attributes["gen_ai.token.type"]),
+    ).toEqual(["input", "output", "cache-read", "cache-write", "reasoning"]);
+    expect(
+      metrics
+        .filter((metric) => metric.name.startsWith("gen_ai."))
+        .every((metric) => metric.attributes["gen_ai.operation.name"] === "chat"),
+    ).toBe(true);
     expect(
       observabilityMetrics({ ...attempt, stopReason: "error" }).find(
         (metric) => metric.name === "volli.agent.model.request.count",
@@ -326,27 +381,34 @@ describe("observabilityMetrics", () => {
       waitDurationMs: 60,
       runId: "run-1",
     });
+    // No `toolId` on this event, so the name falls back to the capability
+    // class, which is kept beside it either way.
+    const labels = {
+      "gen_ai.tool.name": "read-file",
+      "volli.tool.kind": "read-file",
+      "volli.tool.outcome": "failed",
+    };
     expect(tool).toEqual([
       {
         name: "volli.agent.tool.call.count",
         instrument: "counter",
         unit: "{call}",
         value: 1,
-        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+        attributes: labels,
       },
       {
         name: "volli.agent.tool.execution.duration",
         instrument: "histogram",
         unit: "s",
         value: 0.24,
-        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+        attributes: labels,
       },
       {
         name: "volli.agent.tool.wait.duration",
         instrument: "histogram",
         unit: "s",
         value: 0.06,
-        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+        attributes: labels,
       },
     ]);
 
@@ -430,21 +492,28 @@ describe("observabilitySpan — the export boundary", () => {
         Object.values(event).filter((value): value is string => typeof value === "string"),
       );
       const span = observabilitySpan(event);
-      for (const value of Object.values(span.attributes)) {
-        if (typeof value !== "string") {
-          expect(typeof value === "number" || typeof value === "boolean").toBe(true);
-          continue;
-        }
-        expect(carried.has(value) || FROZEN_WORDS.has(value)).toBe(true);
-      }
-      for (const metric of observabilityMetrics(event)) {
-        expect(metric.attributes).not.toHaveProperty("volli.run.id");
-        for (const value of Object.values(metric.attributes)) {
+      // A list attribute is held to exactly the same rule, element by element:
+      // the array arm exists to satisfy a convention's type, not to open a
+      // second channel with looser checking than the scalar one.
+      for (const attribute of Object.values(span.attributes)) {
+        for (const value of Array.isArray(attribute) ? attribute : [attribute]) {
           if (typeof value !== "string") {
             expect(typeof value === "number" || typeof value === "boolean").toBe(true);
             continue;
           }
           expect(carried.has(value) || FROZEN_WORDS.has(value)).toBe(true);
+        }
+      }
+      for (const metric of observabilityMetrics(event)) {
+        expect(metric.attributes).not.toHaveProperty("volli.run.id");
+        for (const attribute of Object.values(metric.attributes)) {
+          for (const value of Array.isArray(attribute) ? attribute : [attribute]) {
+            if (typeof value !== "string") {
+              expect(typeof value === "number" || typeof value === "boolean").toBe(true);
+              continue;
+            }
+            expect(carried.has(value) || FROZEN_WORDS.has(value)).toBe(true);
+          }
         }
       }
     }
