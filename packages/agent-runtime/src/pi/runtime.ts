@@ -1707,9 +1707,7 @@ async function attachSession(
         // no gap between releasing it and Pi owning the array itself.
         await rewritingTheContext(compactBeforeTurn);
         const delivered =
-          agent.state.messages.length === 0
-            ? composeFirstUserMessage(spec.identity.role, spec.brief, text)
-            : text;
+          agent.state.messages.length === 0 ? composeFirstUserMessage(spec, text) : text;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,

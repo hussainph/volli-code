@@ -13,7 +13,6 @@ const INDEX: PromptResource = {
 function input(overrides: Partial<PromptBaselineInput> = {}): PromptBaselineInput {
   return {
     role: "project",
-    workspacePath: "/code/volli",
     tools: { tools: ["read", "edit", "write", "execute"] },
     brief: { text: "A project-scoped chat Session." },
     promptResources: [INDEX],
@@ -32,7 +31,10 @@ function spec(baseline: PromptBaselineInput): SessionRuntimeSpec {
       projectId: "project-1",
       ticketId: null,
     },
-    workspacePath: baseline.workspacePath,
+    // Not a baseline input any more (VC-164): the workspace path is no longer
+    // a prompt byte, so it cannot change what the baseline prices. The spec
+    // still carries it because that is where a Session actually runs.
+    workspacePath: "/code/volli",
     venue: "local",
     model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "medium" },
     brief: baseline.brief,
