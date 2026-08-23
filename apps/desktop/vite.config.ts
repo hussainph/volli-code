@@ -225,6 +225,7 @@ export default defineConfig(({ mode }) => ({
         // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
         // `index.ts`: it is transport bootstrap around an SDK.
         "**/src/main/observability/genai.ts",
+        "**/src/main/observability/ipc.ts",
         "**/src/main/observability/settings.ts",
         "**/src/main/observability/sink.ts",
         "**/src/main/project-roots.ts",

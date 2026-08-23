@@ -270,6 +270,21 @@ export interface PiAdapterOptions {
    * the settings change that retunes it.
    */
   compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
+  /**
+   * Where the runtime's metadata-only observability events go (VC-119).
+   *
+   * Passed straight through, and absent means the runtime's own default: the
+   * no-op sink, which is what every caller that has never heard of telemetry
+   * gets. Main supplies the owner of the opt-in Settings switch, which is a
+   * stable reference for the life of the process — turning export on or off
+   * swaps what is behind it rather than replacing this, so a Session started
+   * before the switch was flipped is still observed after it.
+   *
+   * This module never constructs one. An exporter is Electron-main's to own,
+   * and building one here would put OpenTelemetry into the plain-Node graph
+   * these tests run in.
+   */
+  observability?: PiRuntimeHostOptions["observability"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -384,6 +399,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.compactionPolicy === undefined
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
+    ...(options.observability === undefined ? {} : { observability: options.observability }),
   });
 
   return {

@@ -27,6 +27,7 @@ import {
 
 import { isExternalAppId } from "./external-apps";
 import type {
+  AgentObservabilityIpcChannel,
   CliIpcChannel,
   DataIpcChannel,
   FileIpcChannel,
@@ -1134,6 +1135,32 @@ export const WEB_ACCESS_IPC: { readonly [C in WebAccessIpcChannel]: IpcRequestDe
 
 /** Every channel the Web Access surface owns, derived — never hand-synced. */
 export const WEB_ACCESS_CHANNELS = Object.keys(WEB_ACCESS_IPC) as readonly WebAccessIpcChannel[];
+
+// ---- agent observability descriptor table (VC-119) ------------------------
+// The endpoint is deliberately NOT validated here, for the reason the Web
+// Access table gives: a guard checks an argument's SHAPE, and where telemetry
+// may be sent is a policy (`admitCollectorEndpoint`) whose refusals are
+// sentences a person has to read. "Invalid request" would not tell them which
+// of their address's problems to fix.
+
+export const AGENT_OBSERVABILITY_IPC: {
+  readonly [C in AgentObservabilityIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:agent-observability-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:agent-observability-set": {
+    guard: (args): args is IpcArgs<"volli:agent-observability-set"> =>
+      args.length === 2 && typeof args[0] === "boolean" && typeof args[1] === "string",
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the agent-observability surface owns, derived — never hand-synced. */
+export const AGENT_OBSERVABILITY_CHANNELS = Object.keys(
+  AGENT_OBSERVABILITY_IPC,
+) as readonly AgentObservabilityIpcChannel[];
 
 // ---- self-update descriptor table (VC-59) ---------------------------------
 // Every update request is argument-less — the state is main's to own and the

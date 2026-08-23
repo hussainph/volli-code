@@ -77,6 +77,8 @@ import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
   EXA_SEARCH_KEY_SECRET,
@@ -799,12 +801,28 @@ app.whenReady().then(async () => {
           },
         }
       : null;
+  // Agent observability (VC-119): the opt-in export switch, and the sink the
+  // runtime holds whether or not it is on. Constructed here because this is the
+  // only process allowed to initialize OpenTelemetry — never the renderer, and
+  // never a process a model's tools can see. `start()` brings a stored
+  // opt-in into effect; a profile that never asked for one builds no exporter
+  // at all and the runtime keeps the no-op sink.
+  const agentObservability = dbHandle.ok
+    ? new AgentObservability({ db: dbHandle.db, serviceVersion: app.getVersion() })
+    : null;
+  agentObservability?.start();
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
       ? createPiRuntimeHost({
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
+          // A stable reference for the life of the process: flipping the
+          // Settings switch swaps what is behind this owner rather than
+          // replacing it, so a Session started before the flip is observed
+          // after it. Absent when the database never opened, which leaves the
+          // runtime on its own no-op default.
+          ...(agentObservability === null ? {} : { observability: agentObservability }),
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here
@@ -1209,6 +1227,15 @@ app.whenReady().then(async () => {
     webAccess,
     dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
   );
+  // Agent telemetry export (VC-119): its own door beside Web Access, because the
+  // instrumented Session RPC wire is not where a switch governing
+  // instrumentation belongs.
+  registerAgentObservabilityIpcHandlers(
+    agentObservability,
+    dbHandle.ok
+      ? undefined
+      : `Agent telemetry settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -1223,6 +1250,11 @@ app.whenReady().then(async () => {
           console.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
         }
       }
+      // The one flush, and it is here rather than anywhere else because this is
+      // the only point at which every Session has stopped producing events.
+      // Bounded inside the owner, so a collector that has stopped answering
+      // delays the quit by a couple of seconds instead of holding it.
+      await agentObservability?.shutdown();
     },
     shutdownAgentSocket,
     reportFailure: (error) => {
