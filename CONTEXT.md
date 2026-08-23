@@ -214,6 +214,18 @@ instead of bytes in the system prompt: the date, the working directory, live
 ticket state. The Runtime Brief is the first and largest one.
 _Avoid_: system reminder (a provider's wrapper, not Volli's), dynamic prompt section
 
+**Cache class**:
+How often one section of an assembled request is bought again at write price
+rather than read from the provider's cache: `role-static`, `project-static`,
+`session-static`, or `per-turn`. It is a claim derived from what the section is
+composed from, never a measurement — reported per section by `prompt baseline`
+beside what the section costs, and falsifiable by the cache read and write token
+counts a turn actually reports. A message-side section is marked as one, because
+the same class prices differently there: it is appended once and can invalidate
+no Cache Prefix ahead of it.
+_Avoid_: cache tier, TTL (the provider's retention window, not a section's
+stability), static/dynamic (says nothing about how often)
+
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
 Session: message content, an interaction, activity, Thread lineage, attachment

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import { promptBaseline } from "@volli/agent-runtime";
+import { readWorkspaceEnvironment } from "./session-env";
 import { readSessionTranscriptTail } from "@volli/session-engine";
 import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-engine";
 import {
@@ -2327,17 +2328,19 @@ export function createAgentCommandService(
         // session baseline this command exists to price. `null` is a real
         // measurement: a prompt with no resources section at all.
         const index = await options.skillsIndex(project.id);
-        // No `workspacePath` and no measured environment: neither reaches the
-        // system prompt any more (VC-164), so neither is an input to what the
-        // prompt costs. The dependency fact is now a Turn Reminder on the first
-        // message — real bytes this breakdown does not yet price, and the gap
-        // VC-164's cost-readout lane closes when it adds the reminder as a
-        // per-turn section.
+        // No `workspacePath`: it is not a prompt byte any more (VC-164), so it
+        // cannot change what the prompt costs. The measured environment is back
+        // — not as a prompt layer, but because a workspace with absent
+        // dependencies really is sent an extra ~60 tokens as a Turn Reminder on
+        // the first message, and a breakdown that skipped them would under-price
+        // that Session by exactly the bytes it moved out of the prompt.
+        // Measured here the way a real attach measures it (VC-156).
         const baseline = promptBaseline({
           role,
           tools: { tools: [...PI_TOOLS.tools] },
           ...(index === null ? {} : { promptResources: [index] }),
           brief: { text: brief },
+          workspaceEnvironment: readWorkspaceEnvironment(workspacePath),
         });
         return {
           v: 1,
