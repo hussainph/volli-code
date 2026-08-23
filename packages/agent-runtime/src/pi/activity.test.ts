@@ -1,4 +1,5 @@
 import type { AgentEvent, EditToolDetails } from "@earendil-works/pi-agent-core";
+import { observedToolId } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import {
   MAX_ACTIVITY_PAYLOAD_STRING_LENGTH,
@@ -699,5 +700,57 @@ describe("mapPiActivity", () => {
         subject: { label: "plugin/data.json", path: "plugin/data.json", lineRange: null },
       },
     });
+  });
+});
+
+/**
+ * The join between what Pi calls a tool and what Volli is willing to name.
+ *
+ * `OBSERVED_TOOL_IDS` is the closed vocabulary the observability side channel
+ * exports, and its coding half quotes Pi's wire names (`bash`, not Volli's own
+ * `execute`). Nothing but this test connects the two: if Pi renames a tool, or
+ * Volli's bundle starts registering a different one, the allowlist silently
+ * stops matching and those calls go out counted but unnamed.
+ *
+ * That failure is safe — an unrecognised name is never exported — which is
+ * exactly why it would not otherwise be noticed. This is the noticing.
+ */
+describe("Pi tool names the observability allowlist depends on", () => {
+  const codingToolNames = ["read", "edit", "write", "bash"] as const;
+
+  it("classifies every coding tool the allowlist names", () => {
+    for (const toolName of codingToolNames) {
+      const observation = mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "call-1",
+          toolName,
+          result: { content: [{ type: "text", text: "done" }] },
+          isError: false,
+        } satisfies Extract<AgentEvent, { type: "tool_execution_end" }>,
+        activityContext({ observedAt: 100 }),
+      );
+      // Carried through unchanged, which is what the reducer narrows against.
+      expect(observation.descriptor.nativeToolName).toBe(toolName);
+      expect(observedToolId(observation.descriptor.nativeToolName)).toBe(toolName);
+      // A name Pi no longer classifies would fall to `other` — still safe, but
+      // it would mean the allowlist is describing a tool that no longer exists.
+      expect(observation.descriptor.kind).not.toBe("other");
+    }
+  });
+
+  it("refuses to name a tool outside the allowlist, however it is classified", () => {
+    const observation = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "mcp__github__create_issue",
+        result: { content: [{ type: "text", text: "done" }] },
+        isError: false,
+      } satisfies Extract<AgentEvent, { type: "tool_execution_end" }>,
+      activityContext({ observedAt: 100 }),
+    );
+    expect(observation.descriptor.nativeToolName).toBe("mcp__github__create_issue");
+    expect(observedToolId(observation.descriptor.nativeToolName)).toBeUndefined();
   });
 });

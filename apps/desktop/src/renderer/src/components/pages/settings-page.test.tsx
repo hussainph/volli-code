@@ -32,6 +32,7 @@ describe("SettingsPage (app-wide)", () => {
       "Web Search",
       "Integrations",
       "Storage",
+      "Telemetry",
       "Updates",
       "About",
     ]) {
@@ -65,6 +66,18 @@ describe("SettingsPage (app-wide)", () => {
     // the deletion takes and what survives it. This is the sanctioned
     // exception to the copy rule and must not become a hint.
     expect(html).toContain("keeps the branch, its commits, and the ticket");
+  });
+
+  it("opens Telemetry in its loading state, drawing no switch it has not read", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="telemetry" />);
+
+    expect(html).toContain("Agent telemetry");
+    expect(html).toContain("Loading…");
+    // A pane that has read nothing must not draw a position: an export switch
+    // rendered before the bridge answered would be showing somebody a state
+    // that is not their setting.
+    expect(html).not.toContain("agent-observability-export");
+    expect(html).not.toContain('id="agent-observability-endpoint"');
   });
 
   it("opens Web Search in its loading state, offering no key it has not read", () => {

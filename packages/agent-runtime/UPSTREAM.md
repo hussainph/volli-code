@@ -6,23 +6,27 @@ Pi, consumed from npm.
 - Repository: https://github.com/earendil-works/pi
 - Previously `badlogic/pi-mono`, published under the `@mariozechner/*` npm scope.
   Both are stale — the current packages are `@earendil-works/*`.
-- Pinned release: tag `v0.84.1`, commit `53fa77ccd8a279eb87e92294ef3687b03ff80112`
+- Pinned releases: `pi-agent-core` at tag `v0.84.1`, commit
+  `53fa77ccd8a279eb87e92294ef3687b03ff80112`; `pi-ai` at `0.84.2`. The split is
+  temporary — VC-117 tracks aligning both on `0.84.2`.
 - Node floor: `>=22.19.0`. ESM only.
 
 ## Packages consumed
 
-Direct dependencies, all pinned to exactly `0.84.1`:
+Direct dependencies, pinned exactly:
 
-- `@earendil-works/pi-agent-core` — `Agent`, JSONL Session persistence,
-  context-injected coding tools, and the Node execution environment
-- `@earendil-works/pi-ai` — model catalog, provider streams, and message types
+- `@earendil-works/pi-agent-core` `0.84.1` — `Agent`, JSONL Session
+  persistence, context-injected coding tools, and the Node execution
+  environment
+- `@earendil-works/pi-ai` `0.84.2` — model catalog, provider streams, and
+  message types
 
 `@earendil-works/pi-telemetry` arrives transitively and is not imported here.
 The coding-agent TUI, client, and protocol packages are intentionally absent.
 
 ## Process sandbox runtime
 
-Direct dependency, pinned exactly to `0.0.70`, required before Pi bash runs:
+Direct dependency, pinned exactly to `0.0.71`, required before Pi bash runs:
 
 - `@anthropic-ai/sandbox-runtime` — https://github.com/anthropic-experimental/sandbox-runtime,
   Apache-2.0, maintained macOS Seatbelt process boundary used by Claude Code.

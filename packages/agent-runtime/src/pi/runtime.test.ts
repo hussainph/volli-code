@@ -34,6 +34,7 @@ import {
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
   type AuthoritySnapshot,
+  type ObservabilityEvent,
   type CompactionObservation,
   type RuntimeAskUserRequest,
   type RuntimeObservation,
@@ -987,6 +988,71 @@ describe("tool mapping", () => {
   });
 });
 
+describe("observability side channel", () => {
+  const SECRET = "OBS-SENSITIVE-material";
+
+  it("reduces a whole run to bounded metadata events under one opaque run id", async () => {
+    const events: ObservabilityEvent[] = [];
+    const att = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: att.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles(SECRET)])),
+      observability: { record: (event) => void events.push(event) },
+    });
+
+    const handle = await runtime.startSession(att.spec);
+    await handle.submitUserMessage(`Summarize ${SECRET}`);
+    await handle.close();
+    // The attempt envelope settles on a microtask behind the stream's result.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const seen = events.map((event) => event.kind);
+    expect(seen).toContain("attachment");
+    expect(seen).toContain("turn");
+    expect(seen).toContain("provider-attempt");
+
+    // The envelope carries the scripted provider's own report, verbatim.
+    expect(events.find((event) => event.kind === "provider-attempt")).toMatchObject({
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      api: "anthropic-messages",
+      stopReason: "stop",
+      inputTokens: 100,
+      outputTokens: 20,
+      costUsd: 0.003,
+    });
+
+    // One opaque correlation id for the whole attachment — and not one
+    // derived from Session identity.
+    const runIds = new Set(events.map((event) => event.runId));
+    expect(runIds.size).toBe(1);
+    expect([...runIds][0]).not.toContain("session-1");
+
+    // Nothing the user or the model said reaches the side channel.
+    expect(JSON.stringify(events)).not.toContain(SECRET);
+  });
+
+  it("loses nothing from a run when the sink throws on every event", async () => {
+    const att = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: att.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("Still delivered.")])),
+      observability: {
+        record: () => {
+          throw new Error("sink offline");
+        },
+      },
+    });
+
+    const handle = await runtime.startSession(att.spec);
+    await handle.submitUserMessage("go");
+    await handle.close();
+
+    expect(settledTexts(att.observations)).toEqual(["Still delivered."]);
+    expect(kinds(att.observations)).toContain("turn:completed");
+  });
+});
+
 /** The tool names one Session's model was actually offered, off the provider request. */
 async function offeredIn(spec: SessionRuntimeSpec): Promise<string[]> {
   let offered: Context | undefined;
@@ -1756,8 +1822,10 @@ describe("startSession", () => {
     );
     expect(activities.map((activity) => activity.state)).toEqual(["started", "failed"]);
     const authority = observations.find(
-      (observation): observation is Extract<RuntimeObservation, { kind: "authority" }> =>
-        observation.kind === "authority",
+      (
+        observation,
+      ): observation is Extract<RuntimeObservation, { kind: "authority"; state: "denied" }> =>
+        observation.kind === "authority" && observation.state === "denied",
     );
     expect(authority).toMatchObject({
       kind: "authority",
@@ -1955,6 +2023,56 @@ describe("startSession", () => {
     // The whole point of asking after the counters rather than before the
     // observation: history must not hold a denial for a call that then ran.
     expect(exec).toHaveBeenCalledOnce();
+    expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("records an allowed authority decision only through observability, split from tool execution", async () => {
+    const events: ObservabilityEvent[] = [];
+    const { attachment, containedEnv } = escalatingAttachment(async () => "allow");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      observability: { record: (event) => void events.push(event) },
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    const decision = events.find(
+      (event): event is Extract<ObservabilityEvent, { kind: "authority" }> =>
+        event.kind === "authority",
+    );
+    const tool = events.find(
+      (event): event is Extract<ObservabilityEvent, { kind: "tool" }> => event.kind === "tool",
+    );
+    expect(decision).toEqual(
+      expect.objectContaining({
+        kind: "authority",
+        outcome: "allowed",
+        waitDurationMs: expect.any(Number),
+      }),
+    );
+    expect(tool).toEqual(
+      expect.objectContaining({
+        kind: "tool",
+        activityKind: "run-command",
+        waitDurationMs: expect.any(Number),
+      }),
+    );
+    // Allowance is a metrics denominator, never a durable Session fact.
     expect(kinds(attachment.observations)).not.toContain("authority");
   });
 

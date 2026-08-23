@@ -1206,6 +1206,48 @@ export interface VolliWebAccessIpcContract {
 
 export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
 
+/** Whether agent telemetry is exported, and whether it is actually landing. */
+export interface AgentObservabilityView {
+  enabled: boolean;
+  /** The collector's address, normalized to its origin by main before storage. */
+  endpoint: string;
+  status: "off" | "exporting" | "failed";
+  /**
+   * One sentence about why nothing is being exported, latched. Null when there
+   * is nothing to say. Never a dependency's message, a stack, or an address.
+   */
+  problem: string | null;
+}
+
+export type AgentObservabilityResult = Result<{ settings: AgentObservabilityView }>;
+
+/**
+ * The opt-in agent-telemetry export setting (VC-119).
+ *
+ * Its own two-channel surface for the same reason Web Access has one: the
+ * Session RPC wire is instrumented, and a switch that governs instrumentation
+ * has no business being observed by it.
+ *
+ * Nothing on this surface carries a secret, and it cannot start carrying one:
+ * main refuses a collector address with credentials in it rather than storing
+ * a password that Settings would then read back and display.
+ */
+export interface VolliAgentObservabilityIpcContract {
+  /** The current setting plus whatever the exporter has since found out. */
+  "volli:agent-observability-get": { args: []; result: AgentObservabilityResult };
+  /**
+   * Records the switch and the address together, because they are one decision:
+   * turning export on names where it goes. The address is judged before it is
+   * stored, so a refusal is a correction to what was just typed.
+   */
+  "volli:agent-observability-set": {
+    args: [enabled: boolean, endpoint: string];
+    result: AgentObservabilityResult;
+  };
+}
+
+export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
+
 /**
  * Type-only entries for every remaining invoke channel — these live outside
  * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
@@ -1401,6 +1443,7 @@ export interface VolliInvokeContract
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
+    VolliAgentObservabilityIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
     VolliUpdateIpcContract {}

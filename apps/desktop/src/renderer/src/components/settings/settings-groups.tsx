@@ -11,6 +11,7 @@
  * search. Keep it green when you add rows.
  */
 import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
+import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
@@ -20,6 +21,7 @@ import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 
+import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
@@ -223,6 +225,34 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "reveal in finder",
           ],
           content: <StoragePane />,
+        },
+        {
+          // Its own category rather than a row under General (VC-119): the
+          // collector address is a developer's configuration and the switch
+          // governs what leaves the machine, which is a thing somebody should
+          // be able to find by looking rather than by scrolling.
+          key: "telemetry",
+          label: "Telemetry",
+          icon: ChartLineIcon,
+          keywords: [
+            "telemetry",
+            "observability",
+            "opentelemetry",
+            "otel",
+            "otlp",
+            "collector",
+            "jaeger",
+            "trace",
+            "tracing",
+            "span",
+            "metrics",
+            "export agent telemetry",
+            "agent telemetry",
+            "tokens",
+            "cost",
+            "cache hit",
+          ],
+          content: <AgentObservabilitySettings />,
         },
         {
           key: "updates",

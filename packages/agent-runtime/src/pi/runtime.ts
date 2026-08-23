@@ -32,6 +32,8 @@ import {
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
+  NOOP_OBSERVABILITY_SINK,
+  ObservabilityReducer,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
@@ -39,6 +41,7 @@ import {
   type CompactionReason,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type ObservabilitySink,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -69,6 +72,11 @@ import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
 import { piOwnedModelAccess } from "./models";
+import {
+  instrumentStreamFn,
+  recordObservationToSink,
+  teeObservationsToSink,
+} from "./observability";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { createSessionTools } from "./tools";
 import {
@@ -165,6 +173,14 @@ export interface PiRuntimeHostOptions {
    * option.
    */
   compactionPolicy?: () => CompactionPolicy;
+  /**
+   * Where metadata-only observability events go. A side channel, never a
+   * participant: the runtime reduces its own observations and provider
+   * attempts to bounded events and hands them here without awaiting, and a
+   * sink that throws costs a run nothing but the lost measurement. Absent
+   * means disabled — the no-op sink, not an `undefined` check per call.
+   */
+  observability?: ObservabilitySink;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -179,6 +195,7 @@ interface PiRuntimeHost {
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
   compactionPolicy: () => CompactionPolicy;
+  observability: ObservabilitySink;
 }
 
 /**
@@ -217,6 +234,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
       options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
+    observability: options.observability ?? NOOP_OBSERVABILITY_SINK,
   };
   return {
     inspectModelAccess: (input) =>
@@ -640,9 +658,12 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-async function rejectUnavailableModel(spec: SessionRuntimeSpec): Promise<never> {
+async function rejectUnavailableModel(
+  spec: SessionRuntimeSpec,
+  observe: SessionRuntimeSpec["observer"],
+): Promise<never> {
   const message = `Model ${spec.model.providerId}/${spec.model.modelId} is not available.`;
-  await spec.observer({
+  await observe({
     kind: "attachment",
     state: "failed",
     failure: { reason: "configuration", message },
@@ -650,9 +671,9 @@ async function rejectUnavailableModel(spec: SessionRuntimeSpec): Promise<never> 
   throw new Error(message);
 }
 
-async function rejectCancelledAttachment(spec: SessionRuntimeSpec): Promise<never> {
+async function rejectCancelledAttachment(observe: SessionRuntimeSpec["observer"]): Promise<never> {
   const message = "Runtime attachment was cancelled before it started.";
-  await spec.observer({
+  await observe({
     kind: "attachment",
     state: "failed",
     failure: { reason: "aborted", message },
@@ -664,15 +685,31 @@ async function attachSession(
   host: PiRuntimeHost,
   spec: SessionRuntimeSpec,
 ): Promise<RuntimeAttachmentHandle> {
+  // The side channel exists before the first observation can, so even an
+  // attachment refused at the door reports its bounded failure through the
+  // tee. The run id is opaque and process-local on purpose — correlation
+  // without exporting Session identity.
+  const runId = randomUUID();
+  const observabilityReducer = new ObservabilityReducer(host.now);
+  const observe = teeObservationsToSink(
+    spec.observer,
+    observabilityReducer,
+    host.observability,
+    runId,
+  );
+  // A permitted authority decision is a metrics denominator, not durable
+  // Session history. It therefore goes through the reducer's passive path and
+  // never awaits the Session observer or changes whether Pi can run the call.
+  const recordObservability = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
+    recordObservationToSink(observabilityReducer, host.observability, runId, observation);
   if (isAborted(spec.signal)) {
-    return rejectCancelledAttachment(spec);
+    return rejectCancelledAttachment(observe);
   }
 
-  const observe = spec.observer;
   const models = host.models;
   const model = models.getModel(spec.model.providerId, spec.model.modelId);
   if (model === undefined) {
-    return rejectUnavailableModel(spec);
+    return rejectUnavailableModel(spec, observe);
   }
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
@@ -1057,6 +1094,7 @@ async function attachSession(
         priorDenials: spec.priorAuthorityDenials,
         ask: spec.ask,
         signal: spec.signal,
+        now: host.now,
       });
       return async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
@@ -1075,7 +1113,17 @@ async function attachSession(
           turnId,
           signal,
         });
-        if (disposition.outcome === "allow") return undefined;
+        const waitDurationMs = escalation.consumeWaitDuration(toolCall.id);
+        if (disposition.outcome === "allow") {
+          recordObservability({
+            kind: "authority",
+            state: "allowed",
+            turnId,
+            toolCallId: toolCall.id,
+            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
+          });
+          return undefined;
+        }
         // Recorded before refused, through the same ordered queue as every other
         // observation: a refusal that overtook the turn it belongs to would be
         // filed against the wrong turn, and one that raced the activity stream
@@ -1088,6 +1136,8 @@ async function attachSession(
             kind: "authority",
             state: "denied",
             turnId,
+            toolCallId: toolCall.id,
+            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
             tool: toolCall.name,
             cause: disposition.cause,
             reason: disposition.reason,
@@ -1110,7 +1160,11 @@ async function attachSession(
         tools,
         messages: recoveredMessages,
       },
-      streamFn: models.streamSimple.bind(models),
+      streamFn: instrumentStreamFn(models.streamSimple.bind(models), {
+        sink: host.observability,
+        runId,
+        now: host.now,
+      }),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",
       // Pi's harness converter, not the `Agent`'s default, and the difference is

@@ -81,6 +81,8 @@ export interface AuthorityEscalationInput {
   ask?: AskPort;
   /** The attachment's own cancellation, distinct from any one call's. */
   signal?: AbortSignal;
+  /** Clock for an approval wait measurement; a broken clock costs only that measurement. */
+  now?: () => number;
 }
 
 /** One call offered for judgement, named well enough to put a question about it. */
@@ -143,6 +145,9 @@ export class AuthorityEscalation {
   readonly #sessionInterval: number;
   readonly #ask: AskPort | undefined;
   readonly #signal: AbortSignal | undefined;
+  readonly #now: () => number;
+  /** Local tool-call correlation; consumed immediately by the runtime's side channel. */
+  #waitDurationByToolCallId = new Map<string, number>();
 
   /**
    * Refusals since the last call that ran. Runtime-only, and necessarily so: an
@@ -202,8 +207,22 @@ export class AuthorityEscalation {
     this.#sessionInterval = denialThreshold(input.fallback.sessionDenials);
     this.#ask = input.ask;
     this.#signal = input.signal;
+    this.#now = input.now ?? Date.now;
     this.#sessionDenials = denialCount(input.priorDenials);
     this.#sessionTrip = this.#sessionInterval;
+  }
+
+  /**
+   * Takes the measured person-wait for one local tool call, if it was measured.
+   *
+   * The id exists only between an authority decision and its matching activity.
+   * It is deliberately consumed rather than read so a stalled or repeated
+   * activity cannot attribute one wait to two tool executions.
+   */
+  consumeWaitDuration(toolCallId: string): number | undefined {
+    const duration = this.#waitDurationByToolCallId.get(toolCallId);
+    this.#waitDurationByToolCallId.delete(toolCallId);
+    return duration;
   }
 
   /** Decide one call, parking on a person when the counters say it is time. */
@@ -245,6 +264,7 @@ export class AuthorityEscalation {
     // granted, nothing below stops them, and this is the layer that enforces the
     // distinction rather than the layer that trusts its caller.
     const overridable = isOverridableAuthorityRule(verdict.cause);
+    const waitStartedAt = this.#measurementStartedAt();
     const answer = await this.#askUntilAnsweredOrAbandoned(
       ask,
       {
@@ -258,6 +278,7 @@ export class AuthorityEscalation {
       },
       call.signal,
     );
+    this.#recordWaitDuration(call.toolCallId, waitStartedAt);
 
     // However it ended, this run of refusals is over: a person who answered has
     // dealt with it, and a cancellation ended the turn the run belonged to.
@@ -280,6 +301,28 @@ export class AuthorityEscalation {
     this.#sessionTrip = this.#sessionDenials + this.#sessionInterval;
     if (granted) return ALLOW;
     return { ...refused, record: true, interrupt: choice === "stop" };
+  }
+
+  /** Start a passive measurement; observability must never change a decision. */
+  #measurementStartedAt(): number | undefined {
+    try {
+      const startedAt = this.#now();
+      return Number.isFinite(startedAt) ? startedAt : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Retain a non-negative wait only long enough for the runtime to consume it. */
+  #recordWaitDuration(toolCallId: string, startedAt: number | undefined): void {
+    if (startedAt === undefined) return;
+    try {
+      const endedAt = this.#now();
+      if (!Number.isFinite(endedAt) || endedAt < startedAt) return;
+      this.#waitDurationByToolCallId.set(toolCallId, endedAt - startedAt);
+    } catch {
+      // A broken clock costs the measurement, never the authority outcome.
+    }
   }
 
   /**
