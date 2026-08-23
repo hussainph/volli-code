@@ -1,74 +1,23 @@
+/**
+ * The agent socket's wire vocabulary: request and response shapes, the error
+ * codes, the column tokens, and context resolution.
+ *
+ * The verbs it answers are NOT declared here. `AGENT_COMMANDS` and its
+ * `AgentCommand` union are projections of the Verb Registry
+ * (`verb-registry.ts`) — the one enumerable declaration of every agent-facing
+ * verb, from which this socket surface, `volli help`, and the future Pi tool
+ * array are all derived (VC-92 §5, built in VC-161). The standing discipline
+ * that used to sit on the `AGENT_COMMANDS` declaration moved with it: the
+ * dot-name is the verb's registry key and never changes, and adding a verb is
+ * a tier decision made in the registry rather than retrofitted onto a bare
+ * string.
+ *
+ * The import below is type-only, deliberately: the registry reads this module's
+ * column vocabulary at load, so a value edge back would be a cycle.
+ */
+
 import type { TicketStatus } from "./ticket";
-
-// Verb Registry discipline (VC-92): every agent-facing verb is declared here
-// with its dot-name at birth — that dot-name IS its future Verb Registry key.
-// The registry in @volli/shared is the one source of truth (one entry per
-// verb, access modes as data, one handler binding); this list is its CLI
-// projection. A verb may gain a named-tool access mode later, but its name
-// never changes, and nothing ships under an unnamed string that must later be
-// retroactively gated.
-//
-// Adding an entry here is therefore a tier decision, made now rather than
-// retrofitted (VC-92's ruling): reads are open to any caller, coordination
-// writes want an authenticated session actor, and control-tier verbs do not
-// belong in this array AT ALL — agent control (start/stop/send), credential
-// custody, and anything that blocks are named tools in a Role bundle. This
-// socket attributes its caller and cannot authenticate one (`requestActor`),
-// so a verb whose misuse cannot be tolerated from an arbitrary process running
-// as the user does not go here. `session.start` below is ruled off this
-// surface and awaits its execution ticket.
-export const AGENT_COMMANDS = [
-  "identify",
-  "board",
-  "ticket.list",
-  "ticket.show",
-  "ticket.events",
-  "ticket.create",
-  "ticket.update",
-  "ticket.move",
-  "ticket.comment",
-  "ticket.archive",
-  "ticket.brief",
-  "worktree.status",
-  "worktree.diff",
-  "project.list",
-  "label.list",
-  // Model discovery (VC-78): the same Model Access snapshot the app reads,
-  // filtered for a context window — never a parallel provider probe.
-  "model.list",
-  "session.list",
-  "session.peek",
-  // Attended-only Session start (VC-13): rides the app-owned product start
-  // route (the Sessions facade) over the socket. The CLI's only
-  // transport is that socket and the Pi runtime lives in Electron main, so
-  // there is deliberately no headless path — app not running is
-  // APP_UNREACHABLE, and `volli app launch` is the sanctioned recovery.
-  "session.start",
-  "session.done",
-  "session.blocked",
-  "session.link",
-  // The other involuntary one: a harness's own PATH-shim wrapper announcing
-  // that IT is what is now running in this terminal, one step before it execs.
-  // `harness_id` is the launch and never moves; this is what a terminal is
-  // running after the user quit one agent and started another in it.
-  "session.harness",
-  "notify",
-  // The involuntary channel: a harness hook reporting what the agent is doing,
-  // rather than an agent choosing to say so. Unlike every other command it is
-  // not addressed to a human reader — `volli hook` fires it and discards the
-  // answer, because a hook that fails must never wedge the agent it fired from.
-  "hook",
-  // Diagnostics, not agent surface: what the harness integration is actually
-  // doing on this machine, measured from inside the environment under test.
-  "doctor",
-  // Diagnostics too: what a fresh structured Session's composed prompt costs,
-  // per section, before the user types a word (VC-66). Main answers it because
-  // main owns the composition — the same layers, index and Brief a real start
-  // assembles — so the breakdown is reproducible rather than a one-off count.
-  "prompt.baseline",
-] as const;
-
-export type AgentCommand = (typeof AGENT_COMMANDS)[number];
+import type { AgentCommand } from "./verb-registry";
 
 export const AGENT_ERROR_CODES = [
   "USAGE",

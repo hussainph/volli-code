@@ -1,0 +1,971 @@
+/**
+ * The Verb Registry — one enumerable declaration of every agent-facing verb
+ * (VC-92 §5, built in VC-161).
+ *
+ * Every agent-facing surface is a PROJECTION of this table, never a second
+ * list: {@link AGENT_COMMANDS} is the socket projection, `volli help` renders
+ * {@link REFERENCE_VERBS}, and VC-162's Pi tool array will read the same
+ * entries. One entry per verb, one handler binding per verb, exposed through
+ * several access modes — never parallel implementations.
+ *
+ * Entries are pure data. The executable half of the CLI's argument handling
+ * (`parse`, `finalize`, `build`) stays in `packages/cli`, keyed by verb key,
+ * because argv mechanics are the CLI's own projection detail; what lives here
+ * is the option TABLE, so `apps/desktop` can derive a tool schema without
+ * depending on `@volli/cli`.
+ *
+ * Two disciplines this table exists to hold:
+ *
+ * 1. **Tier is derived, never stored.** No entry carries a tier field and
+ *    nothing may set one — {@link verbTier} computes it from access modes plus
+ *    actor requirement, on demand (VC-92 §2).
+ * 2. **Adding a verb is a tier decision, made now rather than retrofitted.**
+ *    The dot-name is the verb's identity on every surface, in rule packs, and
+ *    in Role bundles; it is chosen once and never changes. Reads are open to
+ *    any caller, coordination writes want an authenticated session actor, and
+ *    a control-tier verb does not get a `cli` access mode AT ALL — agent
+ *    control, credential custody, and anything that blocks are named tools in
+ *    a Role bundle. The socket attributes its caller and cannot authenticate
+ *    one, so a verb whose misuse cannot be tolerated from an arbitrary process
+ *    running as the user does not go on it.
+ *
+ * The table records TODAY'S surface, not VC-92's target. `session.start` and
+ * `ticket.archive` are on the socket right now, so that is what they declare;
+ * VC-162 and VC-163 move them, and `verb-registry.test.ts` names both deltas.
+ */
+
+import { REASONING_LEVELS } from "./agent-runtime";
+import { COLUMN_VOCABULARY } from "./agent-surface";
+import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+
+/**
+ * Where a verb is projected. `cli` is the Agent CLI (the local agent socket),
+ * `tool` is the Agent Tool Surface (a Role bundle's named tools, VC-162), and
+ * `hostApi` is reserved for the future External Agent Surface — declared so a
+ * host without a shell can simply not project `cli`, unprojected until that
+ * surface exists. A verb on two surfaces is one entry with two modes.
+ */
+export type VerbAccessMode = "cli" | "tool" | "hostApi";
+
+/**
+ * What the caller must be: `any` caller, an authenticated `session` actor
+ * (VC-44's tokens), or a `role` that holds the verb in its bundle.
+ */
+export type VerbActor = "any" | "session" | "role";
+
+/**
+ * Where the verb's one handler binding lives: `main` answers over the agent
+ * socket (`apps/desktop/src/main/agent-commands.ts`), `cli` answers locally in
+ * the `volli` process and never opens a socket. Declared and checked, never
+ * read — dispatch is still a hand-written chain, and the parity test asserts
+ * both directions against it.
+ */
+export type VerbHandlerSite = "main" | "cli";
+
+/** The heading a listed verb prints under in the CLI reference. */
+export type VerbGroup = "Read" | "Write" | "Session" | "App";
+
+/**
+ * The governance class a verb's access modes imply (VC-92 §2). Derived by
+ * {@link verbTier}; never a field, never persisted.
+ */
+export type VerbTier = "read" | "coordination" | "control";
+
+/** Help/schema metadata every declared option carries, whatever its kind. */
+export interface VerbOptionCommon {
+  /** The literal argv token the CLI accepts (`--title`, `-m`). */
+  readonly name: string;
+  /** One-line description shown in command detail. */
+  readonly help: string;
+  /** Renders the option unbracketed in usage lines. */
+  readonly required?: boolean;
+  /** Suppresses an alias (`--message` for `-m`) from generated help. */
+  readonly hidden?: boolean;
+  /** Collapses mutually exclusive options into one `[a|b]` usage slot. */
+  readonly group?: string;
+  /** Valid-value hint for when the placeholder cannot carry it (columns). */
+  readonly values?: string;
+}
+
+/**
+ * One option, as data. `kind` is the value shape a caller supplies — a bare
+ * flag, one value, a repeatable value, or a fixed run of words — which is what
+ * both a usage line and a tool schema need to know.
+ */
+export type VerbOption =
+  | (VerbOptionCommon & { readonly kind: "flag" })
+  | (VerbOptionCommon & {
+      readonly kind: "value" | "repeated" | "multi";
+      /** The value shape shown after the name (`<text>`, `<old> <new>`). */
+      readonly placeholder: string;
+    });
+
+/** One agent-facing verb. Pure data; see the module comment for what is not here. */
+export interface VerbEntry {
+  /** The dot-name — this verb's identity on every surface. */
+  readonly key: string;
+  readonly accessModes: readonly VerbAccessMode[];
+  readonly actor: VerbActor;
+  readonly handler: VerbHandlerSite;
+  /** Whether `volli help` prints the verb. Involuntary verbs stay unlisted. */
+  readonly listed: boolean;
+  readonly group: VerbGroup;
+  /** One-line description; feeds both help text and tool schema. */
+  readonly summary: string;
+  /** One realistic invocation, shown in command detail. */
+  readonly example?: string;
+  /** Short lines for semantics the option table cannot express. */
+  readonly notes?: readonly string[];
+  /** Whether the verb takes a leading `<id>`, and whether it is required. */
+  readonly positionalId?: "required" | "optional";
+  /** Rendered after `<id>` for positionals the option table cannot express. */
+  readonly extraUsage?: string;
+  readonly options: readonly VerbOption[];
+}
+
+/**
+ * The harness vocabulary rendered into help. The four first-class ids can be
+ * listed; a registered harness cannot, because its slug is whatever its author
+ * called it and only the app knows which ones exist — so the phrase names the
+ * category instead of pretending to enumerate it.
+ */
+export const HARNESS_VOCABULARY: string = `${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness`;
+
+/** The CLI-facing name for a verb key (`ticket.create` → `ticket create`). */
+export function cliVerbName(key: string): string {
+  return key.replaceAll(".", " ");
+}
+
+const COLUMN_VALUES = `valid: ${COLUMN_VOCABULARY}`;
+const HARNESS_VALUES = `valid: ${HARNESS_VOCABULARY}`;
+const REASONING_VALUES = `valid: ${REASONING_LEVELS.join(", ")}`;
+
+/**
+ * Every agent-facing verb, in the order the socket projection has always had.
+ *
+ * Declaration order is the socket order, so {@link AGENT_COMMANDS} is a plain
+ * filter-and-map with nothing reordered. The order the CLI reference prints
+ * them in is a different order, and it is {@link REFERENCE_VERBS}.
+ */
+export const VERB_REGISTRY = [
+  {
+    key: "identify",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Resolve and print the active project, ticket, session, and session environment.",
+    example: "volli identify",
+    notes: [
+      "The env block reports the session PATH, how it was adopted, where each measured tool (git, gh, node, npm, pnpm, yarn, bun) resolves, and whether workspace dependencies are installed — read it before probing for tools.",
+      "env.requiredTools names what THIS project implies: git for a repository, node and the lockfile's package manager for a JS workspace. A `-` tool not listed there is one nothing here runs, not a fault.",
+      "env.provenance is the boot adoption; env.interactiveProvenance is the later pass that picks up what your shell's interactive startup files export (nvm, bun, rbenv, pyenv, mise). `pending` there means that pass has not landed yet.",
+    ],
+    options: [
+      {
+        name: "--project",
+        kind: "value",
+        placeholder: "<p>",
+        help: "Resolve against this project instead of the context ladder.",
+      },
+    ],
+  },
+  {
+    key: "board",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Show a project's board grouped by column.",
+    example: "volli board --project VC",
+    options: [{ name: "--project", kind: "value", placeholder: "<p>", help: "Target project." }],
+  },
+  {
+    key: "ticket.list",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "List a project's tickets, optionally filtered.",
+    example: "volli ticket list --status doing --priority high",
+    options: [
+      {
+        name: "--status",
+        kind: "value",
+        placeholder: "<column>",
+        values: COLUMN_VALUES,
+        help: "Filter by column.",
+      },
+      {
+        name: "--priority",
+        kind: "value",
+        placeholder: "low|medium|high",
+        help: "Filter by priority.",
+      },
+      { name: "--label", kind: "value", placeholder: "<name>", help: "Filter by label." },
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
+      { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of rows." },
+    ],
+  },
+  {
+    key: "ticket.show",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Show one ticket with recent events and comments.",
+    example: "volli ticket show VC-12 --comments 5",
+    positionalId: "required",
+    options: [
+      {
+        name: "--events",
+        kind: "value",
+        placeholder: "<n>",
+        help: "How many recent events to include.",
+      },
+      {
+        name: "--comments",
+        kind: "value",
+        placeholder: "<n>",
+        help: "How many recent comments to include.",
+      },
+    ],
+  },
+  {
+    key: "ticket.events",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Print a ticket's event log.",
+    example: "volli ticket events VC-12 --limit 20",
+    positionalId: "required",
+    options: [
+      { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of events." },
+    ],
+  },
+  {
+    key: "ticket.create",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Write",
+    summary: "Create a ticket (defaults to Backlog).",
+    example: 'volli ticket create --title "Fix auth" --label bug',
+    notes: [
+      "Defaults to Backlog unless --status is set.",
+      "--body and --body-file are mutually exclusive.",
+    ],
+    options: [
+      {
+        name: "--title",
+        kind: "value",
+        placeholder: "<text>",
+        required: true,
+        help: "Ticket title.",
+      },
+      { name: "--body", kind: "value", placeholder: "<text>", group: "body", help: "Body text." },
+      {
+        name: "--body-file",
+        kind: "value",
+        placeholder: "<path>",
+        group: "body",
+        help: "Body from a file.",
+      },
+      { name: "--priority", kind: "value", placeholder: "low|medium|high", help: "Priority." },
+      {
+        name: "--status",
+        kind: "value",
+        placeholder: "<column>",
+        values: COLUMN_VALUES,
+        help: "Initial column.",
+      },
+      {
+        name: "--label",
+        kind: "repeated",
+        placeholder: "<name>",
+        help: "Add label (repeatable).",
+      },
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Project (name/prefix/path)." },
+      {
+        name: "--harness",
+        kind: "value",
+        placeholder: "<h>",
+        values: HARNESS_VALUES,
+        help: "Harness id.",
+      },
+      { name: "--base", kind: "value", placeholder: "<branch>", help: "Base branch." },
+      { name: "--no-worktree", kind: "flag", help: "Skip worktree isolation." },
+    ],
+  },
+  {
+    key: "ticket.update",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Write",
+    summary: "Update a ticket's fields or body.",
+    example: 'volli ticket update VC-12 --edit "old" "new"',
+    notes: ["At most one body mutation per call.", "--edit needs exactly one match for <old>."],
+    positionalId: "required",
+    options: [
+      { name: "--title", kind: "value", placeholder: "<text>", help: "Replace the title." },
+      {
+        name: "--body",
+        kind: "value",
+        placeholder: "<text>",
+        group: "body",
+        help: "Replace the body.",
+      },
+      {
+        name: "--body-file",
+        kind: "value",
+        placeholder: "<path>",
+        group: "body",
+        help: "Replace body from a file.",
+      },
+      {
+        name: "--append",
+        kind: "value",
+        placeholder: "<text>",
+        group: "body",
+        help: "Append to the body.",
+      },
+      {
+        name: "--edit",
+        kind: "multi",
+        placeholder: "<old> <new>",
+        group: "body",
+        help: "Replace one <old> with <new>.",
+      },
+      { name: "--priority", kind: "value", placeholder: "low|medium|high", help: "Set priority." },
+      {
+        name: "--add-label",
+        kind: "repeated",
+        placeholder: "<name>",
+        help: "Add label (repeatable).",
+      },
+      {
+        name: "--remove-label",
+        kind: "repeated",
+        placeholder: "<name>",
+        help: "Remove label (repeatable).",
+      },
+      {
+        name: "--harness",
+        kind: "value",
+        placeholder: "<h>",
+        values: HARNESS_VALUES,
+        help: "Set the harness.",
+      },
+      { name: "--base", kind: "value", placeholder: "<branch>", help: "Set the base branch." },
+    ],
+  },
+  {
+    key: "ticket.move",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Write",
+    summary: "Move a ticket to another column.",
+    example: "volli ticket move VC-12 --to needs-review",
+    notes: ["Moving to the current column is a no-op."],
+    positionalId: "required",
+    options: [
+      {
+        name: "--to",
+        kind: "value",
+        placeholder: "<column>",
+        values: COLUMN_VALUES,
+        required: true,
+        help: "Destination column.",
+      },
+    ],
+  },
+  {
+    key: "ticket.comment",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Write",
+    summary: "Add a comment to a ticket.",
+    example: 'volli ticket comment VC-12 -m "Ready for review"',
+    notes: ["Exactly one of -m or --file."],
+    positionalId: "required",
+    options: [
+      {
+        name: "-m",
+        kind: "value",
+        placeholder: "<text>",
+        group: "message",
+        help: "Comment text.",
+      },
+      {
+        name: "--message",
+        kind: "value",
+        placeholder: "<text>",
+        group: "message",
+        hidden: true,
+        help: "Alias for -m.",
+      },
+      {
+        name: "--file",
+        kind: "value",
+        placeholder: "<path>",
+        group: "message",
+        help: "Read the comment from a file.",
+      },
+    ],
+  },
+  {
+    // VC-92 ruled this one off the agent surface entirely — an app-only
+    // curation act, no bundle and no CLI access mode. It is still on the socket
+    // here because this table records today's surface; VC-163 empties its
+    // access modes, at which point it holds no tier at all.
+    key: "ticket.archive",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Write",
+    summary: "Archive a ticket (its worktree is preserved).",
+    example: "volli ticket archive VC-12",
+    positionalId: "required",
+    options: [],
+  },
+  {
+    key: "ticket.brief",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Print the agent kickoff prompt for a ticket.",
+    example: "volli ticket brief VC-12",
+    positionalId: "required",
+    options: [],
+  },
+  {
+    key: "worktree.status",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Show a ticket's worktree branch, base, and sync state.",
+    example: "volli worktree status VC-12",
+    notes: ["Read-only; defaults to the ticket owning the current directory."],
+    positionalId: "optional",
+    options: [],
+  },
+  {
+    key: "worktree.diff",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "Summarize a ticket's diff (the PR range by default).",
+    example: "volli worktree diff VC-12 --working-tree",
+    notes: [
+      "Read-only; defaults to the ticket owning the current directory.",
+      "Default range is the merge-base diff (what the PR would contain).",
+      "--working-tree switches to the uncommitted working-tree view.",
+    ],
+    positionalId: "optional",
+    options: [
+      {
+        name: "--working-tree",
+        kind: "flag",
+        help: "Diff the uncommitted working tree instead of the PR range.",
+      },
+    ],
+  },
+  {
+    key: "project.list",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "List all registered projects.",
+    example: "volli project list",
+    options: [],
+  },
+  {
+    key: "label.list",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "List a project's labels.",
+    example: "volli label list --project VC",
+    options: [{ name: "--project", kind: "value", placeholder: "<p>", help: "Target project." }],
+  },
+  {
+    // Model discovery (VC-78): the same Model Access snapshot the app reads,
+    // filtered for a context window — never a parallel provider probe.
+    key: "model.list",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Read",
+    summary: "List signed-in providers, model ids, and reasoning levels.",
+    example: "volli model list",
+    notes: [
+      "Copy a printed <provider/model> verbatim into session start --model.",
+      "Shows available models only; --all includes signed-out providers.",
+    ],
+    options: [
+      {
+        name: "--all",
+        kind: "flag",
+        help: "Include signed-out providers and unavailable models.",
+      },
+    ],
+  },
+  {
+    key: "session.list",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "List a project's active terminal and chat sessions.",
+    example: "volli session list --ticket VC-12",
+    notes: ["Prints each session's title and short id; session peek takes either type."],
+    options: [
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },
+      { name: "--ticket", kind: "value", placeholder: "<id>", help: "Filter by ticket." },
+    ],
+  },
+  {
+    // Read tier despite the disclosure it carries: cross-session transcript
+    // access is per-actor policy data (VC-44), not a tier change.
+    key: "session.peek",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
+    example: "volli session peek a1b2c3 --lines 60",
+    notes: [
+      "Handle is a short session id from session list — terminal or chat.",
+      "A chat answers activity, last-event age, turn depth, then its transcript tail.",
+      "--lines is trailing terminal lines (60), or chat messages (12).",
+      "Keep peeks narrow — output consumes the caller's context.",
+    ],
+    positionalId: "required",
+    options: [
+      {
+        name: "--lines",
+        kind: "value",
+        placeholder: "<n>",
+        help: "How much trailing output to show.",
+      },
+    ],
+  },
+  {
+    // Attended-only Session start (VC-13): rides the app-owned product start
+    // route (the Sessions facade) over the socket. The CLI's only transport is
+    // that socket and the Pi runtime lives in Electron main, so there is
+    // deliberately no headless path — app not running is APP_UNREACHABLE, and
+    // `volli app launch` is the sanctioned recovery.
+    //
+    // VC-92 ruled it control tier — a named tool in the `project` bundle, off
+    // the socket for every caller. This entry records where it is TODAY, so its
+    // derived tier is coordination until VC-162 flips the access mode.
+    key: "session.start",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "Start an agent chat session on a ticket.",
+    example: 'volli session start VC-12 -m "Fix the flaky auth test"',
+    notes: [
+      "Runs in the app: attended-only, never headless; the board does not move.",
+      "Submits a kickoff turn; -m replaces the default kickoff text and names the session.",
+      "--title sets a permanent title; --model/--reasoning override the app default.",
+    ],
+    positionalId: "required",
+    options: [
+      {
+        name: "-m",
+        kind: "value",
+        placeholder: "<text>",
+        group: "message",
+        help: "Kickoff message.",
+      },
+      {
+        name: "--message",
+        kind: "value",
+        placeholder: "<text>",
+        group: "message",
+        hidden: true,
+        help: "Alias for -m.",
+      },
+      { name: "--title", kind: "value", placeholder: "<text>", help: "Explicit session title." },
+      {
+        name: "--model",
+        kind: "value",
+        placeholder: "<provider/model>",
+        help: "Model override.",
+      },
+      {
+        name: "--reasoning",
+        kind: "value",
+        placeholder: "<level>",
+        values: REASONING_VALUES,
+        help: "Reasoning level override.",
+      },
+    ],
+  },
+  {
+    key: "session.done",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "Record that this session's work is finished.",
+    example: 'volli session done --reason "Tests pass"',
+    notes: [
+      "Acts on VOLLI_SESSION; needs a Volli session.",
+      "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
+    ],
+    options: [
+      { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
+    ],
+  },
+  {
+    key: "session.blocked",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "Signal the current session is blocked and needs a person.",
+    example: 'volli session blocked --reason "Needs credentials"',
+    notes: [
+      "Acts on VOLLI_SESSION; needs a Volli session.",
+      "Raises attention on this session; --reason is the text a person sees.",
+    ],
+    options: [
+      { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
+    ],
+  },
+  {
+    key: "session.link",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "Record the harness's own session id on the current Volli session.",
+    example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
+    notes: [
+      "Acts on VOLLI_SESSION; needs a Volli session.",
+      "Seeds resume-on-re-entry; usually run from the harness's session-start hook.",
+    ],
+    positionalId: "required",
+    options: [],
+  },
+  {
+    // The other involuntary one: a harness's own PATH-shim wrapper announcing
+    // that IT is what is now running in this terminal, one step before it
+    // execs. `harness_id` is the launch and never moves; this is what a
+    // terminal is running after the user quit one agent and started another in
+    // it. Unlisted for the same reason `hook` is — the reference is what an
+    // agent can usefully DO, and a verb whose only correct caller is a file
+    // Volli generated is noise in it. It still walks the parser.
+    key: "session.harness",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: false,
+    group: "Session",
+    summary: "Record which harness is now running in the current Volli session.",
+    example: "volli session harness claude-code",
+    notes: [
+      "Acts on VOLLI_SESSION; needs a Volli session.",
+      "Fired by the harness's launch wrapper, not typed.",
+    ],
+    positionalId: "required",
+    options: [
+      {
+        name: "--mint",
+        kind: "flag",
+        hidden: true,
+        help: "Mint this launch's harness session id and print it.",
+      },
+    ],
+  },
+  {
+    key: "notify",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: true,
+    group: "Session",
+    summary: "Send a native notification to the user.",
+    example: 'volli notify -m "Needs input"',
+    options: [
+      {
+        name: "-m",
+        kind: "value",
+        placeholder: "<text>",
+        group: "message",
+        required: true,
+        help: "Notification body.",
+      },
+      {
+        name: "--message",
+        kind: "value",
+        placeholder: "<text>",
+        group: "message",
+        hidden: true,
+        help: "Alias for -m.",
+      },
+      { name: "--title", kind: "value", placeholder: "<text>", help: "Notification title." },
+    ],
+  },
+  {
+    // The involuntary channel: a harness hook reporting what the agent is
+    // doing, rather than an agent choosing to say so. Unlike every other verb
+    // it is not addressed to a human reader — `volli hook` fires it and
+    // discards the answer, because a hook that fails must never wedge the agent
+    // it fired from. It bypasses the parser entirely (two bare positionals,
+    // its own argv handling), so it declares no option table and no example:
+    // there is no invocation a reader of the reference should ever type.
+    key: "hook",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: "main",
+    listed: false,
+    group: "Session",
+    summary: "Report a harness hook event for the current session.",
+    options: [],
+  },
+  {
+    // Diagnostics, not agent surface: what the harness integration is actually
+    // doing on this machine, measured from inside the environment under test.
+    key: "doctor",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "App",
+    summary: "Audit the harness integration and report what it is actually doing.",
+    example: "volli doctor --fix",
+    notes: [
+      "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
+      "Run it inside a Volli terminal — several checks describe the shell it runs in.",
+      "--fix regenerates the wrappers, harness configs and shell integration, then re-runs both Session PATH adoption passes. It names the outcome and added directories for new Sessions; a Session already running keeps its startup environment.",
+    ],
+    options: [
+      {
+        name: "--fix",
+        kind: "flag",
+        help: "Regenerate, re-run Session PATH adoption, then re-check.",
+      },
+    ],
+  },
+  {
+    // Diagnostics too: what a fresh structured Session's composed prompt costs,
+    // per section, before the user types a word (VC-66). Main answers it
+    // because main owns the composition — the same layers, index and Brief a
+    // real start assembles — so the breakdown is reproducible rather than a
+    // one-off count.
+    key: "prompt.baseline",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    group: "App",
+    summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
+    example: "volli prompt baseline",
+    notes: [
+      "Token counts are estimates at 4 characters/token; the provider's own meter is the count of record.",
+      "Excludes tool definitions, the user's first message, and provider overhead, which ride on top of everything counted here.",
+      "--ticket prices a Ticket Session instead, including that ticket's Brief.",
+    ],
+    options: [
+      {
+        name: "--ticket",
+        kind: "value",
+        placeholder: "<id>",
+        help: "Price a Ticket Session for this ticket instead of a project chat.",
+      },
+      {
+        name: "--project",
+        kind: "value",
+        placeholder: "<p>",
+        help: "Resolve against this project instead of the context ladder.",
+      },
+    ],
+  },
+  // The two local verbs. They are on the Agent CLI like every verb above, but
+  // `volli` answers them in its own process — so they are absent from
+  // AGENT_COMMANDS, which is the SOCKET projection, not the CLI surface. That
+  // difference is exactly what `handler` records.
+  {
+    key: "app.launch",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "cli",
+    listed: true,
+    group: "App",
+    summary: "Launch the Volli app if it isn't already running.",
+    example: "volli app launch",
+    notes: ["Retry the failed command once the app is up."],
+    options: [
+      {
+        name: "--timeout",
+        kind: "value",
+        placeholder: "<n>",
+        help: "Seconds to wait for readiness.",
+      },
+    ],
+  },
+  {
+    key: "help",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "cli",
+    listed: true,
+    group: "App",
+    summary: "Show this reference, a command's help, or a topic.",
+    example: "volli help ticket create",
+    notes: ["Topics: exit-codes, addressing, json, orchestration."],
+    extraUsage: "[<command> | <topic>]",
+    options: [],
+  },
+] as const satisfies readonly VerbEntry[];
+
+type RegistryEntry = (typeof VERB_REGISTRY)[number];
+
+/** Every declared verb key — the vocabulary rule packs and Role bundles name. */
+export type VerbKey = RegistryEntry["key"];
+
+/** The socket projection at the type level: handler `main`, plus a `cli` access mode. */
+type SocketProjected<E extends VerbEntry> = E extends { handler: "main" }
+  ? "cli" extends E["accessModes"][number]
+    ? E["key"]
+    : never
+  : never;
+
+/**
+ * The verbs the agent socket answers — {@link AGENT_COMMANDS}' member type, and
+ * the closed union `AgentRequest.cmd` is checked against.
+ */
+export type AgentCommand = SocketProjected<RegistryEntry>;
+
+/**
+ * The socket projection: entries whose handler lives in main AND that carry a
+ * `cli` access mode. Takes its entries as an argument so a projection can be
+ * proven against a synthetic table — no `tool`-only verb exists until VC-162.
+ */
+export function agentCommandsFrom(entries: readonly VerbEntry[]): readonly string[] {
+  return entries
+    .filter((entry) => entry.handler === "main" && entry.accessModes.includes("cli"))
+    .map((entry) => entry.key);
+}
+
+/**
+ * The commands the agent socket accepts — derived, never authored. A verb
+ * reaches this list by declaring a `cli` access mode and a `main` handler, so
+ * the socket surface cannot drift from the registry.
+ *
+ * The cast restores the literal union {@link agentCommandsFrom} widens to
+ * `string`; `verb-registry.test.ts` pins the runtime value to the same 27
+ * strings, in the same order, that this list has always held.
+ */
+export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly AgentCommand[];
+
+/**
+ * The Verb Tier a verb's access modes and actor requirement imply (VC-92 §2).
+ * Never stored: no entry carries a tier field, and this is the only way to get
+ * one.
+ *
+ * - **read** — Agent CLI, any caller. Composability and zero context cost.
+ * - **coordination** — Agent CLI, authenticated session actor. Visible,
+ *   attributable, reversible writes.
+ * - **control** — off the socket, or gated on a Role that holds the verb: the
+ *   two ways an arbitrary same-uid process is shut out.
+ * - **null** — no access mode at all. An app-only verb is on no agent surface,
+ *   so it holds no governance class; `ticket.archive` becomes this in VC-163.
+ */
+export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbTier | null {
+  if (entry.accessModes.length === 0) return null;
+  if (entry.actor === "role") return "control";
+  if (!entry.accessModes.includes("cli")) return "control";
+  return entry.actor === "any" ? "read" : "coordination";
+}
+
+/**
+ * The order `volli help` prints the listed verbs in, within their group. It is
+ * NOT the socket order above — the reference leads its Session group with
+ * `session start` and its App group with `app launch`, and the socket list
+ * grew in a different order. Keys, so a typo cannot compile; the test asserts
+ * this covers the listed entries exactly once each.
+ */
+const REFERENCE_ORDER = [
+  "identify",
+  "board",
+  "ticket.list",
+  "ticket.show",
+  "ticket.events",
+  "ticket.brief",
+  "worktree.status",
+  "worktree.diff",
+  "project.list",
+  "label.list",
+  "model.list",
+  "ticket.create",
+  "ticket.update",
+  "ticket.move",
+  "ticket.comment",
+  "ticket.archive",
+  "session.start",
+  "session.list",
+  "session.peek",
+  "session.done",
+  "session.blocked",
+  "session.link",
+  "notify",
+  "app.launch",
+  "prompt.baseline",
+  "doctor",
+  "help",
+] as const satisfies readonly VerbKey[];
+
+const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
+  VERB_REGISTRY.map((entry) => [entry.key, entry]),
+);
+
+/** One verb's entry, or undefined for a key this build does not declare. */
+export function verbEntry(key: string): VerbEntry | undefined {
+  return ENTRY_BY_KEY.get(key);
+}
+
+/**
+ * The CLI reference projection: the listed verbs, in reference order. `volli
+ * help` groups these by {@link VerbEntry.group}; the involuntary verbs (`hook`,
+ * `session.harness`) are absent because nothing should type them.
+ */
+export const REFERENCE_VERBS: readonly VerbEntry[] = REFERENCE_ORDER.map(
+  (key) => ENTRY_BY_KEY.get(key)!,
+);
