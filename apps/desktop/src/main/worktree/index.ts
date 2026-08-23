@@ -74,7 +74,14 @@ export {
   ghPrStatus,
   ghDiscoverPr,
 } from "./net";
-export type { RunNet, GhResult, GhFailure, GhFailureKind, PrStatusReport } from "./net";
+export type {
+  ExplainCredentialHelpers,
+  RunNet,
+  GhResult,
+  GhFailure,
+  GhFailureKind,
+  PrStatusReport,
+} from "./net";
 export { publishTicketBranch, commitTicketRemaining } from "./publish";
 export type { PublishDeps, PublishOutcome } from "./publish";
 

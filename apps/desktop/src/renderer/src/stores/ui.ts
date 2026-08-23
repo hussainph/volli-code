@@ -69,6 +69,14 @@
  * every time. It is app-wide chrome too; a successful Launch Services listing
  * resolves an app removed since the choice was saved back to asking.
  *
+ * `dismissedEnvironmentFaults` — which app-level environment faults the user
+ * has put away, by kind. Persisted app-wide because a dismissal that did not
+ * survive relaunch was the defect (VC-159): the banner used to be dismissed in
+ * component state keyed on its exact sentence, so it came back at every launch
+ * and at every wording change. Keyed by FAULT KIND, never by copy, and dropped
+ * again as soon as the fault stops being measured — so the same fault happening
+ * a second time is heard.
+ *
  * `terminalFocusTarget` — the terminal tab temporarily owning the app canvas,
  * whether a ticket owns it or the project does. It is deliberately session-only:
  * live PTYs do not survive relaunch, and entering a new app lifetime with its
@@ -100,6 +108,7 @@ import {
   sanitizeHomeRailMode,
   type HomeRailMode,
 } from "@renderer/components/home/home-rail-model";
+import type { SessionEnvironmentFaultKind } from "@renderer/components/session-environment-alert-model";
 import {
   DEFAULT_TICKET_RAIL_MODE,
   type TicketRailMode,
@@ -222,6 +231,31 @@ function sanitizeDefaultExternalAppId(appId: unknown): DefaultExternalAppId {
   return isKnownExternalAppId(appId) ? appId : DEFAULT_EXTERNAL_APP_ID;
 }
 
+/**
+ * Every fault kind this build knows how to raise — the sanitizer's whitelist.
+ *
+ * A `Record` keyed by the union rather than an array of it, so adding a kind to
+ * `SessionEnvironmentFaultKind` without listing it here fails to compile. An
+ * array would have accepted the omission silently and then dropped that kind's
+ * dismissals on every rehydrate — a banner returning each launch, which is the
+ * defect this whole mechanism exists to fix.
+ */
+const ENVIRONMENT_FAULT_KINDS: Record<SessionEnvironmentFaultKind, true> = {
+  "login-path-unreadable": true,
+};
+
+/**
+ * Dismissals a past build wrote, kept only for kinds this one still raises.
+ * A retired kind's row would otherwise sit in `app_state` forever, and a
+ * corrupt value must never be able to silence a fault nobody dismissed.
+ */
+function sanitizeEnvironmentFaults(faults: unknown): SessionEnvironmentFaultKind[] {
+  if (!Array.isArray(faults)) return [];
+  return (Object.keys(ENVIRONMENT_FAULT_KINDS) as SessionEnvironmentFaultKind[]).filter((kind) =>
+    faults.includes(kind),
+  );
+}
+
 interface UiState {
   sidebarWidth: number;
   /** Ticket-detail right rail width; resizable via its grip, persisted app-wide. */
@@ -273,6 +307,14 @@ interface UiState {
   diffPresentation: DiffPresentation;
   /** Chosen external app, or explicit Ask every time. Persisted app-wide. */
   defaultExternalAppId: DefaultExternalAppId;
+  /**
+   * App-level environment faults the user has put away, by KIND. Persisted
+   * app-wide, which is the whole point (VC-159/R7): the launch banner used to
+   * be dismissed in component state keyed on its own sentence, so it returned
+   * on every relaunch and on every wording change. A kind is dismissed once,
+   * and only that kind — a different fault still speaks.
+   */
+  dismissedEnvironmentFaults: SessionEnvironmentFaultKind[];
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   setSidebarWidth(width: number): void;
@@ -316,6 +358,15 @@ interface UiState {
    * this after an `{ ok: true }` result.
    */
   reconcileDefaultExternalApp(apps: readonly ExternalApp[]): void;
+  /** Put one fault kind away until it clears and happens again. */
+  dismissEnvironmentFault(kind: SessionEnvironmentFaultKind): void;
+  /**
+   * Keep only the dismissals for faults still being measured — the "cleared
+   * when the fault clears" half of the contract. Called with what the latest
+   * measurement found, so a fault that was dismissed and then genuinely
+   * repaired speaks again if it ever comes back.
+   */
+  retainEnvironmentFaultDismissals(active: readonly SessionEnvironmentFaultKind[]): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -351,6 +402,7 @@ type PersistedUiState = Pick<
   | "homeEmptyVisual"
   | "diffPresentation"
   | "defaultExternalAppId"
+  | "dismissedEnvironmentFaults"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
@@ -368,7 +420,7 @@ type PersistedUiState = Pick<
 export function createUiStore(storage?: StateStorage) {
   return create<UiState>()(
     persist(
-      (set) => ({
+      (set, get) => ({
         sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
         railWidth: RAIL_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
@@ -384,6 +436,7 @@ export function createUiStore(storage?: StateStorage) {
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
+        dismissedEnvironmentFaults: [],
         terminalFocusTarget: null,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
@@ -416,6 +469,23 @@ export function createUiStore(storage?: StateStorage) {
               ? { defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID }
               : {},
           ),
+        // Same discipline as the retain below: an already-dismissed kind writes
+        // nothing rather than re-persisting the identical list.
+        dismissEnvironmentFault: (kind) => {
+          const current = get().dismissedEnvironmentFaults;
+          if (!current.includes(kind)) set({ dismissedEnvironmentFaults: [...current, kind] });
+        },
+        // Nothing to drop means NO `set` at all, not a `set` of an empty patch.
+        // zustand's persist middleware wraps `set` unconditionally and writes
+        // the whole store to `app_state` after every call, so `set({})` still
+        // costs a serialize, an IPC hop and a SQLite UPSERT. This runs on every
+        // window focus, so on a healthy machine that would have been a durable
+        // write per focus, forever, to record nothing.
+        retainEnvironmentFaultDismissals: (active) => {
+          const current = get().dismissedEnvironmentFaults;
+          const kept = current.filter((kind) => active.includes(kind));
+          if (kept.length !== current.length) set({ dismissedEnvironmentFaults: kept });
+        },
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -446,6 +516,7 @@ export function createUiStore(storage?: StateStorage) {
           homeEmptyVisual: state.homeEmptyVisual,
           diffPresentation: state.diffPresentation,
           defaultExternalAppId: state.defaultExternalAppId,
+          dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -484,6 +555,10 @@ export function createUiStore(storage?: StateStorage) {
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
             defaultExternalAppId: sanitizeDefaultExternalAppId(stored.defaultExternalAppId),
+            // A dismissal only survives while this build still raises its kind.
+            dismissedEnvironmentFaults: sanitizeEnvironmentFaults(
+              stored.dismissedEnvironmentFaults,
+            ),
           };
         },
       },

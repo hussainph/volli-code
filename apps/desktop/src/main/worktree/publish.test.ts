@@ -29,6 +29,14 @@ afterEach(() => {
 const WORKTREE_PATH = "/repo/.worktrees/VC-1";
 const BRANCH = "volli/VC-1-thing";
 
+/**
+ * The default for these tests: a host with no GUI credential helper, so a push
+ * failure reports Git's own stderr and nothing else. Injected rather than
+ * defaulted (see `PublishDeps`) precisely so this suite never runs `git config`
+ * against whatever the machine running it happens to have configured.
+ */
+const NO_HELPERS = async () => [];
+
 /** Seeds a project + a ticket that already has a worktree/branch/base, ready to publish. */
 function seedTicket(overrides: { prUrl?: string | null } = {}): {
   db: TestDb["db"];
@@ -64,6 +72,50 @@ function events(db: TestDb["db"], ticketId: string): TicketEvent[] {
 }
 
 describe("publishTicketBranch", () => {
+  // The point-of-use half of VC-159/R8, end to end: `net.ts` composes the
+  // explanation, but THIS is the only path that ever shows it to anyone — a
+  // failed fetch is discarded by design, so if the wiring were missing here the
+  // notice would have no venue at all.
+  it("carries the credential-helper explanation onto the push failure it records", async () => {
+    const { db, ticketId } = seedTicket();
+    const { run } = scriptedNet((file, args) => {
+      if (file === "git" && args[0] === "fetch") return {};
+      if (file === "git" && args[0] === "push") {
+        throw netFailure({
+          stderr:
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+          code: 128,
+        });
+      }
+      return {};
+    });
+    const deps: PublishDeps = {
+      db,
+      git: scriptedGit(() => "").git,
+      net: run,
+      explainCredentialHelpers: async () => [
+        {
+          kind: "osxkeychain-may-prompt-gui",
+          helper: "osxkeychain",
+          scope: "global",
+          location: "/Users/me/.gitconfig",
+        },
+      ],
+      blobsRoot: "unused",
+    };
+
+    const result = await publishTicketBranch(deps, ticketId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Git's own words first, the explanation beneath them.
+    expect(result.error).toContain("could not read Username");
+    expect(result.error).toContain("osxkeychain");
+    expect(result.error).toContain("gh auth login");
+    const failed = events(db, ticketId).find((e) => e.payload.kind === "worktree_failed");
+    expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "push" });
+  });
+
   it("records worktree_failed(push) and errs when the push is rejected", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet((file, args) => {
@@ -77,6 +129,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -104,6 +157,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -128,6 +182,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -157,6 +212,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -181,6 +237,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -207,6 +264,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -243,6 +301,7 @@ describe("publishTicketBranch", () => {
       db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -264,6 +323,7 @@ describe("publishTicketBranch", () => {
       db: harness.db,
       git: scriptedGit(() => "").git,
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -282,6 +342,7 @@ describe("commitTicketRemaining", () => {
       db,
       git: commitGit(" M src/a.ts\n"),
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -312,6 +373,7 @@ describe("commitTicketRemaining", () => {
       db,
       git: commitGit("M  src/a.ts\n"),
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 
@@ -336,7 +398,13 @@ describe("commitTicketRemaining", () => {
   it("returns the committed:false no-op and records NO event on a clean tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = { db, git: commitGit(""), net: run, blobsRoot: "unused" };
+    const deps: PublishDeps = {
+      db,
+      git: commitGit(""),
+      net: run,
+      explainCredentialHelpers: NO_HELPERS,
+      blobsRoot: "unused",
+    };
 
     const result = await commitTicketRemaining(deps, ticketId);
 
@@ -357,6 +425,7 @@ describe("commitTicketRemaining", () => {
       db,
       git: commitGit(" M src/a.ts\n"),
       net: run,
+      explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
     };
 

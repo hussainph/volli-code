@@ -405,6 +405,7 @@ describe("persistence", () => {
     store.getState().setHomeRailMode("sessions");
     store.getState().setHomeEmptyVisual("board");
     store.getState().setDiffPresentation("side-by-side");
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
@@ -421,6 +422,7 @@ describe("persistence", () => {
       homeEmptyVisual: "board",
       diffPresentation: "side-by-side",
       defaultExternalAppId: null,
+      dismissedEnvironmentFaults: ["login-path-unreadable"],
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
     // The New-ticket composer's terminal harness left with the terminal kickoff
@@ -747,5 +749,107 @@ describe("setUiScale", () => {
 
     store.getState().setUiScale(Number.NaN);
     expect(store.getState().uiScale).toBe(1);
+  });
+});
+
+describe("environment fault dismissals", () => {
+  it("survives a relaunch, because a banner that returns every launch is the defect", async () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+    // Idempotent: pressing Dismiss twice is one dismissal, not two rows.
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+    expect(store.getState().dismissedEnvironmentFaults).toEqual(["login-path-unreadable"]);
+
+    const relaunched = createUiStore(storage);
+    await relaunched.persist.rehydrate();
+    expect(relaunched.getState().dismissedEnvironmentFaults).toEqual(["login-path-unreadable"]);
+  });
+
+  it("drops a dismissal the moment its fault stops being measured", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+
+    // Still faulting: the dismissal stands, and the same array is kept so a
+    // re-measurement on every window focus re-renders nothing.
+    const kept = store.getState().dismissedEnvironmentFaults;
+    store.getState().retainEnvironmentFaultDismissals(["login-path-unreadable"]);
+    expect(store.getState().dismissedEnvironmentFaults).toBe(kept);
+
+    // Repaired (or simply gone): the dismissal goes with it, so the same fault
+    // happening again is heard rather than silently swallowed.
+    store.getState().retainEnvironmentFaultDismissals([]);
+    expect(store.getState().dismissedEnvironmentFaults).toEqual([]);
+  });
+
+  /**
+   * A re-measurement that changes nothing must not TOUCH the store.
+   *
+   * zustand's persist middleware wraps `set` and writes the whole store to
+   * `app_state` after every call, so even `set({})` costs a serialize, an IPC
+   * hop and a SQLite UPSERT. This action runs on every window focus — so on a
+   * healthy machine, which by contract sees no banner ever, a `set` here would
+   * be a durable write per focus, forever, recording nothing.
+   */
+  it("writes nothing when a re-measurement changes no dismissal", () => {
+    const storage = createMemoryStorage();
+    let writes = 0;
+    const counted = {
+      ...storage,
+      setItem: (name: string, value: string) => {
+        writes += 1;
+        storage.setItem(name, value);
+      },
+    };
+    const store = createUiStore(counted);
+
+    // The healthy case: nothing dismissed, nothing faulting, focus after focus.
+    writes = 0;
+    store.getState().retainEnvironmentFaultDismissals([]);
+    store.getState().retainEnvironmentFaultDismissals([]);
+    expect(writes).toBe(0);
+
+    // A standing dismissal whose fault is still measured: also nothing to say.
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+    writes = 0;
+    store.getState().retainEnvironmentFaultDismissals(["login-path-unreadable"]);
+    expect(writes).toBe(0);
+    // Dismissing the same kind twice is one dismissal, and one write.
+    store.getState().dismissEnvironmentFault("login-path-unreadable");
+    expect(writes).toBe(0);
+
+    // Only a real change is durable.
+    store.getState().retainEnvironmentFaultDismissals([]);
+    expect(writes).toBe(1);
+  });
+
+  it("keeps only kinds this build still raises, whatever a past one wrote", async () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: {
+          sidebarWidth: 320,
+          uiScale: 1,
+          dismissedEnvironmentFaults: ["login-path-unreadable", "retired-fault"],
+        },
+        version: 1,
+      }),
+    );
+    const store = createUiStore(storage);
+    await store.persist.rehydrate();
+    expect(store.getState().dismissedEnvironmentFaults).toEqual(["login-path-unreadable"]);
+
+    // Corrupt or missing: nothing is dismissed, so no fault can be silenced by
+    // a value nobody wrote on purpose.
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, dismissedEnvironmentFaults: "all" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().dismissedEnvironmentFaults).toEqual([]);
   });
 });

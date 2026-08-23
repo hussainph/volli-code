@@ -23,11 +23,18 @@ export interface ScriptedNet {
  * A rejection shaped like Node's `execFile` failure: a real `Error` (so
  * `instanceof Error` holds) with `stdout`/`stderr`/`code` attached. `code` is a
  * number for a non-zero exit, or a string like `"ENOENT"` for a spawn failure.
+ *
+ * `killed` and `signal` are the timeout shape, and they are deliberately
+ * separate knobs: Node sets `killed` only when IT killed the child on its own
+ * timeout, while `signal` is also set when something else did. Callers that
+ * classify a hang must be testable against both.
  */
 export function netFailure(opts: {
   stdout?: string;
   stderr?: string;
   code?: number | string;
+  killed?: boolean;
+  signal?: string;
 }): Error {
   return Object.assign(new Error(opts.stderr ?? "command failed"), opts);
 }

@@ -28,7 +28,6 @@ function status(
         ...overrides,
       },
       systemPathIssues: [],
-      credentialHelperIssues: [],
     },
   };
 }

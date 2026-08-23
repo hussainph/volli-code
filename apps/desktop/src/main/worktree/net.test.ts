@@ -1,7 +1,41 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { describe, expect, it } from "vite-plus/test";
 
-import { fetchBase, ghCreateDraftPr, ghDiscoverPr, ghFindPr, ghPrStatus, pushBranch } from "./net";
+import type { CredentialHelperIssue } from "../credential-helper-diagnostics";
+import {
+  extractFailure,
+  fetchBase,
+  ghCreateDraftPr,
+  ghDiscoverPr,
+  ghFindPr,
+  ghPrStatus,
+  pushBranch,
+} from "./net";
 import { netFailure, scriptedNet } from "./scripted-net";
+
+const OSXKEYCHAIN: CredentialHelperIssue = {
+  kind: "osxkeychain-may-prompt-gui",
+  helper: "osxkeychain",
+  scope: "global",
+  location: "/Users/me/.gitconfig",
+};
+
+/** A recording stand-in for the read-only `git config` diagnosis. */
+function explainer(issues: readonly CredentialHelperIssue[] = []) {
+  const asked: string[] = [];
+  return {
+    asked,
+    explain: async (cwd: string) => {
+      asked.push(cwd);
+      return issues;
+    },
+  };
+}
+
+/** A host with no GUI credential helper: Git's stderr stands alone. */
+const NO_HELPERS = async () => [];
 
 describe("fetchBase", () => {
   it("runs git fetch origin <base> and returns ok", async () => {
@@ -25,7 +59,11 @@ describe("fetchBase", () => {
 describe("pushBranch", () => {
   it("runs git push -u origin <branch> and returns ok", async () => {
     const { run, calls } = scriptedNet(() => ({ stderr: "branch set up to track" }));
-    const result = await pushBranch(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
+    const result = await pushBranch(
+      run,
+      { worktreePath: "/wt", branch: "volli/VC-12-x" },
+      NO_HELPERS,
+    );
     expect(result.ok).toBe(true);
     expect(calls[0]?.args).toEqual(["push", "-u", "origin", "volli/VC-12-x"]);
   });
@@ -39,7 +77,11 @@ describe("pushBranch", () => {
         code: 1,
       });
     });
-    const result = await pushBranch(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
+    const result = await pushBranch(
+      run,
+      { worktreePath: "/wt", branch: "volli/VC-12-x" },
+      NO_HELPERS,
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/moved|remote branch|diverged/i);
@@ -53,7 +95,11 @@ describe("pushBranch", () => {
         code: 128,
       });
     });
-    const result = await pushBranch(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
+    const result = await pushBranch(
+      run,
+      { worktreePath: "/wt", branch: "volli/VC-12-x" },
+      NO_HELPERS,
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/remote/i);
@@ -67,11 +113,166 @@ describe("pushBranch", () => {
     const { run } = scriptedNet(() => {
       throw netFailure({ stderr, code: 128 });
     });
-    const result = await pushBranch(run, { worktreePath: "/wt", branch: "volli/VC-12-x" });
+    const result = await pushBranch(
+      run,
+      { worktreePath: "/wt", branch: "volli/VC-12-x" },
+      NO_HELPERS,
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("Permission denied");
     expect(result.error).not.toContain("Add an `origin` remote");
+  });
+});
+
+// VC-159/R8: `osxkeychain` is the stock macOS Git setup, so it is explained
+// where it explains something — at the failure it predicts — and nowhere else.
+/** A push/fetch that failed for want of credentials Git could not obtain. */
+function promptFailure() {
+  return scriptedNet(() => {
+    throw netFailure({
+      stderr: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      code: 128,
+    });
+  });
+}
+
+describe("the credential-helper explanation's venue", () => {
+  it("explains the helper on a push that failed for want of credentials", async () => {
+    const { run } = promptFailure();
+    const { asked, explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(asked).toEqual(["/wt"]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Git's own stderr survives; the explanation is added under it.
+    expect(result.error).toContain("could not read Username");
+    expect(result.error).toContain("osxkeychain");
+    expect(result.error).toContain("/Users/me/.gitconfig");
+    expect(result.error).toContain("a Session cannot answer");
+    expect(result.error).toContain("gh auth login");
+  });
+
+  // Fetch does NOT explain, on purpose. Every caller treats a failed fetch as
+  // best-effort and throws the string away (publish.ts §3), so diagnosing it
+  // would spend a `git config` subprocess on a sentence with no reader. The
+  // prompt that stops the fetch stops the push a moment later, and the push is
+  // where somebody is told.
+  it("leaves a failed fetch undiagnosed, because nobody reads its error", async () => {
+    const { run } = promptFailure();
+
+    const result = await fetchBase(run, { worktreePath: "/wt", baseBranch: "main" });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("could not read Username");
+    expect(result.error).not.toContain("osxkeychain");
+  });
+
+  it("asks nothing when the failure is not one a credential prompt accounts for", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "! [rejected] b -> b (non-fast-forward)", code: 1 });
+    });
+    const { asked, explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(asked).toEqual([]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).not.toContain("osxkeychain");
+  });
+
+  it("leaves the stderr alone when no such helper is configured", async () => {
+    const { run } = promptFailure();
+    const { explain } = explainer();
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe(
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+    );
+  });
+
+  it("establishes nothing when the diagnosis itself cannot be taken", async () => {
+    const { run } = promptFailure();
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, async () => {
+      throw new Error("git config is not runnable here");
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("could not read Username");
+    expect(result.error).not.toContain("osxkeychain");
+  });
+
+  // A verb the RUNNER killed on its timeout is what a hung GUI prompt looks
+  // like from out here: no stderr to classify, just a process that never came
+  // back. Node marks exactly this with `killed`, which is what `extractFailure`
+  // reads — the shape is asserted in "execFile's timeout shape" below.
+  it("treats a timed-out network verb as consistent with a prompt nobody could answer", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "", killed: true });
+    });
+    const { explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("osxkeychain");
+  });
+
+  // The opposite, and the reason `killed` is read rather than `signal`: a child
+  // that something ELSE killed (an app quit's SIGTERM) is not a hung credential
+  // prompt, and must not be handed the keychain paragraph.
+  it("does not blame the keychain for a child something else killed", async () => {
+    const { run } = scriptedNet(() => {
+      throw netFailure({ stderr: "", signal: "SIGTERM" });
+    });
+    const { asked, explain } = explainer([OSXKEYCHAIN]);
+
+    const result = await pushBranch(run, { worktreePath: "/wt", branch: "b" }, explain);
+
+    expect(asked).toEqual([]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).not.toContain("osxkeychain");
+  });
+});
+
+// The timeout is not decoration: without it a push blocked on a macOS keychain
+// window never fails, so the explanation above never runs (VC-159/R8). What
+// this pins is the SHAPE `extractFailure` reads that timeout out of — against a
+// real `execFile`, on a short bound of its own rather than the runner's real
+// two minutes, because the assumption being checked is Node's, not ours.
+describe("execFile's timeout shape", () => {
+  it("marks a verb it killed with `killed`, and leaves `code` null", async () => {
+    const caught = await promisify(execFile)("sleep", ["5"], { timeout: 100 }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(caught).not.toBeNull();
+    // `code` is null on this path, so a classifier keying on a code (an
+    // `ETIMEDOUT` that execFile never emits) would miss every hung verb.
+    const failure = extractFailure(caught);
+    expect(failure.code).toBeNull();
+    expect(failure.timedOut).toBe(true);
+  });
+
+  it("leaves `timedOut` false for an ordinary non-zero exit", async () => {
+    const caught = await promisify(execFile)("sh", ["-c", "exit 3"]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(extractFailure(caught).timedOut).toBe(false);
   });
 });
 

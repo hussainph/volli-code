@@ -39,7 +39,6 @@ function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
       loginPath: "/usr/bin:/home/me/.local/bin",
       session: session(),
       systemPathIssues: [],
-      credentialHelperIssues: [],
     },
     socket: { path: "/profiles/volli.sock", live: true },
     wrappers: { commands: ["claude", "codex"] },
@@ -67,7 +66,6 @@ describe("sessionPathComparison", () => {
           loginPath,
           session: session({ path: `${sessionOnly}:${loginPath}` }),
           systemPathIssues: [],
-          credentialHelperIssues: [],
         },
       }),
     );
@@ -93,7 +91,6 @@ describe("sessionPathComparison", () => {
             interactiveProvenance: "pending",
           }),
           systemPathIssues: [],
-          credentialHelperIssues: [],
         },
       }),
     );
@@ -115,7 +112,6 @@ describe("sessionPathComparison", () => {
             interactiveProvenance: "pending",
           }),
           systemPathIssues: [],
-          credentialHelperIssues: [],
         },
       }),
     );
@@ -135,7 +131,6 @@ describe("sessionPathComparison", () => {
             path: "/volli/bin:/opt/homebrew/bin:/usr/bin:/Users/me/.local/bin",
           }),
           systemPathIssues: [],
-          credentialHelperIssues: [],
         },
       }),
     );
@@ -158,7 +153,6 @@ describe("sessionPathComparison", () => {
             interactiveProvenance: "pending",
           }),
           systemPathIssues: [],
-          credentialHelperIssues: [],
         },
       }),
     );
@@ -257,6 +251,27 @@ describe("cliStatusRows", () => {
       status({ path: { binDir: "/home/me/.local/bin", state: "unknown" } }),
     );
     expect(row(unknown, "path")).toMatchObject({ tone: "muted", value: "Unknown" });
+  });
+
+  // Repair writes no profile line for a shell Volli does not manage, so for
+  // fish or bash the row itself must carry the manual step — otherwise the
+  // warn can never clear and its remedy is invisible (VC-160's finding).
+  it("names the shell and the manual step when the PATH repair cannot help it", () => {
+    const fish = cliStatusRows(
+      status({
+        path: { binDir: "/home/me/.local/bin", state: "missing" },
+        shell: { name: "fish", supported: false, chainActive: false },
+      }),
+    );
+    expect(row(fish, "path").detail).toBe(
+      "/home/me/.local/bin is not on the login shell's PATH. " +
+        "Volli only manages zsh, so add it to your fish configuration yourself.",
+    );
+
+    const zsh = cliStatusRows(
+      status({ path: { binDir: "/home/me/.local/bin", state: "missing" } }),
+    );
+    expect(row(zsh, "path").detail).toBe("/home/me/.local/bin is not on the login shell's PATH.");
   });
 
   it("covers the socket, wrapper, and shell-chain states", () => {

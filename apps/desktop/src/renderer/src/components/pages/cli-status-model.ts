@@ -168,7 +168,12 @@ function pathRow(status: CliToolStatus): CliStatusRow {
         label: "Volli on login PATH",
         tone: "warn",
         value: "Missing",
-        detail: `${status.path.binDir} is not on the login shell's PATH.`,
+        // For a shell Volli does not manage, repair deliberately writes no
+        // profile line — so the row must name the shell and the manual step,
+        // or its remedy is invisible and the warn can never clear (VC-160).
+        detail: status.shell.supported
+          ? `${status.path.binDir} is not on the login shell's PATH.`
+          : `${status.path.binDir} is not on the login shell's PATH. Volli only manages zsh, so add it to your ${status.shell.name} configuration yourself.`,
       };
     case "unknown":
       return {

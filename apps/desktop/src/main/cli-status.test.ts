@@ -40,7 +40,6 @@ function deps(home: string, overrides: Partial<CliStatusDeps> = {}): CliStatusDe
       installCommand: null,
     }),
     systemPathIssues: async () => [],
-    credentialHelperIssues: async () => [],
     wrapperCommands: () => ["claude", "codex"],
     shellFile: "/bin/zsh",
     shellChainActive: () => true,
@@ -86,7 +85,6 @@ describe("readCliStatus", () => {
         installCommand: null,
       },
       systemPathIssues: [],
-      credentialHelperIssues: [],
     });
     expect(status.socket).toEqual({ path: join(root, "volli.sock"), live: true });
     expect(status.wrappers.commands).toEqual(["claude", "codex"]);
@@ -108,28 +106,16 @@ describe("readCliStatus", () => {
     expect(status.environment.systemPathIssues).toEqual([issue]);
   });
 
-  it("carries a project-scoped credential-helper diagnosis beside the Session facts", async () => {
+  // VC-159/R8: the credential-helper diagnosis left this read entirely. It is a
+  // `git config` exec, this status is re-measured on every window focus, and
+  // `osxkeychain` is the stock macOS setup — so it is asked for only where it
+  // explains something, at a failed Git network verb (`worktree/net.ts`).
+  it("asks nothing about Git credential helpers", async () => {
     root = await mkdtemp(join(tmpdir(), "volli-cli-status-"));
-    const seen: Array<string | null> = [];
-    const issue = {
-      kind: "osxkeychain-may-prompt-gui" as const,
-      helper: "osxkeychain" as const,
-      scope: "global" as const,
-      location: "/Users/me/.gitconfig",
-    };
 
-    const status = await readCliStatus(
-      deps(root, {
-        credentialHelperIssues: async (cwd) => {
-          seen.push(cwd);
-          return [issue];
-        },
-      }),
-      "/work/acme",
-    );
+    const status = await readCliStatus(deps(root), "/work/acme");
 
-    expect(seen).toEqual(["/work/acme"]);
-    expect(status.environment.credentialHelperIssues).toEqual([issue]);
+    expect(Object.keys(status.environment)).toEqual(["loginPath", "session", "systemPathIssues"]);
   });
 
   it("passes the selected project's root into the existing Session environment report", async () => {

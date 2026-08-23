@@ -1,15 +1,20 @@
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { errorMessage } from "@volli/shared";
+
 import {
-  sessionEnvironmentAlert,
+  sessionEnvironmentMeasurement,
   type SessionEnvironmentAlertState,
+  type SessionEnvironmentMeasurement,
 } from "@renderer/components/session-environment-alert-model";
 import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
@@ -18,68 +23,141 @@ import { useUiStore } from "@renderer/stores/ui";
  * A toast expires before someone starts the Session that needs these tools; a
  * modal blocks a product that may still be usable. This persistent, non-modal
  * notice is the smallest middle ground: it says the failure at first use and
- * stays visible without interrupting work. Two escapes keep it honest rather
- * than nagging: the measurement is re-taken whenever the window regains focus
- * (repairs happen in a terminal, outside this window — a cleared fault must
- * not keep wearing its alert), and Dismiss hides exactly the fault it named —
- * a different fault, or the same one after a relaunch, comes back.
+ * stays visible without interrupting work. Three things keep it honest rather
+ * than nagging:
+ *
+ * - the measurement is re-taken whenever the window regains focus (repairs
+ *   happen outside this window too — a cleared fault must not keep wearing its
+ *   alert);
+ * - **Fix now** does the repair here, in-process, instead of telling somebody
+ *   to type `volli doctor --fix` (VC-159/R7). Same work, one press;
+ * - Dismiss puts away the FAULT KIND, durably (`app_state`, through the ui
+ *   store), and the dismissal is dropped again the moment that fault stops
+ *   being measured. It used to be component state keyed on the alert's exact
+ *   sentence, which is why it came back at every relaunch. A project-readiness
+ *   notice has no fault kind and is still dismissed for the view only: it is
+ *   the project's onboarding state, not an app fault, and VC-156 owns retiring
+ *   it altogether.
+ *
+ * One notice is drawn at a time — the first the reader has not dismissed.
+ * Dismissing the app fault therefore reveals whatever the project is still
+ * missing, rather than burying a fact nobody dismissed behind one they did.
  */
 export function SessionEnvironmentAlert() {
-  const [alert, setAlert] = useState<SessionEnvironmentAlertState | null>(null);
+  const [measurement, setMeasurement] = useState<SessionEnvironmentMeasurement | null>(null);
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  const [fixing, setFixing] = useState(false);
   const project = useSelectedProject();
   const projectCwd = project?.path;
   const projectName = project?.name;
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  const dismissedFaults = useUiStore((state) => state.dismissedEnvironmentFaults);
+  const dismissEnvironmentFault = useUiStore((state) => state.dismissEnvironmentFault);
+  const retainEnvironmentFaultDismissals = useUiStore(
+    (state) => state.retainEnvironmentFaultDismissals,
+  );
   // Token-guarded like the Settings pane's read: the answer that lands is the
   // one asked for last, whether the ask came from selection or from refocus.
   const fetchToken = useRef(0);
 
-  const load = useCallback(() => {
+  /**
+   * Re-measures. Resolves with what the measurement found, or `undefined` when
+   * this read could not establish anything — a superseded token, a failed
+   * status call. The two are NOT the same answer, and Fix now depends on the
+   * difference: "the fault is gone" and "nobody could tell" must never be
+   * reported to the user as the same outcome.
+   */
+  const load = useCallback(async (): Promise<SessionEnvironmentMeasurement | undefined> => {
     const token = ++fetchToken.current;
     const input = projectCwd === undefined ? undefined : { cwd: projectCwd };
-    void window.api.cli
-      .status(input)
-      .then((result) => {
-        if (fetchToken.current !== token || !result.ok) return;
-        setAlert(
-          sessionEnvironmentAlert(
-            result.status,
-            projectName === undefined ? null : { name: projectName },
-          ),
-        );
-      })
-      .catch(() => {
-        // This read cannot establish a PATH failure, so it must not invent one.
-      });
-  }, [projectCwd, projectName]);
+    try {
+      const result = await window.api.cli.status(input);
+      if (fetchToken.current !== token || !result.ok) return undefined;
+      const measured = sessionEnvironmentMeasurement(
+        result.status,
+        projectName === undefined ? null : { name: projectName },
+      );
+      setMeasurement(measured);
+      // The "cleared when the fault clears" half of the dismissal contract:
+      // this measurement is the authority on which faults still exist, so a
+      // dismissal for anything else is dropped here rather than lingering to
+      // silence the same fault the next time it happens. It is fed every fault
+      // that was MEASURED — not the one notice on screen, which would report a
+      // dismissed lower-ranked fault as repaired while another outranked it.
+      retainEnvironmentFaultDismissals(measured.faults);
+      return measured;
+    } catch {
+      // This read cannot establish a PATH failure, so it must not invent one.
+      return undefined;
+    }
+  }, [projectCwd, projectName, retainEnvironmentFaultDismissals]);
 
   useEffect(() => {
     // A project becomes selected in the same state change that adds it, so this
     // is the onboarding check. It deliberately shares this notice rather than
     // growing a second Configure pane while VC-109 owns that repair surface.
-    setAlert(null);
-    load();
+    setMeasurement(null);
+    void load();
   }, [load]);
 
   useEffect(() => {
-    // Repairs happen outside this window — volli doctor --fix or an install in
-    // a terminal — so returning focus to the app is the moment to re-measure.
-    const onFocus = (): void => load();
+    // Repairs happen outside this window too — an install in a terminal, a
+    // profile edit — so returning focus to the app is the moment to re-measure.
+    const onFocus = (): void => void load();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [load]);
 
-  const alertKey = alert === null ? null : `${alert.title}\n${alert.detail}`;
-  if (terminalFocused || alert === null || alertKey === dismissedKey) return null;
+  /**
+   * Fix now: main re-runs both PATH passes (the work `volli doctor --fix`
+   * does), then this re-measures.
+   *
+   * Both ways it can disappoint are said out loud. A repair that FAILED is a
+   * failed mutation and toasts as one. A repair that ran and left the fault
+   * standing is the quieter failure: the banner alone would look like a button
+   * that did nothing, so the re-measurement's own verdict is reported.
+   */
+  const fix = useCallback(async () => {
+    setFixing(true);
+    try {
+      const result = await window.api.cli.repair();
+      // Re-measure either way: a repair that reported failure may still have
+      // changed the world before it stopped.
+      const measured = await load();
+      if (!result.ok) {
+        toastError(`Couldn't repair the Session PATH: ${result.error}`);
+      } else if (measured !== undefined && measured.faults.length > 0) {
+        toastError(
+          "Volli still couldn't read your terminal's PATH. Review details for what it found.",
+        );
+      }
+    } catch (error) {
+      toastError(`Couldn't repair the Session PATH: ${errorMessage(error)}`);
+    } finally {
+      setFixing(false);
+    }
+  }, [load]);
+
+  // The first notice this reader has not put away — so dismissing the app
+  // fault reveals the project's own shortfall instead of hiding it too.
+  const alert =
+    measurement?.notices.find((notice) =>
+      notice.fault === null ? notice.key !== dismissedKey : !dismissedFaults.includes(notice.fault),
+    ) ?? null;
+  if (terminalFocused || alert === null) return null;
 
   return (
     <div className="shrink-0 px-2 pt-2">
       <SessionEnvironmentNotice
         alert={alert}
+        fixing={fixing}
+        onFix={alert.fault === null ? undefined : () => void fix()}
         onReview={() => setSettingsOpen(true, "cli")}
-        onDismiss={() => setDismissedKey(alertKey)}
+        onDismiss={() => {
+          if (alert.fault === null) setDismissedKey(alert.key);
+          else dismissEnvironmentFault(alert.fault);
+        }}
       />
     </div>
   );
@@ -88,10 +166,16 @@ export function SessionEnvironmentAlert() {
 /** Exported drawing seam: the request state above is deliberately not part of a visual test. */
 export function SessionEnvironmentNotice({
   alert,
+  fixing = false,
+  onFix,
   onReview,
   onDismiss,
 }: {
   alert: SessionEnvironmentAlertState;
+  /** The repair is running; the button says so and cannot be pressed twice. */
+  fixing?: boolean;
+  /** Present only for an app fault — a project's missing dependencies are not Volli's to repair. */
+  onFix?: (() => void) | undefined;
   onReview(): void;
   onDismiss(): void;
 }) {
@@ -105,9 +189,15 @@ export function SessionEnvironmentNotice({
       detail={alert.detail}
       actions={
         <>
-          <Button size="xs" variant="outline" onClick={onReview}>
+          {onFix === undefined ? null : (
+            <Button size="xs" variant="outline" disabled={fixing} onClick={onFix}>
+              <WrenchIcon />
+              {fixing ? "Fixing…" : "Fix now"}
+            </Button>
+          )}
+          <Button size="xs" variant="ghost" onClick={onReview}>
             <TerminalWindowIcon />
-            Review CLI
+            Review details
           </Button>
           <Button size="xs" variant="ghost" onClick={onDismiss}>
             <XIcon />

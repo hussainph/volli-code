@@ -159,6 +159,7 @@ import {
   WorktreeChangeWatchManager,
 } from "./worktree";
 import { createCoalescer } from "./worktree/coalesce";
+import { credentialHelperIssues } from "./credential-helper-diagnostics";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
@@ -1144,7 +1145,7 @@ export function registerDataIpcHandlers(
       // shape-checked them at the door, and what "blank" and "absent" mean is
       // commit.ts's to decide, in one place, for every caller.
       const result = await commitTicketRemaining(
-        { ...worktreeDeps(db), net: runNet },
+        { ...worktreeDeps(db), net: runNet, explainCredentialHelpers: credentialHelperIssues },
         input.ticketId,
         { message: input.message, includeUnstaged: input.includeUnstaged },
       );
@@ -1163,7 +1164,7 @@ export function registerDataIpcHandlers(
 
     "volli:worktree-push-pr": async (input: TicketIdInput): Promise<WorktreePushPrResult> => {
       const result = await publishTicketBranch(
-        { ...worktreeDeps(db), net: runNet },
+        { ...worktreeDeps(db), net: runNet, explainCredentialHelpers: credentialHelperIssues },
         input.ticketId,
       );
       if (!result.ok) return { ok: false, error: result.error };

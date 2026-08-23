@@ -35,6 +35,7 @@ import {
   ghCreateDraftPr,
   ghFindPr,
   pushBranch,
+  type ExplainCredentialHelpers,
   type GhFailure,
   type RunNet,
 } from "./net";
@@ -48,6 +49,13 @@ import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
  */
 export interface PublishDeps extends WorktreeDeps {
   net: RunNet;
+  /**
+   * The read-only credential-helper diagnosis a failed push consults before it
+   * reports (VC-159/R8). Injected beside `net` for the same reason: it shells
+   * out to `git config`, so the suite hands it a fake rather than reaching for
+   * the host's real configuration.
+   */
+  explainCredentialHelpers: ExplainCredentialHelpers;
 }
 
 /** The success value of {@link publishTicketBranch}: the PR url, and whether it pre-existed. */
@@ -207,10 +215,11 @@ export async function publishTicketBranch(
 
   // (c) push — FATAL. A rejection (remote moved) or missing remote is the user's
   // to resolve; record it and stop before touching `gh`.
-  const pushed = await pushBranch(deps.net, {
-    worktreePath: identity.worktreePath,
-    branch: identity.branch,
-  });
+  const pushed = await pushBranch(
+    deps.net,
+    { worktreePath: identity.worktreePath, branch: identity.branch },
+    deps.explainCredentialHelpers,
+  );
   if (!pushed.ok) {
     recordFailure(deps, ticketId, "push", pushed.error);
     return err(pushed.error);
