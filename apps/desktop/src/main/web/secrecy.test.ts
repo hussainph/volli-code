@@ -97,6 +97,7 @@ const context: PiRuntimeContext = {
   rootThreadId: sessionRootThreadId("session-1"),
   brief: "Find out how people test Electron main.",
   model: { providerId: "anthropic", modelId: "claude", reasoningLevel: "medium" },
+  toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
   promptResources: [],
 };
 

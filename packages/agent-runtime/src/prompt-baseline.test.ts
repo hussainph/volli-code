@@ -1,7 +1,9 @@
-import type {
-  PromptResource,
-  RuntimeWorkspaceEnvironment,
-  SessionRuntimeSpec,
+import {
+  skillPromptResource,
+  skillsIndexResource,
+  type PromptResource,
+  type RuntimeWorkspaceEnvironment,
+  type SkillReference,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -33,36 +35,10 @@ function input(overrides: Partial<PromptBaselineInput> = {}): PromptBaselineInpu
   };
 }
 
-/** The full spec `composeSystemPrompt` takes, carrying the same prompt-relevant fields. */
-function spec(baseline: PromptBaselineInput): SessionRuntimeSpec {
-  return {
-    identity: {
-      role: "project",
-      sessionId: "session-1",
-      rootThreadId: "thread-1",
-      attachmentId: "attachment-1",
-      projectId: "project-1",
-      ticketId: null,
-    },
-    // Not a baseline input any more (VC-164): the workspace path is no longer
-    // a prompt byte, so it cannot change what the baseline prices. The spec
-    // still carries it because that is where a Session actually runs.
-    workspacePath: "/code/volli",
-    venue: "local",
-    model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "medium" },
-    brief: baseline.brief,
-    tools: baseline.tools,
-    ...(baseline.promptResources === undefined
-      ? {}
-      : { promptResources: baseline.promptResources }),
-    observer: async () => {},
-  };
-}
-
 describe("promptBaseline", () => {
   it("prices the exact string composeSystemPrompt assembles — separators included", () => {
     const measured = promptBaseline(input());
-    const composed = composeSystemPrompt(spec(input()));
+    const composed = composeSystemPrompt(input());
     expect(measured.system.chars).toBe(composed.length);
     expect(measured.system.tokens).toBe(
       Math.ceil(composed.length / PROMPT_BASELINE_CHARS_PER_TOKEN),
@@ -119,9 +95,7 @@ describe("promptBaseline", () => {
 
   it("cannot drift from the composer: each section's text is the composed prompt's", () => {
     const sections = systemPromptSections(input());
-    expect(composeSystemPrompt(spec(input()))).toBe(
-      sections.map((section) => section.text).join("\n\n"),
-    );
+    expect(composeSystemPrompt(input())).toBe(sections.map((section) => section.text).join("\n\n"));
   });
 });
 
@@ -197,7 +171,7 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
       // Forks on whether any RESOURCE section exists, which is the project's index.
       ["operating", "project-static", "prefix"],
       ["role", "role-static", "prefix"],
-      // No Authority Snapshot: Role, the tool bundle, and nothing per-Session.
+      // Session authority policy is outside the prompt; Role + bundle remain.
       ["authority", "role-static", "prefix"],
       ["workspace", "role-static", "prefix"],
       ["resources-header", "project-static", "prefix"],
@@ -207,33 +181,46 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
     ]);
   });
 
-  it("a skill this Session named is session-static, where the project's index is not", () => {
-    const measured = promptBaseline(
-      input({ promptResources: [INDEX, { name: "svg", text: "draw a vector" }] }),
-    );
+  it("classes the production named-skill + filtered-index shape conservatively", () => {
+    const skill = (name: string): SkillReference => ({
+      name,
+      description: `${name} description`,
+      body: `# ${name}\n\nDo ${name}.`,
+      userInvokeOnly: false,
+      root: `.agents/skills/${name}`,
+    });
+    const named = skill("svg");
+    const listed = skill("tdd");
+    const index = skillsIndexResource([named, listed], [named.name]);
+    if (index === null) throw new Error("expected the remaining skill in the index");
+    const resources = [skillPromptResource(named), index];
+    // Production orders named bodies first, then builds an index with those
+    // names removed. That makes this Session's index bytes session-specific.
+    expect(resources.map((resource) => resource.name)).toEqual(["svg", "skills index"]);
+    expect(index.text).not.toContain("svg");
+    expect(index.text).toContain("tdd");
+
+    const measured = promptBaseline(input({ promptResources: resources }));
     const classOf = (id: string) =>
       measured.sections.find((section) => section.id === id)?.cacheClass;
-    expect(classOf("resource:skills index")).toBe("project-static");
+    expect(classOf("operating")).toBe("session-static");
+    expect(classOf("resources-header")).toBe("session-static");
     expect(classOf("resource:svg")).toBe("session-static");
+    expect(classOf("resource:skills index")).toBe("session-static");
   });
 
-  it("an Authority Snapshot takes the authority layer out of the shared prefix", () => {
-    const measured = promptBaseline(
-      input({
-        authority: {
-          mode: "auto",
-          location: "worktree",
-          tools: ["read", "edit", "write", "execute"],
-          rulePackId: "builtin",
-          rulePackHash: "hash",
-          classifierModel: null,
-          fallback: { consecutiveDenials: 3, sessionDenials: 15 },
-        },
-      }),
-    );
-    expect(measured.sections.find((section) => section.id === "authority")?.cacheClass).toBe(
+  it("under-claims an empty resource shape whose project supply is unknown", () => {
+    const measured = promptBaseline(input({ promptResources: undefined }));
+    expect(measured.sections.find((section) => section.id === "operating")?.cacheClass).toBe(
       "session-static",
     );
+  });
+
+  it("keeps Session authority policy outside the priced prompt boundary", () => {
+    const authority = promptBaseline(input()).sections.find(
+      (section) => section.id === "authority",
+    );
+    expect(authority?.cacheClass).toBe("role-static");
   });
 
   it("a fresh Session buys nothing per turn, and nothing per Session in its prefix", () => {

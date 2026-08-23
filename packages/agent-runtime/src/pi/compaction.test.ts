@@ -296,14 +296,7 @@ describe("contextMessages", () => {
     // pins the same behaviour end to end.
     const opening = composeFirstUserMessage(
       {
-        identity: {
-          role: "ticket",
-          sessionId: "session-1",
-          rootThreadId: "thread-1",
-          attachmentId: "attachment-1",
-          projectId: "project-1",
-          ticketId: "ticket-1",
-        },
+        identity: { role: "ticket" },
         brief: { text: "VC-12 — read the marker." },
         workspaceEnvironment: { dependencies: "absent", installCommand: "pnpm install" },
       },

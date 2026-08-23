@@ -10,6 +10,7 @@ import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engin
 import {
   errorMessage,
   promptResourceBlock,
+  sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
   type CompactionRequestOutcome,
@@ -49,6 +50,7 @@ const context: PiRuntimeContext = {
     modelId: "gpt-5.6-sol",
     reasoningLevel: "high",
   },
+  toolSurface: ["read", "edit", "write", "execute", "ask_user"],
   promptResources: [],
 };
 
@@ -464,6 +466,10 @@ describe("Pi native adapter attach", () => {
   it("hands a configured profile's ports to the Session, calls and all", async () => {
     const asked: unknown[] = [];
     const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+      }),
       resolveWebPorts: () => ({
         webFetch: async (input) => {
           asked.push({ fetch: input.url });
@@ -501,6 +507,99 @@ describe("Pi native adapter attach", () => {
 
     expect(runtime.specs).toHaveLength(1);
     expect(resolutions).toBe(1);
+  });
+
+  it("keeps the durable tool surface when Web Access is enabled before recovery reattach", async () => {
+    let webEnabled = false;
+    const { adapter, runtime } = composition({
+      resolveWebPorts: () =>
+        webEnabled
+          ? {
+              webFetch: async (input) => ({
+                requestedUrl: input.url,
+                finalUrl: input.url,
+                origin: new URL(input.url).origin,
+                contentType: "text" as const,
+                text: "page",
+                truncated: false,
+              }),
+              webSearch: async (input) => ({
+                provider: "brave",
+                query: input.query,
+                references: [],
+                truncated: false,
+              }),
+            }
+          : {},
+    });
+    const first = await adapter.attach(attachmentSpec(), new RecordingSink());
+    await first.release("requested");
+
+    webEnabled = true;
+    await adapter.attach(
+      attachmentSpec({
+        attachmentId: "attachment-2",
+        continuity: "native_resume",
+        native: first.native,
+      }),
+      new RecordingSink(),
+    );
+
+    expect(runtime.specs.map((spec) => sessionToolIds(spec))).toEqual([
+      ["read", "edit", "write", "execute", "ask_user"],
+      ["read", "edit", "write", "execute", "ask_user"],
+    ]);
+    expect("webFetch" in runtime.specs[1]!).toBe(false);
+    expect("webSearch" in runtime.specs[1]!).toBe(false);
+  });
+
+  it("refuses recovery rather than shrinking a frozen Web Access surface", async () => {
+    let webEnabled = true;
+    const frozenWebContext: PiRuntimeContext = {
+      ...context,
+      toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+    };
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => frozenWebContext,
+      resolveWebPorts: () =>
+        webEnabled
+          ? {
+              webFetch: async (input) => ({
+                requestedUrl: input.url,
+                finalUrl: input.url,
+                origin: new URL(input.url).origin,
+                contentType: "text" as const,
+                text: "page",
+                truncated: false,
+              }),
+              webSearch: async (input) => ({
+                provider: "brave",
+                query: input.query,
+                references: [],
+                truncated: false,
+              }),
+            }
+          : {},
+    });
+    const first = await adapter.attach(attachmentSpec(), new RecordingSink());
+    await first.release("requested");
+    webEnabled = false;
+
+    const recovery = adapter.attach(
+      attachmentSpec({
+        attachmentId: "attachment-2",
+        continuity: "native_resume",
+        native: first.native,
+      }),
+      new RecordingSink(),
+    );
+
+    await expect(recovery).rejects.toMatchObject({
+      code: "PI_RECOVERY_FAILED",
+      attentionKind: "adapter_unrecoverable",
+    });
+    await expect(recovery).rejects.toThrow(/Restore a working Web Access configuration/);
+    expect(runtime.specs).toHaveLength(1);
   });
 
   it("passes the injected model collection and session directory to the runtime factory", async () => {
@@ -562,6 +661,7 @@ describe("Pi native adapter attach", () => {
           rootThreadId: sessionRootThreadId(SESSION_ID),
           brief: "A project-scoped chat Session.",
           model: context.model,
+          toolSurface: context.toolSurface,
           promptResources: [],
         }),
       },

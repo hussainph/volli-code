@@ -121,7 +121,14 @@ export function composeTicketBrief(input: {
   project: Pick<Project, "id" | "path" | "ticketPrefix">;
   ticket: Pick<
     Ticket,
-    "id" | "ticketNumber" | "title" | "body" | "worktreePath" | "branch" | "baseBranch"
+    | "id"
+    | "ticketNumber"
+    | "title"
+    | "body"
+    | "usesWorktree"
+    | "worktreePath"
+    | "branch"
+    | "baseBranch"
   >;
   attachments: Parameters<typeof blobsSectionInput>[0];
 }): string {
@@ -131,18 +138,22 @@ export function composeTicketBrief(input: {
     title: input.ticket.title,
     body: input.ticket.body,
   });
-  // Orientation preamble (worktree-support §6): agents must never infer their
-  // working directory — state it outright, same as main's own post-ensure
-  // prepend, whenever the ticket has an active worktree.
-  const orientation =
-    input.ticket.worktreePath !== null && input.ticket.branch !== null
+  // Runtime-Brief orientation is message-side Cache Prefix material (VC-164):
+  // every execution root is concrete once it exists. A worktree-scoped Ticket
+  // with no stamp is intentionally silent because its worktree has not
+  // materialized yet; a no-worktree Ticket is different — the Main checkout is
+  // already its final execution root and must be named rather than mistaken for
+  // the same pending state.
+  const orientation = input.ticket.usesWorktree
+    ? input.ticket.worktreePath !== null && input.ticket.branch !== null
       ? worktreeOrientationPreamble({
           worktreePath: input.ticket.worktreePath,
           branch: input.ticket.branch,
           baseBranch: input.ticket.baseBranch,
           projectPath: input.project.path,
         }) + "\n\n"
-      : "";
+      : ""
+    : `This Ticket intentionally runs in the Main checkout at \`${input.project.path}\`. All work happens in this directory.\n\n`;
   // Attachments (CONCEPT decision #19): the brief is read-only — it never
   // materializes, only lists what session boot already did (or will do), via
   // the same deterministic relPath mapping main's `ensure` pipeline uses.

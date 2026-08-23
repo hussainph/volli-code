@@ -844,6 +844,46 @@ describe("agent command service", () => {
     });
   });
 
+  it("names the Main checkout as a no-worktree Ticket's execution root", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI", body: "Follow the implementation contract.", usesWorktree: false },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    const brief = await service.execute({
+      v: 1,
+      cmd: "ticket.brief",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(brief).toMatchObject({
+      ok: true,
+      data: {
+        prompt: expect.stringContaining(
+          "This Ticket intentionally runs in the Main checkout at `/repo/volli`. All work happens in this directory.",
+        ),
+      },
+    });
+    if (!brief.ok) throw new Error("expected a Ticket Brief");
+    expect((brief.data as { prompt: string }).prompt).not.toContain(
+      "worktree has not materialized",
+    );
+  });
+
   it("appends an Attachments section to the brief when the ticket has attachments", async () => {
     ctx = openTestDb();
     insertProject(

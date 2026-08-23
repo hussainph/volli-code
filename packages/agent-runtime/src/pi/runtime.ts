@@ -1100,7 +1100,11 @@ async function attachSession(
 
     const agent = new Agent({
       initialState: {
-        systemPrompt: composeSystemPrompt(spec),
+        systemPrompt: composeSystemPrompt({
+          role: spec.identity.role,
+          tools: spec.tools,
+          promptResources: spec.promptResources,
+        }),
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,

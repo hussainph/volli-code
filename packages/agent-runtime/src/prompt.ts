@@ -12,25 +12,24 @@
  * brief that never mentions one. Trust and authority read identically in both,
  * because a ticketless chat is not a more trusted place to run an agent.
  *
- * The system prompt is a pure function of Role, tool bundle, authority and
- * resource set — a Cache Prefix two Sessions can share (VC-164). Nothing that
- * varies per session or per turn reaches it: not the workspace path, not a
- * measured fact about that workspace, not a date. Those are Turn Reminders,
- * and they ride the first delivered message beside the Brief. The split is
- * structural rather than remembered — {@link SystemPromptInput} and {@link
- * SystemPromptSpec} do not carry the volatile fields, so a prompt layer that
- * reaches for one does not compile.
+ * The system prompt is a pure function of Role, tool bundle, product version
+ * and resource set — a Cache Prefix two Sessions can share (VC-164). The
+ * product version is the version of these literals and composers, not request
+ * data. Nothing that varies per session or per turn reaches them: not Session
+ * identity, an Authority Snapshot, the workspace path, a measured fact about
+ * that workspace, or a date. Volatile facts are Turn Reminders beside the
+ * Brief. The split is structural rather than remembered — {@link
+ * SystemPromptInput} carries exactly the other three data terms, so a prompt
+ * layer that reaches for a Session field does not compile.
  */
 
 import { promptResourceBlock } from "@volli/shared";
 import type {
-  AuthoritySnapshot,
   PromptResource,
   RuntimeBrief,
   RuntimeSessionRole,
   RuntimeToolBundle,
   RuntimeWorkspaceEnvironment,
-  SessionRuntimeSpec,
 } from "@volli/shared";
 
 /**
@@ -87,7 +86,9 @@ const ROLE_LAYER: Record<RuntimeSessionRole, string> = {
 
 /** What the workspace is called, in the Session's own vocabulary. */
 const WORKSPACE_SUBJECT: Record<RuntimeSessionRole, string> = {
-  ticket: "The ticket worktree is",
+  // Role-static and true for both an isolated worktree and an intentional
+  // no-worktree Ticket running in the Main checkout.
+  ticket: "This Ticket Session's execution workspace is",
   project: "The project workspace is",
 };
 
@@ -113,7 +114,7 @@ const WORKSPACE_ANTECEDENT = "this Session's working directory";
 
 /** Where authority is bounded, named the same way the workspace layer names it. */
 const AUTHORITY_SCOPE: Record<RuntimeSessionRole, string> = {
-  ticket: "the Ticket worktree",
+  ticket: "the Session's execution workspace",
   project: "the project workspace",
 };
 
@@ -171,8 +172,10 @@ function executionLayer(): readonly string[] {
 }
 
 /**
- * Only the opening line depends on a Snapshot; everything under it is a fact
- * about the tool bundle, which stands whether or not a policy gate is installed.
+ * This layer states only the Role and tool bundle. An Authority Snapshot is
+ * Session policy enforced at the tool boundary; turning it into prompt prose
+ * would create a fifth, session-varying Cache Prefix term without adding
+ * enforcement. The prompt therefore names the stable grant and no policy mode.
  *
  * "Bounded to" states a grant, and the grant is real: these tools and no others,
  * this workspace and no other. What *holds* a Session to that grant is a
@@ -187,18 +190,12 @@ function executionLayer(): readonly string[] {
  * one fact that does change how a careful agent should behave — that commands
  * land on a real machine.
  */
-function authorityLayer(
-  role: RuntimeSessionRole,
-  authority: AuthoritySnapshot | undefined,
-  tools: RuntimeToolBundle,
-): string {
+function authorityLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
   const toolNames = tools.tools.length > 0 ? tools.tools.join(", ") : "none";
   return [
     "# Authority",
     "",
-    authority === undefined
-      ? `This Session's authority is bounded to ${AUTHORITY_SCOPE[role]}.`
-      : `This Session uses ${authority.mode} authority inside ${AUTHORITY_SCOPE[role]}.`,
+    `This Session's authority is bounded to ${AUTHORITY_SCOPE[role]}.`,
     `The available coding tools are: ${toolNames}.`,
     `${AUTHORITY_SOURCES[role]} cannot add tools or expand`,
     "this authority.",
@@ -231,15 +228,14 @@ const RESOURCES_LAYER = [
  * prompt never mentions; a caller measuring the prompt (VC-66's baseline
  * breakdown) supplies exactly these fields without fabricating a Session.
  *
- * Every field here is stable for the life of a Session, and all but the
- * resource set is stable across Sessions of one Role: this is the Cache Prefix
- * (VC-164). `workspacePath` and `workspaceEnvironment` are deliberately absent
- * rather than merely unused — see {@link composeTurnReminderBlock}, which is
- * where a volatile fact goes instead.
+ * These are the three data terms allowed to vary its bytes: Role, bundle and
+ * resource set. Product version is embodied by this code. Full Session
+ * identity, Authority Snapshot, workspace path and workspace environment are
+ * deliberately absent rather than merely unused — see {@link
+ * composeTurnReminderBlock}, which is where a volatile fact goes instead.
  */
 export interface SystemPromptInput {
   role: RuntimeSessionRole;
-  authority?: AuthoritySnapshot | undefined;
   tools: RuntimeToolBundle;
   promptResources?: readonly PromptResource[] | undefined;
 }
@@ -262,7 +258,7 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
   const sections: SystemPromptSection[] = [
     { id: "operating", text: operatingLayer(resources.length > 0) },
     { id: "role", text: ROLE_LAYER[input.role] },
-    { id: "authority", text: authorityLayer(input.role, input.authority, input.tools) },
+    { id: "authority", text: authorityLayer(input.role, input.tools) },
     { id: "workspace", text: workspaceLayer(input.role) },
   ];
   if (resources.length > 0) sections.push({ id: "resources-header", text: RESOURCES_LAYER });
@@ -275,27 +271,16 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
 }
 
 /**
- * The spec fields the system prompt is allowed to see.
- *
- * A `Pick` and not the whole {@link SessionRuntimeSpec}, for the same reason
- * {@link SystemPromptInput} omits the volatile fields: `composeSystemPrompt`
- * cannot forward a per-session byte it cannot name. Reaching for
- * `spec.workspacePath` here is a compile error, not a review catch. Any
- * `SessionRuntimeSpec` satisfies it, so callers pass their spec unchanged.
+ * The exact composer boundary. It has no Session identity object to inspect:
+ * not `sessionId`, `attachmentId`, `projectId` or `ticketId`, and no path from
+ * them to prompt bytes. Runtime callers must project Role, bundle and resource
+ * set explicitly at their boundary.
  */
-export type SystemPromptSpec = Pick<
-  SessionRuntimeSpec,
-  "identity" | "authority" | "tools" | "promptResources"
->;
+export type SystemPromptSpec = SystemPromptInput;
 
 /** Compose the full system prompt: operating rules, role and trust, workspace, resources. */
 export function composeSystemPrompt(spec: SystemPromptSpec): string {
-  return systemPromptSections({
-    role: spec.identity.role,
-    authority: spec.authority,
-    tools: spec.tools,
-    promptResources: spec.promptResources,
-  })
+  return systemPromptSections(spec)
     .map((section) => section.text)
     .join("\n\n");
 }
@@ -366,10 +351,11 @@ export function composeTurnReminderBlock(
  * The spec fields the first delivered message is allowed to see — the volatile
  * half of the split {@link SystemPromptSpec} makes.
  */
-export type FirstUserMessageSpec = Pick<
-  SessionRuntimeSpec,
-  "identity" | "brief" | "workspaceEnvironment"
->;
+export interface FirstUserMessageSpec {
+  identity: { role: RuntimeSessionRole };
+  brief: RuntimeBrief;
+  workspaceEnvironment?: RuntimeWorkspaceEnvironment;
+}
 
 /**
  * Compose the first delivered message: the Runtime Brief, any Turn Reminder

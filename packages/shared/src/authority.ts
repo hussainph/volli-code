@@ -45,7 +45,8 @@ export type WorkLocationKind = "worktree" | "main-checkout";
  * never load, so an unlisted tool is not merely absent — it is a tool the Agent
  * Tool Surface never carried, and Pi refuses the name before any policy runs.
  */
-export type CodingToolId = "read" | "edit" | "write" | "execute";
+export const CODING_TOOL_IDS = ["read", "edit", "write", "execute"] as const;
+export type CodingToolId = (typeof CODING_TOOL_IDS)[number];
 
 /**
  * The tools a Session can be offered that are not coding tools.
@@ -78,6 +79,9 @@ export const NON_CODING_TOOL_IDS = [
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
+
+/** The complete durable Agent Tool Surface vocabulary, in canonical order. */
+export const SESSION_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as const;
 
 /**
  * Every name the Agent Tool Surface can carry, whatever kind of tool it is.

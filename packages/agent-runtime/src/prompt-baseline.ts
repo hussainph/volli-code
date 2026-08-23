@@ -55,9 +55,9 @@ export const PROMPT_BASELINE_CHARS_PER_TOKEN = 4;
  * How wide a set of requests can reuse a section's bytes — which is to say how
  * often those bytes are bought at cache-write price instead of read at ~0.1x.
  *
- * - `role-static`: composed from Role and product version alone. Every Session
- *   of that Role composes the same bytes, so the first one to run pays for them
- *   and every overlapping Session reads them.
+ * - `role-static`: composed from Role, its frozen bundle, and product version.
+ *   Every Session with those terms composes the same bytes, so the first one to
+ *   run pays for them and every overlapping Session reads them.
  * - `project-static`: composed from a project fact. Shared by every Session in
  *   the project — which is where the skills index, far the largest section,
  *   lands.
@@ -193,58 +193,48 @@ function measure(text: string): PromptBaselineTotal {
   };
 }
 
-/**
- * The cache class of every system-prompt layer whose class is fixed by which
- * layer it is. The two that are not — `authority` and the resource blocks —
- * are decided in {@link systemSectionCacheClass}, from the input rather than
- * from a table, so they cannot go stale silently.
- *
- * `operating` and `resources-header` are `project-static` rather than
- * `role-static` because both turn on whether the Session carries any RESOURCE
- * section at all: `operating` swaps its no-ambient-configuration sentence and
- * `resources-header` appears or does not. In every ordinary start that answer
- * is the project's skills index, hence the project scope. The corner it does
- * not cover — a Session naming a skill inside a project whose index is off —
- * would make them session-static, and is called out here rather than papered
- * over, because the honest floor for a prompt-side section nobody has classed
- * is session-static, not role-static.
- */
+/** Layers whose inputs are fixed by Role, its bundle and product version. */
 const SYSTEM_SECTION_CACHE_CLASS: Readonly<Record<string, PromptCacheClass>> = {
-  operating: "project-static",
   role: "role-static",
+  authority: "role-static",
   workspace: "role-static",
-  "resources-header": "project-static",
 };
 
 /** The prefix `systemPromptSections` gives a resource block's id. */
 const RESOURCE_SECTION_PREFIX = "resource:";
 
 /**
+ * Whether the actual resource-set shape proves project-wide reuse.
+ *
+ * Production composes named skill bodies first, then an index built with those
+ * names removed. The index is therefore project-static only when it is the
+ * entire resource set. The moment another resource is present, both the index
+ * bytes and the operating/header decision came from a Session-specific
+ * selection. An empty set is conservative too: this shape cannot distinguish a
+ * project with no skills from one whose only skills are manual and named by
+ * some Sessions, so it claims no cross-Session reuse it cannot prove.
+ */
+function hasProjectStaticResourceSet(input: SystemPromptInput): boolean {
+  const resources = input.promptResources ?? [];
+  return resources.length === 1 && resources[0]?.name === SKILLS_INDEX_RESOURCE_NAME;
+}
+
+/**
  * What a system-prompt section claims about its own reuse.
  *
- * Derived where the answer depends on the input, so the claim tracks the
- * composition instead of a comment about it:
- *
- * - `authority` reads Role, the tool bundle and the Authority Snapshot. Nothing
- *   constructs a Snapshot today (`authority.ts`), and the bundle is Role-scoped
- *   by the invariant this ticket asserts, so it is `role-static` — but the
- *   moment a Session carries a Snapshot of its own, the layer stops being
- *   shareable and this says so without anyone remembering to come back.
- * - a resource block is `project-static` when it is the project's skills index
- *   and `session-static` otherwise, because every other resource is a skill the
- *   Session named at start. The index's name is guaranteed uncollidable —
- *   `SKILLS_INDEX_RESOURCE_NAME` is unspellable as a skill slug — so matching on
- *   it is a real discrimination and not a heuristic.
- *
- * An unrecognised id falls to `session-static`: the pessimistic prompt-side
- * floor, claiming no sharing for a layer nobody has classified. A new layer
- * therefore under-claims rather than promising a cache read it may not earn,
- * and the id-list test fails so it gets classified for real.
+ * `operating`, `resources-header`, and every resource block derive their answer
+ * from the actual resource-set shape above. Everything unrecognized falls to
+ * `session-static`: a new layer under-claims rather than promising a cache read
+ * it has not earned, while the pinned section-id test makes the omission visible.
  */
 function systemSectionCacheClass(id: string, input: SystemPromptInput): PromptCacheClass {
-  if (id === "authority") return input.authority === undefined ? "role-static" : "session-static";
+  const projectStaticResources = hasProjectStaticResourceSet(input);
+  if (id === "operating" || id === "resources-header") {
+    return projectStaticResources ? "project-static" : "session-static";
+  }
   if (id.startsWith(RESOURCE_SECTION_PREFIX)) {
-    return id === `${RESOURCE_SECTION_PREFIX}${SKILLS_INDEX_RESOURCE_NAME}`
+    return projectStaticResources &&
+      id === `${RESOURCE_SECTION_PREFIX}${SKILLS_INDEX_RESOURCE_NAME}`
       ? "project-static"
       : "session-static";
   }

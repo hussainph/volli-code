@@ -5654,21 +5654,19 @@ describe("compacting because somebody asked", () => {
  * The Cache Prefix: the byte-identical leading part of a request a provider
  * reuses, which for Pi is the tool array and the system prompt (VC-164).
  *
- * Lane A made the system prompt a pure function of Role, bundle, authority and
- * resource set, so its bytes cannot vary across Sessions; `prompt.test.ts`
- * proves that. What is proved HERE is the other axis — that neither half moves
- * for the life of one Session, through everything a Session actually does:
- * a tool call inside a turn, a model change between turns, a compaction that
- * replaces the whole message array, and a reattach that composes both halves
- * again from scratch.
+ * The system prompt is a pure function of Role, bundle, product version and
+ * resource set, so its bytes cannot vary across matching Sessions; `prompt.test.ts`
+ * proves that. What is proved HERE is the runtime half of the other axis —
+ * neither prefix half moves after one frozen spec reaches Pi, through a tool
+ * call, model change, compaction, and runtime reconstruction. The desktop
+ * adapter tests the real recovery seam separately: it reads the Session's
+ * durable tool-surface record, ignores newly enabled ports, and refuses a
+ * missing recorded capability rather than handing this runtime a changed spec.
  *
- * Every assertion reads the bytes off the provider request rather than off the
- * constants behind them, because today both invariants hold by accident and
- * not by construction: `PI_TOOLS` is a literal in the desktop adapter, and the
- * bundle reaches Pi once, in `initialState`. VC-162 turns bundles into registry
- * data, and the first thing that could then break this is a bundle recomputed
- * mid-Session — which a test re-reading the constant would never see, and
- * which this one fails on.
+ * Every assertion reads bytes off provider requests rather than constants.
+ * That pins names, order, schemas, descriptions and prompt prose after the
+ * adapter has done its work; a constant-level comparison would agree with
+ * itself while a downstream recomposition changed what reached the wire.
  */
 describe("the Cache Prefix a Session sends", () => {
   it("offers one tool array from turn 1 to turn N, and again after a reattach", async () => {
