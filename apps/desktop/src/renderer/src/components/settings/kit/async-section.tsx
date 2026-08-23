@@ -64,6 +64,7 @@ export function AsyncSection<T>({
   hint,
   action,
   before,
+  fill,
   state,
   isEmpty,
   empty,
@@ -75,13 +76,25 @@ export function AsyncSection<T>({
   action?: React.ReactNode;
   /** Content that stays useful while this fetched collection changes state. */
   before?: React.ReactNode;
+  /**
+   * Passed through to {@link PrefSection}. Only the READY branch fills — a
+   * spinner or an error stretched down a tall column reads as a broken page,
+   * and the empty state centres better in the space it actually needs.
+   */
+  fill?: boolean;
   state: AsyncState<T>;
   isEmpty?: (data: T) => boolean;
   empty?: string;
   children: (data: T) => React.ReactNode;
 }) {
   return (
-    <PrefSection title={title} icon={icon} hint={hint} action={action}>
+    <PrefSection
+      title={title}
+      icon={icon}
+      hint={hint}
+      action={action}
+      fill={fill && state.status === "ready" && !isEmpty?.(state.data)}
+    >
       {before}
       {state.status === "loading" ? <LoadingRows /> : null}
       {state.status === "error" ? (

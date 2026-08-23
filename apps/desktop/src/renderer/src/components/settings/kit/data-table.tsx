@@ -97,8 +97,17 @@ export function DataTable<T>({
   search?: (item: T) => string;
   placeholder?: string;
   filter?: TableFilter;
-  /** How many rows before it scrolls. */
-  rows?: number;
+  /**
+   * How many rows before it scrolls, or `"fill"` to take the height the pane
+   * has left over.
+   *
+   * A number is right whenever something follows the table — the cap is what
+   * stops a hundred models burying the sections under them. `"fill"` is for a
+   * pane where the table IS the page (Skills, Commands, MCP, Plugins): capping
+   * at eight there just draws a short table against a tall empty column and
+   * makes people scroll a box that had room to show them the rows.
+   */
+  rows?: number | "fill";
   /** How many rows may render at once. The rest are withheld, and said so. */
   maxItems?: number;
   empty: string;
@@ -119,14 +128,15 @@ export function DataTable<T>({
   const withheld = matched.length - shown.length;
   const roving = useRovingRows(shown.length);
 
+  const fill = rows === "fill";
   // The sticky header lives inside the same scroll box and would otherwise eat
   // a row — `rows={8}` was showing seven.
-  const maxBodyHeight = rows * ROW_H + HEAD_H;
+  const maxBodyHeight = fill ? undefined : rows * ROW_H + HEAD_H;
 
   if (items.length === 0 && !filter?.isFiltering) return <Empty>{empty}</Empty>;
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
       {search || filter ? (
         <div className="flex items-center gap-2">
           {search ? (
@@ -168,7 +178,14 @@ export function DataTable<T>({
           second of three nested rounded rectangles and the reason the surface
           read as boxes all the way down. The header hairline and the row
           hairlines are the whole structure a table needs. */}
-      <div className="overflow-y-auto" style={{ maxHeight: maxBodyHeight }}>
+      {/* In fill mode the floor matters: the toolbar and the section header
+          above this can leave almost nothing on a short window, and a scroll
+          box allowed to flex to zero shows a header and no rows at all. With a
+          floor it keeps three rows and the PAGE scrolls instead. */}
+      <div
+        className={cn("overflow-y-auto", fill && "min-h-0 flex-1")}
+        style={fill ? { minHeight: 3 * ROW_H + HEAD_H } : { maxHeight: maxBodyHeight }}
+      >
         <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
           <caption className="sr-only">{label}</caption>
           <colgroup>

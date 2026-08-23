@@ -83,6 +83,7 @@ export function SkillsPane({ project }: { project: Project }) {
         </>
       }
       action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
+      fill
       state={state}
       isEmpty={(data) => data.skills.length === 0}
       empty="No skills yet. Add one to .agents/skills."
@@ -134,7 +135,7 @@ function SkillsTable({
       label="Skills available to this project"
       items={shown}
       keyOf={(skill) => `${skillScope(skill)}/${skill.name}`}
-      rows={8}
+      rows="fill"
       search={(skill) => `${skill.name} ${skill.description}`}
       placeholder="Search skills"
       filter={{

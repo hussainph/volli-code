@@ -33,10 +33,12 @@ const NO_PLUGINS: readonly Plugin[] = [];
 export function PluginsPane() {
   return (
     <Unavailable
+      fill
       what="Plugins"
       meanwhile="To add capabilities now, put skills in .agents/skills and commands in .volli/commands."
     >
       <PrefSection
+        fill
         title="Installed plugins"
         icon={PuzzlePieceIcon}
         hint={<>A bundle of skills and commands, updated together.</>}
@@ -46,7 +48,7 @@ export function PluginsPane() {
           label="Installed plugins"
           items={NO_PLUGINS}
           keyOf={(plugin) => plugin.name}
-          rows={6}
+          rows="fill"
           empty="No plugins installed."
           columns={[
             { key: "name", header: "Plugin", cell: (plugin) => <Cell>{plugin.name}</Cell> },

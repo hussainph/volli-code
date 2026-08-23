@@ -36,6 +36,21 @@ export interface PrefCategory {
   count?: number;
   /** Something is wrong or waiting here. Drawn as a dot, said in the name. */
   attention?: { state: StatusDotState; label: string };
+  /**
+   * This pane's content should absorb the leftover height rather than sit in a
+   * short box under a tall empty column. For a pane that IS one table.
+   *
+   * BOUNDED BY THE VIEWPORT, not by the row count: the column takes `h-full`,
+   * a definite height, so the table's `flex-1` resolves against the window and
+   * can never grow past it. `min-h-full` would only be a floor — four hundred
+   * skills would push the container taller than the screen and hand back the
+   * unbounded page-scroll this exists to avoid.
+   *
+   * The pane still scrolls when it is genuinely cramped: the table keeps a
+   * three-row floor, and if that floor plus the header exceeds the window, the
+   * scroller overflows and scrolls as before rather than clipping.
+   */
+  fill?: boolean;
   content: React.ReactNode;
 }
 
@@ -179,9 +194,11 @@ export function PrefShell({
             45rem measure the description truncated to a few words, which is
             the one column that tells two skills apart. Wider measure, same
             gutter, same whitespace-not-breakpoints rule (docs/DESIGN.md). */}
-          <WorkbenchColumn className="pb-4">
+          <WorkbenchColumn className={cn("pb-4", current?.fill && "flex h-full flex-col")}>
             <PageHeader variant="reading" title={current?.label ?? ""} />
-            <div className="flex flex-col gap-6">{current?.content}</div>
+            <div className={cn("flex flex-col gap-6", current?.fill && "min-h-0 flex-1")}>
+              {current?.content}
+            </div>
           </WorkbenchColumn>
         </div>
       </div>

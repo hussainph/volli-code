@@ -35,6 +35,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
       categories: [
         {
           key: "skills",
+          fill: true,
           label: "Skills",
           icon: BookOpenIcon,
           keywords: [
@@ -54,6 +55,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         },
         {
           key: "commands",
+          fill: true,
           label: "Commands",
           icon: CommandIcon,
           keywords: [
@@ -71,6 +73,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         },
         {
           key: "mcp",
+          fill: true,
           label: "MCP Servers",
           icon: PlugsConnectedIcon,
           keywords: ["mcp", "server", "servers", "tool", "tools", "context protocol", "status"],
@@ -78,6 +81,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         },
         {
           key: "plugins",
+          fill: true,
           label: "Plugins",
           icon: PuzzlePieceIcon,
           keywords: ["plugin", "installed plugins", "bundle", "marketplace", "contents", "browse"],

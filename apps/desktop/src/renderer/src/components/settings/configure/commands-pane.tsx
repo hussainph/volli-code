@@ -28,6 +28,7 @@ export function CommandsPane({ project }: { project: Project }) {
       icon={CommandIcon}
       hint={<>Type the name in any composer. Project commands override personal ones.</>}
       action={<NewCommandDialog projectId={project.id} onCreated={reload} />}
+      fill
       state={state}
       isEmpty={(data) => data.templates.length === 0}
       empty="No commands yet."
@@ -56,7 +57,7 @@ function CommandsTable({
       label="Commands available to this project"
       items={shown}
       keyOf={(command) => command.name}
-      rows={8}
+      rows="fill"
       search={(command) => `${command.name} ${command.description}`}
       placeholder="Search commands"
       filter={{

@@ -17,6 +17,7 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 
 import { Button } from "@renderer/components/ui/button";
+import { cn } from "@renderer/lib/utils";
 
 import { InfoHint } from "./info-hint";
 
@@ -25,6 +26,7 @@ export function PrefSection({
   icon: Icon,
   hint,
   action,
+  fill,
   children,
 }: {
   title: string;
@@ -32,6 +34,12 @@ export function PrefSection({
   /** The `(i)`. A node, not a string, so it can carry a link. */
   hint?: React.ReactNode;
   action?: React.ReactNode;
+  /**
+   * Absorb the height the pane has left over, for a section holding a table
+   * that is the whole page. Needs every ancestor up to the shell to be a flex
+   * column that can shrink — `PrefShell` arranges that when a category asks.
+   */
+  fill?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -39,7 +47,7 @@ export function PrefSection({
     // the app shell's framed content card, and a frame here is what turns a
     // pane into boxes inside boxes: a bordered card holding a bordered table
     // holding a bordered search field.
-    <section className="rounded-lg bg-card px-4 py-4">
+    <section className={cn("rounded-lg bg-card px-4 py-4", fill && "flex min-h-0 flex-1 flex-col")}>
       {/* The rule under the header is DELIBERATE and drawn here, and the
           wrapper below is what keeps it to ONE line.
 
@@ -59,7 +67,9 @@ export function PrefSection({
         {action}
       </div>
       {/* Rows live in their own box so `first:` has something true to say. */}
-      <div>{children}</div>
+      {/* `|| undefined` so a non-filling section emits no `class` at all rather
+          than an empty one — `cn(false)` returns "". */}
+      <div className={cn(fill && "flex min-h-0 flex-1 flex-col") || undefined}>{children}</div>
     </section>
   );
 }

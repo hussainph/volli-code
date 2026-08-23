@@ -30,6 +30,7 @@ import type * as React from "react";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
 
 import { Notice } from "@renderer/components/ui/notice";
+import { cn } from "@renderer/lib/utils";
 
 /**
  * The banner. One sentence on what is missing, one on what to do meanwhile.
@@ -71,10 +72,23 @@ export function UnavailableNotice({
  * is. Not `/30`: at that weight the preview stops being legible, and an
  * illegible preview is just a smudge where a feature will be.
  */
-export function UnavailablePreview({ children }: { children: React.ReactNode }) {
+export function UnavailablePreview({
+  fill,
+  children,
+}: {
+  /** Hand the leftover height to the preview, for one that is a table. */
+  fill?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     // eslint-disable-next-line react/no-unknown-property -- `inert` is a React 19 boolean prop.
-    <div inert className="pointer-events-none opacity-50 select-none">
+    <div
+      inert
+      className={cn(
+        "pointer-events-none opacity-50 select-none",
+        fill && "flex min-h-0 flex-1 flex-col",
+      )}
+    >
       {children}
     </div>
   );
@@ -84,16 +98,19 @@ export function UnavailablePreview({ children }: { children: React.ReactNode }) 
 export function Unavailable({
   what,
   meanwhile,
+  fill,
   children,
 }: {
   what: string;
   meanwhile?: React.ReactNode;
+  /** Let the preview absorb the pane's leftover height. */
+  fill?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <>
       <UnavailableNotice what={what} meanwhile={meanwhile} />
-      <UnavailablePreview>{children}</UnavailablePreview>
+      <UnavailablePreview fill={fill}>{children}</UnavailablePreview>
     </>
   );
 }

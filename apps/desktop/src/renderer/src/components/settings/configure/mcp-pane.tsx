@@ -43,10 +43,12 @@ const NO_SERVERS: readonly Server[] = [];
 export function McpPane() {
   return (
     <Unavailable
+      fill
       what="MCP servers"
       meanwhile="Agents can already read, edit, write, and run commands without MCP."
     >
       <PrefSection
+        fill
         title="Servers"
         icon={PlugsConnectedIcon}
         hint={<>Web search applies to every project. Change it in Settings.</>}
@@ -56,7 +58,7 @@ export function McpPane() {
           label="MCP servers"
           items={NO_SERVERS}
           keyOf={(server) => server.name}
-          rows={6}
+          rows="fill"
           empty="No MCP servers yet."
           columns={[
             { key: "name", header: "Server", cell: (server) => <Cell>{server.name}</Cell> },
