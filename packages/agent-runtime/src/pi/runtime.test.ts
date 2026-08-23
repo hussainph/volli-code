@@ -337,6 +337,21 @@ function compactions(observations: RuntimeObservation[]): CompactionObservation[
 }
 
 /**
+ * Whether an unreadable marker of this shape stops a Session from opening.
+ *
+ * Only a command marker does. Its loss changes what the Session DID rather than
+ * what it showed — an acceptance recovery cannot see is a command `reconcile`
+ * re-delivers — so it is refused, where every other kind is quarantined.
+ */
+function refusesToOpen(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as { kind?: unknown }).kind === "command-accepted"
+  );
+}
+
+/**
  * A message long enough to fill Pi's recent-token budget on its own.
  *
  * `keepRecentTokens` is 20,000 and Pi estimates four characters to the token,
@@ -2612,7 +2627,7 @@ describe("startSession", () => {
     await reopened.close();
   });
 
-  it("rejects structurally malformed recovery markers without deleting the sidecar", async () => {
+  it("quarantines a structurally malformed marker, and refuses only a command one (VC-155)", async () => {
     const attachment = fixture();
     const firstRuntime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -2840,18 +2855,34 @@ describe("startSession", () => {
         data,
       };
       writeFileSync(recovery.sessionFilePath, `${header}\n${JSON.stringify(malformed)}\n`);
-      try {
-        const unexpected = await secondRuntime.startSession({
-          ...attachment.spec,
-          recovery,
-        });
-        await unexpected.close();
-        throw new Error(`Malformed marker case ${index} was accepted.`);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("was accepted")) throw error;
-        expect(error).toEqual(
-          expect.objectContaining({ message: "Pi recovery marker is malformed." }),
+      if (refusesToOpen(data)) {
+        try {
+          const unexpected = await secondRuntime.startSession({
+            ...attachment.spec,
+            recovery,
+          });
+          await unexpected.close();
+          throw new Error(`Malformed marker case ${index} was accepted.`);
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("was accepted")) throw error;
+          expect(error).toEqual(
+            expect.objectContaining({ message: "Pi recovery marker is malformed." }),
+          );
+        }
+      } else {
+        // Opens, because bricking a Session forever over one unreadable
+        // observation is the VC-155 failure. The skip is said out loud.
+        const handle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+        const replay = await handle.reconcile(null);
+        expect([...replay.observations]).toContainEqual(
+          expect.objectContaining({
+            kind: "attention",
+            state: "raised",
+            reason: "runtime-failure",
+            message: expect.stringContaining("Skipped 1 unreadable Pi recovery marker"),
+          }),
         );
+        await handle.close();
       }
       expect(existsSync(recovery.sessionFilePath)).toBe(true);
     }
@@ -4258,6 +4289,101 @@ describe("compacting a context that reached its reserve", () => {
       expect.objectContaining({ commandId: "command-2" }),
     ]);
     await secondHandle.close();
+  });
+
+  it("reopens a Session an older version already poisoned (VC-155)", async () => {
+    // Widening the validator heals the image shape retroactively, because the
+    // marker was always fine and only the reader was wrong. These two are the
+    // other half of VC-155, and they are NOT healed that way: they are markers
+    // older versions genuinely wrote wrong, and they still sit in the sidecars
+    // of everyone who hit them. Fixing the writers stops new ones; it does
+    // nothing for a Session already carrying one, which kept reporting a failed
+    // threshold compaction after every message and could never be reopened.
+    // So the read quarantines what it cannot parse instead of throwing.
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+
+    const poisoned = [
+      {
+        // A model with no cost table multiplied through to a NaN total, and
+        // JSON persists NaN as null — which `optionalFiniteNumber` refuses.
+        kind: "message-settled",
+        turnId: "turn-1",
+        message: {
+          entryId: "entry-1",
+          role: "assistant",
+          text: "settled",
+          usage: { inputTokens: 1, outputTokens: 2, costUsd: null },
+        },
+      },
+      {
+        // What the generic fallback wrote for a hostile `tool_execution_end`
+        // before `fallbackStateOf`: an end-event activity left at "progress",
+        // which the marker validator accepts only as completed or failed.
+        kind: "activity",
+        turnId: "turn-1",
+        activityId: "unknown",
+        state: "progress",
+        descriptor: {
+          kind: "other",
+          nativeToolName: "unknown",
+          subject: { label: "unknown", path: null, lineRange: null },
+          outcome: null,
+          startedAt: null,
+          endedAt: null,
+        },
+        input: null,
+        output: null,
+      },
+    ];
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${[
+        header,
+        ...poisoned.map((data, index) =>
+          JSON.stringify({
+            kind: "entry",
+            lane: "main",
+            type: "custom",
+            id: `poisoned-marker-${index}`,
+            parentId: index === 0 ? null : `poisoned-marker-${index - 1}`,
+            seq: index + 1,
+            timestamp: Date.now(),
+            customType: "volli.observation.v1",
+            data,
+          }),
+        ),
+      ].join("\n")}\n`,
+    );
+
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("still here"))])),
+    });
+    const handle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await handle.submitUserMessage("does this still work?");
+
+    // The turn ran, and the head of it no longer files a failed compaction.
+    expect(calls).toHaveLength(1);
+    expect(compactions(attachment.observations)).toEqual([]);
+    // Both skips are counted, and said once rather than swallowed.
+    expect([...(await handle.reconcile(null)).observations]).toContainEqual(
+      expect.objectContaining({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: expect.stringContaining("Skipped 2 unreadable Pi recovery markers"),
+      }),
+    );
+    await handle.close();
   });
 
   it("still compacts at the threshold after an image message (VC-155)", async () => {
