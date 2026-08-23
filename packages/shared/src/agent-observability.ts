@@ -111,10 +111,59 @@ export interface TurnEvent {
   runId?: string;
 }
 
+/**
+ * The tools Volli is willing to name, as a closed vocabulary.
+ *
+ * `ActivityKind` answers "what capability class" but not "which tool" — it
+ * collapses `web_fetch` and `web_search` into `fetch-url`, and everything
+ * unclassified into `other`. That is too coarse for the per-tool call rates and
+ * failure rates this side channel exists to report.
+ *
+ * The honest fix is not to export the harness's `nativeToolName`: that value is
+ * sanitized and length-capped, but it is not bounded — a model can ask for a
+ * tool that does not exist, and a future Pi or an MCP surface can introduce
+ * names nobody here has seen. Exporting it would put an unbounded string into a
+ * union whose whole safety property is that it contains none.
+ *
+ * So the tools Volli ships are listed, and only a name on this list is spoken.
+ * Anything else is absent, and the capability class still carries the call. A
+ * tool added to the product is one line here — and until somebody writes that
+ * line, the new tool is counted without being named, which is the failure
+ * direction worth having.
+ */
+export const OBSERVED_TOOL_IDS = [
+  "read",
+  "edit",
+  "write",
+  "bash",
+  "ask_user",
+  "web_fetch",
+  "web_search",
+] as const;
+
+export type ObservedToolId = (typeof OBSERVED_TOOL_IDS)[number];
+
+/** The allowlist as a lookup, so narrowing is a set membership and not a scan. */
+const OBSERVED_TOOL_ID_SET: ReadonlySet<string> = new Set(OBSERVED_TOOL_IDS);
+
+/**
+ * A harness tool name as Volli's own word for it, or nothing.
+ *
+ * The narrowing IS the privacy boundary: an unrecognised name does not degrade
+ * to a truncated or hashed string, it is simply not reported.
+ */
+export function observedToolId(nativeToolName: unknown): ObservedToolId | undefined {
+  return typeof nativeToolName === "string" && OBSERVED_TOOL_ID_SET.has(nativeToolName)
+    ? (nativeToolName as ObservedToolId)
+    : undefined;
+}
+
 /** One executed tool call, reduced to its kind, outcome, and two kinds of time. */
 export interface ToolEvent {
   kind: "tool";
   activityKind: ActivityKind;
+  /** Volli's own name for the tool, when it is one Volli ships. Never a raw harness name. */
+  toolId?: ObservedToolId;
   outcome: "completed" | "failed";
   /** Time Pi spent executing the tool, excluding a wait for a person. */
   durationMs?: number;
@@ -242,36 +291,31 @@ export class ObservabilityReducer {
         const startedAt = this.#turnStartedAt.get(observation.turnId);
         this.#turnStartedAt.delete(observation.turnId);
         this.#authorityWaitByActivityId.clear();
+        // Through the same guard as every other duration: a clock that stepped
+        // backwards between the two readings must not become a negative span.
+        const durationMs =
+          startedAt === undefined ? undefined : measuredDuration(this.now() - startedAt);
         return {
           kind: "turn",
           outcome: observation.state,
-          ...(startedAt === undefined ? {} : { durationMs: this.now() - startedAt }),
+          ...(durationMs === undefined ? {} : { durationMs }),
         };
       }
       case "activity": {
         if (observation.state === "started" || observation.state === "progress") return null;
         const { startedAt, endedAt } = observation.descriptor;
         const elapsed =
-          startedAt !== null &&
-          endedAt !== null &&
-          Number.isFinite(startedAt) &&
-          Number.isFinite(endedAt) &&
-          endedAt >= startedAt
-            ? endedAt - startedAt
-            : undefined;
+          startedAt === null || endedAt === null
+            ? undefined
+            : measuredDuration(endedAt - startedAt);
         const waitDurationMs = this.#authorityWaitByActivityId.get(observation.activityId);
         this.#authorityWaitByActivityId.delete(observation.activityId);
-        const durationMs =
-          elapsed === undefined
-            ? undefined
-            : waitDurationMs === undefined
-              ? elapsed
-              : elapsed >= waitDurationMs
-                ? elapsed - waitDurationMs
-                : undefined;
+        const durationMs = executionTimeExcludingWait(elapsed, waitDurationMs);
+        const toolId = observedToolId(observation.descriptor.nativeToolName);
         return {
           kind: "tool",
           activityKind: observation.descriptor.kind,
+          ...(toolId === undefined ? {} : { toolId }),
           outcome: observation.state,
           ...(durationMs === undefined ? {} : { durationMs }),
           ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
@@ -331,7 +375,31 @@ export class ObservabilityReducer {
   }
 }
 
-/** A duration is a non-negative finite count, never an unchecked clock result. */
-function measuredDuration(value: unknown): number | undefined {
+/**
+ * A duration is a non-negative finite count, never an unchecked clock result.
+ *
+ * Exported because it is the single definition of that rule: every duration on
+ * an {@link ObservabilityEvent} passes through here, including the two that are
+ * computed by subtracting one clock reading from another in other packages.
+ */
+export function measuredDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Tool execution time with any approval wait taken back out.
+ *
+ * The wait is time a person spent deciding, and leaving it in would make a tool
+ * that was approved slowly look like a tool that ran slowly. A wait longer than
+ * the whole measured span means the two clocks disagree about a call this
+ * reducer only ever saw the ends of — so the execution time is reported as
+ * unmeasured rather than as a number derived from a contradiction.
+ */
+function executionTimeExcludingWait(
+  elapsed: number | undefined,
+  waitDurationMs: number | undefined,
+): number | undefined {
+  if (elapsed === undefined) return undefined;
+  if (waitDurationMs === undefined) return elapsed;
+  return elapsed >= waitDurationMs ? elapsed - waitDurationMs : undefined;
 }

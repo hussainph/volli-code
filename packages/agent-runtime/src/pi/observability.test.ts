@@ -253,6 +253,30 @@ describe("instrumentStreamFn", () => {
     expect(JSON.stringify(events)).not.toContain(SENSITIVE);
   });
 
+  it("reports no elapsed time rather than a negative one when the clock steps back", async () => {
+    const { sink, events } = recordingSink();
+    const { inner, finish, stream } = scripted(settledMessage());
+    // A wall clock that jumps backwards mid-request — an NTP correction, or a
+    // laptop waking up. Without the guard the envelope carries a negative
+    // duration, which the exporter turns into a span that ends before it began.
+    const readings = [1_000, 900, 800];
+    const wrapped = instrumentStreamFn(inner, {
+      sink,
+      runId: "run-9",
+      now: () => readings.shift() ?? 700,
+    });
+
+    wrapped(model(), { messages: [] });
+    finish();
+    await settle(stream);
+
+    expect(events[0]).toMatchObject({ durationMs: 0 });
+    // TTFT was measured across the same backwards step, so it is absent rather
+    // than zero: absent means "not measured", and zero would claim an instant
+    // first token.
+    expect(events[0]).not.toHaveProperty("ttftMs");
+  });
+
   it("omits reasoning, reasoning tokens, and response model when absent", async () => {
     const { sink, events } = recordingSink();
     const { inner, finish, stream } = scripted(settledMessage());

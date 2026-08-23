@@ -3,8 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ATTEMPT_STOP_REASONS,
   NOOP_OBSERVABILITY_SINK,
+  OBSERVED_TOOL_IDS,
   PROVIDER_ERROR_CLASSES,
   ObservabilityReducer,
+  observedToolId,
   type ObservabilityEvent,
 } from "./agent-observability";
 import type {
@@ -156,6 +158,81 @@ describe("ObservabilityReducer tools", () => {
     const reducer = new ObservabilityReducer(() => 0);
     expect(reducer.reduce(activity("started"))).toBeNull();
     expect(reducer.reduce(activity("progress"))).toBeNull();
+  });
+
+  it("names a tool Volli ships, so per-tool rates are answerable", () => {
+    const reducer = new ObservabilityReducer(() => 0);
+    // `fetch-url` is one capability class over two distinct tools; without the
+    // id there is no way to tell a search from a fetch.
+    expect(
+      reducer.reduce(activity("completed", { kind: "fetch-url", nativeToolName: "web_search" })),
+    ).toMatchObject({ activityKind: "fetch-url", toolId: "web_search" });
+    expect(
+      reducer.reduce(activity("completed", { kind: "fetch-url", nativeToolName: "web_fetch" })),
+    ).toMatchObject({ activityKind: "fetch-url", toolId: "web_fetch" });
+  });
+
+  it("refuses to name a tool it does not ship, rather than exporting the name", () => {
+    const reducer = new ObservabilityReducer(() => 0);
+    // The default fixture's `nativeToolName` is the sensitive marker, which
+    // stands in for every name Volli has not allowlisted: an MCP tool, a tool a
+    // future Pi adds, or one a model simply invented.
+    const event = reducer.reduce(activity("completed"));
+    expect(event).not.toHaveProperty("toolId");
+    expect(leaks(event)).toBe(false);
+    // The capability class still carries the call, so it is counted either way.
+    expect(event).toMatchObject({ activityKind: "run-command" });
+  });
+
+  it("reports execution time with an approval wait taken back out", () => {
+    const reducer = new ObservabilityReducer(() => 0);
+    reducer.reduce({
+      kind: "authority",
+      state: "allowed",
+      turnId: "turn-1",
+      toolCallId: "activity-1",
+      waitDurationMs: 60,
+    });
+    // 160ms wall clock, 60ms of which was a person deciding.
+    expect(reducer.reduce(activity("completed", { startedAt: 100, endedAt: 260 }))).toMatchObject({
+      durationMs: 100,
+      waitDurationMs: 60,
+    });
+  });
+
+  it("reports no execution time when the wait outlasts the whole measured span", () => {
+    const reducer = new ObservabilityReducer(() => 0);
+    reducer.reduce({
+      kind: "authority",
+      state: "allowed",
+      turnId: "turn-1",
+      toolCallId: "activity-1",
+      waitDurationMs: 5_000,
+    });
+    // The two clocks disagree about a call this reducer only saw the ends of;
+    // a duration derived from that contradiction would be worse than none.
+    const event = reducer.reduce(activity("completed", { startedAt: 100, endedAt: 260 }));
+    expect(event).not.toHaveProperty("durationMs");
+    expect(event).toMatchObject({ waitDurationMs: 5_000 });
+  });
+});
+
+describe("observedToolId", () => {
+  it("admits every tool Volli ships and nothing else", () => {
+    for (const id of OBSERVED_TOOL_IDS) expect(observedToolId(id)).toBe(id);
+    for (const rejected of [
+      "mcp__github__create_issue",
+      "Read",
+      "bash ",
+      "",
+      "../../etc/passwd",
+      undefined,
+      null,
+      42,
+      { toString: () => "bash" },
+    ]) {
+      expect(observedToolId(rejected)).toBeUndefined();
+    }
   });
 });
 

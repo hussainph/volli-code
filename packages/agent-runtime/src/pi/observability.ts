@@ -26,6 +26,7 @@ import type {
   StopReason,
 } from "@earendil-works/pi-ai";
 import {
+  measuredDuration,
   ObservabilityReducer,
   type AttemptStopReason,
   type ObservabilitySink,
@@ -170,23 +171,21 @@ export function instrumentStreamFn(
 ): PiStreamFn {
   return (model, context, options) => {
     const produced = inner(model, context, options);
-    if (produced instanceof Promise) {
-      return produced.then((stream) => {
-        observeAttempt(stream, observability, {
-          providerId: model.provider,
-          modelId: model.id,
-          api: model.api,
-          reasoningLevel: options?.reasoning,
-        });
-        return stream;
-      });
-    }
-    observeAttempt(produced, observability, {
+    // Read off the request before the stream settles, and once: the identity is
+    // the same whichever way the inner function chose to hand the stream back.
+    const identity: AttemptIdentity = {
       providerId: model.provider,
       modelId: model.id,
       api: model.api,
       reasoningLevel: options?.reasoning,
-    });
+    };
+    if (produced instanceof Promise) {
+      return produced.then((stream) => {
+        observeAttempt(stream, observability, identity);
+        return stream;
+      });
+    }
+    observeAttempt(produced, observability, identity);
     return produced;
   };
 }
@@ -249,6 +248,14 @@ function recordAttempt(
     const eventCount = timing.eventCount();
     const stopReason = attemptStopReason(message.stopReason);
     const errorClass = providerErrorClass(stopReason, message.errorMessage);
+    // Both clock readings are taken here, but not necessarily from a clock that
+    // moved forwards between them; the shared guard is what stops a backwards
+    // step from becoming a span that ends before it starts.
+    const durationMs = measuredDuration(observability.now() - timing.startedAt) ?? 0;
+    const ttftMs =
+      timing.firstEventAt === undefined
+        ? undefined
+        : measuredDuration(timing.firstEventAt - timing.startedAt);
     const event: ProviderAttemptEvent = {
       kind: "provider-attempt",
       providerId: identity.providerId,
@@ -257,10 +264,8 @@ function recordAttempt(
       ...(identity.reasoningLevel === undefined ? {} : { reasoningLevel: identity.reasoningLevel }),
       stopReason,
       ...(errorClass === undefined ? {} : { providerErrorClass: errorClass }),
-      durationMs: observability.now() - timing.startedAt,
-      ...(timing.firstEventAt === undefined
-        ? {}
-        : { ttftMs: timing.firstEventAt - timing.startedAt }),
+      durationMs,
+      ...(ttftMs === undefined ? {} : { ttftMs }),
       ...(eventCount === 0 ? {} : { chunkCount: eventCount }),
       inputTokens: usage.input,
       outputTokens: usage.output,
