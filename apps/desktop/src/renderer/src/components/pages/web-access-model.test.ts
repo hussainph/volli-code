@@ -8,7 +8,6 @@ function view(overrides: Partial<WebAccessSettingsView> = {}): WebAccessSettings
     provider: "off",
     searxngUrl: null,
     keys: { brave: "absent", exa: "absent" },
-    encryptionAvailable: true,
     ...overrides,
   };
 }
@@ -39,8 +38,7 @@ describe("webAccessPanel", () => {
       const panel = webAccessPanel(view({ provider: "brave" }));
 
       expect(panel).toMatchObject({ showsKey: true, showsEndpoint: false, active: false });
-      expect(panel.notice).toMatchObject({ tone: "neutral" });
-      expect(panel.notice?.message).toMatch(/API key/i);
+      expect(panel.notice).toMatch(/API key/i);
     });
 
     it("is on once a key is stored", () => {
@@ -52,26 +50,14 @@ describe("webAccessPanel", () => {
       });
     });
 
-    it("says a machine that cannot encrypt cannot hold a key, before anyone types one", () => {
-      const panel = webAccessPanel(view({ provider: "brave", encryptionAvailable: false }));
-
-      expect(panel.keyEntryDisabled).toBe(true);
-      expect(panel.notice).toMatchObject({ tone: "error" });
-      expect(panel.notice?.message).toMatch(/keychain/i);
-      expect(panel.active).toBe(false);
-    });
-
-    it("tells a person their stored key stopped opening rather than that they have none", () => {
+    it("names the provider whose key it is asking for", () => {
+      // Exa chosen with only Brave's key stored is the case a shared "enter
+      // your key" sentence would get wrong.
       const panel = webAccessPanel(
-        view({
-          provider: "brave",
-          keys: { brave: "unreadable", exa: "absent" },
-          encryptionAvailable: false,
-        }),
+        view({ provider: "exa", keys: { brave: "present", exa: "absent" } }),
       );
 
-      expect(panel.notice).toMatchObject({ tone: "error" });
-      expect(panel.notice?.message).toMatch(/could not be read/i);
+      expect(panel.notice).toMatch(/Exa API key/);
       expect(panel.active).toBe(false);
     });
   });
@@ -81,7 +67,7 @@ describe("webAccessPanel", () => {
       const panel = webAccessPanel(view({ provider: "searxng" }));
 
       expect(panel).toMatchObject({ showsEndpoint: true, showsKey: false, active: false });
-      expect(panel.notice?.message).toMatch(/instance/i);
+      expect(panel.notice).toMatch(/instance/i);
     });
 
     it("is on once an instance is saved, and never asks for a key", () => {
@@ -97,8 +83,7 @@ describe("webAccessPanel", () => {
         view({
           provider: "searxng",
           searxngUrl: "http://localhost:8888/",
-          keys: { brave: "unreadable", exa: "absent" },
-          encryptionAvailable: false,
+          keys: { brave: "present", exa: "absent" },
         }),
       );
 

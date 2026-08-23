@@ -2,54 +2,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import { readSecret } from "../db/secrets-repo";
-import {
-  BRAVE_SEARCH_KEY_SECRET,
-  SecretUnavailableError,
-  WebCredentialStore,
-  type SecretCipher,
-} from "./credential";
-
-/**
- * A stand-in for Electron's `safeStorage`, with the one knob the real one has:
- * whether the OS can encrypt at all right now.
- *
- * The "encryption" is a reversible transform rather than a copy, so a test that
- * asserts the database does not hold the plaintext is asserting something the
- * fake could actually have got wrong.
- */
-class FakeCipher implements SecretCipher {
-  available = true;
-  decryptFailure: Error | null = null;
-  readonly encrypted: string[] = [];
-
-  isEncryptionAvailable(): boolean {
-    return this.available;
-  }
-
-  encryptString(plainText: string): Buffer {
-    if (!this.available) throw new Error("Encryption is not available on this system.");
-    this.encrypted.push(plainText);
-    return Buffer.from(`v1:${Buffer.from(plainText, "utf8").toString("base64")}`, "utf8");
-  }
-
-  decryptString(encrypted: Buffer): string {
-    if (this.decryptFailure !== null) throw this.decryptFailure;
-    return Buffer.from(encrypted.toString("utf8").slice("v1:".length), "base64").toString("utf8");
-  }
-}
+import { BRAVE_SEARCH_KEY_SECRET, WebCredentialError, WebCredentialStore } from "./credential";
 
 const KEY = "BSA-super-secret-brave-key-42";
 
 let ctx: TestDb;
-let cipher: FakeCipher;
 let store: WebCredentialStore;
 
 beforeEach(() => {
   ctx = openTestDb();
-  cipher = new FakeCipher();
   store = new WebCredentialStore({
     db: ctx.db,
-    cipher,
     secretName: BRAVE_SEARCH_KEY_SECRET,
     now: () => 1_700_000_000_000,
   });
@@ -72,13 +35,13 @@ describe("WebCredentialStore", () => {
     expect(store.read()).toBe(KEY);
   });
 
-  it("stores ciphertext, never the key itself", () => {
+  it("keeps the key in the one table nothing answers the renderer from", () => {
     store.save(KEY);
 
-    const stored = readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET);
-    expect(stored).not.toBeNull();
-    expect(stored?.toString("utf8")).not.toContain(KEY);
-    expect(cipher.encrypted).toEqual([KEY]);
+    // The key IS the stored value now — the protection is which table it is in,
+    // not what it was transformed into. So the claim worth testing is that it is
+    // in that table and no other.
+    expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).toBe(KEY);
   });
 
   it("keeps no row anywhere else in the database", () => {
@@ -101,9 +64,25 @@ describe("WebCredentialStore", () => {
     expect(store.read()).toBe(KEY);
   });
 
-  it("refuses a key that is only whitespace", () => {
-    expect(() => store.save("   ")).toThrow(/no key/i);
+  it("refuses a key that is only whitespace, without repeating what it was handed", () => {
+    try {
+      store.save("   \n ");
+      expect.unreachable("saving must refuse");
+    } catch (error) {
+      const refusal = error as Error;
+      expect(refusal).toBeInstanceOf(WebCredentialError);
+      expect(refusal.message).toMatch(/no key/i);
+    }
     expect(store.state()).toBe("absent");
+    expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).toBeNull();
+  });
+
+  it("replaces a stored key rather than keeping two", () => {
+    store.save(KEY);
+    store.save("exa-rotated-key-88");
+
+    expect(store.read()).toBe("exa-rotated-key-88");
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM secrets").get()).toEqual({ n: 1 });
   });
 
   it("forgets a key on request, and forgetting nothing is not an error", () => {
@@ -115,54 +94,11 @@ describe("WebCredentialStore", () => {
     expect(() => store.clear()).not.toThrow();
   });
 
-  describe("when the OS cannot encrypt", () => {
-    beforeEach(() => {
-      cipher.available = false;
-    });
-
-    it("refuses to store the key rather than writing it in the clear", () => {
-      expect(() => store.save(KEY)).toThrow(SecretUnavailableError);
-
-      expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).toBeNull();
-      expect(store.state()).toBe("absent");
-    });
-
-    it("says so without repeating the key", () => {
-      try {
-        store.save(KEY);
-        expect.unreachable("saving must refuse");
-      } catch (error) {
-        const refusal = error as Error;
-        expect(refusal.message).not.toContain(KEY);
-        expect(refusal.message).toMatch(/keychain|encrypt/i);
-      }
-    });
-
-    it("reports a key stored on a healthier day as unreadable rather than absent", () => {
-      cipher.available = true;
-      store.save(KEY);
-      cipher.available = false;
-
-      expect(store.state()).toBe("unreadable");
-      expect(() => store.read()).toThrow(SecretUnavailableError);
-    });
-  });
-
-  it("refuses a ciphertext this machine can no longer open, in Volli's own words", () => {
+  it("owns one name, so a second provider's store cannot answer for it", () => {
+    const exa = new WebCredentialStore({ db: ctx.db, secretName: "web-access.exa.api-key" });
     store.save(KEY);
-    cipher.decryptFailure = new Error(`could not decrypt payload ${KEY}`);
 
-    expect(store.state()).toBe("present");
-    try {
-      store.read();
-      expect.unreachable("reading must refuse");
-    } catch (error) {
-      const refusal = error as Error;
-      expect(refusal).toBeInstanceOf(SecretUnavailableError);
-      // The cipher's own text is dropped: a failure message from a layer that
-      // was handed the secret is not a message Volli can repeat.
-      expect(refusal.message).not.toContain(KEY);
-      expect(refusal.message).toMatch(/could not be read/i);
-    }
+    expect(exa.state()).toBe("absent");
+    expect(exa.read()).toBeNull();
   });
 });

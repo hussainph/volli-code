@@ -681,6 +681,11 @@ DROP TABLE ticket_attachments;
  * readable without the key material the OS holds, so a copied `volli.db` is not
  * a copied credential.
  *
+ * (Migration 023 retired the ciphertext half of that: the payload is now the key
+ * itself, and the reason this table is separate from `app_state` is the whole of
+ * what keeps it off the renderer's wire. The paragraph above is left as written
+ * because it is what this statement did on the day it ran.)
+ *
  * **`app_state` was the obvious home for the settings and is the wrong one.**
  * Every row of it rides the `volli:data-bootstrap` payload to the renderer, and
  * `volli:app-state-set` lets the renderer write any key it likes with any string
@@ -734,6 +739,56 @@ INSERT INTO web_access_settings_new (id, provider, searxng_url, updated_at)
 DROP TABLE web_access_settings;
 
 ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
+`;
+
+/**
+ * Migration 023: the two search keys stop being keychain material.
+ *
+ * `safeStorage` was the app's only tie to the macOS Keychain, and it guarded the
+ * least sensitive secret Volli holds while producing its loudest interruption:
+ * macOS binds a keychain item's ACL to the code identity that created it, so
+ * every differently-signed build — a dev Electron, a local `release/`, an
+ * updated `/Applications` copy — raised "Volli Code wants to access key … in
+ * your keychain", on every Session attach, forever. Meanwhile the credentials
+ * that actually matter (the provider OAuth tokens) sit in Pi's 0600
+ * `~/.pi/agent/auth.json`, the same plain-file model opencode and Codex use.
+ * This schema follows the secret that matters rather than the one that shouted.
+ *
+ * So `secrets.ciphertext BLOB` becomes `secrets.value TEXT`, holding the key as
+ * typed. What is given up is the one property the ciphertext bought: a copied
+ * `volli.db` is now a copied key. What is kept is the property that was doing
+ * the work all along — this table is not `app_state`, so nothing here rides the
+ * bootstrap payload to the renderer, and the file itself lives in a user-only
+ * `Application Support` directory beside the auth.json that already made this
+ * trade.
+ *
+ * The old rows are moved rather than dropped, because only `safeStorage` can
+ * open them and only the machine that wrote them can ask it to. They wait in
+ * `legacy_safe_storage_secrets` for exactly one attempt at that
+ * (`web/legacy-safe-storage.ts`), which is also the last time this app touches a
+ * keychain. The table is named for what it is so the next reader does not have
+ * to guess why a second secrets table exists; it empties itself and is expected
+ * to stay empty. The user's "Volli Code Safe Storage" keychain item is left
+ * alone — another profile may still be using it, and deleting a keychain entry
+ * is not this migration's business.
+ */
+const MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN = `
+CREATE TABLE legacy_safe_storage_secrets (
+  name       TEXT PRIMARY KEY,
+  ciphertext BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+INSERT INTO legacy_safe_storage_secrets (name, ciphertext, updated_at)
+  SELECT name, ciphertext, updated_at FROM secrets;
+
+DROP TABLE secrets;
+
+CREATE TABLE secrets (
+  name       TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -838,6 +893,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 22,
     name: "web access — Exa as a second keyed search provider",
     sql: MIGRATION_022_WEB_ACCESS_EXA,
+  },
+  {
+    version: 23,
+    name: "web access — search keys leave the OS keychain for the profile's own store",
+    sql: MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN,
   },
 ];
 

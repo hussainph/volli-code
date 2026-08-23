@@ -4,25 +4,27 @@
  * Volli had no stored secret of its own before this: Pi owns its provider
  * credentials in its own file store, and every other setting is plain. So this
  * module is a precedent, and it is written as one — a single named owner with
- * four methods, rather than `safeStorage` calls sprinkled across whichever
- * module happened to need a key. Everything that wants the Brave key goes
- * through here, which is what makes "the key never reaches the renderer" a claim
- * a reader can check by looking at this file's callers instead of the whole app.
+ * four methods, rather than reads of the `secrets` table sprinkled across
+ * whichever module happened to need a key. Everything that wants the Brave key
+ * goes through here, which is what makes "the key never reaches the renderer" a
+ * claim a reader can check by looking at this file's callers instead of the
+ * whole app.
  *
- * **Encryption is a fact, not a preference.** `safeStorage.isEncryptionAvailable()`
- * is false on a machine whose keychain is locked or missing (a headless Linux
- * box with no libsecret, a broken login keyring), and the tempting response —
- * store it in the clear and carry on — turns a credential into a file anyone
- * with the disk can read, without ever telling the person that happened. This
- * refuses instead: no key is stored, the refusal says why, and Settings shows
- * it. A person who cannot store a key can still run Volli; they cannot run web
- * search, which is a smaller loss than a leaked key they were never told about.
+ * **Where the key rests, and why it is not the keychain.** The key sits in the
+ * profile's own `secrets` table, in the clear, under a user-only `Application
+ * Support` directory — the same trade Pi already makes for the credentials that
+ * actually matter (`~/.pi/agent/auth.json`, 0600), and the same one opencode and
+ * Codex make. Electron's `safeStorage` used to encrypt this, and it bought
+ * little: it guarded the least sensitive secret in the app while raising a
+ * macOS keychain prompt on every Session attach for anyone whose build
+ * signature had changed since the item was created. A threat model that accepts
+ * a plaintext OAuth token on disk does not get to demand a keychain for a search
+ * key. See migration 023 and `legacy-safe-storage.ts` for what became of the
+ * keys stored the old way.
  *
  * **Nothing here appears in a message.** A refusal names the situation and never
- * the secret, never the cipher's own error text (a layer that was handed the
- * plaintext is not a layer whose words Volli repeats), and never how long the
- * key is — every one of those is a fact about the key that a log, a toast or a
- * ledger would then hold.
+ * the secret, and never how long the key is — either would be a fact about the
+ * key that a log, a toast or a ledger would then hold.
  */
 import type Database from "better-sqlite3";
 
@@ -40,41 +42,31 @@ export const BRAVE_SEARCH_KEY_SECRET = "web-access.brave.api-key";
 export const EXA_SEARCH_KEY_SECRET = "web-access.exa.api-key";
 
 /**
- * The OS-backed cipher, as this module needs it.
- *
- * Exactly the three members of Electron's `safeStorage` that are used, so main
- * passes `safeStorage` itself and a test passes something it can break on
- * purpose. Declared here rather than imported from Electron because this module
- * is tested in plain Node, and an Electron import at the top of it would make
- * that impossible for no gain.
- */
-export interface SecretCipher {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
-}
-
-/**
  * What this profile can say about a stored key without disclosing it.
  *
- * Three states rather than a boolean, because "there is a key here that this
- * machine cannot open" is a real situation — a profile carried to another
- * machine, or a keychain that stopped answering — and reporting it as `absent`
- * would tell a person to paste a key they already pasted.
+ * Two states, because there are only two situations: a key is here or it is
+ * not. There used to be a third — "stored, but this machine cannot open it" —
+ * which existed entirely because the keychain could refuse to answer for bytes
+ * Volli was holding. Nothing can refuse now, so nothing has to be reported.
  */
-export type SecretState = "absent" | "present" | "unreadable";
+export type SecretState = "absent" | "present";
 
-/** A refusal that is about the machine's ability to hold a secret, never about the secret. */
-export class SecretUnavailableError extends Error {
+/**
+ * A refusal about the act of storing a key, never about the key.
+ *
+ * One arm survives (there was nothing in the paste), which is the point of
+ * keeping the type: a caller reaching for this class is reaching for a sentence
+ * that has already been checked not to quote a credential.
+ */
+export class WebCredentialError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "SecretUnavailableError";
+    this.name = "WebCredentialError";
   }
 }
 
 export interface WebCredentialStoreOptions {
   db: Database.Database;
-  cipher: SecretCipher;
   /**
    * Which secret this store owns.
    *
@@ -90,33 +82,22 @@ export interface WebCredentialStoreOptions {
 /** The owner of one provider's key. Main builds one per keyed provider. */
 export class WebCredentialStore {
   readonly #db: Database.Database;
-  readonly #cipher: SecretCipher;
   readonly #secretName: string;
   readonly #now: () => number;
 
   constructor(options: WebCredentialStoreOptions) {
     this.#db = options.db;
-    this.#cipher = options.cipher;
     this.#secretName = options.secretName;
     this.#now = options.now ?? Date.now;
   }
 
-  /** Whether this machine can encrypt a secret at all right now. */
-  encryptionAvailable(): boolean {
-    return this.#cipher.isEncryptionAvailable();
-  }
-
-  /**
-   * What Settings may say about the key: that there is one, that there is one
-   * this machine cannot open, or that there is none. Never what it is.
-   */
+  /** What Settings may say about the key: that there is one, or that there is none. Never what it is. */
   state(): SecretState {
-    if (!hasSecret(this.#db, this.#secretName)) return "absent";
-    return this.#cipher.isEncryptionAvailable() ? "present" : "unreadable";
+    return hasSecret(this.#db, this.#secretName) ? "present" : "absent";
   }
 
   /**
-   * Store one key, or refuse.
+   * Store one key.
    *
    * Trimmed, because a key pasted out of a dashboard arrives with the newline
    * that ended the copy and a provider would reject it — a failure that would
@@ -127,41 +108,20 @@ export class WebCredentialStore {
   save(key: string): void {
     const trimmed = key.trim();
     if (trimmed.length === 0) {
-      throw new SecretUnavailableError("There is no key in what was entered.");
+      throw new WebCredentialError("There is no key in what was entered.");
     }
-    if (!this.#cipher.isEncryptionAvailable()) {
-      throw new SecretUnavailableError(
-        "This machine's keychain is unavailable, so Volli cannot encrypt an API key. " +
-          "Volli will not store one in the clear.",
-      );
-    }
-    writeSecret(this.#db, this.#secretName, this.#cipher.encryptString(trimmed), this.#now());
+    writeSecret(this.#db, this.#secretName, trimmed, this.#now());
   }
 
   /**
    * The key, for the one caller that builds a provider with it.
    *
-   * Null means there is nothing stored. A stored key this machine cannot open
-   * throws instead, because answering null there would silently turn a
-   * configured Session into an unconfigured one.
+   * Null means there is nothing stored, and null is the only other answer this
+   * can give: reading is a `SELECT`, so there is no "stored but unavailable"
+   * outcome left for a caller to handle.
    */
   read(): string | null {
-    const ciphertext = readSecret(this.#db, this.#secretName);
-    if (ciphertext === null) return null;
-    if (!this.#cipher.isEncryptionAvailable()) {
-      throw new SecretUnavailableError(
-        "A stored API key could not be read: this machine's keychain is unavailable.",
-      );
-    }
-    try {
-      return this.#cipher.decryptString(ciphertext);
-    } catch {
-      // The cipher's own message is dropped rather than wrapped. It was handed
-      // the secret, and a failure it phrases is a failure that could quote it.
-      throw new SecretUnavailableError(
-        "A stored API key could not be read on this machine. Enter it again.",
-      );
-    }
+    return readSecret(this.#db, this.#secretName);
   }
 
   /** Forget the key. Forgetting nothing is not a failure. */

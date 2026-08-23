@@ -138,10 +138,11 @@ resting state: an app with no configured provider gives its Sessions no
 web tool at all, rather than a tool that refuses when called. A provider
 endpoint is a person's own configuration and is judged by its own admission
 policy when saved and again on every request; a URL the model supplies is not,
-and faces the stricter public-web policy every time. The credential owner
-encrypts a bring-your-own key through the OS keychain, refuses to hold one when
-the keychain cannot encrypt, and never exposes it to the renderer, prompt,
-transcript, or Session ledger — the renderer may learn only whether a key
+and faces the stricter public-web policy every time. The credential owner keeps a
+bring-your-own key in the profile's own user-only store — the trade Pi's
+`auth.json` already makes, rather than the OS keychain, whose per-binary prompts
+cost more than they bought — and never exposes it to the renderer, prompt,
+transcript, or Session ledger. The renderer may learn only whether a key
 exists. What a search returns is third-party text, references rather than
 contents, and reading one of them is a new decision judged from scratch.
 _Avoid_: web search setting, browsing, internet permission

@@ -14,7 +14,7 @@ const searxng: ResolvedWebAccess = {
 
 describe("what a Session is offered", () => {
   it("offers nothing at all when nothing is configured", () => {
-    for (const reason of ["off", "no-key", "unreadable-key", "no-endpoint"] as const) {
+    for (const reason of ["off", "no-key", "no-endpoint"] as const) {
       const ports = webPortsFor({ configured: false, reason });
 
       // Absent, not present-and-failing: the runtime registers a tool only when

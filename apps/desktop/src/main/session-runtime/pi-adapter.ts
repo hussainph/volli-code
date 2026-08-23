@@ -245,8 +245,8 @@ export interface PiAdapterOptions {
    *
    * It must not throw. This runs on the attach path, so a failure to work out
    * what web access amounts to would cost the Session its attachment rather
-   * than its web tools — an unreadable credential is a Session with no web,
-   * which is what `WebAccessSettings.resolve` answers instead of raising.
+   * than its web tools — a missing credential is a Session with no web, which
+   * is what `WebAccessSettings.resolve` answers instead of raising.
    */
   resolveWebPorts?: () => SessionWebPorts;
   /**

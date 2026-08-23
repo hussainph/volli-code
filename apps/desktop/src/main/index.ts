@@ -7,7 +7,6 @@ import {
   net,
   Notification,
   protocol,
-  safeStorage,
   session,
   shell,
 } from "electron";
@@ -74,6 +73,7 @@ import {
   EXA_SEARCH_KEY_SECRET,
   WebCredentialStore,
 } from "./web/credential";
+import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
@@ -696,21 +696,31 @@ app.whenReady().then(async () => {
   // catalog the runtime had no reason to re-read.
   const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
   // Web Access: the BYO search provider, and the one credential Volli stores
-  // itself. `safeStorage` is passed as the cipher rather than imported inside
-  // the owner, which is what keeps that owner (and everything it decides about
-  // refusing to store a key in the clear) testable outside Electron.
+  // itself. Before anything can read one, the keys that predate migration 023
+  // are carried out of `safeStorage` — the app's one remaining keychain call,
+  // and a no-op `SELECT` on every profile that has already made the trip. It
+  // runs here, ahead of the stores, so no Session and no Settings open can see
+  // a key half-moved. Counts only in the log: how many rows moved is not a fact
+  // about any key.
+  if (dbHandle.ok) {
+    const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
+    if (moved.carried + moved.dropped + moved.deferred > 0) {
+      console.info(
+        `[volli] web search keys out of the OS keychain: ${moved.carried} carried, ` +
+          `${moved.dropped} dropped, ${moved.deferred} left for a later launch`,
+      );
+    }
+  }
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
         credentials: {
           brave: new WebCredentialStore({
             db: dbHandle.db,
-            cipher: safeStorage,
             secretName: BRAVE_SEARCH_KEY_SECRET,
           }),
           exa: new WebCredentialStore({
             db: dbHandle.db,
-            cipher: safeStorage,
             secretName: EXA_SEARCH_KEY_SECRET,
           }),
         },
