@@ -892,11 +892,9 @@ describe("tool mapping", () => {
     const env = await ScopedExecutionEnv.create(worktreePath);
 
     expect(
-      createSessionTools(
-        { tools: { tools: ["read", "edit", "write", "execute"] } },
-        env,
-        undefined,
-      ).map((tool) => tool.name),
+      createSessionTools({ tools: { tools: ["read", "edit", "write", "execute"] } }, env).map(
+        (tool) => tool.name,
+      ),
     ).toEqual(["read", "edit", "write", "bash"]);
 
     await env.cleanup();
@@ -916,7 +914,7 @@ describe("tool mapping", () => {
     // spellings are allowed to differ — and the reason the gate maps the name
     // back before any rule reads it.
     expect(sessionToolIds(spec)).toEqual(["read", "execute", "ask_user", "web_search"]);
-    expect(createSessionTools(spec, env, undefined).map((tool) => tool.name)).toEqual([
+    expect(createSessionTools(spec, env).map((tool) => tool.name)).toEqual([
       "read",
       "bash",
       "ask_user",
@@ -924,6 +922,53 @@ describe("tool mapping", () => {
     ]);
 
     await env.cleanup();
+  });
+
+  /**
+   * The premise `tool.not-bundled`'s deletion rests on, pinned against Pi.
+   *
+   * VC-3 removed the rule that refused a name outside the Session's tools, on
+   * the ground that availability is already the enforcement: Pi resolves a call
+   * against its own tool array and answers `Tool X not found` *before*
+   * `beforeToolCall` runs, so an unregistered name never reaches the gate. That
+   * is behaviour in a vendored dependency, not in this repo — without this test
+   * a `pi-agent-core` bump could reorder the two and silently reopen the hole
+   * the rule used to cover, with every other test in the suite still green.
+   *
+   * The Session here runs under a Snapshot, so the gate *is* installed. Both
+   * assertions matter: the model is refused, and no `authority` observation is
+   * recorded — the refusal is the tool not existing, not a policy denial, so it
+   * costs no fallback budget and reaches the ledger as nothing at all.
+   */
+  it("refuses a name the Session was never offered, without consulting the gate", async () => {
+    const attachment = fixture();
+    // One tool, so `grep` is unregistered rather than merely unbundled.
+    expect(attachment.spec.authority.tools).toEqual(["read"]);
+
+    let afterRefusal: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("grep", { pattern: "secret" });
+            emit.finish();
+          },
+          (emit, context) => {
+            afterRefusal = context;
+            emit.text("No grep, then.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("Find it.");
+    await handle.close();
+
+    expect(JSON.stringify(afterRefusal?.messages)).toContain("Tool grep not found");
+    expect(kinds(attachment.observations)).not.toContain("authority");
   });
 });
 

@@ -35,11 +35,12 @@ documentation](https://nodejs.org/api/globals.html#fetch)
 [Undici Client documentation](https://undici.nodejs.org/api/Client)
 
 The existing Pi surface has a closed coding bundle (`read | edit | write |
-execute`) in `packages/shared/src/authority.ts`; `createPiTools()` maps that
-bundle to Pi tools in `packages/agent-runtime/src/pi/tools.ts`. Add web tools
-as a separate, explicitly named runtime capability rather than pretending
-they are `execute` or expanding `CodingToolId` without a complete authority
-model. The current source also documents that the authority snapshot and
+execute`) in `packages/shared/src/authority.ts`; `createSessionTools()` builds
+the Session's whole tool array in `packages/agent-runtime/src/pi/tools.ts`
+(`createPiTools()`, named here when this note was written, was the bundle-only
+half of that and was removed in VC-3). Add web tools as a separate, explicitly
+named runtime capability rather than pretending they are `execute` or expanding
+`CodingToolId` without a complete authority model. The current source also documents that the authority snapshot and
 Seatbelt boundary are not installed today, so this feature must not rely on
 them for network safety.
 

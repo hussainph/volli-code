@@ -93,6 +93,16 @@ export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
  * and a Role bundle would spell it. Until the registry exists, the two lists
  * above are that source, and `sessionToolIds` is the one place they are read
  * together.
+ *
+ * So this union will hold two spellings, and that is decided rather than
+ * overlooked. Registry verbs are dot-named (`ticket.archive`, `session.start`);
+ * the three tools here are not, and are not renamed to match. They are VC-92's
+ * first family — product-authored tools that were already inside Pi's loop, with
+ * no registry entry to take a key from — and `ask_user` is a name a model has
+ * already been trained against by every harness that ships one. The rule the
+ * amendment actually sets is that a name here must not *differ* from its verb's
+ * dot-name; a verb with no dot-name cannot differ from one. A tool promoted from
+ * the Agent CLI arrives dot-named and keeps it.
  */
 export type SessionToolId = CodingToolId | NonCodingToolId;
 

@@ -69,6 +69,18 @@ function bindContext<TParameters extends TSchema, TDetails>(
   };
 }
 
+/**
+ * What building the live surface takes: the spec that names it, plus the signal
+ * its ports honour.
+ *
+ * Deliberately wider than {@link SessionToolSpec} and only here. `signal`
+ * decides nothing about *which* tools exist, so it has no place in the type
+ * that answers that question — but a live tool still has to be handed it, and a
+ * caller passing the same spec twice, once whole and once for one field, is the
+ * seam saying so out loud.
+ */
+type SessionToolInput = SessionToolSpec & Pick<SessionRuntimeSpec, "signal">;
+
 function createTool(tool: CodingToolId, env: ExecutionEnv): AgentTool {
   switch (tool) {
     case "read":
@@ -99,11 +111,7 @@ function createTool(tool: CodingToolId, env: ExecutionEnv): AgentTool {
  * unwired" is not a case this has to handle because the binding type cannot
  * express it. There is no unreachable branch to leave untested.
  */
-export function createSessionTools(
-  spec: SessionToolSpec,
-  env: ExecutionEnv,
-  signal: AbortSignal | undefined,
-): AgentTool[] {
+export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): AgentTool[] {
   return sessionToolBindings(spec).map((binding) => {
     switch (binding.tool) {
       case "read":
@@ -112,11 +120,11 @@ export function createSessionTools(
       case "execute":
         return createTool(binding.tool, env);
       case "ask_user":
-        return createAskUserTool(binding.port, signal);
+        return createAskUserTool(binding.port, spec.signal);
       case "web_fetch":
-        return createWebFetchTool(binding.port, signal);
+        return createWebFetchTool(binding.port, spec.signal);
       case "web_search":
-        return createWebSearchTool(binding.port, signal);
+        return createWebSearchTool(binding.port, spec.signal);
     }
   });
 }

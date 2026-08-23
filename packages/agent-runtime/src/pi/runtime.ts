@@ -906,11 +906,12 @@ async function attachSession(
     // the query to a third party and a read does not, so a Session may be given
     // either, both or neither, and is offered exactly what it was given.
     //
-    // Assembled behind `sessionToolIds` rather than pushed one by one here,
-    // because the Snapshot's tool list is built from that same call: the array
-    // Pi resolves against and the list the Snapshot records cannot disagree,
-    // which is what let the pack drop its rule about tool identity (VC-3).
-    const tools = createSessionTools(spec, ownedToolEnv, spec.signal);
+    // Assembled behind `sessionToolBindings` rather than pushed one by one
+    // here, and the Snapshot's list is `sessionToolIds` over those same
+    // bindings: the array Pi resolves against and the list the Snapshot records
+    // cannot disagree, which is what let the pack drop its rule about tool
+    // identity (VC-3).
+    const tools = createSessionTools(spec, ownedToolEnv);
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;
