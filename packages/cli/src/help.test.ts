@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { AGENT_ERROR_CODES } from "@volli/shared";
+import { AGENT_ERROR_CODES, cliVerbName, REFERENCE_VERBS } from "@volli/shared";
+import type { VerbEntry } from "@volli/shared";
 
 import { bareHelpText, renderHelp } from "./help";
-import { COMMAND_HELP } from "./parser";
 
 /** chars / 4 is the bench's token estimate; keep the two ceilings in one place. */
 const estTokens = (text: string): number => Math.floor(text.length / 4);
+
+/** The commands the reference publishes, as a caller types them. */
+const PUBLISHED_COMMANDS = REFERENCE_VERBS.map((entry) => cliVerbName(entry.key));
 
 describe("bareHelpText", () => {
   it("is a complete, grouped, footered reference under the 2,800-char budget", () => {
@@ -18,7 +21,7 @@ describe("bareHelpText", () => {
       expect(text).toContain(`${group}\n`);
     }
     // Every command appears exactly by name in the compact reference.
-    for (const entry of COMMAND_HELP) expect(text).toContain(entry.name);
+    for (const name of PUBLISHED_COMMANDS) expect(text).toContain(name);
     // Footer: context ladder, --json, id conventions, the help pointer + topics.
     expect(text).toContain("VOLLI_SESSION/VOLLI_TICKET");
     expect(text).toContain("Add --json to any command");
@@ -38,10 +41,10 @@ describe("bareHelpText", () => {
 
 describe("renderHelp command detail", () => {
   it("keeps every command's detail under the 900-char / 225-token ceilings", () => {
-    for (const entry of COMMAND_HELP) {
-      const detail = renderHelp(entry.name.split(" "));
-      expect(detail.length, `${entry.name} chars`).toBeLessThanOrEqual(900);
-      expect(estTokens(detail), `${entry.name} est tokens`).toBeLessThanOrEqual(225);
+    for (const name of PUBLISHED_COMMANDS) {
+      const detail = renderHelp(name.split(" "));
+      expect(detail.length, `${name} chars`).toBeLessThanOrEqual(900);
+      expect(estTokens(detail), `${name} est tokens`).toBeLessThanOrEqual(225);
     }
   });
 
@@ -155,5 +158,55 @@ describe("renderHelp groups and topics", () => {
     expect(renderHelp(["nonsense"])).toBe(bareHelpText());
     // A topic word with extra tokens is not a single-topic path → reference.
     expect(renderHelp(["exit-codes", "extra"])).toBe(bareHelpText());
+  });
+});
+
+/**
+ * Help is a projection of an entry list, not a table of its own. These pass one
+ * in, which is the only way to render a verb the real registry has no reason to
+ * hold — and the only way to show that the real surface refuses it.
+ */
+describe("renderHelp over a supplied entry list", () => {
+  /** A control-tier verb of the shape VC-162 introduces: a named tool, off the shell. */
+  const toolOnly: VerbEntry = {
+    key: "vault.rotate",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: "main",
+    listed: false,
+    group: "Session",
+    summary: "Rotate a stored credential.",
+    options: [],
+  };
+
+  it("renders exactly the verbs it is handed, and nothing else", () => {
+    const text = bareHelpText([toolOnly]);
+    expect(text).toContain("vault rotate");
+    expect(text).not.toContain("ticket create");
+  });
+
+  // The ruling this ticket implements (VC-92 §2): a verb with no `cli` access
+  // mode is not on the shell surface, so the reference a shell caller reads
+  // must not name it and no help path may render its detail.
+  it("keeps a verb that is off the CLI out of what a shell caller sees", () => {
+    expect(bareHelpText()).not.toContain("vault rotate");
+    expect(renderHelp(["vault", "rotate"])).toBe(bareHelpText());
+  });
+
+  // `hook` and `session harness` are on the socket but unlisted: fired by a
+  // generated file, never typed. Asking for either lands on the reference or
+  // the group list, never on a detail page that invites a reader to run it.
+  it("renders no detail for the involuntary verbs", () => {
+    expect(renderHelp(["hook"])).toBe(bareHelpText());
+    expect(renderHelp(["session", "harness"])).toBe(renderHelp(["session"]));
+  });
+
+  // Every listed verb carries one, so this branch only opens for a verb nobody
+  // should ever type — which is exactly the kind that stays unlisted.
+  it("omits the Example line for a verb that declares none", () => {
+    const detail = renderHelp(["vault", "rotate"], [toolOnly]);
+    expect(detail).toContain("vault rotate — Rotate a stored credential.");
+    expect(detail).toContain("Usage: volli vault rotate");
+    expect(detail).not.toContain("Example:");
   });
 });

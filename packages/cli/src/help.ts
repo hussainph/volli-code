@@ -1,7 +1,6 @@
-import { AGENT_ERROR_CODES } from "@volli/shared";
+import { AGENT_ERROR_CODES, cliVerbName, REFERENCE_VERBS } from "@volli/shared";
+import type { VerbEntry, VerbOption } from "@volli/shared";
 
-import { COMMAND_HELP } from "./parser";
-import type { CommandHelpEntry, CommandSpec, OptionEntry } from "./parser";
 import { exitCodeForError } from "./render";
 
 const EXIT_CLASS_LABEL = {
@@ -45,13 +44,21 @@ function topicText(topic: Topic): string {
 }
 
 /** The value shape shown after an option name (`<text>`, `low|medium|high`); flags carry none. */
-function placeholderOf(entry: OptionEntry): string {
-  return entry.kind === "flag" ? "" : ` ${entry.placeholder}`;
+function placeholderOf(option: VerbOption): string {
+  return option.kind === "flag" ? "" : ` ${option.placeholder}`;
 }
 
 /** One option's `--name <value>` token as it appears in a usage line. */
-function optionToken(name: string, entry: OptionEntry): string {
-  return `${name}${placeholderOf(entry)}`;
+function optionToken(option: VerbOption): string {
+  return `${option.name}${placeholderOf(option)}`;
+}
+
+/** The members of one mutually exclusive option group, as one `a|b` alternation. */
+function groupAlternation(entry: VerbEntry, group: string): string {
+  return entry.options
+    .filter((option) => option.group === group && option.hidden !== true)
+    .map(optionToken)
+    .join("|");
 }
 
 /**
@@ -59,25 +66,21 @@ function optionToken(name: string, entry: OptionEntry): string {
  * required options unbracketed, repeatable options suffixed `...`, and mutually
  * exclusive `group` members collapsed into one `[a|b]` slot.
  */
-function fullOptionsUsage(spec: CommandSpec): string {
-  const entries = Object.entries(spec.options);
+function fullOptionsUsage(entry: VerbEntry): string {
   const seenGroups = new Set<string>();
   const parts: string[] = [];
-  for (const [name, entry] of entries) {
-    if (entry.hidden) continue;
-    if (entry.group !== undefined) {
-      if (seenGroups.has(entry.group)) continue;
-      seenGroups.add(entry.group);
-      const inner = entries
-        .filter(([, other]) => other.group === entry.group && other.hidden !== true)
-        .map(([memberName, member]) => optionToken(memberName, member))
-        .join("|");
-      parts.push(entry.required === true ? inner : `[${inner}]`);
-    } else if (entry.required === true) {
-      parts.push(optionToken(name, entry));
+  for (const option of entry.options) {
+    if (option.hidden === true) continue;
+    if (option.group !== undefined) {
+      if (seenGroups.has(option.group)) continue;
+      seenGroups.add(option.group);
+      const inner = groupAlternation(entry, option.group);
+      parts.push(option.required === true ? inner : `[${inner}]`);
+    } else if (option.required === true) {
+      parts.push(optionToken(option));
     } else {
-      const token = `[${optionToken(name, entry)}]`;
-      parts.push(entry.kind === "repeated" ? `${token}...` : token);
+      const token = `[${optionToken(option)}]`;
+      parts.push(option.kind === "repeated" ? `${token}...` : token);
     }
   }
   return parts.join(" ");
@@ -88,28 +91,22 @@ function fullOptionsUsage(spec: CommandSpec): string {
  * single `[options]` standing in for the optional ones (each fully described in
  * the Options table below, so the detail view never repeats itself).
  */
-function compactOptionsUsage(spec: CommandSpec): string {
-  const entries = Object.entries(spec.options);
+function compactOptionsUsage(entry: VerbEntry): string {
   const seenGroups = new Set<string>();
   const required: string[] = [];
   let hasOptional = false;
-  for (const [name, entry] of entries) {
-    if (entry.hidden) continue;
-    if (entry.group !== undefined) {
-      if (seenGroups.has(entry.group)) continue;
-      seenGroups.add(entry.group);
-      if (entry.required !== true) {
+  for (const option of entry.options) {
+    if (option.hidden === true) continue;
+    if (option.group !== undefined) {
+      if (seenGroups.has(option.group)) continue;
+      seenGroups.add(option.group);
+      if (option.required !== true) {
         hasOptional = true;
         continue;
       }
-      required.push(
-        entries
-          .filter(([, other]) => other.group === entry.group && other.hidden !== true)
-          .map(([memberName, member]) => optionToken(memberName, member))
-          .join("|"),
-      );
-    } else if (entry.required === true) {
-      required.push(optionToken(name, entry));
+      required.push(groupAlternation(entry, option.group));
+    } else if (option.required === true) {
+      required.push(optionToken(option));
     } else {
       hasOptional = true;
     }
@@ -122,26 +119,31 @@ function compactOptionsUsage(spec: CommandSpec): string {
  * and spell out every option; command detail keeps `volli ` but folds optional
  * options into `[options]`.
  */
-function usageLine(entry: CommandHelpEntry, mode: "reference" | "detail"): string {
-  const id = entry.spec.positionalId
-    ? entry.spec.positionalId.optional === true
-      ? " [<id>]"
-      : " <id>"
-    : "";
-  const opts =
-    mode === "reference" ? fullOptionsUsage(entry.spec) : compactOptionsUsage(entry.spec);
-  const extra = entry.spec.extraUsage ? ` ${entry.spec.extraUsage}` : "";
+function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
+  const id =
+    entry.positionalId === undefined ? "" : entry.positionalId === "optional" ? " [<id>]" : " <id>";
+  const opts = mode === "reference" ? fullOptionsUsage(entry) : compactOptionsUsage(entry);
+  const extra = entry.extraUsage === undefined ? "" : ` ${entry.extraUsage}`;
   const prefix = mode === "reference" ? "" : "volli ";
-  return `${prefix}${entry.name}${id}${opts.length > 0 ? ` ${opts}` : ""}${extra}`;
+  return `${prefix}${cliVerbName(entry.key)}${id}${opts.length > 0 ? ` ${opts}` : ""}${extra}`;
 }
 
-/** The complete compact reference (`volli help` / bare `volli`), grouped and footered. */
-export function bareHelpText(): string {
+/**
+ * The complete compact reference (`volli help` / bare `volli`), grouped and
+ * footered.
+ *
+ * Like every function here it takes the verbs it renders as an argument,
+ * defaulting to the registry's own CLI-reference projection. That is what makes
+ * this a projection rather than a second table: a synthetic entry can be pushed
+ * through the renderer in a test without touching the real surface, and nothing
+ * here can decide for itself which verbs exist.
+ */
+export function bareHelpText(entries: readonly VerbEntry[] = REFERENCE_VERBS): string {
   const order = ["Read", "Write", "Session", "App"] as const;
   const sections = order.map((group) => {
-    const lines = COMMAND_HELP.filter((entry) => entry.group === group).map(
-      (entry) => `  ${usageLine(entry, "reference")}`,
-    );
+    const lines = entries
+      .filter((entry) => entry.group === group)
+      .map((entry) => `  ${usageLine(entry, "reference")}`);
     return `${group}\n${lines.join("\n")}`;
   });
   return (
@@ -155,44 +157,51 @@ export function bareHelpText(): string {
 }
 
 /** Detail for one command: usage, every option, example, notes. */
-function commandDetail(entry: CommandHelpEntry): string {
-  const visible = Object.entries(entry.spec.options).filter(([, o]) => o.hidden !== true);
-  const width = Math.max(0, ...visible.map(([name, o]) => optionToken(name, o).length));
+function commandDetail(entry: VerbEntry): string {
+  const visible = entry.options.filter((option) => option.hidden !== true);
+  const width = Math.max(0, ...visible.map((option) => optionToken(option).length));
   const lines = [
-    `${entry.name} — ${entry.spec.summary}`,
+    `${cliVerbName(entry.key)} — ${entry.summary}`,
     "",
     `Usage: ${usageLine(entry, "detail")}`,
   ];
   if (visible.length > 0) {
     lines.push("", "Options:");
-    for (const [name, option] of visible) {
+    for (const option of visible) {
       const suffix = option.values !== undefined ? ` (${option.values})` : "";
-      lines.push(`  ${optionToken(name, option).padEnd(width)}  ${option.help}${suffix}`);
+      lines.push(`  ${optionToken(option).padEnd(width)}  ${option.help}${suffix}`);
     }
   }
-  lines.push("", `Example: ${entry.spec.example}`);
-  if (entry.spec.notes !== undefined && entry.spec.notes.length > 0) {
+  // A verb with no example is one nobody should ever type — `hook` is the
+  // standing case — and such a verb is unlisted, so this line is missing only
+  // for an entry that was never meant to reach a reader.
+  if (entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
+  if (entry.notes !== undefined && entry.notes.length > 0) {
     lines.push("", "Notes:");
-    for (const note of entry.spec.notes) lines.push(`- ${note}`);
+    for (const note of entry.notes) lines.push(`- ${note}`);
   }
   return `${lines.join("\n")}\n`;
 }
 
 /** The command-group words (`ticket`, `session`, …) that have subcommands. */
-function groupWords(): Set<string> {
+function groupWords(entries: readonly VerbEntry[]): Set<string> {
   const words = new Set<string>();
-  for (const entry of COMMAND_HELP) {
-    const [first, second] = entry.name.split(" ");
+  for (const entry of entries) {
+    const [first, second] = cliVerbName(entry.key).split(" ");
     if (second !== undefined && first !== undefined) words.add(first);
   }
   return words;
 }
 
 /** `volli help ticket` → the one-line summaries of every `ticket <sub>` command. */
-function groupDetail(word: string): string {
-  const subcommands = COMMAND_HELP.filter((entry) => entry.name.startsWith(`${word} `));
-  const width = Math.max(...subcommands.map((entry) => entry.name.length));
-  const lines = subcommands.map((entry) => `  ${entry.name.padEnd(width)}  ${entry.spec.summary}`);
+function groupDetail(word: string, entries: readonly VerbEntry[]): string {
+  const subcommands = entries
+    .map((entry) => ({ name: cliVerbName(entry.key), summary: entry.summary }))
+    .filter((subcommand) => subcommand.name.startsWith(`${word} `));
+  const width = Math.max(...subcommands.map((subcommand) => subcommand.name.length));
+  const lines = subcommands.map(
+    (subcommand) => `  ${subcommand.name.padEnd(width)}  ${subcommand.summary}`,
+  );
   return (
     `${word} subcommands:\n` +
     `${lines.join("\n")}\n` +
@@ -201,11 +210,11 @@ function groupDetail(word: string): string {
 }
 
 /** The longest command whose name words are a prefix of `path`, or null. */
-function matchCommand(path: readonly string[]): CommandHelpEntry | null {
-  let best: CommandHelpEntry | null = null;
+function matchCommand(path: readonly string[], entries: readonly VerbEntry[]): VerbEntry | null {
+  let best: VerbEntry | null = null;
   let bestLength = 0;
-  for (const entry of COMMAND_HELP) {
-    const words = entry.name.split(" ");
+  for (const entry of entries) {
+    const words = cliVerbName(entry.key).split(" ");
     if (words.length > path.length) continue;
     if (words.every((word, index) => word === path[index]) && words.length > bestLength) {
       best = entry;
@@ -219,16 +228,23 @@ function matchCommand(path: readonly string[]): CommandHelpEntry | null {
  * Resolves a `help` path into reference text: empty → the compact reference;
  * a command prefix → that command's detail; a group word → its subcommand list;
  * a single topic → the topic; anything else → the compact reference.
+ *
+ * Only the verbs it is given can be reached — an entry the registry keeps off
+ * the CLI reference (the involuntary `hook` and `session harness`) has no path
+ * that renders its detail, because it is not in this list at all.
  */
-export function renderHelp(rawPath: readonly string[]): string {
+export function renderHelp(
+  rawPath: readonly string[],
+  entries: readonly VerbEntry[] = REFERENCE_VERBS,
+): string {
   // A quoted multi-word argument (`volli help "ticket create"`) must resolve
   // the same as separate words, so split every element on whitespace first.
   const path = rawPath.flatMap((part) => part.split(/\s+/)).filter((part) => part.length > 0);
-  if (path.length === 0) return bareHelpText();
-  const command = matchCommand(path);
+  if (path.length === 0) return bareHelpText(entries);
+  const command = matchCommand(path, entries);
   if (command !== null) return commandDetail(command);
   const first = path[0]!;
-  if (groupWords().has(first)) return groupDetail(first);
+  if (groupWords(entries).has(first)) return groupDetail(first, entries);
   if (path.length === 1 && isTopic(first)) return topicText(first);
-  return bareHelpText();
+  return bareHelpText(entries);
 }
