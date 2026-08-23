@@ -99,7 +99,7 @@ describe("Configure → MCP", () => {
   it("shows the shape and says it does not work yet", () => {
     const html = renderConfigure("mcp");
 
-    expect(html).toContain("aren&#x27;t wired up yet");
+    expect(html).toContain("aren&#x27;t available yet");
     // Rule 3 of kit/unavailable.tsx: the real empty state, never invented
     // servers that a reader could mistake for real ones gone wrong.
     expect(html).toContain("No MCP servers yet.");

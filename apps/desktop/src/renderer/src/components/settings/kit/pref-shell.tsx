@@ -13,8 +13,9 @@ import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 
-import { ContentColumn } from "@renderer/components/layout/content-column";
+import { WorkbenchColumn } from "@renderer/components/layout/content-column";
 import { PageHeader } from "@renderer/components/layout/page-header";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { Badge } from "@renderer/components/ui/badge";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -94,84 +95,96 @@ export function PrefShell({
   const current = all.find((category) => category.key === activeKey) ?? all[0] ?? null;
 
   return (
-    // `w-full flex-1` is not decoration. Without it this root is a
-    // shrink-to-fit flex item and the entire surface collapses to the width of
-    // its widest line — ~670px in a 1400px window, jammed against the left
-    // edge, every table column starved. Invisible in a screenshot of the pane
-    // alone, which is how it shipped once.
-    <div className="flex h-full min-h-0 w-full flex-1">
-      <nav
-        aria-label={`${surfaceLabel} categories`}
-        className="flex w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-4"
-      >
-        {header}
-        <InputGroup className="mx-1">
-          <InputGroupAddon>
-            <MagnifyingGlassIcon />
-          </InputGroupAddon>
-          <InputGroupInput
-            type="search"
-            value={query}
-            aria-label={`Search ${surfaceLabel.toLowerCase()}`}
-            placeholder="Search"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </InputGroup>
+    // ONE tooltip provider for both surfaces. Row actions are glyphs and need
+    // tooltips to be legible, and `Tooltip` does not carry its own provider —
+    // the app only had one inside the sidebar, so a settings pane using a
+    // tooltip threw "`Tooltip` must be used within `TooltipProvider`" and
+    // painted an empty pane. Mounting it at the shell means a pane cannot
+    // forget it.
+    <TooltipProvider>
+      {/* `w-full flex-1` is not decoration. Without it this root is a
+          shrink-to-fit flex item and the entire surface collapses to the width
+          of its widest line — ~670px in a 1400px window, jammed against the
+          left edge, every table column starved. Invisible in a screenshot of
+          the pane alone, which is how it shipped once. */}
+      <div className="flex h-full min-h-0 w-full flex-1">
+        <nav
+          aria-label={`${surfaceLabel} categories`}
+          className="flex w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-4"
+        >
+          {header}
+          <InputGroup className="mx-1">
+            <InputGroupAddon>
+              <MagnifyingGlassIcon />
+            </InputGroupAddon>
+            <InputGroupInput
+              type="search"
+              value={query}
+              aria-label={`Search ${surfaceLabel.toLowerCase()}`}
+              placeholder="Search"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </InputGroup>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {visible.map((group) => (
-            <div key={group.key} className="pb-4">
-              <SectionHeading as="p" className="px-2 pb-1">
-                {group.label}
-              </SectionHeading>
-              {group.categories.map((category) => (
-                <button
-                  key={category.key}
-                  type="button"
-                  aria-current={category.key === current?.key ? "page" : undefined}
-                  onClick={() => onSelect(category.key)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-ui transition-colors focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none",
-                    category.key === current?.key
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                  )}
-                >
-                  <category.icon aria-hidden className="size-4 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">{category.label}</span>
-                  {category.count === undefined ? null : (
-                    <Badge variant="count">{category.count}</Badge>
-                  )}
-                  {category.attention ? (
-                    <>
-                      <StatusDot state={category.attention.state} />
-                      {/* The dot is `aria-hidden` by construction, so the
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {visible.map((group) => (
+              <div key={group.key} className="pb-4">
+                <SectionHeading as="p" className="px-2 pb-1">
+                  {group.label}
+                </SectionHeading>
+                {group.categories.map((category) => (
+                  <button
+                    key={category.key}
+                    type="button"
+                    aria-current={category.key === current?.key ? "page" : undefined}
+                    onClick={() => onSelect(category.key)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-ui transition-colors focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none",
+                      category.key === current?.key
+                        ? "bg-accent text-foreground"
+                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                    )}
+                  >
+                    <category.icon aria-hidden className="size-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{category.label}</span>
+                    {category.count === undefined ? null : (
+                      <Badge variant="count">{category.count}</Badge>
+                    )}
+                    {category.attention ? (
+                      <>
+                        <StatusDot state={category.attention.state} />
+                        {/* The dot is `aria-hidden` by construction, so the
                           state is said here rather than dropped. */}
-                      <span className="sr-only">{category.attention.label}</span>
-                    </>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          ))}
-          {visible.length === 0 ? (
-            <p className="px-2 py-6 text-center text-ui text-muted-foreground">Nothing matches.</p>
-          ) : null}
-          <p aria-live="polite" className="sr-only">
-            {matches === null ? "" : `${matches.size} categories match`}
-          </p>
-        </div>
-      </nav>
+                        <span className="sr-only">{category.attention.label}</span>
+                      </>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {visible.length === 0 ? (
+              <p className="px-2 py-6 text-center text-ui text-muted-foreground">
+                Nothing matches.
+              </p>
+            ) : null}
+            <p aria-live="polite" className="sr-only">
+              {matches === null ? "" : `${matches.size} categories match`}
+            </p>
+          </div>
+        </nav>
 
-      <div ref={scroller} className="min-w-0 flex-1 overflow-y-auto">
-        {/* Tier A: a pane is a reading surface, so it takes the app's
-            canonical measure and page gutter rather than a width of its own
-            (docs/DESIGN.md). */}
-        <ContentColumn className="pb-4">
-          <PageHeader variant="reading" title={current?.label ?? ""} />
-          <div className="flex flex-col gap-6">{current?.content}</div>
-        </ContentColumn>
+        <div ref={scroller} className="min-w-0 flex-1 overflow-y-auto">
+          {/* Tier B: a pane LOOKS like a reading surface but its tables are not
+            prose. Skills carry a name, a description and provenance; at the
+            45rem measure the description truncated to a few words, which is
+            the one column that tells two skills apart. Wider measure, same
+            gutter, same whitespace-not-breakpoints rule (docs/DESIGN.md). */}
+          <WorkbenchColumn className="pb-4">
+            <PageHeader variant="reading" title={current?.label ?? ""} />
+            <div className="flex flex-col gap-6">{current?.content}</div>
+          </WorkbenchColumn>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }

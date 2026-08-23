@@ -51,8 +51,8 @@ export function UnavailableNotice({
     <Notice
       icon={WrenchIcon}
       tone="neutral"
-      title={`${what} aren't wired up yet.`}
-      detail={meanwhile ?? "The layout below is what this will look like."}
+      title={`${what} aren't available yet.`}
+      detail={meanwhile ?? "This page previews the controls. You can't change them yet."}
     />
   );
 }

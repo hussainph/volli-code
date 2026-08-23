@@ -37,13 +37,13 @@ import {
 
 import {
   AsyncSection,
-  Cell,
   CONTROL_W,
+  Cell,
   DataTable,
+  RowAction,
   SectionAction,
 } from "@renderer/components/settings/kit";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
-import { Button } from "@renderer/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -151,7 +151,7 @@ function SkillsTable({
       empty="No skills yet. Add one to .agents/skills."
       noResults="No skills match."
       columns={[
-        { key: "name", header: "Skill", width: "26%", cell: (skill) => <Cell>{skill.name}</Cell> },
+        { key: "name", header: "Skill", width: "20%", cell: (skill) => <Cell>{skill.name}</Cell> },
         {
           key: "description",
           header: "Description",
@@ -172,14 +172,12 @@ function SkillsTable({
           align: "end",
           headerHidden: true,
           cell: (skill) => (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label={`Reveal ${skill.name}`}
-              onClick={() => void revealSkill(project, skill)}
-            >
-              <ArrowSquareOutIcon />
-            </Button>
+            <RowAction
+              label={`Reveal ${skill.name} in Finder`}
+              hint="Reveal in Finder"
+              icon={ArrowSquareOutIcon}
+              onAct={() => void revealSkill(project, skill)}
+            />
           ),
         },
         {

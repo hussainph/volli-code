@@ -225,7 +225,7 @@ export function AboutPane() {
       <PrefSection
         title="Harnesses"
         icon={CpuIcon}
-        hint={<>Agent binaries Volli can launch. Pick one per project in Configure.</>}
+        hint={<>The agents Volli can run. Choose one per project in Configure.</>}
       >
         {listings.map((listing) => (
           <ItemRow

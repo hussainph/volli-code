@@ -73,9 +73,9 @@ export function IntegrationsPane() {
 
   return (
     <AsyncSection
-      title="Open in…"
+      title="External apps"
       icon={PlugsIcon}
-      hint={<>Offered wherever Volli can hand over a file or a worktree.</>}
+      hint={<>Volli offers these apps whenever you open a file or a worktree.</>}
       before={
         <PrefRow label="Open files in" htmlFor="open-files-in">
           <Select
@@ -105,7 +105,7 @@ export function IntegrationsPane() {
       }
       state={state}
       isEmpty={(availableApps) => availableApps.length === 0}
-      empty="No known apps are installed."
+      empty="Volli found no supported apps on this Mac."
     >
       {(availableApps) => (
         <>

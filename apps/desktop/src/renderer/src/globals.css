@@ -310,6 +310,12 @@
    * surfaces center on it via <ContentColumn>) and the unified page gutter
    * every surface aligns its edges to. */
   --container-content: 45rem;
+  /* The Tier B ceiling. Settings and Configure are workbench surfaces: their
+   * tables carry a name AND a description AND provenance, which the 45rem
+   * reading measure truncates past legibility. Fluid, but not unbounded — on a
+   * 34" display an uncapped row parks a switch a foot from the label it
+   * answers to, and the eye loses the pairing the row exists to draw. */
+  --container-workbench: 80rem;
   --spacing-gutter: 1.5rem;
 }
 

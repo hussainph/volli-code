@@ -32,7 +32,7 @@ export function NotificationsPane() {
   return (
     <Unavailable
       what="Notification preferences"
-      meanwhile="Turn Volli's notifications off in System Settings → Notifications for now."
+      meanwhile="To turn notifications off, open System Settings and select Notifications."
     >
       <PrefSection title="Notifications" icon={BellIcon}>
         <PrefRow label="Notify me">

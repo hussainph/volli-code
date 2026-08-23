@@ -34,10 +34,10 @@ export function PluginsPane() {
   return (
     <Unavailable
       what="Plugins"
-      meanwhile="Install skills into .agents/skills and commands into .volli/commands."
+      meanwhile="To add capabilities now, put skills in .agents/skills and commands in .volli/commands."
     >
       <PrefSection
-        title="Installed"
+        title="Installed plugins"
         icon={PuzzlePieceIcon}
         hint={<>A bundle of skills and commands, updated together.</>}
         action={<SectionAction label="Browse…" />}

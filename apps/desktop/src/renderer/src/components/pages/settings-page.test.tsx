@@ -98,7 +98,7 @@ describe("SettingsPage (app-wide)", () => {
 
     // The rule from kit/unavailable.tsx: the notice comes FIRST and in words.
     // Someone who reads one thing must read the one that stops them waiting.
-    expect(html).toContain("aren&#x27;t wired up yet");
+    expect(html).toContain("aren&#x27;t available yet");
     expect(html).toContain("System Settings");
   });
 });

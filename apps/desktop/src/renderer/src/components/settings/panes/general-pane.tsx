@@ -40,7 +40,7 @@ export function GeneralPane() {
       <PrefRow
         label="Keep the sidebar open"
         htmlFor="sidebar-pinned"
-        hint={<>Off, it appears when the pointer reaches the window edge.</>}
+        hint={<>When off, the sidebar opens when the pointer reaches the edge.</>}
       >
         <Switch id="sidebar-pinned" checked={sidebarPinned} onCheckedChange={setSidebarPinned} />
       </PrefRow>

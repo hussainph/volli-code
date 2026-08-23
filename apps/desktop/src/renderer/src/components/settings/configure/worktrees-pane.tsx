@@ -77,7 +77,7 @@ export function WorktreesPane({ project }: { project: Project }) {
       <PrefSection
         title="Copied files"
         icon={TerminalWindowIcon}
-        hint={<>Creating .worktreeinclude replaces these defaults entirely.</>}
+        hint={<>A .worktreeinclude file in your repo replaces these defaults.</>}
         action={
           <span className="text-ui text-muted-foreground">
             <PlusIcon aria-hidden className="inline size-3.5" /> .worktreeinclude

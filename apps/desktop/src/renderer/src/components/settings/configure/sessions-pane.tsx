@@ -152,7 +152,7 @@ export function SessionsPane({ project }: { project: Project }) {
         icon={CpuIcon}
         // The precedence table, as one hint rather than a paragraph under the
         // header — available to whoever wants it, invisible to everyone else.
-        hint={<>Composer choice wins, then this project, then Settings.</>}
+        hint={<>Volli uses the composer&rsquo;s choice first, then this project, then Settings.</>}
         action={modelCatalogAction}
       >
         <PrefRow label="Harness" htmlFor="project-harness" testId="project-session-harness">
@@ -267,7 +267,7 @@ export function SessionsPane({ project }: { project: Project }) {
       <PrefSection
         title="Instructions"
         icon={BookOpenIcon}
-        hint={<>Read before every session&rsquo;s first turn.</>}
+        hint={<>Volli reads these files before each session&rsquo;s first turn.</>}
         action={
           <SectionAction
             label="Reveal"

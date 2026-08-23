@@ -30,6 +30,7 @@ import {
   ItemRow,
   PrefRow,
   PrefSection,
+  RowAction,
   SectionAction,
   SectionIconAction,
   type AsyncState,
@@ -367,7 +368,7 @@ function OrphansSection() {
       <AsyncSection
         title="Orphaned worktrees"
         icon={TreeStructureIcon}
-        hint={<>Never swept automatically while they hold uncommitted work.</>}
+        hint={<>Volli never deletes a worktree that has uncommitted work.</>}
         action={
           <SectionIconAction
             label="Rescan orphaned worktrees"
@@ -391,22 +392,18 @@ function OrphansSection() {
                 meta={orphan.reason}
                 testId="orphan-row"
               >
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label={`Reveal ${orphan.path}`}
-                  onClick={() => void reveal(orphan.path)}
-                >
-                  <FolderOpenIcon />
-                </Button>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label={`Delete ${orphan.path}`}
-                  onClick={() => setPendingDelete(orphan)}
-                >
-                  <TrashIcon />
-                </Button>
+                <RowAction
+                  label={`Reveal ${orphan.path} in Finder`}
+                  hint="Reveal in Finder"
+                  icon={FolderOpenIcon}
+                  onAct={() => void reveal(orphan.path)}
+                />
+                <RowAction
+                  label={`Delete ${orphan.path}`}
+                  hint="Delete worktree"
+                  icon={TrashIcon}
+                  onAct={() => setPendingDelete(orphan)}
+                />
               </ItemRow>
             ))}
 

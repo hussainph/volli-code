@@ -80,7 +80,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           key: "plugins",
           label: "Plugins",
           icon: PuzzlePieceIcon,
-          keywords: ["plugin", "bundle", "marketplace", "installed", "contents", "browse"],
+          keywords: ["plugin", "installed plugins", "bundle", "marketplace", "contents", "browse"],
           content: <PluginsPane />,
         },
       ],

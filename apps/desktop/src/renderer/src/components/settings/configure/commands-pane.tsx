@@ -26,7 +26,7 @@ export function CommandsPane({ project }: { project: Project }) {
     <AsyncSection
       title="Commands"
       icon={CommandIcon}
-      hint={<>Type the name in any composer. Project overrides personal.</>}
+      hint={<>Type the name in any composer. Project commands override personal ones.</>}
       action={<NewCommandDialog projectId={project.id} onCreated={reload} />}
       state={state}
       isEmpty={(data) => data.templates.length === 0}

@@ -33,6 +33,7 @@ export { DetailLine, HealthPanel, type Fault } from "./health-panel";
 export { InfoHint } from "./info-hint";
 export { OverrideControl, OverrideNote } from "./override";
 export { ItemRow, PrefRow } from "./pref-row";
+export { RowAction } from "./row-action";
 export { PrefSection, SectionAction, SectionIconAction } from "./pref-section";
 export { PrefShell, type PrefCategory, type PrefGroup } from "./pref-shell";
 export { Health, Provenance } from "./status";

@@ -40,11 +40,14 @@ export function PrefSection({
     // pane into boxes inside boxes: a bordered card holding a bordered table
     // holding a bordered search field.
     <section className="rounded-lg bg-card px-4 py-4">
-      {/* The rule under the header is DELIBERATE and drawn here. It used to
-          appear by accident, via a `first:border-t-0` on the rows that never
-          matched — because this header, not the first row, is the section's
-          first child. Same pixels; now the code says so, and the rows own
-          only the rules between themselves. */}
+      {/* The rule under the header is DELIBERATE and drawn here, and the
+          wrapper below is what keeps it to ONE line.
+
+          A row draws `border-t` with `first:border-t-0`, which only suppresses
+          the top rule when the row is genuinely its parent's first child. With
+          the rows as direct children of this `<section>`, THIS header is the
+          first child, `first:` matched nothing, and every section drew the
+          header's rule and the first row's rule eight pixels apart. */}
       <div className="mb-2 flex items-start justify-between gap-4 border-b border-border/50 pb-2">
         <div className="flex min-w-0 items-center gap-2">
           {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
@@ -55,7 +58,8 @@ export function PrefSection({
         </div>
         {action}
       </div>
-      {children}
+      {/* Rows live in their own box so `first:` has something true to say. */}
+      <div>{children}</div>
     </section>
   );
 }

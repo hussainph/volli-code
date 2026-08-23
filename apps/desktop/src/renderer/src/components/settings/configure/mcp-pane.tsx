@@ -44,12 +44,12 @@ export function McpPane() {
   return (
     <Unavailable
       what="MCP servers"
-      meanwhile="Volli's built-in read, edit, write and bash tools work today."
+      meanwhile="Agents can already read, edit, write, and run commands without MCP."
     >
       <PrefSection
         title="Servers"
         icon={PlugsConnectedIcon}
-        hint={<>Web search is app-wide — set it in Settings.</>}
+        hint={<>Web search applies to every project. Change it in Settings.</>}
         action={<SectionAction label="Add server" icon={PlusIcon} />}
       >
         <DataTable
