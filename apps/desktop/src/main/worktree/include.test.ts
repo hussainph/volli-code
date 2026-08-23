@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { compileIncludePattern, copyIncludedFiles, isIncluded } from "./include";
+import {
+  DEFAULT_PRUNED_DIRS,
+  compileIncludePattern,
+  copyIncludedFiles,
+  isIncluded,
+} from "./include";
 
 let dirs: string[] = [];
 
@@ -207,7 +212,8 @@ describe("copyIncludedFiles", () => {
     const { copied } = await copyIncludedFiles(project, worktree);
 
     expect(copied).toEqual([".env"]);
-    for (const pruned of [".venv", "venv", "__pycache__", ".tox", "target", "vendor"]) {
+    // Every name on the list, not the subset that happened to get fixtures.
+    for (const pruned of DEFAULT_PRUNED_DIRS) {
       expect(existsSync(join(worktree, pruned))).toBe(false);
     }
   });
@@ -226,20 +232,25 @@ describe("copyIncludedFiles", () => {
     expect(copied).toEqual(["node_modules/.bin/local-tool"]);
   });
 
-  it("honors that escape hatch for every name on the widened prune list", async () => {
-    const project = tempDir("proj");
-    const worktree = tempDir("wt");
-    // A Python project's real, uncommitted local config genuinely can live in
-    // the virtualenv (a `.pth` file, an activate hook a person edited). The
-    // contract is unchanged by the widening: naming it brings it back.
-    write(project, ".worktreeinclude", ".venv/bin/activate.local\n");
-    write(project, ".venv/bin/activate.local", "export API=1\n");
-    write(project, ".venv/lib/pkg/settings.cfg", "NOT_MINE=1");
+  it.each([...DEFAULT_PRUNED_DIRS])(
+    "honors that escape hatch for %s, as for every name on the widened prune list",
+    async (pruned) => {
+      const project = tempDir("proj");
+      const worktree = tempDir("wt");
+      // Real, uncommitted local config genuinely can live under one of these: a
+      // `.pth` or hand-edited activate hook in a virtualenv, or `.bundle/config`
+      // holding a private gem server's credentials — the stated exception to the
+      // membership rule, and the reason this hatch has to work for EVERY name
+      // rather than the one that happened to get a fixture.
+      write(project, ".worktreeinclude", `${pruned}/keep/mine.local\n`);
+      write(project, `${pruned}/keep/mine.local`, "API=1\n");
+      write(project, `${pruned}/lib/theirs.cfg`, "NOT_MINE=1");
 
-    const { copied } = await copyIncludedFiles(project, worktree);
+      const { copied } = await copyIncludedFiles(project, worktree);
 
-    expect(copied).toEqual([".venv/bin/activate.local"]);
-  });
+      expect(copied).toEqual([`${pruned}/keep/mine.local`]);
+    },
+  );
 
   it("keeps the prune when the only mention of the directory is a negation", async () => {
     const project = tempDir("proj");

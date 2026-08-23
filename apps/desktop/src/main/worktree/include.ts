@@ -33,8 +33,8 @@
  * so the walk visits every directory it does not prune, and never follows
  * symlinked dirs. Two kinds are pruned: `.git`, which is git's own metadata and
  * can never be transported, and the {@link DEFAULT_PRUNED_DIRS} below, any of
- * which a `.worktreeinclude` line can ask for back by name. The walk and every copy run
- * through `fs/promises` — this step executes on Electron main, and the
+ * which a `.worktreeinclude` line can ask for back by name. The walk and every
+ * copy run through `fs/promises` — this step executes on Electron main, and the
  * synchronous version froze every window for the walk's whole duration on a
  * large Main checkout (VC-16's rainbow wheel).
  */
@@ -51,22 +51,21 @@ export const DEFAULT_INCLUDE_PATTERNS = [".env*", ".claude/settings.local.json"]
 
 /**
  * Directory names the walk does not descend into unless a `.worktreeinclude`
- * line names one — the shared per-ecosystem dependency/build list
- * ({@link DEPENDENCY_AND_BUILD_DIRS}), which the file index's fallback walk and
- * the Project Files watcher read too, so the three cannot drift apart.
+ * line names one — the shared per-ecosystem dependency/build list, which the
+ * file index's fallback walk and the Project Files watcher read too, so the
+ * three cannot drift apart.
  *
- * `node_modules` is the member this walk measured, and it earns the place twice
- * over. It is the dominant cost of the walk on a JS checkout — the seconds
- * VC-16 reported — and it is also a correctness trap: `.env*` is an unanchored
- * default, packages ship `.env.example` files, and a depth-agnostic walk
- * transported other people's samples into the agent's checkout. Both halves of
- * that hold for a Python `.venv` or a Go `vendor` too, and the cost was simply
- * never measured here because the checkout under the walk was this repository
- * (VC-160's bias audit).
+ * What belongs on the list, and why `dist`/`build`/`out` do not, is the
+ * membership rule documented once on {@link DEPENDENCY_AND_BUILD_DIRS} — not
+ * restated here, because two copies of a rule are two rules eventually.
  *
- * Deliberately NOT a general ignore list. A directory that is merely large is
- * still walked: these are the ones whose contents are, by construction, not
- * ours — see the membership rule in `walk-prune.ts`.
+ * What is specific to THIS walk is the second reason it prunes at all. Beyond
+ * cost (VC-16's rainbow wheel, measured on `node_modules`), pruning is a
+ * CORRECTNESS requirement here: `.env*` is an unanchored default, packages ship
+ * `.env.example` files, and a depth-agnostic walk transported other people's
+ * samples into the agent's checkout. That trap is per-ecosystem too — a Python
+ * `.venv` and a Go `vendor` carry the same stray samples — and it went unnoticed
+ * only because the checkout under the walk was this repository (VC-160).
  */
 export const DEFAULT_PRUNED_DIRS = DEPENDENCY_AND_BUILD_DIRS;
 

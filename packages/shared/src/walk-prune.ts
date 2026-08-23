@@ -21,6 +21,16 @@
  * in some repository, and guessing wrong would silently hide a file someone
  * wrote.
  *
+ * ONE STATED EXCEPTION: `.bundle`. Bundler keeps a small hand-editable
+ * `config` there (`bundle config set --local`, which can hold a private gem
+ * server's credentials) — authored, not generated, so the rule above does not
+ * reach it. It is on the list because it is the name Ruby projects actually
+ * carry and the ticket that widened this list named it; the escape hatch is
+ * what makes that safe, since a `.worktreeinclude` line naming `.bundle/config`
+ * un-prunes it (see `prunedDirNames` in the worktree copy walk). Recorded here
+ * rather than quietly filed under "generated", so the rule stays honest and
+ * the next name is judged against a rule nothing already violates.
+ *
  * Not a substitute for `.gitignore`. Where git is usable it already answers
  * this question better (the file index asks `git ls-files` first, and only
  * falls back to a walk when git cannot answer); this is the constant table for
@@ -28,16 +38,17 @@
  */
 
 /**
- * Dependency and build-output directories, by ecosystem. Sorted for reading,
- * not for lookup — every consumer builds its own `Set` (or prefix list) from
- * this, usually adding names of its own.
+ * Dependency and build-output directories, GROUPED BY ECOSYSTEM (not sorted —
+ * `venv` sits beside `.venv` because they are two spellings of one thing).
+ * Order is for reading only: every consumer builds its own `Set` (or prefix
+ * list) from this, usually adding names of its own.
  *
  * Each consumer keeps its own escape hatch: a `.worktreeinclude` line naming
  * one of these puts it back for the copy walk, and the file index prefers
  * `git ls-files` over the walk that reads this list at all.
  */
 export const DEPENDENCY_AND_BUILD_DIRS = [
-  /** Ruby: bundler's vendored gems and its local config. */
+  /** Ruby: bundler's local `config` — the stated exception above; its gems vendor to `vendor/bundle`. */
   ".bundle",
   /** JVM: Gradle's per-project caches and build state. */
   ".gradle",
@@ -55,5 +66,3 @@ export const DEPENDENCY_AND_BUILD_DIRS = [
   /** Go, PHP (composer), Ruby: fetched third-party source. */
   "vendor",
 ] as const;
-
-export type DependencyOrBuildDir = (typeof DEPENDENCY_AND_BUILD_DIRS)[number];

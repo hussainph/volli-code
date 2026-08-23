@@ -1081,10 +1081,12 @@ app.whenReady().then(async () => {
   // unregistered, the renderer's Model Access page would toast Electron's
   // nameless "No handler registered" instead of the actual problem (VC-76).
   if (sessionRuntime === null) {
+    // `dbHandle.error` is already a complete sentence naming the failure (see
+    // db-open-failure.ts's CONTRACT), so it is passed through rather than
+    // wrapped — a second "the local database failed to open" in front of it read
+    // as two restatements of one fact to the user (VC-160).
     registerDegradedSessionRpcIpcHandlers(
-      dbHandle.ok
-        ? "The agent runtime is unavailable."
-        : `The local database failed to open: ${dbHandle.error}`,
+      dbHandle.ok ? "The agent runtime is unavailable." : dbHandle.error,
     );
   }
   // Signing in is a Model Access task, not a Session one, so it gets its own
@@ -1099,17 +1101,13 @@ app.whenReady().then(async () => {
     // surface must answer with the recorded (already-classified) reason — a
     // Node-ABI failure names the incompatibility, not a generic "unavailable"
     // (VC-76).
-    dbHandle.ok
-      ? undefined
-      : `Sign-in is unavailable — the local database failed to open: ${dbHandle.error}`,
+    dbHandle.ok ? undefined : `Sign-in is unavailable. ${dbHandle.error}`,
   );
   // The Web Access surface, on its own door beside sign-in and for the same
   // reason: one of its arguments is an API key.
   registerWebAccessIpcHandlers(
     webAccess,
-    dbHandle.ok
-      ? undefined
-      : `Web access settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+    dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
   );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot

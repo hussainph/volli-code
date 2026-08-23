@@ -36,9 +36,10 @@ launched-wrapped by absolute path; it just cannot intercept a hand-typed command
 
 ## What a fish or bash user is told
 
-No banner, toast, dialog or error anywhere states or implies that their shell is a
-problem. Everything below is either a neutral statement of fact or lives behind a door
-the user opened.
+Nothing states or implies that their *shell* is a problem: no banner, toast or dialog
+names it, and everything below is either a neutral statement of fact or lives behind a
+door the user opened. One warn-tone row is reachable for these users, but it is about
+the login `PATH` rather than the shell — see [The one rough edge found](#the-one-rough-edge-found).
 
 - **Settings → CLI, "Shell chain" row:** `muted` tone, `"fish — zsh only for now"`.
   Muted is the pane's vocabulary for true-but-unactionable; it is not a warning, and it

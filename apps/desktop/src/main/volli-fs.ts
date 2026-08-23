@@ -103,9 +103,10 @@ const FALLBACK_SKIP_DIRS = new Set([".git", ".volli", ...DEPENDENCY_AND_BUILD_DI
 
 /**
  * The same names as a watch-event prefix (`node_modules/`), for the one thing
- * {@link DirWatchManager.matches} drops. Precomputed: a watcher fires per
- * filesystem event, and rebuilding this per event would pay for the list's
- * length forever.
+ * {@link DirWatchManager.matches} drops. Built once at module load rather than
+ * per event: the scan itself is still one pass over the list per event, but a
+ * watcher under an install fires thousands of times and there is no reason to
+ * re-allocate the same nine strings for each one.
  */
 const DEPENDENCY_AND_BUILD_DIR_PREFIXES = DEPENDENCY_AND_BUILD_DIRS.map((name) => `${name}${sep}`);
 

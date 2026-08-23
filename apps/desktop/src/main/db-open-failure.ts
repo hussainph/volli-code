@@ -20,6 +20,14 @@
  * by audience rather than dropped: {@link describeDbOpenFailure} answers the
  * person in front of the app, and the dev loop keeps its own copy in the dev
  * build and in {@link dbOpenFailureLogLine}, which is where a developer looks.
+ *
+ * CONTRACT: {@link describeDbOpenFailure} returns a COMPLETE, standalone
+ * sentence that names what happened. Its result is what every degraded IPC
+ * surface answers with verbatim, so it cannot be a fragment that only reads
+ * correctly after some caller's prefix — that split is what made four call
+ * sites glue "The local database failed to open:" onto a paragraph already
+ * saying so. The framing therefore lives HERE, in the one module that knows
+ * how to phrase this failure, and callers add only their own surface's name.
  */
 
 import { errorMessage } from "@volli/shared";
@@ -52,11 +60,22 @@ export function isNativeModuleFailure(message: string): boolean {
 }
 
 /**
+ * How this failure is named to a reader who gets the raw message with it. Every
+ * caller used to spell some variant of this itself; it lives here so the
+ * sentence is written once and cannot be doubled onto a message that already
+ * contains it.
+ */
+const DB_OPEN_FRAME = "The local database failed to open";
+
+/**
  * What a person who did not build this app can actually do about it: the one
  * failure named in plain words, then the two recoveries available to them and
  * nothing else. No ABI number, no module path, no package manager — none of it
  * is actionable without a checkout, and printing it only asks a user to debug
  * a build they never ran.
+ *
+ * Carries its own framing (it replaces {@link DB_OPEN_FRAME} rather than
+ * following it) because "database" is not the user's word for what broke.
  */
 const USER_NATIVE_MODULE_REMEDY =
   "Volli's database engine did not load, so your boards, tickets and sessions " +
@@ -82,6 +101,15 @@ export interface DbOpenFailureAudience {
 }
 
 /**
+ * The raw message with the dev-loop remedy appended when the failure class
+ * earns one. The single definition of "what a developer is told", shared by the
+ * dev build's surfaces and {@link dbOpenFailureLogLine} so the two cannot drift.
+ */
+function developerDetail(message: string): string {
+  return isNativeModuleFailure(message) ? `${message} — ${DEV_NATIVE_MODULE_REMEDY}` : message;
+}
+
+/**
  * The message a failed database open is recorded — and answered — with.
  *
  * Native-module failures get the incompatibility named and a remedy its reader
@@ -92,16 +120,20 @@ export interface DbOpenFailureAudience {
  * The audience defaults to the USER. A caller that forgets to say where it is
  * running gets the copy that is true everywhere, rather than shipping a
  * dev-loop instruction to somebody who has no repository to run it in.
+ *
+ * Always a complete sentence — see the CONTRACT note at the top of this module.
  */
 export function describeDbOpenFailure(
   error: unknown,
   audience: DbOpenFailureAudience = { dev: false },
 ): string {
   const message = errorMessage(error);
-  if (!isNativeModuleFailure(message)) return message;
-  // A dev build keeps the raw message in front of the remedy: the ABI numbers
-  // are the fastest way to see which Node built the addon.
-  return audience.dev ? `${message} — ${DEV_NATIVE_MODULE_REMEDY}` : USER_NATIVE_MODULE_REMEDY;
+  // The only arm whose reader cannot act on the raw text, so it is the only one
+  // that replaces it. Everything else — a dev build, and any I/O failure, whose
+  // message ('disk full', 'permission denied') speaks for itself — keeps the
+  // message and gets the frame that says which subsystem it came from.
+  if (!audience.dev && isNativeModuleFailure(message)) return USER_NATIVE_MODULE_REMEDY;
+  return `${DB_OPEN_FRAME}: ${developerDetail(message)}`;
 }
 
 /**
@@ -110,8 +142,11 @@ export function describeDbOpenFailure(
  * message and, for the native-module class, the dev-loop remedy, so a user's
  * report of the plain-language message can still be diagnosed from the log they
  * attach.
+ *
+ * Unframed: the one call site's `console.error` prefix already says a database
+ * open failed, and repeating it in the payload is the doubling this module's
+ * CONTRACT exists to prevent.
  */
 export function dbOpenFailureLogLine(error: unknown): string {
-  const message = errorMessage(error);
-  return isNativeModuleFailure(message) ? `${message} — ${DEV_NATIVE_MODULE_REMEDY}` : message;
+  return developerDetail(errorMessage(error));
 }

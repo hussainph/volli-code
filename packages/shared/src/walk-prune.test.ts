@@ -6,6 +6,11 @@ describe("DEPENDENCY_AND_BUILD_DIRS", () => {
   it("names a dependency or build tree for every ecosystem the walks meet, not just JS", () => {
     // The bias this list exists to remove: `node_modules` alone made a Python,
     // Rust, Go, Ruby or JVM checkout pay a full walk of a tree nobody authored.
+    //
+    // Deliberately an exact-match gate, not a `toContain` sample. Every name
+    // here silently hides a directory from a user, so growing the list is a
+    // product decision that should have to edit a test and argue with the
+    // membership rule — not something a passing suite waves through.
     expect([...DEPENDENCY_AND_BUILD_DIRS]).toEqual([
       ".bundle",
       ".gradle",

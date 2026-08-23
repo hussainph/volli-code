@@ -59,15 +59,40 @@ describe("describeDbOpenFailure", () => {
     expect(described).toContain("Node version incompatibility");
   });
 
-  it("leaves a plain I/O failure untouched for either audience — no invented Node story", () => {
+  it("leaves a plain I/O failure's own words intact for either audience — no invented Node story", () => {
     const message = "SQLITE_CANTOPEN: unable to open database file";
-    expect(describeDbOpenFailure(new Error(message))).toBe(message);
-    expect(describeDbOpenFailure(new Error(message), { dev: true })).toBe(message);
+    for (const described of [
+      describeDbOpenFailure(new Error(message)),
+      describeDbOpenFailure(new Error(message), { dev: true }),
+    ]) {
+      expect(described).toContain(message);
+      expect(described).not.toContain("Node version incompatibility");
+      expect(described).not.toContain("pnpm install");
+    }
     expect(isNativeModuleFailure(message)).toBe(false);
   });
 
+  it("answers with a COMPLETE sentence, so no caller has to prefix one", () => {
+    // The regression this guards (VC-160 review): the user copy was written as a
+    // standalone paragraph while four call sites still glued "the local database
+    // failed to open:" in front of it, so the person read one fact three times.
+    // Every arm now names the failure itself, and no arm names it twice.
+    const arms = [
+      describeDbOpenFailure(new Error(ABI_MISMATCH)),
+      describeDbOpenFailure(new Error(ABI_MISMATCH), { dev: true }),
+      describeDbOpenFailure(new Error("SQLITE_CANTOPEN: unable to open database file")),
+    ];
+    for (const described of arms) {
+      expect(described).toMatch(/database|Volli/);
+      expect(described.match(/failed to open/g) ?? []).toHaveLength(
+        described.startsWith("The local database failed to open") ? 1 : 0,
+      );
+    }
+  });
+
   it("survives a non-Error throw", () => {
-    expect(describeDbOpenFailure("disk full")).toBe("disk full");
+    expect(describeDbOpenFailure("disk full")).toBe("The local database failed to open: disk full");
+    expect(dbOpenFailureLogLine("disk full")).toBe("disk full");
   });
 });
 
@@ -79,6 +104,14 @@ describe("dbOpenFailureLogLine", () => {
     expect(logged).toContain(ABI_MISMATCH);
     expect(logged).toContain(".nvmrc");
     expect(logged).toContain("pnpm install");
+  });
+
+  it("omits the frame its one call site's console prefix already prints", () => {
+    // `console.error("[volli] failed to open database:", line)` — repeating it
+    // in the payload is the same doubling the describe() contract forbids.
+    expect(dbOpenFailureLogLine(new Error(ABI_MISMATCH))).not.toContain(
+      "The local database failed to open",
+    );
   });
 
   it("passes a plain I/O failure through untouched", () => {
