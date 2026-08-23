@@ -25,6 +25,16 @@ const INDEX: PromptResource = {
   text: "- svg (.agents/skills/svg/SKILL.md): draws vectors",
 };
 
+function skill(name: string): SkillReference {
+  return {
+    name,
+    description: `${name} description`,
+    body: `# ${name}\n\nDo ${name}.`,
+    userInvokeOnly: false,
+    root: `.agents/skills/${name}`,
+  };
+}
+
 function input(overrides: Partial<PromptBaselineInput> = {}): PromptBaselineInput {
   return {
     role: "project",
@@ -182,13 +192,6 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
   });
 
   it("classes the production named-skill + filtered-index shape conservatively", () => {
-    const skill = (name: string): SkillReference => ({
-      name,
-      description: `${name} description`,
-      body: `# ${name}\n\nDo ${name}.`,
-      userInvokeOnly: false,
-      root: `.agents/skills/${name}`,
-    });
     const named = skill("svg");
     const listed = skill("tdd");
     const index = skillsIndexResource([named, listed], [named.name]);
