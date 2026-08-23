@@ -7,6 +7,7 @@ export * from "./doctor";
 export * from "./session-env";
 export * from "./harness-command";
 export * from "./harness";
+export * from "./verb-registry";
 export * from "./agent-surface";
 export * from "./agent-runtime";
 export * from "./model-access-policy";
