@@ -83,7 +83,6 @@ import {
   type ResolvedAppearance,
 } from "@volli/shared";
 
-import { PrefRow } from "@renderer/components/settings/kit";
 import {
   canvasContrastReport,
   CANVAS_SWATCH_PAGES,
@@ -594,11 +593,11 @@ function PrimaryColourRow({
       >
         <CaretLeftIcon />
       </Button>
-      <div
-        role="group"
-        aria-label="Primary colour presets"
-        className="grid flex-1 grid-cols-9 gap-1"
-      >
+      {/* FIXED-SIZE chips, not a stretching grid. `flex-1` with `aspect-square
+          w-full` squares meant each swatch was a ninth of whatever width the
+          row was given — on the workbench measure that made nine 85px discs
+          dominating the pane. A colour chip is a chip at any window size. */}
+      <div role="group" aria-label="Primary colour presets" className="flex flex-1 gap-1.5">
         {CANVAS_SWATCH_PAGES[page].map((swatch) => (
           <button
             key={swatch}
@@ -607,7 +606,7 @@ function PrimaryColourRow({
             aria-label={swatch}
             aria-pressed={swatch === normalized}
             style={{ background: swatch }}
-            className="aspect-square w-full rounded-full outline-offset-2 ring-1 ring-black/10 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-ring"
+            className="size-6 shrink-0 rounded-full outline-offset-2 ring-1 ring-black/10 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-ring"
           />
         ))}
       </div>
@@ -1022,6 +1021,34 @@ function ContrastAlert({
  * The store is read imperatively for every write, so no handler closes over a
  * snapshot that a concurrent hydrate has already replaced.
  */
+/**
+ * A label and its control INSIDE the editor cluster, not across the pane.
+ *
+ * These were `PrefRow`s, which is right for a setting on the page and wrong
+ * here: `PrefRow` justifies label and control to the section's two edges, so
+ * on the workbench measure the Vibrancy track sat some 800px from the word
+ * "Vibrancy" with nothing between them. A control belongs beside the thing it
+ * is named by; the cluster's own width is the measure that keeps it there.
+ */
+function EditorRow({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <label htmlFor={htmlFor} className="text-sm font-medium">
+        {label}
+      </label>
+      <div className="flex shrink-0 items-center gap-2">{children}</div>
+    </div>
+  );
+}
+
 export function CanvasEditor({
   scope,
   canvas,
@@ -1120,8 +1147,8 @@ export function CanvasEditor({
        * wrap under the pad, which is the stacked layout this replaced.
        * Responsiveness is the whitespace (docs/DESIGN.md).
        */}
-      <div className="flex flex-wrap items-start gap-4 pb-2">
-        <div className="w-full max-w-[22rem] shrink-0 grow-0">
+      <div className="flex max-w-[46rem] flex-wrap items-start gap-x-6 gap-y-4 pb-2">
+        <div className="w-full max-w-[20rem] shrink-0 grow-0">
           <GradientPad
             canvas={live}
             resolved={resolved}
@@ -1131,7 +1158,7 @@ export function CanvasEditor({
           />
         </div>
 
-        <div className="flex min-w-[18rem] flex-1 flex-col gap-4">
+        <div className="flex min-w-[18rem] flex-1 flex-col gap-3">
           <StopRow
             canvas={live}
             resolved={resolved}
@@ -1145,38 +1172,38 @@ export function CanvasEditor({
             onPreview={(next) => edit((current) => withPrimaryHex(current, next))}
             onAbandon={abandon}
           />
+
+          <EditorRow label="Vibrancy" htmlFor="canvas-vibrancy">
+            <UnitSlider
+              id="canvas-vibrancy"
+              label="Vibrancy"
+              value={live.vibrancy}
+              chip={
+                <span
+                  aria-hidden
+                  className="size-6 shrink-0 rounded-md ring-1 ring-black/10"
+                  style={{ background: vibrancyChip }}
+                />
+              }
+              onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
+              onSettle={settle}
+            />
+          </EditorRow>
+
+          {/* No `htmlFor`: the dial is a `div[role="slider"]`, which a label
+              cannot be bound to. It carries its own `aria-label` instead. */}
+          <EditorRow label="Grain">
+            <GrainDial
+              value={live.grain}
+              onInput={(grain) => edit((current) => ({ ...current, grain }))}
+              onSettle={settle}
+            />
+            <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
+              {percentLabel(live.grain)}
+            </span>
+          </EditorRow>
         </div>
       </div>
-
-      <PrefRow label="Vibrancy" htmlFor="canvas-vibrancy">
-        <UnitSlider
-          id="canvas-vibrancy"
-          label="Vibrancy"
-          value={live.vibrancy}
-          chip={
-            <span
-              aria-hidden
-              className="size-6 shrink-0 rounded-md ring-1 ring-black/10"
-              style={{ background: vibrancyChip }}
-            />
-          }
-          onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
-          onSettle={settle}
-        />
-      </PrefRow>
-
-      {/* No `htmlFor`: the dial is a `div[role="slider"]`, which a label cannot
-          be bound to. It carries its own `aria-label` instead. */}
-      <PrefRow label="Grain">
-        <GrainDial
-          value={live.grain}
-          onInput={(grain) => edit((current) => ({ ...current, grain }))}
-          onSettle={settle}
-        />
-        <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
-          {percentLabel(live.grain)}
-        </span>
-      </PrefRow>
 
       <ContrastAlert
         report={report}
