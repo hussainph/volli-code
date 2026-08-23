@@ -398,13 +398,26 @@ than a generic "install it".
 requiring became narrow: `SESSION_ENV_TOOLS` is now every name a session's
 `PATH` is looked up for (`git`, `gh`, `node`, `npm`, `pnpm`, `yarn`, `bun`), and
 `requiredSessionEnvTools` derives the faultable subset from what is on disk —
-`git` when the folder is a repository, `node` plus the manager the lockfile
-names when it is a package workspace, and `gh` never (its absence is already
-classified by `GhResult` at the moment a PR action runs). The fixed
-`git, gh, node, pnpm` list was Volli-repo bias: a Python repo, or any host
+`git` when the folder is a repository, the manager the lockfile names plus the
+runtime that manager needs when it is a package workspace, and `gh` never (its
+absence is already classified by `GhResult` at the moment a PR action runs). The
+fixed `git, gh, node, pnpm` list was Volli-repo bias: a Python repo, or any host
 without `gh`, wore a permanent "Sessions aren't ready" banner for tools it never
 runs. `volli doctor` still reports every measurement — an unrequired absence is
 an `ok` check that says what was seen, because reporting is not alarming.
+
+Two edges keep the rule honest. `gh` is unrequirable by TYPE
+(`REQUIRABLE_SESSION_ENV_TOOLS`), so neither the derivation nor a wire payload
+from another `volli` can revive the launch-wide fault. And the requirement is a
+fact about a DIRECTORY, so every surface that judges one has to stand in the
+project: Settings → CLI passes its project root to the doctor probe, which would
+otherwise inherit main's cwd — `/` under launchd — imply nothing, and pass a
+genuinely missing `git` while the banner beside it said otherwise.
+
+Bun is the case that shows requiring is about the project rather than the
+habit: it is its own runtime and its own installer, so a `bun.lock` workspace
+implies `bun` alone. Requiring `node` beside it would be the same false fault as
+pnpm-in-a-yarn-workspace, wearing a different name.
 
 **✅ B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
 (`474f77de`.) The pane now folds the two long values into a side-by-side

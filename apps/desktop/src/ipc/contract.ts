@@ -49,6 +49,7 @@ import type {
   SESSION_RPC_IPC_CHANNEL,
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
+  RequirableSessionEnvTool,
   SessionEnvTool,
   SessionListingRow,
   SessionRpcIpcRequest,
@@ -777,11 +778,12 @@ export interface CliSessionPathStatus {
   tools: Readonly<Record<SessionEnvTool, string | null>>;
   /**
    * The subset of {@link tools} the scoped project implies — a repository
-   * implies `git`, a JavaScript workspace implies `node` and the manager its
-   * lockfile names (`@volli/shared`'s `requiredSessionEnvTools`). Only these
-   * absences are faults; empty when no project workspace was supplied.
+   * implies `git`, a JavaScript workspace implies its lockfile's manager and
+   * the runtime that manager needs (`@volli/shared`'s
+   * `requiredSessionEnvTools`). Only these absences are faults; empty when no
+   * project workspace was supplied.
    */
-  requiredTools: readonly SessionEnvTool[];
+  requiredTools: readonly RequirableSessionEnvTool[];
   /** Project-scoped dependency state; `null` when no project workspace was supplied. */
   dependencies: WorkspaceDependenciesStatus;
   /**
@@ -838,6 +840,17 @@ export interface CliStatusInput {
 /** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
 export interface CliDoctorInput {
   fix: boolean;
+  /**
+   * The project root to run the probe IN, when one is in scope.
+   *
+   * Which tool absences are faults is a fact about a directory (VC-157), and
+   * `volli doctor` reads it from its own cwd. A probe spawned without this
+   * inherits main's cwd — `/` for an app launched from Finder — which implies
+   * no project and so can never fault a missing `git`. The pane would then
+   * contradict the banner that sent the user to it, which is the
+   * two-surfaces-disagree failure VC-94 was about.
+   */
+  cwd?: string;
 }
 
 /**

@@ -445,12 +445,19 @@ function renderStableLines(command: string, data: unknown): string | null {
       // they just read: a `-` above a name absent from this line is a tool
       // nothing here runs, not a fault. `-` here means the project implies
       // no tool at all — a folder that is neither repository nor workspace.
-      const requiredTools = Array.isArray(env["requiredTools"]) ? env["requiredTools"] : [];
-      lines.push(
-        `env.requiredTools  ${
-          requiredTools.length === 0 ? "-" : requiredTools.map(terminalSafeInline).join(" ")
-        }`,
-      );
+      //
+      // A field that is not an array at all is a different fact: an answering
+      // process that never established requirements. That prints no line,
+      // rather than a `-` claiming it looked and found none — the same
+      // measured-versus-unmeasured discipline the block keeps everywhere else.
+      const requiredTools = env["requiredTools"];
+      if (Array.isArray(requiredTools)) {
+        lines.push(
+          `env.requiredTools  ${
+            requiredTools.length === 0 ? "-" : requiredTools.map(terminalSafeInline).join(" ")
+          }`,
+        );
+      }
       lines.push(`env.dependencies  ${envValue(env["dependencies"])}`);
     }
     if (data["degraded"] === true) lines.push("degraded  true");

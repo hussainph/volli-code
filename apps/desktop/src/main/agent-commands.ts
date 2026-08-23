@@ -28,10 +28,10 @@ import {
   isValidBranchName,
   parseHarnessId,
   REASONING_LEVELS,
+  REQUIRABLE_SESSION_ENV_TOOLS,
   resolveAgentContext,
   resolveDefaultModel,
   runDoctorChecks,
-  SESSION_ENV_TOOLS,
   shortSessionId,
   supersededHarnessEvent,
   declaresInputNeeded as adapterDeclaresInputNeeded,
@@ -54,10 +54,10 @@ import type {
   ReasoningLevel,
   SessionActivityState,
   SessionProjection,
+  RequirableSessionEnvTool,
   SessionRecord,
   SessionEnvRepair,
   SessionEnvReport,
-  SessionEnvTool,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
@@ -924,10 +924,14 @@ function observedText(value: unknown): Observed<string> {
  * the `volli` that called and the main that answered disagree about the wire.
  * What is dropped costs a fault, never a report — an empty list means nothing
  * here can fail, which is the safe direction for a disagreement to fall.
+ *
+ * Filtered against the REQUIRABLE census, not the measured one, so `gh` is
+ * dropped here as well as at the producer: "no project implies gh" holds for
+ * a payload this main did not compute, including one from an older `volli`.
  */
-function observedRequiredTools(value: unknown): readonly SessionEnvTool[] {
+function observedRequiredTools(value: unknown): readonly RequirableSessionEnvTool[] {
   if (!Array.isArray(value)) return [];
-  return SESSION_ENV_TOOLS.filter((tool) => value.includes(tool));
+  return REQUIRABLE_SESSION_ENV_TOOLS.filter((tool) => value.includes(tool));
 }
 
 function parseDoctorObservation(request: AgentRequest): DoctorObservation | null {

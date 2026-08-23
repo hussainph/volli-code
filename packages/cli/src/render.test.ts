@@ -653,6 +653,35 @@ describe("renderCliSuccess", () => {
     );
   });
 
+  // `-` is a measurement: asked, and nothing implied. A block from an
+  // answering process that never established requirements at all has not
+  // measured anything, and must not borrow the word for one that did.
+  it("omits requiredTools entirely when the block never reported them", () => {
+    const rendered = renderCliSuccess(
+      "identify",
+      {
+        project: null,
+        ticket: null,
+        session: null,
+        worktreePath: "/repo/volli",
+        socket: null,
+        appVersion: null,
+        env: {
+          path: "/usr/bin",
+          provenance: "adopted",
+          interactiveProvenance: "adopted",
+          tools: { git: "/usr/bin/git" },
+          dependencies: null,
+        },
+      },
+      { json: false },
+    );
+
+    expect(rendered).toContain("env.tools.git  /usr/bin/git");
+    expect(rendered).not.toContain("env.requiredTools");
+    expect(rendered).toContain("env.dependencies  -");
+  });
+
   it("prints the worktree-misalignment warning right after the path it contradicts", () => {
     expect(
       renderCliSuccess(

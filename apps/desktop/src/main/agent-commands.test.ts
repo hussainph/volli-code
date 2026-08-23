@@ -3615,6 +3615,22 @@ describe("doctor", () => {
     expect((await checkFrom(unreadable, "tool-git")).status).toBe("ok");
   });
 
+  // "No project implies gh" is enforced at BOTH ends, so a caller that names
+  // it — an older `volli`, or one from somewhere else entirely — cannot talk
+  // main into reviving the launch-wide fault VC-157 retired.
+  it("refuses a wire payload that claims gh is required", async () => {
+    const claimsGh = {
+      ...observation,
+      resolved: { claude: "/ud/bin/claude", git: "/usr/bin/git", gh: null },
+      requiredTools: ["git", "gh"],
+    };
+
+    const gh = await checkFrom(claimsGh, "tool-gh");
+    expect(gh.status).toBe("ok");
+    expect(gh.title).toBe("`gh` is not required by this project");
+    expect((await checkFrom(claimsGh, "tool-git")).status).toBe("ok");
+  });
+
   it("gives a malformed resolution the same treatment as an unreported one", async () => {
     const claimed = await checkFrom(
       { ...observation, resolved: { claude: 42 } },

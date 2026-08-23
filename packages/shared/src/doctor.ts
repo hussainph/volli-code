@@ -23,7 +23,7 @@
  * caller's workspace implies can fail.
  */
 import { SESSION_ENV_TOOLS } from "./session-env";
-import type { SessionEnvTool } from "./session-env";
+import type { RequirableSessionEnvTool, SessionEnvTool } from "./session-env";
 import type { WrapperRefusal } from "./harness/wrapper";
 
 /** How much a finding matters. `warn` is a degraded but working install. */
@@ -80,7 +80,7 @@ export interface DoctorObservation {
    * be needed, an absence has no consequence to name, and alarming anyway is
    * the bias VC-157 removed.
    */
-  requiredTools: readonly SessionEnvTool[];
+  requiredTools: readonly RequirableSessionEnvTool[];
   /** Where `volli` itself resolves for the caller. */
   volliPath: Observed<string>;
 }
@@ -198,9 +198,8 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
  * causes and the discriminator that tells them apart: `volli identify`, which
  * prints the adopted PATH and its provenance.
  */
-const TOOL_REMEDIES: Record<SessionEnvTool, string> = {
+const TOOL_REMEDIES: Record<RequirableSessionEnvTool, string> = {
   git: "macOS ships git with the Xcode Command Line Tools — run `xcode-select --install`. If git is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
-  gh: "Install the GitHub CLI (`brew install gh`). If gh is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
   node: "Install Node (`brew install node`). If node is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
   npm: "npm ships with Node (`brew install node`). If npm is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
   pnpm: "Enable it with `corepack enable pnpm` (or `brew install pnpm`). If pnpm is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
@@ -213,9 +212,12 @@ const TOOL_REMEDIES: Record<SessionEnvTool, string> = {
  * `gh` is the one worth a sentence: its absence used to be a launch-wide
  * fault, and a reader who remembers that deserves to know where the answer
  * moved rather than to conclude the check was simply dropped.
+ *
+ * Sentences only — the joining is {@link toolChecks}'s job, so a note added
+ * later cannot break the spacing by forgetting a leading space.
  */
 const UNREQUIRED_TOOL_NOTES: Partial<Record<SessionEnvTool, string>> = {
-  gh: " Volli reports gh's absence when a PR action actually needs it.",
+  gh: "Volli reports gh's absence when a PR action actually needs it.",
 };
 
 /**
@@ -237,7 +239,11 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
     const title = `\`${tool}\` is available to sessions`;
     const actual = observation.resolved[tool];
     if (typeof actual === "string") return ok(id, title, actual);
-    if (!observation.requiredTools.includes(tool)) {
+    // `find` rather than `includes`: it narrows the name to a requirable one,
+    // which is what lets the remedy table be indexed without a cast — and the
+    // table has no `gh` entry to reach, because nothing can require it.
+    const required = observation.requiredTools.find((candidate) => candidate === tool);
+    if (required === undefined) {
       const seen =
         actual === null
           ? `\`${tool}\` resolves to nothing on this PATH`
@@ -245,7 +251,9 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
       return ok(
         id,
         `\`${tool}\` is not required by this project`,
-        `${seen}, and nothing here asks for it.${UNREQUIRED_TOOL_NOTES[tool] ?? ""}`,
+        [`${seen}, and nothing here asks for it.`, UNREQUIRED_TOOL_NOTES[tool]]
+          .filter((part) => part !== undefined)
+          .join(" "),
       );
     }
     if (actual === null) {
@@ -254,7 +262,7 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
         title,
         "fail",
         `\`${tool}\` resolves to nothing on this PATH`,
-        TOOL_REMEDIES[tool],
+        TOOL_REMEDIES[required],
       );
     }
     return bad(

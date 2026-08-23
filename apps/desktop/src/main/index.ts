@@ -27,6 +27,7 @@ import {
   globalSkillsDir,
   projectSkillsDir,
   draftAttachmentHashes,
+  memoizedPathExists,
   resolveDefaultModel,
   resolveShell,
   skillPromptResource,
@@ -668,7 +669,10 @@ app.whenReady().then(async () => {
    * onboarding. `null` means the caller has no project root — it must not turn
    * main's own cwd into a pretend workspace dependency answer.
    */
-  const readSessionEnvironment = async (cwd: string | null) => {
+  const readSessionEnvironment = async (
+    cwd: string | null,
+    pathExists?: (path: string) => boolean,
+  ) => {
     const outcome = await loginPathBootstrap.apply();
     const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
     const report = await buildSessionEnvReport({
@@ -680,6 +684,9 @@ app.whenReady().then(async () => {
       // A host-wide read has no project dependency fact to infer from main's
       // own cwd, so the report leaves that one field unmeasured.
       cwd: cwd ?? undefined,
+      // A caller with a further workspace question of its own passes its memo
+      // in, so the whole read stats each path once (Settings, below).
+      ...(pathExists === undefined ? {} : { pathExists }),
     });
     // `SessionEnvReport` also serves a standalone CLI fallback, where those
     // fields can be unknown. Main just ran both passes, so Settings can retain
@@ -1903,10 +1910,17 @@ app.whenReady().then(async () => {
           // installs the scoped workspace, judged by its lockfile. Computed
           // here so `volli identify`'s env block keeps the exact field set
           // the contract published.
-          sessionEnvironment: async (cwd) => ({
-            ...(await readSessionEnvironment(cwd)),
-            installCommand: cwd === null ? null : workspaceInstallCommand(cwd, existsSync),
-          }),
+          sessionEnvironment: async (cwd) => {
+            // The install command reads the same lockfile the requirements
+            // did, so both share one memo: the walk happens once, and the
+            // command a user is told to run cannot name a different manager
+            // than the tool they were told to have.
+            const pathExists = memoizedPathExists(existsSync);
+            return {
+              ...(await readSessionEnvironment(cwd, pathExists)),
+              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, pathExists),
+            };
+          },
           systemPathIssues: () => readSystemPathIssues(),
           credentialHelperIssues: (cwd) => readCredentialHelperIssues(cwd),
           wrapperCommands: () =>
@@ -1921,7 +1935,11 @@ app.whenReady().then(async () => {
         },
         input?.cwd ?? null,
       ),
-    doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
+    // The probe runs IN the scoped project: `volli doctor` judges which
+    // tools are required from its own cwd (VC-157), and main's cwd is `/`
+    // under launchd — which would imply no project and quietly pass a
+    // genuinely missing `git`.
+    doctor: (cwd) => probeCliDoctor({ shellFile: resolveShell(process.env).file, cwd }),
     repair: async () => {
       await repairSessionEnvironment();
     },

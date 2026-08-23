@@ -37,6 +37,27 @@ export const SESSION_ENV_TOOLS = ["git", "gh", "node", "npm", "pnpm", "yarn", "b
 export type SessionEnvTool = (typeof SESSION_ENV_TOOLS)[number];
 
 /**
+ * The measured tools a project can actually IMPLY — the census minus `gh`.
+ *
+ * `gh` is absent by construction rather than by convention, so "no project
+ * implies `gh`" is a fact the compiler keeps: {@link requiredSessionEnvTools}
+ * cannot return it, the doctor's remedy table has no entry to reach for it,
+ * and a wire payload naming it is dropped at the edge. Stated in
+ * {@link SESSION_ENV_TOOLS} order, which is what lets requirement lists read
+ * in census order without a second sort.
+ */
+export const REQUIRABLE_SESSION_ENV_TOOLS = [
+  "git",
+  "node",
+  "npm",
+  "pnpm",
+  "yarn",
+  "bun",
+] as const satisfies readonly SessionEnvTool[];
+
+export type RequirableSessionEnvTool = (typeof REQUIRABLE_SESSION_ENV_TOOLS)[number];
+
+/**
  * The package managers a JavaScript workspace can name, each of which is also
  * a {@link SessionEnvTool} — a workspace requires THE manager its lockfile
  * names and no other.
@@ -131,7 +152,7 @@ export interface SessionEnvReport {
    * fault. Empty when no workspace was in scope, which is the honest answer
    * for a host-wide read: a report with no project cannot imply a tool.
    */
-  requiredTools: readonly SessionEnvTool[];
+  requiredTools: readonly RequirableSessionEnvTool[];
   /** Dependencies in the supplied workspace, or `null` when none was in scope. */
   dependencies: WorkspaceDependenciesStatus;
 }
@@ -140,6 +161,33 @@ export interface SessionEnvReport {
 export interface PathResolver {
   /** Whether a path is executable — the same question a shell asks of PATH. */
   isExecutable(path: string): Promise<boolean>;
+}
+
+/**
+ * One report's worth of `pathExists`, asked at most once per path.
+ *
+ * The workspace questions overlap by construction: every walk re-checks the
+ * same `.git` and `package.json` on its way up, and a caller that wants the
+ * requirements AND the dependency state AND the install command pays for the
+ * same ancestors three times. Sharing one of these across those calls settles
+ * it to a single stat per path.
+ *
+ * Correctness, not just cost: the answers are meant to describe ONE workspace
+ * at one moment, and a memo is what guarantees they cannot straddle a change
+ * on disk and disagree. Deliberately per-report and never module-level — a
+ * cache that outlived the read would report a repaired workspace as broken.
+ */
+export function memoizedPathExists(
+  pathExists: (path: string) => boolean,
+): (path: string) => boolean {
+  const seen = new Map<string, boolean>();
+  return (path) => {
+    const remembered = seen.get(path);
+    if (remembered !== undefined) return remembered;
+    const answer = pathExists(path);
+    seen.set(path, answer);
+    return answer;
+  };
 }
 
 function joinPath(directory: string, name: string): string {
@@ -154,6 +202,13 @@ function parentDirectory(path: string): string {
   return cut === 0 ? "/" : withoutSlash.slice(0, cut);
 }
 
+/** One step of a workspace walk: the directory, and whether it ended the walk. */
+interface WorkspaceAncestor {
+  directory: string;
+  /** Whether this directory carries the `.git` marker that bounds the walk. */
+  isRepositoryRoot: boolean;
+}
+
 /**
  * The ancestors a workspace question may consult: `cwd` up to and including
  * the repository root, or the filesystem root when no repository encloses
@@ -163,15 +218,20 @@ function parentDirectory(path: string): string {
  * other projects, and a stray `~/package.json` beside a `~/node_modules`
  * must never answer for a worktree that has neither — the false "installed"
  * an unbounded walk produces.
+ *
+ * The boundary is REPORTED rather than merely acted on, because one caller
+ * ({@link isGitRepository}) wants the marker itself. Asking again from the
+ * outside would stat every `.git` twice for one answer the walk already had.
  */
 function* workspaceAncestors(
   cwd: string,
   pathExists: (path: string) => boolean,
-): Generator<string> {
+): Generator<WorkspaceAncestor> {
   let directory = cwd;
   for (;;) {
-    yield directory;
-    if (pathExists(joinPath(directory, ".git"))) return;
+    const isRepositoryRoot = pathExists(joinPath(directory, ".git"));
+    yield { directory, isRepositoryRoot };
+    if (isRepositoryRoot) return;
     const parent = parentDirectory(directory);
     if (parent === directory) return;
     directory = parent;
@@ -228,7 +288,7 @@ export function workspaceDependenciesStatus(
   pathExists: (path: string) => boolean,
 ): WorkspaceDependenciesStatus {
   let sawManifest = false;
-  for (const directory of workspaceAncestors(cwd, pathExists)) {
+  for (const { directory } of workspaceAncestors(cwd, pathExists)) {
     if (pathExists(joinPath(directory, "package.json"))) {
       sawManifest = true;
       if (pathExists(joinPath(directory, "node_modules"))) return "installed";
@@ -270,7 +330,7 @@ export function workspacePackageManager(
   pathExists: (path: string) => boolean,
 ): WorkspacePackageManager | null {
   let sawManifest = false;
-  for (const directory of workspaceAncestors(cwd, pathExists)) {
+  for (const { directory } of workspaceAncestors(cwd, pathExists)) {
     if (!pathExists(joinPath(directory, "package.json"))) continue;
     sawManifest = true;
     for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
@@ -295,41 +355,61 @@ export function workspaceInstallCommand(
 
 /**
  * Whether `cwd` stands inside a git repository — the `.git` marker that
- * bounds every workspace walk, found rather than merely walked past. A file
- * in a linked worktree, a directory in a primary checkout; existence is the
- * test either way.
+ * bounds every workspace walk, taken from the walk rather than re-statted. A
+ * file in a linked worktree, a directory in a primary checkout; existence is
+ * the test either way.
+ *
+ * Module-private: the repository question reaches the outside world as part
+ * of {@link requiredSessionEnvTools}'s answer, and a second exported spelling
+ * of it would be one more thing to keep in step.
  */
-export function isGitRepository(cwd: string, pathExists: (path: string) => boolean): boolean {
-  for (const directory of workspaceAncestors(cwd, pathExists)) {
-    if (pathExists(joinPath(directory, ".git"))) return true;
+function isGitRepository(cwd: string, pathExists: (path: string) => boolean): boolean {
+  for (const { isRepositoryRoot } of workspaceAncestors(cwd, pathExists)) {
+    if (isRepositoryRoot) return true;
   }
   return false;
 }
+
+/**
+ * What each package manager implies about the runtime beside it.
+ *
+ * npm, pnpm and yarn are Node programs: a workspace that names one cannot be
+ * installed without `node`, so both are required. Bun is its own runtime and
+ * ships its own installer, so a bun workspace implies `bun` alone — telling a
+ * bun-only host it is missing `node` would be the same false fault, wearing a
+ * different name, that VC-157 exists to delete.
+ */
+const MANAGER_IMPLICATIONS: Record<WorkspacePackageManager, readonly RequirableSessionEnvTool[]> = {
+  npm: ["node", "npm"],
+  pnpm: ["node", "pnpm"],
+  yarn: ["node", "yarn"],
+  bun: ["bun"],
+};
 
 /**
  * The tools this project implies, and therefore the only ones whose absence
  * from the Session PATH is a fault (VC-157).
  *
  * Every entry is earned by something on disk: `git` by the repository the
- * folder is, `node` and one package manager by the manifest and lockfile a
+ * folder is, a runtime and one package manager by the manifest and lockfile a
  * JavaScript workspace carries. Nothing is required by Volli's own habits —
  * a Go repo implies `git` and nothing else, a yarn workspace implies `yarn`
  * and never `pnpm`, and no project implies `gh`, whose absence is classified
  * where it has a consequence: the moment a PR action runs.
  *
- * Returned in {@link SESSION_ENV_TOOLS} order so two callers listing the same
- * project's requirements produce the same sentence.
+ * Returned in {@link REQUIRABLE_SESSION_ENV_TOOLS} order — the census order —
+ * so two callers listing the same project's requirements produce the same
+ * sentence.
  */
 export function requiredSessionEnvTools(
   cwd: string,
   pathExists: (path: string) => boolean,
-): readonly SessionEnvTool[] {
-  const required = new Set<SessionEnvTool>();
+): readonly RequirableSessionEnvTool[] {
+  const required = new Set<RequirableSessionEnvTool>();
   if (isGitRepository(cwd, pathExists)) required.add("git");
   const manager = workspacePackageManager(cwd, pathExists);
   if (manager !== null) {
-    required.add("node");
-    required.add(manager);
+    for (const implied of MANAGER_IMPLICATIONS[manager]) required.add(implied);
   }
-  return SESSION_ENV_TOOLS.filter((tool) => required.has(tool));
+  return REQUIRABLE_SESSION_ENV_TOOLS.filter((tool) => required.has(tool));
 }

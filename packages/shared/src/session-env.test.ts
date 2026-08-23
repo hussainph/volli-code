@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  isGitRepository,
+  memoizedPathExists,
+  REQUIRABLE_SESSION_ENV_TOOLS,
   requiredSessionEnvTools,
   resolveOnPath,
   resolveSessionEnvTools,
@@ -31,6 +32,67 @@ describe("SESSION_ENV_TOOLS", () => {
   // can name has to be measurable for that answer to be reportable.
   it("names every tool a session's PATH is measured for", () => {
     expect(SESSION_ENV_TOOLS).toEqual(["git", "gh", "node", "npm", "pnpm", "yarn", "bun"]);
+  });
+});
+
+describe("REQUIRABLE_SESSION_ENV_TOOLS", () => {
+  // The one name the census measures and no project may require. Asserted
+  // rather than assumed: the type keeps a caller from requiring `gh`, and
+  // this keeps the list from quietly regrowing it.
+  it("is the census minus gh", () => {
+    expect(REQUIRABLE_SESSION_ENV_TOOLS).toEqual(SESSION_ENV_TOOLS.filter((tool) => tool !== "gh"));
+  });
+
+  // `requiredSessionEnvTools` filters this list, so its order IS census
+  // order — the property the report's "same sentence twice" claim rests on.
+  it("keeps census order, so requirement lists need no second sort", () => {
+    const census = [...SESSION_ENV_TOOLS];
+    const positions = REQUIRABLE_SESSION_ENV_TOOLS.map((tool) => census.indexOf(tool));
+    expect(positions).toEqual([...positions].toSorted((a, b) => a - b));
+  });
+});
+
+describe("memoizedPathExists", () => {
+  it("asks the filesystem once per path and reuses both answers", () => {
+    const asked: string[] = [];
+    const exists = memoizedPathExists((path) => {
+      asked.push(path);
+      return path === "/repo/.git";
+    });
+
+    expect(exists("/repo/.git")).toBe(true);
+    expect(exists("/repo/.git")).toBe(true);
+    expect(exists("/repo/package.json")).toBe(false);
+    // A `false` must be remembered too, or the cheap answer is the one that
+    // keeps costing: an absent lockfile is asked for by every walk.
+    expect(exists("/repo/package.json")).toBe(false);
+    expect(asked).toEqual(["/repo/.git", "/repo/package.json"]);
+  });
+
+  // The reason it exists: requirements, dependency state and install command
+  // walk the same ancestors, and one memo makes that one stat per path.
+  it("settles the overlapping workspace walks to one stat per path", () => {
+    const asked: string[] = [];
+    const present = new Set(["/repo/.git", "/repo/package.json", "/repo/pnpm-lock.yaml"]);
+    const exists = memoizedPathExists((path) => {
+      asked.push(path);
+      return present.has(path);
+    });
+
+    requiredSessionEnvTools("/repo", exists);
+    workspaceDependenciesStatus("/repo", exists);
+    workspaceInstallCommand("/repo", exists);
+
+    expect(asked.length).toBe(new Set(asked).size);
+  });
+
+  it("holds nothing across two memos, so a repaired workspace re-reads", () => {
+    let present = false;
+    const filesystem = (path: string): boolean => present && path === "/repo/.git";
+
+    expect(memoizedPathExists(filesystem)("/repo/.git")).toBe(false);
+    present = true;
+    expect(memoizedPathExists(filesystem)("/repo/.git")).toBe(true);
   });
 });
 
@@ -273,23 +335,26 @@ describe("workspacePackageManager", () => {
   });
 });
 
-describe("isGitRepository", () => {
-  it("finds the marker in the directory itself", () => {
-    expect(isGitRepository("/repo", resolver([], ["/repo/.git"]).exists)).toBe(true);
-  });
-
-  it("finds it up the chain, from a subdirectory of the checkout", () => {
-    expect(isGitRepository("/repo/packages/a", resolver([], ["/repo/.git"]).exists)).toBe(true);
-  });
-
-  it("is false for a plain folder that no repository encloses", () => {
-    expect(isGitRepository("/Users/me/notes", resolver().exists)).toBe(false);
-  });
-});
-
 // VC-157: the census a project IMPLIES, as opposed to the one Volli's own
 // toolchain used to impose on every project it opened.
 describe("requiredSessionEnvTools", () => {
+  // The repository question reaches the outside only through this answer, so
+  // the `.git` marker's own cases are asserted here: found in the directory
+  // itself, found up the chain, and absent.
+  it("finds the repository marker from a subdirectory of the checkout", () => {
+    expect(
+      requiredSessionEnvTools("/repo/packages/a", resolver([], ["/repo/.git"]).exists),
+    ).toEqual(["git"]);
+  });
+
+  // A linked worktree carries `.git` as a FILE, not a directory. Existence is
+  // the test, which is what makes a Session's own worktree a repository.
+  it("treats a linked worktree's .git file as the marker it is", () => {
+    expect(requiredSessionEnvTools("/wt/VC-1", resolver([], ["/wt/VC-1/.git"]).exists)).toEqual([
+      "git",
+    ]);
+  });
+
   it("requires git, node and the lockfile's manager for a pnpm checkout", () => {
     expect(
       requiredSessionEnvTools(
@@ -337,12 +402,33 @@ describe("requiredSessionEnvTools", () => {
     ).not.toContain("gh");
   });
 
-  it("lists requirements in census order, whatever the manager", () => {
+  // Bun is its own runtime and its own installer. Requiring `node` beside it
+  // would fault a bun-only host for a tool the project never runs — the same
+  // false fault as pnpm-in-a-yarn-workspace, wearing a different name.
+  it("requires bun alone for a bun workspace, never node beside it", () => {
     expect(
       requiredSessionEnvTools(
         "/repo",
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/bun.lock"]).exists,
       ),
-    ).toEqual(["git", "node", "bun"]);
+    ).toEqual(["git", "bun"]);
+  });
+
+  it("reads the legacy binary bun.lockb the same way", () => {
+    expect(
+      requiredSessionEnvTools(
+        "/repo",
+        resolver([], ["/repo/package.json", "/repo/bun.lockb"]).exists,
+      ),
+    ).toEqual(["bun"]);
+  });
+
+  it("lists requirements in census order, whatever the manager", () => {
+    expect(
+      requiredSessionEnvTools(
+        "/repo",
+        resolver([], ["/repo/.git", "/repo/package.json", "/repo/package-lock.json"]).exists,
+      ),
+    ).toEqual(["git", "node", "npm"]);
   });
 });

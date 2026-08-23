@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 
 import {
   errorMessage,
+  memoizedPathExists,
   requiredSessionEnvTools,
   SESSION_ENV_TOOLS,
   workspaceDependenciesStatus,
@@ -65,7 +66,9 @@ async function writeDegradedIdentify(
     const resolved = observedResolved[tool];
     tools[tool] = typeof resolved === "string" ? resolved : null;
   }
-  const pathExists = dependencies.pathExists ?? existsSync;
+  // Both workspace questions below walk the same ancestors; one memo makes
+  // that one stat per path and one consistent moment.
+  const pathExists = memoizedPathExists(dependencies.pathExists ?? existsSync);
   dependencies.stdout(
     renderCliSuccess(
       "identify",
@@ -106,7 +109,10 @@ async function doctorObservation(
 ): Promise<Record<string, unknown>> {
   return {
     ...(await dependencies.observe()),
-    requiredTools: requiredSessionEnvTools(dependencies.cwd, dependencies.pathExists ?? existsSync),
+    requiredTools: requiredSessionEnvTools(
+      dependencies.cwd,
+      memoizedPathExists(dependencies.pathExists ?? existsSync),
+    ),
   };
 }
 
