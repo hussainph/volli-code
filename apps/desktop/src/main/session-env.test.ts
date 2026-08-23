@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildSessionEnvReport, executableAt } from "./session-env";
+import { buildSessionEnvReport, executableAt, readWorkspaceEnvironment } from "./session-env";
 
 describe("buildSessionEnvReport", () => {
   it("reports the PATH, provenance, tool verdicts and dependency state together", async () => {
@@ -152,6 +152,43 @@ describe("buildSessionEnvReport", () => {
     });
     expect(seen).not.toContain("");
     expect(seen).not.toContain("/git");
+  });
+});
+
+// The pair a structured Session's prompt carries (VC-156): the state and the
+// command that changes it, measured together so the agent never has to guess.
+describe("readWorkspaceEnvironment", () => {
+  it("names the absent state and the workspace's own install command together", () => {
+    expect(
+      readWorkspaceEnvironment("/work/harbor", (path) =>
+        ["/work/harbor/.git", "/work/harbor/package.json", "/work/harbor/yarn.lock"].includes(path),
+      ),
+    ).toEqual({ dependencies: "absent", installCommand: "yarn install" });
+  });
+
+  it("reports an installed workspace, and a directory that is no workspace at all", () => {
+    expect(
+      readWorkspaceEnvironment("/work/harbor", (path) =>
+        [
+          "/work/harbor/.git",
+          "/work/harbor/package.json",
+          "/work/harbor/pnpm-lock.yaml",
+          "/work/harbor/node_modules",
+        ].includes(path),
+      ),
+    ).toEqual({ dependencies: "installed", installCommand: "pnpm install" });
+
+    expect(readWorkspaceEnvironment("/work/notes", (path) => path === "/work/notes/.git")).toEqual({
+      dependencies: null,
+      installCommand: null,
+    });
+  });
+
+  it("reads the real filesystem when no seam is supplied", () => {
+    expect(readWorkspaceEnvironment("/definitely/not/a/workspace")).toEqual({
+      dependencies: null,
+      installCommand: null,
+    });
   });
 });
 

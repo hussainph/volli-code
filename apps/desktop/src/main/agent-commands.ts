@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import { promptBaseline } from "@volli/agent-runtime";
+import { readWorkspaceEnvironment } from "./session-env";
 import { readSessionTranscriptTail } from "@volli/session-engine";
 import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-engine";
 import {
@@ -2332,6 +2333,10 @@ export function createAgentCommandService(
           workspacePath,
           tools: { tools: [...PI_TOOLS.tools] },
           ...(index === null ? {} : { promptResources: [index] }),
+          // Measured, exactly as a real attach measures it (VC-156): a
+          // workspace whose dependencies are absent composes an extra layer,
+          // and a baseline that skipped it would under-price that Session.
+          workspaceEnvironment: readWorkspaceEnvironment(workspacePath),
           brief: { text: brief },
         });
         return {

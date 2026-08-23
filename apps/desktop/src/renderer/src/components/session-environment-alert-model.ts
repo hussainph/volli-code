@@ -71,32 +71,33 @@ interface ProjectReadinessParts {
   detail: string;
 }
 
+/**
+ * Missing PATH tools, and NOT missing dependencies (VC-156).
+ *
+ * A checkout without its `node_modules` used to be an arm of this alert, which
+ * made adding a fresh scaffold project greet its owner with a red "Sessions
+ * aren't ready" over a completely normal state of the world. Nothing is broken
+ * there, and the one party who can fix it in a keystroke — the agent — now
+ * carries the fact in its own prompt instead
+ * (`RuntimeWorkspaceEnvironment`), with a neutral offer beside the project for
+ * whoever would rather run it themselves
+ * (`workspace-dependencies-offer.tsx`). What is left here is what the word
+ * "fault" still fits: a tool the Session PATH cannot resolve.
+ */
 function readinessParts(status: Pick<CliToolStatus, "environment">): ProjectReadinessParts | null {
-  const { dependencies, tools, requiredTools, installCommand } = status.environment.session;
+  const { tools, requiredTools } = status.environment.session;
   // Only what this project implies (VC-157): a Python repo is never short of
   // `node`, a yarn workspace is never short of `pnpm`, and no project is
   // short of `gh` before a PR action asks for it. The wider `tools` record
   // stays measured and reported — in Settings and `volli identify` — without
   // any of it becoming a fault here.
   const missingTools = requiredTools.filter((tool) => tools[tool] === null);
-  if (missingTools.length === 0 && dependencies !== "absent") return null;
+  if (missingTools.length === 0) return null;
 
-  const toolsFact =
-    missingTools.length > 0 ? `Missing from the Session PATH: ${missingTools.join(", ")}.` : null;
-  const toolsRemedy =
-    missingTools.length > 0
-      ? "If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions."
-      : null;
-  // The workspace's own install command, judged by its lockfile in main; a
-  // bare manifest belongs to npm. Never a hardcoded pnpm for a yarn workspace.
-  const dependenciesFact =
-    dependencies === "absent"
-      ? `Dependencies are not installed. Run ${installCommand ?? "npm install"} before starting a Session.`
-      : null;
-
+  const toolsFact = `Missing from the Session PATH: ${missingTools.join(", ")}.`;
   return {
-    facts: [toolsFact, dependenciesFact].filter((part) => part !== null).join(" "),
-    detail: [toolsFact, toolsRemedy, dependenciesFact].filter((part) => part !== null).join(" "),
+    facts: toolsFact,
+    detail: `${toolsFact} If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions.`,
   };
 }
 

@@ -88,35 +88,27 @@ describe("sessionEnvironmentAlert", () => {
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toEqual({
       title: "Sessions aren't ready for Acme",
       detail:
-        "Missing from the Session PATH: git, node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions. Dependencies are not installed. Run pnpm install before starting a Session.",
+        "Missing from the Session PATH: git, node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions.",
     });
   });
 
-  // The command comes from the workspace's own lockfile: a yarn workspace must
-  // never be told to pnpm install (VC-94 review).
-  it("names the workspace's own install command, not a hardcoded one", () => {
-    const measured = status("adopted", "already-complete", {
-      dependencies: "absent",
-      installCommand: "yarn install",
-    });
+  // VC-156: a fresh checkout without node_modules is a normal state of the
+  // world, not a fault, and the red banner that called it one was the first
+  // thing a new project showed its owner. The fact now reaches the agent's
+  // prompt and a neutral offer beside the project; nothing reaches this alert.
+  it("says nothing at all about uninstalled dependencies", () => {
+    for (const installCommand of ["pnpm install", "yarn install", null]) {
+      const measured = status("adopted", "already-complete", {
+        dependencies: "absent",
+        installCommand,
+      });
 
-    expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Dependencies are not installed. Run yarn install before starting a Session.",
-    );
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toBeNull();
+      expect(sessionEnvironmentAlert(measured, { name: "Acme" })).toBeNull();
+    }
   });
 
-  it("falls back to npm install when no lockfile named a package manager", () => {
-    const measured = status("adopted", "already-complete", {
-      dependencies: "absent",
-      installCommand: null,
-    });
-
-    expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Dependencies are not installed. Run npm install before starting a Session.",
-    );
-  });
-
-  it("reports missing tools without a dependency sentence when dependencies are fine", () => {
+  it("reports missing tools whatever the workspace's dependency state is", () => {
     const measured = status("adopted", "already-complete", {
       tools: {
         git: "/usr/bin/git",
@@ -127,7 +119,8 @@ describe("sessionEnvironmentAlert", () => {
         yarn: null,
         bun: null,
       },
-      dependencies: "installed",
+      dependencies: "absent",
+      installCommand: "pnpm install",
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
@@ -249,7 +242,7 @@ describe("sessionEnvironmentAlert", () => {
     const alert = sessionEnvironmentAlert(measured, { name: "Acme" });
     expect(alert).toEqual({
       title: "Sessions couldn't read your login PATH",
-      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT} Missing from the Session PATH: node. Dependencies are not installed. Run pnpm install before starting a Session.`,
+      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT} Missing from the Session PATH: node.`,
     });
     expect(alert?.detail.match(/volli doctor --fix/g)).toHaveLength(1);
   });

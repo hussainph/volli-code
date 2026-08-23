@@ -40,6 +40,7 @@ import type {
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
   TerminalBusyResult,
+  TerminalCommandResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
@@ -939,6 +940,13 @@ const api = {
     /** Foreground-process probe: is the session running something beyond its shell? */
     busy: (sessionId: string): Promise<TerminalBusyResult> =>
       invoke("volli:terminal-busy", sessionId),
+    /**
+     * Runs one Volli-offered command in a live session's shell, resolving with
+     * its exit code when it finishes. Deliberately long-lived: an install
+     * takes as long as it takes, and its output streams to the pane meanwhile.
+     */
+    run: (sessionId: string, command: string): Promise<TerminalCommandResult> =>
+      invoke("volli:terminal-run", sessionId, command),
     /** Flow-control ack: fire-and-forget count of consumed output chars. */
     ack: (sessionId: string, chars: number): void => {
       send("volli:terminal-ack", sessionId, chars);
