@@ -132,6 +132,36 @@ For external validation, add Inspect only after the Volli eval adapter can run t
 4. Add the minimal `evals/` fixture corpus and Promptfoo provider. Gate pull requests on deterministic cases first; report cost and reliability deltas without making an LLM judge a merge requirement.
 5. Decide whether OpenLIT's shared UI/eval workflows justify its ClickHouse + Collector deployment. If not, continue with Jaeger plus Promptfoo.
 
+## Validation addendum — 2026-08-23
+
+The local claims above were re-verified against the pinned dependencies before
+implementation. One finding materially adjusts the implementation shape:
+
+- `pi-ai` 0.84.2 **accepts and threads** `telemetryContext` through every
+  provider adapter's request options (`buildBaseOptions`), but **no adapter
+  records to it** — there is no `startSpan` call anywhere in its shipped
+  runtime code. Span emission, including the `pi.ai.request` schema, lives in
+  `pi-agent-core`'s harness layer (`dist/harness/telemetry.js`,
+  `AI_TELEMETRY_SCHEMA`), which Volli's plain-`Agent` runtime deliberately does
+  not use.
+- Injecting a child telemetry context through `streamSimple` therefore
+  produces zero spans at these pins. The first implementation slice instead
+  **derives the attempt envelope at Volli's own stream boundary**
+  (`packages/agent-runtime/src/pi/observability.ts`), observing the
+  `AssistantMessageEventStream` the runtime already owns and mirroring the
+  field vocabulary of Pi's `pi.ai.request` span. When a future Pi release
+  records natively, adopting its spans is an exporter change, not a vocabulary
+  migration.
+- Everything else held: the telemetry package is a transitive dependency at
+  0.84.1/0.84.2 and exports the context/span types with `sensitive` and
+  `cardinality` attribute metadata; `RuntimeObservation` carries the safe
+  signal sources listed above; the `Agent` constructor has no telemetry
+  option.
+
+The shipped vocabulary and reduction live in
+`packages/shared/src/agent-observability.ts`; the runtime tee and stream
+instrument live in `packages/agent-runtime/src/pi/observability.ts`.
+
 ## Source index
 
 Primary project/repository sources used above:
