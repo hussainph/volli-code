@@ -8,12 +8,18 @@
  * back is a {@link PolicyToolCall} — plain data, no Pi types, no live paths
  * left to interpret.
  *
- * Two failure modes are deliberately not silent. A tool this runtime does not
- * offer keeps its requested name and reaches the rules as an unknown tool,
- * rather than being mapped onto whichever bundled tool it resembles. And a tool
- * path that cannot be resolved throws, rather than being reported as absent:
- * "no such file" and "cannot say what file this is" are different answers, and
- * only the second is a reason to refuse.
+ * A name with no mapping keeps its own spelling and reaches the rules carrying
+ * nothing — no path, no command, no environment — rather than being mapped onto
+ * whichever bundled tool it resembles. That is how an interaction tool is
+ * judged, and the answer is always "allow", because every rule reads an empty
+ * list. Guessing instead would be the harmful direction: `ask_user`'s `question`
+ * or `web_fetch`'s `url` read as a path would have policy refuse a call over an
+ * operand the tool never opens. The map holds coding tools because those are
+ * the tools whose arguments this layer can actually interpret.
+ *
+ * A tool path that cannot be resolved throws, rather than being reported as
+ * absent: "no such file" and "cannot say what file this is" are different
+ * answers, and only the second is a reason to refuse.
  *
  * A command *operand* that cannot be resolved is the same question asked where
  * the answer costs something. Refusing every one of them would deny `echo $PATH`
@@ -33,7 +39,15 @@ import { normalizeToolPath } from "./pi-tool-path";
 import { resolveInputPath, resolvePathForPolicy, shellPathTokenToPath } from "./vendor/paths";
 import { isAssignment, lexCommandLine, splitProgram, type LexedSegment } from "./vendor/shell";
 
-/** Pi's tool spellings, mapped to the product names the rules are written in. */
+/**
+ * Pi's tool spellings, mapped to the product names the rules are written in.
+ *
+ * Coding tools only, and complete for them: `bash` is the sole entry whose two
+ * names differ, which is the whole reason this map exists. A non-coding tool is
+ * absent by design rather than by omission — its Pi name and its product name
+ * are the same string, and nothing below would know what to do with its
+ * arguments anyway.
+ */
 const CODING_TOOL_BY_PI_NAME = new Map<string, CodingToolId>([
   ["read", "read"],
   ["edit", "edit"],

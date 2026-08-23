@@ -71,24 +71,44 @@ describe("evaluate", () => {
   });
 });
 
-describe("tool.not-bundled", () => {
-  it("refuses a tool the Session was not given", () => {
-    const decision = decide(call({ tool: "write" }), { tools: ["read"] });
-    expect(decision).toMatchObject({ outcome: "deny", rule: "tool.not-bundled" });
-    expect(decision.outcome === "deny" && decision.reason).toContain("read");
+describe("tool identity", () => {
+  /**
+   * The pack judges what a call *does*, never what it is called.
+   *
+   * `tool.not-bundled` used to lead the pack and refuse any name outside
+   * `snapshot.tools`. It was deleted in VC-3: the Agent Tool Surface makes
+   * availability the enforcement, Pi answers `Tool X not found` for an unknown
+   * name before the gate runs, and `sessionToolIds` leaves the array and the
+   * Snapshot no way to disagree — so every call the rule could have refused was
+   * one the model could never have sent. These cases pin the consequence, which
+   * is the whole of VC-3's guarantee: an interaction tool reaches the rules and
+   * no rule objects.
+   */
+  it("allows every interaction tool, which is how an interaction tool is judged", () => {
+    for (const tool of ["ask_user", "web_fetch", "web_search"]) {
+      expect(ruleOf(call({ tool }))).toBe("allow");
+    }
   });
 
-  it("refuses a tool Volli does not offer at all", () => {
-    expect(ruleOf(call({ tool: "web_search" }))).toBe("tool.not-bundled");
+  it("allows them even when the Snapshot's own list does not name them", () => {
+    // The list is a durable record, not a rule input. A Snapshot that under-
+    // reported its surface would once have refused the Session's own tools;
+    // now nothing reads it, so nothing can.
+    expect(ruleOf(call({ tool: "ask_user" }), { tools: [] })).toBe("allow");
   });
 
-  it("names an empty bundle rather than trailing off", () => {
-    const decision = decide(call({ tool: "read" }), { tools: [] });
-    expect(decision.outcome === "deny" && decision.reason).toContain("none");
+  it("does not refuse a name on the strength of the name alone", () => {
+    // A tool no bundle carries. Pi refuses it before the gate is consulted, so
+    // the pack having no opinion here is correct rather than permissive.
+    expect(ruleOf(call({ tool: "grep" }))).toBe("allow");
   });
 
-  it("allows a tool that is in the bundle", () => {
-    expect(ruleOf(call({ tool: "read" }), { tools: ["read"] })).toBe("allow");
+  it("still judges what a bundled tool does, whatever the Snapshot lists", () => {
+    // The other half of the same coin: dropping the name check must not drop
+    // the checks that read the call.
+    expect(ruleOf(call({ tool: "write", writes: ["/etc/hosts"] }), { tools: [] })).toBe(
+      "path.outside-workspace",
+    );
   });
 });
 
@@ -861,8 +881,12 @@ describe("rule order", () => {
     });
     expect(ruleOf(gitInternalsAndVolli)).toBe("path.git-internals");
 
-    const unbundledAndOutside = call({ tool: "write", reads: ["/etc/passwd"] });
-    expect(ruleOf(unbundledAndOutside, { tools: ["read"] })).toBe("tool.not-bundled");
+    const outsideAndVolli = call({
+      tool: "write",
+      reads: ["/etc/passwd"],
+      writes: [`${WORKSPACE}/.volli/state.json`],
+    });
+    expect(ruleOf(outsideAndVolli)).toBe("path.outside-workspace");
   });
 
   it("checks every segment of a chain, not just the first", () => {

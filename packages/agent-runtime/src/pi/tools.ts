@@ -11,21 +11,24 @@
  *
  * {@link createAskUserTool} and {@link createWebFetchTool} sit outside that map
  * on purpose. Neither is a coding tool and neither must become one:
- * {@link CodingToolId} is the vocabulary the Authority rules are written in, and
- * a name added there is a name every rule, every durable Snapshot and every
- * bundle then has an opinion about. Asking a person a question needs no
- * environment and touches no file; reading a public document reaches a boundary
- * that owns its own policy and no part of this machine. Both are wired as
- * optional ports on {@link SessionRuntimeSpec} instead, and a Session that was
- * given neither is offered neither — a tool that is absent cannot be called,
- * where one wired to nothing would be called and then fail.
+ * {@link CodingToolId} is the vocabulary the file tools are loaded by, and a
+ * name added there is a name every bundle and every durable Snapshot then has an
+ * opinion about. Asking a person a question needs no environment and touches no
+ * file; reading a public document reaches a boundary that owns its own policy
+ * and no part of this machine. Both are wired as optional ports on
+ * {@link SessionRuntimeSpec} instead, and a Session that was given neither is
+ * offered neither — a tool that is absent cannot be called, where one wired to
+ * nothing would be called and then fail.
  *
- * Their names are recorded in `NON_CODING_TOOL_IDS`, which is vocabulary and not
- * yet policy: `tool.not-bundled` still refuses every name outside
- * `snapshot.tools`, so the day a Snapshot is wired both tools are denied as
- * unknown names. That is VC-3's landmine and VC-3's to defuse; naming them there
- * is what lets it decide how they are judged without first having to discover
- * which names are at stake.
+ * Their names are recorded in `NON_CODING_TOOL_IDS` and reach the rule pack
+ * exactly as a coding tool's name does. No rule objects, because none of them
+ * carries a path, a command or an environment for a rule to read — the port is
+ * where the decision was made. That is settled now: `tool.not-bundled` used to
+ * refuse every name outside `snapshot.tools`, which was typed to hold coding
+ * tools only, so the day a Snapshot was wired all three of these tools would
+ * have been denied as unknown names. VC-3 removed the rule and gave the array
+ * and the Snapshot one source — {@link createSessionTools} over `sessionToolIds`
+ * — so the surface itself is the enforcement.
  */
 
 import { randomUUID } from "node:crypto";
@@ -44,14 +47,15 @@ import {
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
+import { sessionToolBindings } from "@volli/shared";
 import type {
   CodingToolId,
   NonCodingToolId,
-  RuntimeToolBundle,
   RuntimeWebDocument,
   RuntimeWebSearchResults,
   SessionInteractionResolution,
   SessionRuntimeSpec,
+  SessionToolSpec,
 } from "@volli/shared";
 
 function bindContext<TParameters extends TSchema, TDetails>(
@@ -78,12 +82,46 @@ function createTool(tool: CodingToolId, env: ExecutionEnv): AgentTool {
   }
 }
 
-/** Explicit Pi tool allowlist, in the order the product declared it. */
-export function createPiTools(bundle: RuntimeToolBundle, env: ExecutionEnv): AgentTool[] {
-  return bundle.tools.map((tool) => createTool(tool, env));
+/**
+ * The Session's whole Agent Tool Surface, built from the one list that names it.
+ *
+ * The surface comes from `sessionToolBindings` and the tools are created by
+ * switching over it, while the Snapshot's list comes from `sessionToolIds` over
+ * the same bindings — so the array cannot hold a tool the Snapshot does not name
+ * or omit one it does. That equality used to be a convention two callers kept — and
+ * the rule pack carried `tool.not-bundled` to catch them when they didn't, which
+ * only ever refused calls a correct caller would never have produced. Making it
+ * structural is what allowed that rule to be deleted (VC-3).
+ *
+ * The switch is exhaustive over {@link SessionToolBinding} rather than
+ * defaulted, and each binding carries its own port: a name added to the
+ * vocabulary with no tool behind it fails to compile here, and "named but
+ * unwired" is not a case this has to handle because the binding type cannot
+ * express it. There is no unreachable branch to leave untested.
+ */
+export function createSessionTools(
+  spec: SessionToolSpec,
+  env: ExecutionEnv,
+  signal: AbortSignal | undefined,
+): AgentTool[] {
+  return sessionToolBindings(spec).map((binding) => {
+    switch (binding.tool) {
+      case "read":
+      case "edit":
+      case "write":
+      case "execute":
+        return createTool(binding.tool, env);
+      case "ask_user":
+        return createAskUserTool(binding.port, signal);
+      case "web_fetch":
+        return createWebFetchTool(binding.port, signal);
+      case "web_search":
+        return createWebSearchTool(binding.port, signal);
+    }
+  });
 }
 
-/** The name the model calls, and the name the Authority lexer will not recognise. */
+/** The name the model calls, and a name no rule in the pack has an opinion about. */
 export const ASK_USER_TOOL_NAME = "ask_user" satisfies NonCodingToolId;
 
 /**

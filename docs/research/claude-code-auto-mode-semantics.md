@@ -621,7 +621,9 @@ false-positive reducer, and the plan already establishes that machine facts are 
 call, so the seam exists.
 
 **7. Multi-agent handoff checks.** Not applicable. Our bundle is `read | edit | write |
-execute` and `tool.not-bundled` denies anything else, so a subagent spawn is already a denial —
+execute` and nothing else is registered, so a subagent spawn is unavailable rather than denied
+(pre-VC-3 this paragraph said `tool.not-bundled` denies it; the rule is gone and the conclusion
+is unchanged) —
 a stricter answer than the outbound check. It becomes relevant the day a task tool joins the
 bundle, and both directions should be built then.
 
@@ -672,9 +674,17 @@ will not resolve or an argument is not the shape the schema promised, and refuse
 name rather than borrowing a rule's. The article does not say what its classifier does with a
 call it cannot parse.
 
-**6. A closed tool bundle rather than an allowlist over an open surface.** `tool.not-bundled`
-means an unlisted tool is a policy denial, not merely absent. Anthropic's tier 1 is an
+**6. A closed tool bundle rather than an allowlist over an open surface.** ~~`tool.not-bundled`
+means an unlisted tool is a policy denial, not merely absent.~~ Anthropic's tier 1 is an
 allowlist over whatever tools exist; ours is a bundle with nothing outside it.
+
+**Superseded in part by VC-3.** The closed bundle stands; the *rule* was the wrong place to
+enforce it and is deleted. A tool outside the bundle was never registered, so Pi answers
+`Tool X not found` before the gate is consulted — the rule could only fire when the Snapshot's
+list and the tool array disagreed, which is a caller bug rather than an act by the model, and
+`sessionToolIds` now makes them one derivation. The differentiator this item claims is real and
+is the Agent Tool Surface itself (`CONTEXT.md`): availability is enforcement. It is not this
+rule.
 
 **7. Case-folding discipline.** Deny-list comparisons fold, containment does not, and the
 reason is written down. The article says nothing about obfuscation at the lexical level.

@@ -40,21 +40,27 @@ describe("hashRulePack", () => {
 
 describe("non-coding tool vocabulary", () => {
   /**
-   * The pack hash pinned to the value it had before any tool was named here.
+   * The pack's identity, pinned to a literal and moved exactly once.
    *
-   * Naming the tools a Session can be offered is not a rule, and a rule pack
-   * whose identity moved because of it would silently invalidate every denial
-   * recorded under the old one. The literal is the independent source of truth:
-   * it came from the pack as it stood, not from re-running the hash.
+   * It read `d5e3dd88` for the ten-rule pack. VC-3 deleted `tool.not-bundled`,
+   * which is a change to the pack and so must be a change to its identity — the
+   * hash exists to make a changed pack undetectable in neither direction. The
+   * literal is the independent source of truth: it came from the pack as it
+   * stands, not from re-running the hash over whatever the list happens to say,
+   * which is what makes this test able to fail.
+   *
+   * Naming a tool below is still not a rule and still must not move it.
    */
-  it("leaves the built-in rule pack's identity where it was", () => {
-    expect(BUILTIN_RULE_PACK_HASH).toBe("d5e3dd88");
+  it("pins the built-in rule pack's identity, which moved when the pack lost a rule", () => {
+    expect(BUILTIN_RULE_PACK_HASH).toBe("dca89a93");
+    expect(AUTHORITY_RULE_IDS).toHaveLength(9);
+    expect(AUTHORITY_RULE_IDS).not.toContain("tool.not-bundled");
   });
 
   it("names no tool that a coding bundle could also name", () => {
     // `CodingToolId` is a type with no runtime list, so the overlap is checked
     // against the spellings the bundle actually carries. A name in both
-    // vocabularies would be a tool two different rules had an opinion about.
+    // vocabularies would be one tool wired two ways.
     for (const tool of NON_CODING_TOOL_IDS) {
       expect(["read", "edit", "write", "execute"]).not.toContain(tool);
     }
