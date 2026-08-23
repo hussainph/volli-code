@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -842,6 +842,46 @@ describe("agent command service", () => {
           "Board coordination goes through the bundled `volli` CLI. Run `volli help` when you need its reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
       },
     });
+  });
+
+  it("names the Main checkout as a no-worktree Ticket's execution root", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI", body: "Follow the implementation contract.", usesWorktree: false },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    const brief = await service.execute({
+      v: 1,
+      cmd: "ticket.brief",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(brief).toMatchObject({
+      ok: true,
+      data: {
+        prompt: expect.stringContaining(
+          "This Ticket intentionally runs in the Main checkout at `/repo/volli`. All work happens in this directory.",
+        ),
+      },
+    });
+    if (!brief.ok) throw new Error("expected a Ticket Brief");
+    expect((brief.data as { prompt: string }).prompt).not.toContain(
+      "worktree has not materialized",
+    );
   });
 
   it("appends an Attachments section to the brief when the ticket has attachments", async () => {
@@ -3781,7 +3821,13 @@ describe("prompt.baseline", () => {
     expect(data["role"]).toBe("project");
     expect(data["workspace"]).toBe("/repo/volli");
     expect(data["charsPerToken"]).toBe(4);
-    const sections = data["sections"] as { id: string; chars: number; tokens: number }[];
+    const sections = data["sections"] as {
+      id: string;
+      chars: number;
+      tokens: number;
+      cacheClass: string;
+      placement: string;
+    }[];
     expect(sections.map((section) => section.id)).toEqual([
       "operating",
       "role",
@@ -3794,10 +3840,19 @@ describe("prompt.baseline", () => {
     for (const section of sections) {
       expect(section.chars).toBeGreaterThan(0);
       expect(section.tokens).toBe(Math.ceil(section.chars / 4));
+      // What it costs and how often it is bought again, at the door a reader
+      // actually reads (VC-164) — never one without the other.
+      expect(["role-static", "project-static", "session-static", "per-turn"]).toContain(
+        section.cacheClass,
+      );
+      expect(["prefix", "message"]).toContain(section.placement);
     }
     const system = data["system"] as { chars: number; tokens: number };
     const brief = data["brief"] as { chars: number; tokens: number };
     const total = data["total"] as { chars: number; tokens: number };
+    // An unwritable path is no package workspace, so it earns no reminder: a
+    // measured zero rather than a missing measurement.
+    expect(data["reminder"]).toEqual({ chars: 0, tokens: 0 });
     expect(total.chars).toBe(system.chars + brief.chars);
     expect(total.tokens).toBe(system.tokens + brief.tokens);
     // The Brief priced is the project Brief a real ticketless start composes.
@@ -3849,6 +3904,38 @@ describe("prompt.baseline", () => {
     const sections = (data["sections"] as { id: string }[]).map((section) => section.id);
     expect(sections).toContain("resource:skills index");
     expect(sections).toContain("brief");
+  });
+
+  it("prices the Turn Reminder a fresh checkout earns, cache class and all", async () => {
+    // A real fresh checkout on disk: a manifest and a lockfile, no
+    // `node_modules`, and a repository boundary so the ancestor walk stops where
+    // a real one would. The environment fact left the system prompt (VC-164)
+    // but is still delivered, so the breakdown has to find it.
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "volli-baseline-")));
+    try {
+      mkdirSync(join(base, ".git"));
+      writeFileSync(join(base, "package.json"), "{}");
+      writeFileSync(join(base, "pnpm-lock.yaml"), "");
+      ctx = openTestDb();
+      insertProject(ctx.db, testProject({ id: "p1", path: base, ticketPrefix: "VC" }));
+      const response = await baselineService()({ project: base });
+      expect(response.ok).toBe(true);
+      if (!response.ok) throw new Error("expected success");
+      const data = response.data as Record<string, unknown>;
+      const sections = data["sections"] as { id: string; cacheClass: string; placement: string }[];
+      const reminder = sections.find((section) => section.id === "reminder:workspace-environment");
+      expect(reminder).toMatchObject({ cacheClass: "session-static", placement: "message" });
+      const measured = data["reminder"] as { chars: number; tokens: number };
+      expect(measured.chars).toBeGreaterThan(0);
+      const system = data["system"] as { chars: number };
+      const brief = data["brief"] as { chars: number };
+      const total = data["total"] as { chars: number };
+      expect(total.chars).toBe(system.chars + brief.chars + measured.chars);
+      // No prompt layer went with it: the reminder is bytes the prompt shed.
+      expect(sections.map((section) => section.id)).not.toContain("environment");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   it("refuses an unknown ticket the way every ticket verb does", async () => {

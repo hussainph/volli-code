@@ -30,6 +30,7 @@ import {
   memoizedPathExists,
   resolveDefaultModel,
   resolveShell,
+  sessionToolIds,
   skillPromptResource,
   skillsIndexResource,
   ticketBranchName,
@@ -37,7 +38,13 @@ import {
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
-import type { PromptResource, SessionEnvRepair, SessionEvent, SessionInput } from "@volli/shared";
+import type {
+  PromptResource,
+  SessionEnvRepair,
+  SessionEvent,
+  SessionInput,
+  SessionToolId,
+} from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
@@ -78,12 +85,13 @@ import {
 import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
-import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
+import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { createAutoTitler } from "./session-runtime/auto-title";
 import {
   createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
+  type SessionToolSurfacePorts,
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
@@ -322,6 +330,26 @@ function recordedPromptResources(events: readonly SessionEvent[]): readonly Prom
     }
   }
   return [];
+}
+
+/** The Cache Prefix's durable tool half, or null for a pre-VC-164 Session. */
+function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionToolId[] | null {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.tools;
+    }
+  }
+  return null;
+}
+
+function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
+  if (input.kind !== "tool-surface") {
+    throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
+  }
+  return input.tools;
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -741,8 +769,38 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  const sessionToolSurface: SessionToolSurfacePorts | null =
+    webAccess !== null && sessionEngine !== null
+      ? {
+          resolve: () => {
+            // Membership only. `webAccess.resolve()` may momentarily read a key
+            // to prove the capability works, but `sessionToolIds` retains only
+            // sanitized names/order; the provider closures are discarded here.
+            const web = webPortsFor(webAccess.resolve());
+            return sessionToolIds({
+              tools: PI_TOOLS,
+              // The desktop always owns the ask surface. This placeholder is
+              // never called; the adapter binds the real interaction port.
+              askUser: async () => {
+                throw new Error("Tool-surface resolution cannot ask a question.");
+              },
+              ...web,
+            });
+          },
+          record: async (sessionId, tools) => {
+            await sessionEngine.getOrRecordSessionInput({
+              sessionId,
+              input: { kind: "tool-surface", tools },
+              provenance: {
+                source: { kind: "system", id: "pi-runtime", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+            });
+          },
+        }
+      : null;
   const piRuntimeHost =
-    dbHandle.ok && piModelAccess !== null
+    dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
       ? createPiRuntimeHost({
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
@@ -787,12 +845,12 @@ app.whenReady().then(async () => {
               },
             });
           },
-          // What this profile's Web Access setting amounts to, read once per
-          // attachment. A profile that configured nothing answers `{}`, and a
-          // Session given `{}` is offered no `web_fetch` and no `web_search` at
-          // all — absent rather than present and refusing. This is the only
-          // call path in the app that reads the stored key, and it hands it
-          // straight to the provider constructor.
+          // What this profile can honestly bind now, read once per attachment.
+          // The durable Session record decides whether either port belongs in
+          // the tool array; this live answer supplies closures only. Missing a
+          // recorded capability rejects recovery, while newly enabled ports are
+          // ignored. This is the only attach path that reads the stored key,
+          // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -809,18 +867,31 @@ app.whenReady().then(async () => {
               source: { kind: "system", id: "pi-runtime", detail: null },
               venue: { id: "local", kind: "local" },
             } as const;
+            const events = await sessionEngine.listEvents({ sessionId });
+            let toolSurface = recordedToolSurface(events);
+            if (toolSurface === null) {
+              // Legacy backfill: the first attach under VC-164 freezes whatever
+              // this Session can honestly bind now. Every later attach reads
+              // the record and Settings can no longer recompose membership.
+              toolSurface = toolSurfaceTools(
+                await sessionEngine.getOrRecordSessionInput({
+                  sessionId,
+                  input: { kind: "tool-surface", tools: sessionToolSurface.resolve() },
+                  provenance,
+                }),
+              );
+            }
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
+              toolSurface,
               // The skills this Session was started with, as recorded ahead of
               // its first attachment (`SessionSkillPorts`). Read from the
               // durable record on EVERY attach — never from disk — so a
               // restart-recovery re-attach composes the same system prompt the
               // first attach did, whatever `.agents/skills/` says today.
-              promptResources: recordedPromptResources(
-                await sessionEngine.listEvents({ sessionId }),
-              ),
+              promptResources: recordedPromptResources(events),
             };
             // A ticketless Session is a Role, not a Ticket lookup that failed:
             // it briefs on the project root it already runs in.
@@ -977,7 +1048,8 @@ app.whenReady().then(async () => {
     sessionRuntime !== null &&
     piRuntimeHost !== null &&
     sessionDb !== null &&
-    sessionSkills !== null
+    sessionSkills !== null &&
+    sessionToolSurface !== null
       ? createSessions({
           runtime: sessionRuntime,
           // Role in, purpose out (VC-53): a Ticket Session resolves the
@@ -994,6 +1066,7 @@ app.whenReady().then(async () => {
           readModelSelection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
+          toolSurface: sessionToolSurface,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.

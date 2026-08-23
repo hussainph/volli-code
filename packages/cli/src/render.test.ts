@@ -954,19 +954,39 @@ describe("renderCliSuccess — prompt.baseline", () => {
     workspace: "/repo/volli",
     charsPerToken: 4,
     sections: [
-      { id: "operating", chars: 420, tokens: 105 },
-      { id: "resource:skills index", chars: 40000, tokens: 10000 },
-      { id: "brief", chars: 300, tokens: 75 },
+      {
+        id: "operating",
+        chars: 420,
+        tokens: 105,
+        cacheClass: "project-static",
+        placement: "prefix",
+      },
+      {
+        id: "resource:skills index",
+        chars: 40000,
+        tokens: 10000,
+        cacheClass: "project-static",
+        placement: "prefix",
+      },
+      { id: "brief", chars: 300, tokens: 75, cacheClass: "session-static", placement: "message" },
+      {
+        id: "reminder:workspace-environment",
+        chars: 240,
+        tokens: 60,
+        cacheClass: "session-static",
+        placement: "message",
+      },
     ],
     system: { chars: 44000, tokens: 11000 },
     brief: { chars: 300, tokens: 75 },
-    total: { chars: 44300, tokens: 11075 },
+    reminder: { chars: 240, tokens: 60 },
+    total: { chars: 44540, tokens: 11135 },
     excluded: "tool definitions, the user's first message, and provider overhead",
   };
 
   it("renders the rollup, one row per section, and the named exclusions", () => {
     const text = renderCliSuccess("prompt.baseline", data, { json: false });
-    expect(text).toContain("prompt baseline  project  ~11075 tokens  44300 chars");
+    expect(text).toContain("prompt baseline  project  ~11135 tokens  44540 chars");
     expect(text).toContain("(est. at 4 chars/token)");
     expect(text).toContain("  operating  ~105 tokens  420 chars");
     expect(text).toContain("  resource:skills index  ~10000 tokens  40000 chars");
@@ -974,6 +994,30 @@ describe("renderCliSuccess — prompt.baseline", () => {
     expect(text).toContain(
       "excluded  tool definitions, the user's first message, and provider overhead",
     );
+  });
+
+  it("carries the cache class as a column, marking only the message side", () => {
+    const text = renderCliSuccess("prompt.baseline", data, { json: false });
+    // Prefix-side rows stay unmarked: that is the common case, and a cell that
+    // says nothing new does not earn its width.
+    expect(text).toContain("  operating  ~105 tokens  420 chars  project-static");
+    expect(text).toContain("  resource:skills index  ~10000 tokens  40000 chars  project-static");
+    // Message-side rows say so beside the class, because "session-static" prices
+    // differently on the two sides of the Cache Prefix.
+    expect(text).toContain("  brief  ~75 tokens  300 chars  session-static, message-side");
+    expect(text).toContain(
+      "  reminder:workspace-environment  ~60 tokens  240 chars  session-static, message-side",
+    );
+  });
+
+  it("drops the class column for a section that names none, rather than printing undefined", () => {
+    const text = renderCliSuccess(
+      "prompt.baseline",
+      { ...data, sections: [{ id: "operating", chars: 420, tokens: 105 }] },
+      { json: false },
+    );
+    expect(text).toContain("  operating  ~105 tokens  420 chars");
+    expect(text).not.toContain("undefined");
   });
 
   it("passes the structured breakdown straight through with --json", () => {

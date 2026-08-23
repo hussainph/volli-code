@@ -19,10 +19,13 @@ export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
 export {
   promptBaseline,
   PROMPT_BASELINE_CHARS_PER_TOKEN,
+  WORKSPACE_ENVIRONMENT_REMINDER_ID,
   type PromptBaseline,
   type PromptBaselineInput,
   type PromptBaselineSection,
   type PromptBaselineTotal,
+  type PromptCacheClass,
+  type PromptCachePlacement,
 } from "./prompt-baseline";
 export {
   piExecutionEnv,

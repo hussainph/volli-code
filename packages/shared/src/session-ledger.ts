@@ -4,6 +4,7 @@
  */
 
 import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
+import type { SessionToolId } from "./authority";
 
 export interface Session {
   id: string;
@@ -392,10 +393,15 @@ export type SessionAttention =
  * what was injected. Bodies ride along with the names deliberately: the skill
  * file on disk can change or vanish after the Session starts, and the record
  * has to say what THIS Session actually received.
+ *
+ * `tool-surface` freezes names and order at the same boundary. It stores no
+ * ports, endpoints or credentials: reattachment must rebind those capabilities
+ * honestly to this sanitized shape or fail instead of sending a changed array.
  */
 export type SessionInput =
   | { kind: "runtime-brief"; text: string }
-  | { kind: "prompt-resources"; resources: readonly PromptResource[] };
+  | { kind: "prompt-resources"; resources: readonly PromptResource[] }
+  | { kind: "tool-surface"; tools: readonly SessionToolId[] };
 
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }

@@ -15,6 +15,7 @@ import {
   STRUCTURED_ADAPTER_ID,
   StructuredSessionsError,
   type SessionSkillPorts,
+  type SessionToolSurfacePorts,
   type SessionsOptions,
 } from "./sessions";
 
@@ -28,6 +29,11 @@ const MODEL: ModelSelection = {
 const NO_SKILLS: SessionSkillPorts = {
   resolve: async () => [],
   index: async () => null,
+  record: async () => undefined,
+};
+
+const CODING_AND_ASK: SessionToolSurfacePorts = {
+  resolve: () => ["read", "edit", "write", "execute", "ask_user"],
   record: async () => undefined,
 };
 
@@ -46,6 +52,7 @@ function sessions(
       readModelSelection: async () => MODEL,
       ticketBelongsToProject: () => true,
       skills: NO_SKILLS,
+      toolSurface: CODING_AND_ASK,
       runtime: {
         command: async (request) => {
           commands.push(request);
@@ -179,6 +186,33 @@ describe("Sessions", () => {
     ]);
     // The runtime a chat attaches stays behind the product facade.
     expect(JSON.stringify(started)).not.toMatch(/adapter|profile|pi|opencode/i);
+  });
+
+  it("records the sanitized Agent Tool Surface before any attachment exists", async () => {
+    const recorded: Array<{ sessionId: string; tools: readonly string[] }> = [];
+    const { commands, sessions: door } = sessions({
+      toolSurface: {
+        resolve: () => ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+        record: async (sessionId, tools) => {
+          recorded.push({ sessionId, tools });
+        },
+      },
+    });
+
+    await door.create({
+      operationId: "operation-tools",
+      projectId: "project-1",
+      ticketId: null,
+      title: "Frozen surface",
+    });
+
+    expect(recorded).toEqual([
+      {
+        sessionId: "session-1",
+        tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+      },
+    ]);
+    expect(commands.some((request) => request.command.kind === "adapter.attach")).toBe(false);
   });
 
   it("reattaches an existing Session with no Role question asked — one attach for both Roles", async () => {

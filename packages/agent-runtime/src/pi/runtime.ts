@@ -912,6 +912,12 @@ async function attachSession(
     // cannot disagree, which is what let the pack drop its rule about tool
     // identity (VC-3).
     const tools = createSessionTools(spec, ownedToolEnv);
+    // Composed here, once per attachment: the array is half of the Session's
+    // Cache Prefix (VC-164), and a provider that orders tools ahead of the
+    // system prompt throws the prompt away too when it changes. Reattachment
+    // must therefore receive the same bindings, order and schemas that Session
+    // start froze. Pinned off provider requests through the desktop reattach
+    // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;
@@ -1094,7 +1100,11 @@ async function attachSession(
 
     const agent = new Agent({
       initialState: {
-        systemPrompt: composeSystemPrompt(spec),
+        systemPrompt: composeSystemPrompt({
+          role: spec.identity.role,
+          tools: spec.tools,
+          promptResources: spec.promptResources,
+        }),
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,
@@ -1710,9 +1720,7 @@ async function attachSession(
         // no gap between releasing it and Pi owning the array itself.
         await rewritingTheContext(compactBeforeTurn);
         const delivered =
-          agent.state.messages.length === 0
-            ? composeFirstUserMessage(spec.identity.role, spec.brief, text)
-            : text;
+          agent.state.messages.length === 0 ? composeFirstUserMessage(spec, text) : text;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,

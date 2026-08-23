@@ -81,6 +81,7 @@ import {
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
   readSkillResources,
+  sessionToolIds,
   type AgentRuntime,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
@@ -96,6 +97,7 @@ import {
   type RuntimeWorkspaceEnvironment,
   type SessionInteractionOption,
   type SessionInteractionResolution,
+  type SessionToolId,
   type SessionNativeDetail,
   type SessionNativeReference,
   type SessionRuntimeSpec,
@@ -155,6 +157,11 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
  * authority layer over the same tool list a real attach names.
  */
 export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
+type PiCodingToolId = (typeof PI_TOOLS.tools)[number];
+
+function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
+  return (PI_TOOLS.tools as readonly SessionToolId[]).includes(tool);
+}
 
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
@@ -173,6 +180,11 @@ interface PiRuntimeContextFields {
   brief: string;
   /** Durable product policy selected before this attachment starts. */
   model: ModelSelection;
+  /**
+   * Names and order frozen at Session start. No ports or credentials: this is
+   * the durable Cache Prefix shape, which an attachment must rebind honestly.
+   */
+  toolSurface: readonly SessionToolId[];
   /**
    * Which tree the Session runs in. Not derivable from the Role here: a Ticket
    * that never took a worktree is bound to the project's Main checkout by
@@ -232,8 +244,10 @@ export interface PiAdapterOptions {
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /**
-   * The web ports this profile's Web Access setting amounts to, resolved once
-   * per attachment.
+   * The web ports this profile can honestly bind now, resolved once per
+   * attachment. Membership comes from the Session's durable tool surface, not
+   * from this answer: extra ports are ignored and a missing required port
+   * rejects reattachment instead of changing the provider tool array.
    *
    * Optional, and its absence means a Session is offered no web tool — the same
    * thing an answer of `{}` means, because a profile that configured no
@@ -241,9 +255,8 @@ export interface PiAdapterOptions {
    * model's side. Main implements it over the settings owner, which is the only
    * thing in the app that reads the stored credential.
    *
-   * Called at attach, not per turn: what a Session may reach is pinned when it
-   * starts, exactly as its Authority Snapshot would be, so a Settings change
-   * never lands mid-turn.
+   * Called at attach, not per turn. Credential values stay inside the returned
+   * closures and are never captured in durable Session data.
    *
    * It must not throw. This runs on the attach path, so a failure to work out
    * what web access amounts to would cost the Session its attachment rather
@@ -579,7 +592,18 @@ class PiBinding implements BindingHandle {
       attachmentId: this.#spec.attachmentId,
       projectId: context.projectId,
     };
-    return {
+    const wantsAskUser = context.toolSurface.includes("ask_user");
+    const wantsWebFetch = context.toolSurface.includes("web_fetch");
+    const wantsWebSearch = context.toolSurface.includes("web_search");
+    if (
+      (wantsWebFetch && this.#web.webFetch === undefined) ||
+      (wantsWebSearch && this.#web.webSearch === undefined)
+    ) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes Web Access, but the current profile cannot bind it. Restore a working Web Access configuration and retry the attachment.",
+      );
+    }
+    const runtimeSpec: SessionRuntimeSpec = {
       identity:
         context.role === "ticket"
           ? { ...identity, role: "ticket", ticketId: context.ticketId }
@@ -608,22 +632,24 @@ class PiBinding implements BindingHandle {
       // with no resources is a spec with no resources field — same shape the
       // runtime's own tests pin.
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
-      tools: { tools: [...PI_TOOLS.tools] },
+      tools: { tools: context.toolSurface.filter(isPiCodingTool) },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
       ask: (request, signal) => this.#ask(request, signal),
-      // Always wired, which is what puts the ask tool in front of the model: a
-      // desktop Session always has somewhere to put a question, because the
-      // chat surface asking it is the same surface that started the turn.
-      askUser: (request, signal) => this.#askUser(request, signal),
-      // The web ports are the opposite case and spread rather than assigned, so
-      // a profile with no Web Access configured produces a spec with no
-      // `webFetch` and no `webSearch` FIELD — not one set to undefined. The
-      // runtime registers each tool on the field's presence, so absence is what
-      // keeps the network out of a Session's vocabulary entirely.
-      ...this.#web,
+      ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
+      ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
+      ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
     };
+    // `sessionToolIds` is the same derivation `createSessionTools` consumes.
+    // Comparing the full ordered list here prevents corrupted/non-canonical
+    // durable data from silently becoming a different provider tool array.
+    if (JSON.stringify(sessionToolIds(runtimeSpec)) !== JSON.stringify(context.toolSurface)) {
+      throw new Error(
+        "The Session's frozen Agent Tool Surface is not valid for this product version.",
+      );
+    }
+    return runtimeSpec;
   }
 
   /**

@@ -26,6 +26,7 @@ import type {
   PromptResource,
   ReasoningLevel,
   SessionStartResult,
+  SessionToolId,
   TicketEventActor,
 } from "@volli/shared";
 
@@ -101,6 +102,20 @@ export interface SessionSkillPorts {
   resolve(projectId: string, names: readonly string[]): Promise<readonly PromptResource[]>;
   index(projectId: string, injectedNames: readonly string[]): Promise<PromptResource | null>;
   record(sessionId: string, resources: readonly PromptResource[]): Promise<void>;
+}
+
+/**
+ * Freeze the sanitized Agent Tool Surface before the first attachment.
+ *
+ * Only names and order cross this port. Implementations may inspect live
+ * capability settings to resolve them, but credentials and callable ports stay
+ * with their owners and never enter Session history. A reattach reads this
+ * record and either rebinds it honestly or fails without sending a changed tool
+ * array.
+ */
+export interface SessionToolSurfacePorts {
+  resolve(): readonly SessionToolId[];
+  record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
 }
 
 /**
@@ -208,6 +223,7 @@ export interface SessionsOptions {
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
   skills: SessionSkillPorts;
+  toolSurface: SessionToolSurfacePorts;
   /**
    * What Model Access can actually run, consulted only when an override
    * arrives: the configured default was validated when it was saved
@@ -319,6 +335,10 @@ export function createSessions(options: SessionsOptions): Sessions {
       explicit.map((resource) => resource.name),
     );
     const resources = index === null ? explicit : [...explicit, index];
+    // Resolved before creation for the same reason as named resources: the
+    // Session's Cache Prefix starts at birth, not whenever an attachment later
+    // happens to read Settings. The answer is sanitized names/order only.
+    const toolSurface = options.toolSurface.resolve();
     const created = await options.runtime.command({
       commandId: `${input.operationId}:create`,
       command: {
@@ -347,6 +367,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     // follows separately — and the record has to exist before whichever
     // attach eventually composes the system prompt from it.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
+    await options.toolSurface.record(created.sessionId, toolSurface);
     return { sessionId: created.sessionId, model };
   }
 
