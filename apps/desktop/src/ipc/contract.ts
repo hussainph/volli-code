@@ -1842,6 +1842,14 @@ export type PromptTemplateCreateResult = Result<{ path: string }>;
 /** The composer's `/` picker is project-scoped, exactly like the file index. */
 export interface PromptTemplateIndexInput {
   projectId: string;
+  /**
+   * Apply this project's skill rules (`skill_modes`) to the returned skills.
+   * The default, and what the composer wants: an `off` skill must not be
+   * offered. The Skills pane passes `false`, because it EDITS the rules and
+   * so must see every installed skill — under the ruled read, a skill set to
+   * `off` vanished from the one surface that could turn it back on.
+   */
+  ruled?: boolean;
 }
 
 /**

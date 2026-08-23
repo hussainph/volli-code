@@ -1851,6 +1851,15 @@ describe("FILE_IPC descriptor table", () => {
       expect(guard([{ projectId: "p1" }])).toBe(true);
     });
 
+    it("accepts the Skills pane's unruled read", () => {
+      expect(guard([{ projectId: "p1", ruled: false }])).toBe(true);
+      expect(guard([{ projectId: "p1", ruled: true }])).toBe(true);
+    });
+
+    it("rejects a non-boolean ruled flag", () => {
+      expect(guard([{ projectId: "p1", ruled: "no" }])).toBe(false);
+    });
+
     it("rejects a non-object payload", () => {
       expect(guard([null])).toBe(false);
     });

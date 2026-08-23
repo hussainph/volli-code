@@ -838,8 +838,11 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
     invalidError: "Invalid request",
   },
   "volli:prompt-templates": {
-    guard: (args): args is IpcArgs<"volli:prompt-templates"> =>
-      args.length === 1 && isProjectIdInput(args[0]),
+    guard: (args): args is IpcArgs<"volli:prompt-templates"> => {
+      if (args.length !== 1 || !isProjectIdInput(args[0])) return false;
+      const ruled = (args[0] as Record<string, unknown>)["ruled"];
+      return ruled === undefined || typeof ruled === "boolean";
+    },
     invalidError: "Invalid request",
   },
 };

@@ -22,6 +22,11 @@
  * Writes are optimistic and the whole map goes at once — the surface holds
  * every rule on screen, so a per-row write would turn one visible state into N
  * that can land out of order.
+ *
+ * THE LIST IS UNRULED (`ruled: false`). Every installed skill is a row here,
+ * `off` ones included — this pane is where a rule is changed, so the ruled
+ * read the composer takes would make `off` a one-way door: the skill would
+ * vanish from the only surface able to turn it back on.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -35,6 +40,7 @@ import {
   type SkillReference,
 } from "@volli/shared";
 
+import { formatTokens } from "@renderer/chat/context-usage";
 import {
   AsyncSection,
   CONTROL_W,
@@ -44,6 +50,7 @@ import {
   SectionAction,
 } from "@renderer/components/settings/kit";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
+import { skillBodyTokens, skillsIndexTokens } from "./skills-budget";
 import {
   Select,
   SelectContent,
@@ -62,6 +69,19 @@ const MODE_LABEL: Record<SkillMode, string> = {
 };
 
 /**
+ * The modes a row's picker may offer.
+ *
+ * A skill whose own frontmatter says user-invoke-only cannot be promoted into
+ * the index: `parseSkillModes` drops `auto` (it is the absence of a rule), so
+ * for that skill "Auto" resolves straight back to Manual. Offering it anyway
+ * was a Select that snapped back the moment it was picked — so the option is
+ * simply not offered.
+ */
+export function offerableModes(skill: SkillReference): readonly SkillMode[] {
+  return skill.userInvokeOnly ? (["manual", "off"] as const) : (["auto", "manual", "off"] as const);
+}
+
+/**
  * A skill's tier, read off the root path the loader spelled. Project skills are
  * workspace-relative (`.agents/skills/…`); personal ones are absolute.
  */
@@ -73,14 +93,28 @@ export function SkillsPane({ project }: { project: Project }) {
   const { state, reload } = useAgentIndex(project.id);
   const [filter, setFilter] = React.useState("all");
 
+  /**
+   * The standing charge, in the `(i)` — the popover that answers "what is
+   * Auto costing me right now". Live once the list has loaded; before that
+   * the hint states the rule without a number rather than a number that lies.
+   */
+  const indexTokens =
+    state.status === "ready"
+      ? skillsIndexTokens(state.data.skills, project.skillModes ?? {})
+      : null;
+
   return (
     <AsyncSection
       title="Skills"
       icon={BookOpenIcon}
       hint={
-        <>
-          Auto costs prompt budget every turn. Manual keeps <code>/name</code> working.
-        </>
+        indexTokens === null ? (
+          <>
+            Auto costs prompt budget every turn. Manual keeps <code>/name</code> working.
+          </>
+        ) : (
+          <>Auto entries add ~{formatTokens(indexTokens)} tokens to every turn.</>
+        )
       }
       action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
       fill
@@ -185,7 +219,12 @@ function SkillsTable({
       empty="No skills yet. Add one to .agents/skills."
       noResults="No skills match."
       columns={[
-        { key: "name", header: "Skill", width: "20%", cell: (skill) => <Cell>{skill.name}</Cell> },
+        {
+          key: "name",
+          header: "Skill",
+          width: "20%",
+          cell: (skill) => <Cell strong>{skill.name}</Cell>,
+        },
         {
           key: "description",
           header: "Description",
@@ -198,6 +237,16 @@ function SkillsTable({
           cell: (skill) => (
             <Cell muted>{skillScope(skill) === "project" ? "This project" : "Personal"}</Cell>
           ),
+        },
+        {
+          // The skill's own size — what activating it will read into context.
+          // An estimate, and marked as one; the honest precision is "pamphlet
+          // or book", not a count.
+          key: "size",
+          header: "Size",
+          width: "4.5rem",
+          align: "end",
+          cell: (skill) => <Cell muted>~{formatTokens(skillBodyTokens(skill))}</Cell>,
         },
         {
           key: "open",
@@ -217,8 +266,7 @@ function SkillsTable({
         {
           key: "mode",
           header: "Mode",
-          width: "6.5rem",
-          align: "end",
+          width: "8.5rem",
           cell: (skill) => (
             <Select
               value={resolveSkillMode(modes, skill)}
@@ -236,7 +284,7 @@ function SkillsTable({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(["auto", "manual", "off"] as const).map((mode) => (
+                {offerableModes(skill).map((mode) => (
                   <SelectItem key={mode} value={mode}>
                     {MODE_LABEL[mode]}
                   </SelectItem>

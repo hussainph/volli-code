@@ -1439,11 +1439,16 @@ export function registerFileIpcHandlers(
       // The picker offers what this project actually has. A `manual` skill IS
       // still offered here — withholding it from the model's index is the
       // whole point of that mode, and it stays typable by name; only `off`
-      // removes a row.
+      // removes a row. The Skills pane asks for the UNRULED list instead
+      // (`ruled: false`): it edits the rules, so a skill set to `off` must
+      // stay on its screen to be turned back on.
       return {
         ok: true,
         templates: [...loaded.templates],
-        skills: [...applySkillModes(skills.skills, project.skillModes ?? {})],
+        skills:
+          input.ruled === false
+            ? [...skills.skills]
+            : [...applySkillModes(skills.skills, project.skillModes ?? {})],
       };
     },
   };

@@ -36,7 +36,10 @@ export function useAgentIndex(projectId: string | null): {
     const token = fetcher.claim();
     setState({ status: "loading" });
     try {
-      const result = await window.api.files.promptTemplates({ projectId });
+      // `ruled: false` — the UNRULED skill list. These panes edit the rules,
+      // so an `off` skill must keep its row here to be turned back on; the
+      // composer's own hook takes the ruled default instead.
+      const result = await window.api.files.promptTemplates({ projectId, ruled: false });
       if (!fetcher.isCurrent(token)) return;
       if (!result.ok) {
         setState({ status: "error", message: result.error, onRetry: () => void load() });
