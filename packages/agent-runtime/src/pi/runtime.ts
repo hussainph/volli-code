@@ -447,10 +447,31 @@ function isPersistedUserMessage(value: unknown): value is UserMessage {
   return (
     isRecord(value) &&
     value["role"] === "user" &&
-    typeof value["content"] === "string" &&
+    isPersistedUserContent(value["content"]) &&
     typeof value["timestamp"] === "number" &&
     Number.isFinite(value["timestamp"])
   );
+}
+
+/**
+ * Both shapes {@link queuedUserMessage} writes: the plain string every
+ * text-only message persists as, and the block array an attached image widens
+ * it to (VC-50). The array arm accepts exactly the two block types that
+ * function produces — this validator's job is to recognize the runtime's own
+ * writes, and the first shape it refused (an image message) poisoned every
+ * later branch read with "Pi recovery marker is malformed" (VC-155).
+ */
+function isPersistedUserContent(value: unknown): boolean {
+  if (typeof value === "string") return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every((block: unknown) => {
+    if (!isRecord(block)) return false;
+    if (block["type"] === "text") return typeof block["text"] === "string";
+    if (block["type"] === "image") {
+      return typeof block["data"] === "string" && typeof block["mimeType"] === "string";
+    }
+    return false;
+  });
 }
 
 function assertUniqueAcceptedCommands(markers: readonly RecoverableMarker[]): void {
@@ -751,6 +772,18 @@ async function attachSession(
     }
     const persistObservation = async <T extends RecoverableMarker>(observation: T): Promise<T> => {
       const durable = JSON.parse(JSON.stringify(observation)) as T;
+      // Refused at the write, not discovered at the read — with the same
+      // predicate recovery applies, so writer and validator cannot drift. A
+      // marker recovery would reject is worthless the moment it is written,
+      // and the failure modes differ by everything: refusing here fails one
+      // command loudly, while writing it quietly poisons recovery and every
+      // later branch read — which read as "Compaction failed … Pi recovery
+      // marker is malformed" after every message a Session sent once an
+      // image-carrying marker had landed (VC-155).
+      /* v8 ignore next 3 -- reachable only if a runtime write drifts from the validator, which this guard exists to catch. */
+      if (!isRecoverableObservation(durable as unknown as Record<string, unknown>)) {
+        throw new Error("Pi observation marker would not survive recovery; refusing to write it.");
+      }
       const markerId = await sidecar.appendCustomEntry(VOLLI_OBSERVATION_MARKER, durable);
       const marker = await sidecar.getEntry(markerId);
       /* v8 ignore next -- appendCustomEntry promises the entry it just returned. */

@@ -374,6 +374,21 @@ describe("mapPiActivity", () => {
     ).toEqual(generic);
     expect(mapPiActivity(throwingGetter, activityContext({ observedAt: 600 }))).toEqual(generic);
     expect(mapPiActivity(hostileProxy, activityContext({ observedAt: 600 }))).toEqual(generic);
+
+    // A hostile END event degrades to a state the recovery marker validator
+    // accepts: only end-event activities are persisted, and a fallback that
+    // kept "progress" for one would be written and then refused on every
+    // read-back — the poisoned-marker shape of VC-155.
+    const hostileEndEvent = {
+      type: "tool_execution_end",
+      get toolName(): never {
+        throw new Error("nope");
+      },
+    };
+    expect(mapPiActivity(hostileEndEvent, activityContext({ observedAt: 600 }))).toEqual({
+      ...generic,
+      state: "completed",
+    });
   });
 
   it("keeps incomplete provider payloads meaningful without inventing paths, ranges, or failures", () => {

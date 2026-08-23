@@ -107,12 +107,18 @@ function usageOf(usage: {
   // they are what the provider counts them as, and the sum of all four is the
   // context the model was actually holding when it answered — the number the
   // Session's context-usage surface is built on.
+  //
+  // Non-finite values are dropped rather than carried: a model with no cost
+  // table multiplies through to a NaN total, JSON persists NaN as null, and
+  // the recovery marker validator rightly refuses a null where a number
+  // belongs. Every field is optional in SanitizedUsage for exactly this — an
+  // absent number is honest, a poisoned marker is not (VC-155).
   return {
-    inputTokens: usage.input,
-    outputTokens: usage.output,
-    cacheReadTokens: usage.cacheRead,
-    cacheWriteTokens: usage.cacheWrite,
-    costUsd: usage.cost.total,
+    ...(Number.isFinite(usage.input) ? { inputTokens: usage.input } : {}),
+    ...(Number.isFinite(usage.output) ? { outputTokens: usage.output } : {}),
+    ...(Number.isFinite(usage.cacheRead) ? { cacheReadTokens: usage.cacheRead } : {}),
+    ...(Number.isFinite(usage.cacheWrite) ? { cacheWriteTokens: usage.cacheWrite } : {}),
+    ...(Number.isFinite(usage.cost.total) ? { costUsd: usage.cost.total } : {}),
   };
 }
 

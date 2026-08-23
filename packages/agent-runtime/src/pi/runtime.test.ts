@@ -2774,6 +2774,33 @@ describe("startSession", () => {
         turnId: "turn-1",
         message: { role: "user", content: "accepted", timestamp: Date.now() },
       },
+      // Content shapes no runtime write produces. The valid array shape — an
+      // image message's blocks — is pinned by the VC-155 recovery test; these
+      // pin that widening the validator did not open it to arbitrary payloads.
+      ...[
+        1,
+        [],
+        [null],
+        [{ type: "text", text: 1 }],
+        [{ type: "image", data: 1, mimeType: "image/png" }],
+        [{ type: "image", data: "aGVsbG8=", mimeType: 1 }],
+        [{ type: "document", data: "aGVsbG8=" }],
+      ].map((content) => ({
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content, timestamp: Date.now() },
+      })),
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: "now" },
+      },
       // A reason no executor writes, and a token count nothing could have
       // counted — the durable ledger reads those as integers, so a marker
       // accepted here would recover into a Session that cannot be read.
@@ -4183,6 +4210,90 @@ describe("compacting a context that reached its reserve", () => {
     ]);
     const [compaction] = compactions(attachment.observations);
     expect(compaction?.state === "compacted" && compaction.tokensAfter).toBeLessThan(OVER_RESERVE);
+    await handle.close();
+  });
+
+  it("does not report a failed compaction after a message that carried an image (VC-155)", async () => {
+    // The durable acceptance marker for an image message holds block-array
+    // content, and the marker validator once refused that shape outright. The
+    // branch read at the head of every later delivery then threw "Pi recovery
+    // marker is malformed" — filed as a failed threshold compaction after
+    // EVERY message the Session sent from then on, and the threshold path
+    // itself never ran again.
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("a login form"), settles("second answer")])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("what is this?", "queue", "command-1", [
+      { data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+    await expect(handle.submitUserMessage("and now?", "queue", "command-2")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    // No compaction was due and none may be reported — least of all a failure.
+    expect(compactions(attachment.observations)).toEqual([]);
+    const recovery = handle.recovery;
+    await handle.close();
+
+    // And the marker holding the image survives recovery: the same validator
+    // guards reattachment, so a shape it refused was also a Session that could
+    // never be reopened.
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after"))])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("still here?");
+    // The recovered context still holds the image message, blocks and all.
+    expect(calls[0]?.messages).toContain("aGVsbG8=");
+    const replayed = await secondHandle.reconcile(null);
+    expect(replayed.receipts).toEqual([
+      expect.objectContaining({ commandId: "command-1" }),
+      expect.objectContaining({ commandId: "command-2" }),
+    ]);
+    await secondHandle.close();
+  });
+
+  it("still compacts at the threshold after an image message (VC-155)", async () => {
+    // The poisoned-marker failure above was also what disabled automatic
+    // compaction: the branch read threw before the threshold was ever asked,
+    // so Sessions grew past their window and reported errors instead of
+    // compacting. This pins the whole journey — image message, window filled,
+    // threshold compaction succeeds.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("a login form")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("what is this?", "queue", "command-1", [
+      { data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+
+    expect(calls).toHaveLength(4);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ kind: "compaction", state: "compacted", reason: "threshold" }),
+    ]);
+    const turn = calls[3]?.messages ?? "";
+    expect(turn).toContain("compacted into the following summary");
+    expect(turn).toContain("carry on");
     await handle.close();
   });
 

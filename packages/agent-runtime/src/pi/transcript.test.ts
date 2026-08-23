@@ -184,6 +184,28 @@ describe("classifyAssistantMessage", () => {
     });
   });
 
+  it("drops non-finite usage numbers rather than persisting them (VC-155)", () => {
+    // A model with no cost table multiplies through to NaN, and JSON persists
+    // NaN as null — which the recovery marker validator refuses, poisoning the
+    // sidecar. An absent field is the honest spelling of "not measured".
+    const outcome = classifyAssistantMessage(
+      "entry",
+      assistant({
+        content: [{ type: "text", text: "Done." }],
+        usage: {
+          input: Number.NaN,
+          output: Number.POSITIVE_INFINITY,
+          cacheRead: Number.NaN,
+          cacheWrite: Number.NEGATIVE_INFINITY,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: Number.NaN },
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: "settled" });
+    expect(outcome.kind === "settled" && outcome.message.usage).toEqual({});
+  });
+
   it("omits reasoning when the model produced none", () => {
     const outcome = classifyAssistantMessage(
       "entry",
