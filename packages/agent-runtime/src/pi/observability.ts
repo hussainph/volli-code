@@ -30,6 +30,8 @@ import {
   type AttemptStopReason,
   type ObservabilitySink,
   type ProviderAttemptEvent,
+  type ProviderErrorClass,
+  type RuntimeObservation,
   type SessionRuntimeSpec,
 } from "@volli/shared";
 
@@ -69,6 +71,71 @@ export function attemptStopReason(reason: StopReason): AttemptStopReason {
 }
 
 /**
+ * The local-only classification input Pi leaves on a failed message.
+ *
+ * Each provider formats diagnostics differently and some formats include user
+ * material. These patterns are deliberately broad only in the direction of a
+ * fixed class; the source text is never stored on an observability event.
+ */
+const PROVIDER_ERROR_PATTERNS: readonly [ProviderErrorClass, RegExp][] = [
+  [
+    "auth",
+    /\b(?:401|403|api[ _-]?key|auth(?:entication)?|credential|forbidden|unauthori[sz]ed)\b/i,
+  ],
+  ["rate-limit", /\b(?:429|rate[ _-]?limit|too many requests|quota|usage[ _-]?limit)\b/i],
+  ["overloaded", /\b(?:503|529|capacity|overload(?:ed|ing)?|service unavailable)\b/i],
+  ["timeout", /\b(?:deadline exceeded|timed? out|timeout)\b/i],
+  [
+    "transport",
+    /\b(?:connection|dns|econn\w*|fetch failed|network|socket|stream closed|websocket)\b/i,
+  ],
+  [
+    "invalid-request",
+    /\b(?:400|bad request|invalid (?:argument|parameter|request)|malformed|validation)\b/i,
+  ],
+];
+
+/**
+ * Reduces provider prose to a bounded class only for an actual provider error.
+ *
+ * An aborted attempt is a local interruption, not a provider failure; adding a
+ * class there would make a person pressing Stop look like a model outage.
+ */
+export function providerErrorClass(
+  stopReason: AttemptStopReason,
+  message: string | undefined,
+): ProviderErrorClass | undefined {
+  if (stopReason !== "error") return undefined;
+  if (message === undefined) return "unknown";
+  for (const [errorClass, pattern] of PROVIDER_ERROR_PATTERNS) {
+    if (pattern.test(message)) return errorClass;
+  }
+  return "unknown";
+}
+
+/**
+ * Reduces and records one observation without delivering it to the Session.
+ *
+ * This is the observability-only path for a fact that must not become durable
+ * history, such as an allowed authority decision. It shares the reducer with
+ * the normal tee so ephemeral local correlation can join it to a later tool
+ * result, but it never awaits or calls the runtime observer.
+ */
+export function recordObservationToSink(
+  reducer: ObservabilityReducer,
+  sink: ObservabilitySink,
+  runId: string,
+  observation: RuntimeObservation,
+): void {
+  try {
+    const event = reducer.reduce(observation);
+    if (event !== null) sink.record({ ...event, runId });
+  } catch {
+    // A lost measurement, never a lost observation or authority decision.
+  }
+}
+
+/**
  * Wraps the observer an attachment was given so every accepted observation is
  * reduced and recorded before delivery — and so neither reduction nor the sink
  * can reject, delay, or reorder what the consumer receives. The tee is
@@ -82,12 +149,7 @@ export function teeObservationsToSink(
   runId: string,
 ): SessionRuntimeSpec["observer"] {
   return (observation) => {
-    try {
-      const event = reducer.reduce(observation);
-      if (event !== null) sink.record({ ...event, runId });
-    } catch {
-      // A lost measurement, never a lost observation.
-    }
+    recordObservationToSink(reducer, sink, runId, observation);
     return observer(observation);
   };
 }
@@ -185,13 +247,16 @@ function recordAttempt(
   try {
     const usage = message.usage;
     const eventCount = timing.eventCount();
+    const stopReason = attemptStopReason(message.stopReason);
+    const errorClass = providerErrorClass(stopReason, message.errorMessage);
     const event: ProviderAttemptEvent = {
       kind: "provider-attempt",
       providerId: identity.providerId,
       modelId: identity.modelId,
       api: identity.api,
       ...(identity.reasoningLevel === undefined ? {} : { reasoningLevel: identity.reasoningLevel }),
-      stopReason: attemptStopReason(message.stopReason),
+      stopReason,
+      ...(errorClass === undefined ? {} : { providerErrorClass: errorClass }),
       durationMs: observability.now() - timing.startedAt,
       ...(timing.firstEventAt === undefined
         ? {}

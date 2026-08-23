@@ -419,6 +419,11 @@ export class RuntimeObservationTranslator {
     observation: Extract<RuntimeObservation, { kind: "authority" }>,
     emit: TranslatedObservationSink,
   ): Promise<void> {
+    // An allowance is a metrics denominator, not Session history. It travels
+    // only through the runtime's passive observability recorder, but accepting
+    // this arm here keeps a direct observer harmless if a future executor uses
+    // the broader shared vocabulary.
+    if (observation.state === "allowed") return;
     await emit({
       id: `${this.#namespace}:authority:${this.#attachmentId}:${++this.#sequence}`,
       kind: "authority.denied",

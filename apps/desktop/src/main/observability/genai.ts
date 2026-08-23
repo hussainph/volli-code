@@ -63,6 +63,7 @@ const GEN_AI = {
   cacheReadTokens: "gen_ai.usage.cache_read.input_tokens",
   cacheWriteTokens: "gen_ai.usage.cache_creation.input_tokens",
   reasoningTokens: "gen_ai.usage.reasoning.output_tokens",
+  tokenType: "gen_ai.token.type",
   toolName: "gen_ai.tool.name",
   toolType: "gen_ai.tool.type",
 } as const;
@@ -89,6 +90,16 @@ export interface ObservabilitySpan {
 
 /** Only the three scalar shapes the vocabulary can produce. Never an object. */
 export type SpanAttributes = Readonly<Record<string, string | number | boolean>>;
+
+/** One counter or histogram update, still independent of OpenTelemetry SDK types. */
+export interface ObservabilityMetric {
+  name: string;
+  instrument: "counter" | "histogram";
+  unit: string;
+  value: number;
+  /** Labels are held to the same metadata-only scalar boundary as span attributes. */
+  attributes: SpanAttributes;
+}
 
 /** Drops the absent fields, so an unreported token count is absent, never zero. */
 function present(
@@ -151,7 +162,9 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
           [`${VOLLI}.usage.total_tokens`]: event.totalTokens,
           [`${VOLLI}.usage.cost_usd`]: event.costUsd,
           [`${VOLLI}.stream.chunks`]: event.chunkCount,
-          ...(attemptFailed(event.stopReason) ? { [ERROR_TYPE]: event.stopReason } : {}),
+          ...(attemptFailed(event.stopReason)
+            ? { [ERROR_TYPE]: event.providerErrorClass ?? event.stopReason }
+            : {}),
         }),
       };
     case "turn":
@@ -178,21 +191,21 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
           [GEN_AI.toolName]: event.activityKind,
           [GEN_AI.toolType]: "function",
           [`${VOLLI}.tool.outcome`]: event.outcome,
+          [`${VOLLI}.tool.wait_duration_ms`]: event.waitDurationMs,
           ...(event.outcome === "failed" ? { [ERROR_TYPE]: "tool_failed" } : {}),
         }),
       };
-    case "authority-denied":
+    case "authority":
       return {
         name: "volli.agent.authority",
         kind: "internal",
-        durationMs: 0,
-        // A refusal is the policy working. Marking it failed would make a
-        // correctly-blocked call look like a broken one.
+        durationMs: event.waitDurationMs ?? 0,
+        // An allowance or refusal is the policy working. Neither is a fault.
         failed: false,
         attributes: present({
           ...runId,
-          [`${VOLLI}.authority.outcome`]: "denied",
-          [`${VOLLI}.authority.cause`]: event.cause,
+          [`${VOLLI}.authority.outcome`]: event.outcome,
+          ...(event.outcome === "denied" ? { [`${VOLLI}.authority.cause`]: event.cause } : {}),
         }),
       };
     case "compaction":
@@ -255,6 +268,178 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
           [`${VOLLI}.dropped.count`]: event.count,
         }),
       };
+    /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
+    default: {
+      const unhandled: never = event;
+      return unhandled;
+    }
+  }
+}
+
+const METRIC = {
+  modelRequests: "volli.agent.model.request.count",
+  modelDuration: "gen_ai.client.operation.duration",
+  tokens: "gen_ai.client.token.usage",
+  cost: "volli.agent.cost.usage",
+  toolCalls: "volli.agent.tool.call.count",
+  toolExecutionDuration: "volli.agent.tool.execution.duration",
+  toolWaitDuration: "volli.agent.tool.wait.duration",
+  authorityDecisions: "volli.agent.authority.decision.count",
+  compactions: "volli.agent.compaction.count",
+  dropped: "volli.observability.dropped.count",
+} as const;
+
+/** A scalar metric value must be a finite non-negative count or duration. */
+function metricValue(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function seconds(value: number | undefined): number | undefined {
+  const milliseconds = metricValue(value);
+  return milliseconds === undefined ? undefined : milliseconds / 1000;
+}
+
+function metric(
+  name: string,
+  instrument: ObservabilityMetric["instrument"],
+  unit: string,
+  value: number | undefined,
+  attributes: SpanAttributes,
+): ObservabilityMetric[] {
+  const safeValue = metricValue(value);
+  return safeValue === undefined ? [] : [{ name, instrument, unit, value: safeValue, attributes }];
+}
+
+function providerMetricAttributes(
+  event: Extract<ObservabilityEvent, { kind: "provider-attempt" }>,
+) {
+  return present({
+    [GEN_AI.providerName]: event.providerId,
+    [GEN_AI.requestModel]: event.modelId,
+    [GEN_AI.finishReasons]: event.stopReason,
+    ...(event.stopReason === "error"
+      ? { [ERROR_TYPE]: event.providerErrorClass ?? "unknown" }
+      : {}),
+  });
+}
+
+function providerTokenMetrics(
+  event: Extract<ObservabilityEvent, { kind: "provider-attempt" }>,
+): ObservabilityMetric[] {
+  const provider = present({
+    [GEN_AI.providerName]: event.providerId,
+    [GEN_AI.requestModel]: event.modelId,
+  });
+  const tokens = [
+    ["input", event.inputTokens],
+    ["output", event.outputTokens],
+    ["cache-read", event.cacheReadTokens],
+    ["cache-write", event.cacheWriteTokens],
+    ["reasoning", event.reasoningTokens],
+  ] as const;
+  return tokens.flatMap(([type, value]) =>
+    metric(
+      METRIC.tokens,
+      "counter",
+      "{token}",
+      value,
+      present({
+        ...provider,
+        [`${VOLLI}.token.type`]: type,
+        // The convention's token type has only input/output words today. Volli's
+        // cache and reasoning splits remain in its own namespace rather than
+        // claiming those words are standardized.
+        ...(type === "input" || type === "output" ? { [GEN_AI.tokenType]: type } : {}),
+      }),
+    ),
+  );
+}
+
+/**
+ * One canonical event as the metric updates it implies.
+ *
+ * This is deliberately beside {@link observabilitySpan}: the reducer and this
+ * mapper are the only places that know the event vocabulary. OTLP transport
+ * code receives generic instruments and labels, so adding a future signal does
+ * not reach back into the Agent Runtime.
+ */
+export function observabilityMetrics(event: ObservabilityEvent): readonly ObservabilityMetric[] {
+  switch (event.kind) {
+    case "provider-attempt": {
+      const request = providerMetricAttributes(event);
+      return [
+        ...metric(METRIC.modelRequests, "counter", "{request}", 1, request),
+        ...metric(METRIC.modelDuration, "histogram", "s", seconds(event.durationMs), request),
+        ...providerTokenMetrics(event),
+        ...metric(
+          METRIC.cost,
+          "counter",
+          "USD",
+          event.costUsd,
+          present({
+            [GEN_AI.providerName]: event.providerId,
+            [GEN_AI.requestModel]: event.modelId,
+          }),
+        ),
+      ];
+    }
+    case "tool": {
+      const attributes = present({
+        [GEN_AI.toolName]: event.activityKind,
+        [`${VOLLI}.tool.outcome`]: event.outcome,
+      });
+      return [
+        ...metric(METRIC.toolCalls, "counter", "{call}", 1, attributes),
+        ...metric(
+          METRIC.toolExecutionDuration,
+          "histogram",
+          "s",
+          seconds(event.durationMs),
+          attributes,
+        ),
+        ...metric(
+          METRIC.toolWaitDuration,
+          "histogram",
+          "s",
+          seconds(event.waitDurationMs),
+          attributes,
+        ),
+      ];
+    }
+    case "authority":
+      return metric(
+        METRIC.authorityDecisions,
+        "counter",
+        "{decision}",
+        1,
+        present({
+          [`${VOLLI}.authority.outcome`]: event.outcome,
+          ...(event.outcome === "denied" ? { [`${VOLLI}.authority.cause`]: event.cause } : {}),
+        }),
+      );
+    case "compaction":
+      return metric(
+        METRIC.compactions,
+        "counter",
+        "{compaction}",
+        1,
+        present({
+          [`${VOLLI}.compaction.outcome`]: event.outcome,
+          [`${VOLLI}.compaction.reason`]: event.reason,
+        }),
+      );
+    case "dropped":
+      return metric(
+        METRIC.dropped,
+        "counter",
+        "{event}",
+        event.count,
+        present({ [`${VOLLI}.dropped.reason`]: event.reason }),
+      );
+    case "turn":
+    case "attachment":
+    case "attention":
+      return [];
     /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
     default: {
       const unhandled: never = event;

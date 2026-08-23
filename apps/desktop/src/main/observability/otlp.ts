@@ -24,13 +24,29 @@
  * the web tools — see `piExecutionEnv`, whose allowlist is the enforcing side.
  *
  * **A collector outage is not an agent failure.** `export` hands spans to a
- * batch processor and returns; delivery happens on the processor's own timer,
+ * batch processor and metric reader and returns; delivery happens on their own timers,
  * and a failure reaches {@link OtlpExporterOptions.onDeliveryFailure} once, so
  * Settings can say so without anything ever being raised at a turn.
  */
 
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { OTLPExporterBase } from "@opentelemetry/otlp-exporter-base";
+import {
+  createOtlpHttpExportDelegate,
+  httpAgentFactoryFromOptions,
+} from "@opentelemetry/otlp-exporter-base/node-http";
+import {
+  JsonMetricsSerializer,
+  JsonTraceSerializer,
+  MetricsExporterMetricsHelper,
+  TraceExporterMetricsHelper,
+} from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  type PushMetricExporter,
+  type ResourceMetrics,
+} from "@opentelemetry/sdk-metrics";
 import {
   BatchSpanProcessor,
   RandomIdGenerator,
@@ -39,12 +55,19 @@ import {
   type ReadableSpan,
   type SpanExporter,
 } from "@opentelemetry/sdk-trace";
-import { SpanKind, SpanStatusCode, type Tracer } from "@opentelemetry/api";
+import {
+  SpanKind,
+  SpanStatusCode,
+  type Counter,
+  type Histogram,
+  type Meter,
+  type Tracer,
+} from "@opentelemetry/api";
 
-import { observabilitySpan } from "./genai";
+import { observabilityMetrics, observabilitySpan, type ObservabilityMetric } from "./genai";
 import type { ObservabilityExporter, RecordedObservabilityEvent } from "./sink";
 
-/** The instrumentation scope every Volli span is attributed to. */
+/** The instrumentation scope every Volli trace and metric is attributed to. */
 const SCOPE_NAME = "volli.agent";
 
 /**
@@ -53,28 +76,84 @@ const SCOPE_NAME = "volli.agent";
  * Deliberately not the app version: this names the *vocabulary* a stored trace
  * was written under, so a reader can tell whether two traces are comparable.
  */
-const SCOPE_VERSION = "1";
+const SCOPE_VERSION = "2";
 
 /** OTLP over HTTP puts each signal on its own path. */
 const TRACES_PATH = "/v1/traces";
+const METRICS_PATH = "/v1/metrics";
 
 /**
  * Success, in the shape the SDK reports it.
  *
  * Compared as a literal rather than imported from `@opentelemetry/core`: the
- * enum member is `0` and stable in the protocol, and structural comparison keeps
- * this module's direct dependency list to the four packages it actually needs.
+ * enum member is `0` and stable in the protocol, and structural comparison avoids
+ * taking a direct dependency on `@opentelemetry/core`.
  */
 const EXPORT_SUCCESS = 0;
+const OTLP_TIMEOUT_MS = 10_000;
+const OTLP_CONCURRENCY_LIMIT = 4;
+
+/**
+ * A fully specified OTLP/HTTP delegate, with no ambient configuration lookup.
+ *
+ * The public OTel exporter constructors merge `OTEL_*` values even when a URL
+ * is passed. Volli cannot let a shell-provided header, certificate, timeout, or
+ * endpoint influence its opt-in Settings row, so the adapter constructs the
+ * lower-level delegate from these fixed values instead.
+ */
+function fixedOtlpHttpConfiguration(url: string) {
+  return {
+    url,
+    headers: async () => ({ "Content-Type": "application/json" }),
+    timeoutMillis: OTLP_TIMEOUT_MS,
+    concurrencyLimit: OTLP_CONCURRENCY_LIMIT,
+    compression: "none" as const,
+    agentFactory: httpAgentFactoryFromOptions({ keepAlive: true }),
+  };
+}
+
+/** Product-owned trace transport over the fixed HTTP delegate above. */
+class FixedOtlpTraceExporter extends OTLPExporterBase<ReadableSpan[]> implements SpanExporter {
+  constructor(url: string) {
+    super(
+      createOtlpHttpExportDelegate(
+        fixedOtlpHttpConfiguration(url),
+        JsonTraceSerializer,
+        "volli.otlp.trace",
+        TraceExporterMetricsHelper,
+        undefined,
+      ),
+    );
+  }
+}
+
+/** Product-owned metric transport over the same fixed HTTP delegate. */
+class FixedOtlpMetricExporter
+  extends OTLPExporterBase<ResourceMetrics>
+  implements PushMetricExporter
+{
+  constructor(url: string) {
+    super(
+      createOtlpHttpExportDelegate(
+        fixedOtlpHttpConfiguration(url),
+        JsonMetricsSerializer,
+        "volli.otlp.metric",
+        MetricsExporterMetricsHelper,
+        undefined,
+      ),
+    );
+  }
+}
 
 export interface OtlpExporterOptions {
   /**
    * The collector's OTLP/HTTP base address, e.g. `http://localhost:4318`.
-   * Already validated by the settings owner; `/v1/traces` is appended here so
-   * the setting stays an address a person can read off a Jaeger quickstart.
+   * Already validated by the settings owner; `/v1/traces` and `/v1/metrics`
+   * are appended here so the setting stays an address a person can read off a
+   * Jaeger quickstart.
    */
   endpoint: string;
-  /** Stamped on the resource so one collector can serve several Volli builds. */
+  /** Stamped on both signal resources so one collector can serve several Volli builds. */
   serviceVersion: string;
   /**
    * Told once, on the first delivery that did not land.
@@ -87,6 +166,8 @@ export interface OtlpExporterOptions {
   onDeliveryFailure?: (error: unknown) => void;
   /** Injected in tests so nothing has to open a socket. */
   spanExporterFactory?: (url: string) => SpanExporter;
+  /** Injected in tests so metric aggregation can be inspected without a socket. */
+  metricExporterFactory?: (url: string) => PushMetricExporter;
 }
 
 /**
@@ -153,12 +234,27 @@ class RunScopedIdGenerator implements IdGenerator {
  * results by design, so the only place to see one is between it and the real
  * exporter. It changes nothing about the result it observes.
  */
-class ReportingSpanExporter implements SpanExporter {
+class DeliveryFailureReporter {
   #reported = false;
 
+  constructor(private readonly onFailure: (error: unknown) => void) {}
+
+  report(error: unknown): void {
+    if (this.#reported) return;
+    this.#reported = true;
+    try {
+      this.onFailure(error);
+    } catch {
+      // The report is a courtesy to Settings; it cannot be allowed to break
+      // either signal path it is reporting on.
+    }
+  }
+}
+
+class ReportingSpanExporter implements SpanExporter {
   constructor(
     private readonly inner: SpanExporter,
-    private readonly onFailure: (error: unknown) => void,
+    private readonly reporter: DeliveryFailureReporter,
   ) {}
 
   export(
@@ -166,15 +262,7 @@ class ReportingSpanExporter implements SpanExporter {
     resultCallback: (result: { code: number; error?: Error }) => void,
   ): void {
     this.inner.export(spans, (result) => {
-      if (result.code !== EXPORT_SUCCESS && !this.#reported) {
-        this.#reported = true;
-        try {
-          this.onFailure(result.error);
-        } catch {
-          // The report is a courtesy to Settings; it cannot be allowed to
-          // break the export path it is reporting on.
-        }
-      }
+      if (result.code !== EXPORT_SUCCESS) this.reporter.report(result.error);
       resultCallback(result);
     });
   }
@@ -185,6 +273,30 @@ class ReportingSpanExporter implements SpanExporter {
 
   forceFlush(): Promise<void> {
     return this.inner.forceFlush?.() ?? Promise.resolve();
+  }
+}
+
+/** Same one-shot delivery report for the metric reader's exporter. */
+class ReportingMetricExporter implements PushMetricExporter {
+  constructor(
+    private readonly inner: PushMetricExporter,
+    private readonly reporter: DeliveryFailureReporter,
+  ) {}
+
+  export(...args: Parameters<PushMetricExporter["export"]>): void {
+    const [metrics, resultCallback] = args;
+    this.inner.export(metrics, (result) => {
+      if (result.code !== EXPORT_SUCCESS) this.reporter.report(result.error);
+      resultCallback(result);
+    });
+  }
+
+  forceFlush(): Promise<void> {
+    return this.inner.forceFlush();
+  }
+
+  shutdown(): Promise<void> {
+    return this.inner.shutdown();
   }
 }
 
@@ -204,66 +316,103 @@ function hrTime(epochMs: number): [number, number] {
 export class OtlpObservabilityExporter implements ObservabilityExporter {
   readonly #provider: TracerProvider;
   readonly #tracer: Tracer;
+  readonly #meterProvider: MeterProvider;
+  readonly #meter: Meter;
+  readonly #counters = new Map<string, Counter>();
+  readonly #histograms = new Map<string, Histogram>();
   readonly #idGenerator = new RunScopedIdGenerator();
 
   constructor(options: OtlpExporterOptions) {
-    const url = new URL(TRACES_PATH, options.endpoint).toString();
-    const inner =
-      options.spanExporterFactory?.(url) ??
-      new OTLPTraceExporter({
-        url,
-        // Bounded so a collector that accepts a connection and then stops
-        // answering cannot pin batches in memory indefinitely.
-        timeoutMillis: 10_000,
-        concurrencyLimit: 4,
-      });
-    const onFailure = options.onDeliveryFailure;
+    const traceUrl = new URL(TRACES_PATH, options.endpoint).toString();
+    const metricUrl = new URL(METRICS_PATH, options.endpoint).toString();
+    const traceInner =
+      options.spanExporterFactory?.(traceUrl) ?? new FixedOtlpTraceExporter(traceUrl);
+    const metricInner =
+      options.metricExporterFactory?.(metricUrl) ?? new FixedOtlpMetricExporter(metricUrl);
+    const reporter =
+      options.onDeliveryFailure === undefined
+        ? undefined
+        : new DeliveryFailureReporter(options.onDeliveryFailure);
+    const resource = resourceFromAttributes({
+      // Fixed, not derived from anything about this machine or profile: a
+      // hostname or a user name here would be the identity the whole
+      // vocabulary is built to leave out.
+      "service.name": "volli",
+      "service.version": options.serviceVersion,
+    });
     this.#provider = new TracerProvider({
-      resource: resourceFromAttributes({
-        // Fixed, not derived from anything about this machine or profile: a
-        // hostname or a user name here would be the identity the whole
-        // vocabulary is built to leave out.
-        "service.name": "volli",
-        "service.version": options.serviceVersion,
-      }),
+      resource,
       idGenerator: this.#idGenerator,
       spanProcessors: [
         new BatchSpanProcessor({
-          exporter: onFailure === undefined ? inner : new ReportingSpanExporter(inner, onFailure),
+          exporter:
+            reporter === undefined ? traceInner : new ReportingSpanExporter(traceInner, reporter),
+        }),
+      ],
+    });
+    this.#meterProvider = new MeterProvider({
+      resource,
+      readers: [
+        new PeriodicExportingMetricReader({
+          exporter:
+            reporter === undefined
+              ? metricInner
+              : new ReportingMetricExporter(metricInner, reporter),
+          // Events already travel through the sink's bounded queue. The reader
+          // aggregates them on a quiet cadence instead of putting another timer
+          // or network request on the agent path.
+          exportIntervalMillis: 30_000,
+          exportTimeoutMillis: 10_000,
         }),
       ],
     });
     this.#tracer = this.#provider.getTracer(SCOPE_NAME, SCOPE_VERSION);
+    this.#meter = this.#meterProvider.getMeter(SCOPE_NAME, SCOPE_VERSION);
   }
 
   /**
-   * One batch of Volli events as one batch of spans.
+   * One batch of Volli events as spans and aggregated metric updates.
    *
-   * Synchronous and unawaited: `startSpan`/`end` only hand the span to the batch
-   * processor's buffer, and the HTTP request happens on that processor's timer,
-   * off every caller's stack. Each event is wrapped on its own so one malformed
-   * event costs one span rather than the batch.
+   * Synchronous and unawaited: spans enter the batch processor and metric values
+   * enter the reader's aggregator; both HTTP paths run later, off every caller's
+   * stack. Each signal is isolated so one malformed mapping costs only that
+   * signal for one event.
    */
   export(batch: readonly RecordedObservabilityEvent[]): void {
     for (const entry of batch) {
       try {
-        this.#emit(entry);
+        this.#emitSpan(entry);
       } catch {
-        // A lost span. The sink counts a thrown batch; a single span that
-        // could not be built is simply gone, which is the cheaper failure.
+        // A lost span must not cost the metric beside it.
+      }
+      try {
+        this.#emitMetrics(entry.event);
+      } catch {
+        // A broken instrument or mapper costs one metric update, never a span
+        // and never an agent turn.
       }
     }
   }
 
   async flush(timeoutMs: number): Promise<void> {
-    await withTimeout(this.#provider.forceFlush(), timeoutMs);
+    await withTimeout(
+      Promise.all([this.#provider.forceFlush(), this.#meterProvider.forceFlush()]).then(
+        () => undefined,
+      ),
+      timeoutMs,
+    );
   }
 
   async shutdown(timeoutMs: number): Promise<void> {
-    await withTimeout(this.#provider.shutdown(), timeoutMs);
+    await withTimeout(
+      Promise.all([this.#provider.shutdown(), this.#meterProvider.shutdown()]).then(
+        () => undefined,
+      ),
+      timeoutMs,
+    );
   }
 
-  #emit(entry: RecordedObservabilityEvent): void {
+  #emitSpan(entry: RecordedObservabilityEvent): void {
     const span = observabilitySpan(entry.event);
     // Measured backwards from when the event settled: the vocabulary carries a
     // duration, not a start, because a start is a clock reading the runtime had
@@ -282,6 +431,32 @@ export class OtlpObservabilityExporter implements ObservabilityExporter {
     // carries the bounded word that says what went wrong.
     if (span.failed) started.setStatus({ code: SpanStatusCode.ERROR });
     started.end(hrTime(endedAt));
+  }
+
+  #emitMetrics(event: Parameters<typeof observabilityMetrics>[0]): void {
+    for (const measurement of observabilityMetrics(event)) {
+      if (measurement.instrument === "counter") {
+        this.#counter(measurement).add(measurement.value, measurement.attributes);
+      } else {
+        this.#histogram(measurement).record(measurement.value, measurement.attributes);
+      }
+    }
+  }
+
+  #counter(measurement: ObservabilityMetric): Counter {
+    const existing = this.#counters.get(measurement.name);
+    if (existing !== undefined) return existing;
+    const counter = this.#meter.createCounter(measurement.name, { unit: measurement.unit });
+    this.#counters.set(measurement.name, counter);
+    return counter;
+  }
+
+  #histogram(measurement: ObservabilityMetric): Histogram {
+    const existing = this.#histograms.get(measurement.name);
+    if (existing !== undefined) return existing;
+    const histogram = this.#meter.createHistogram(measurement.name, { unit: measurement.unit });
+    this.#histograms.set(measurement.name, histogram);
+    return histogram;
   }
 }
 

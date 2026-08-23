@@ -76,7 +76,7 @@ function syntheticRun(runId: string): ObservabilityEvent[] {
     },
     { kind: "tool", activityKind: "read-file", outcome: "completed", durationMs: 12, runId },
     { kind: "tool", activityKind: "run-command", outcome: "failed", durationMs: 2100, runId },
-    { kind: "authority-denied", cause: "call.unreadable", runId },
+    { kind: "authority", outcome: "denied", cause: "call.unreadable", runId },
     {
       kind: "compaction",
       outcome: "compacted",

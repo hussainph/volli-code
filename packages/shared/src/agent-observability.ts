@@ -46,6 +46,25 @@ export const ATTEMPT_STOP_REASONS = [
 export type AttemptStopReason = (typeof ATTEMPT_STOP_REASONS)[number];
 
 /**
+ * Why a provider request failed, reduced without retaining the provider's prose.
+ *
+ * A provider error frequently includes a request id, a model-generated fragment,
+ * or a credential-shaped string. The runtime classifies it locally and exports
+ * only one of these fixed words.
+ */
+export const PROVIDER_ERROR_CLASSES = [
+  "auth",
+  "rate-limit",
+  "overloaded",
+  "timeout",
+  "transport",
+  "invalid-request",
+  "unknown",
+] as const;
+
+export type ProviderErrorClass = (typeof PROVIDER_ERROR_CLASSES)[number];
+
+/**
  * One physical provider request, measured at the runtime's stream boundary.
  *
  * The closest local equivalent of Pi's `pi.ai.request` telemetry span, derived
@@ -63,6 +82,8 @@ export interface ProviderAttemptEvent {
   /** Absent when the request was made without reasoning. */
   reasoningLevel?: ReasoningLevel;
   stopReason: AttemptStopReason;
+  /** Present only for a provider error, never provider diagnostic prose. */
+  providerErrorClass?: ProviderErrorClass;
   /** Call to terminal stream event. */
   durationMs: number;
   /** Call to first stream event, when one arrived before settlement. */
@@ -90,27 +111,41 @@ export interface TurnEvent {
   runId?: string;
 }
 
-/** One executed tool call, reduced to its kind, outcome, and cost in time. */
+/** One executed tool call, reduced to its kind, outcome, and two kinds of time. */
 export interface ToolEvent {
   kind: "tool";
   activityKind: ActivityKind;
   outcome: "completed" | "failed";
-  /** From the activity descriptor's own clock, when the adapter reported one. */
+  /** Time Pi spent executing the tool, excluding a wait for a person. */
   durationMs?: number;
+  /** Time this call was parked on an authority question, when the runtime measured it. */
+  waitDurationMs?: number;
   runId?: string;
 }
 
 /**
- * The Session's authority refused a call before it ran.
+ * The Session's authority decided whether a call could run.
  *
- * Carries the rule that refused and nothing else: the tool name a model asked
- * for is unbounded input, and the refusal reason is prose.
+ * The allowed arm is the denominator for a refusal rate. Neither arm carries
+ * the model-supplied tool name or the reason prose: a refusal only carries the
+ * fixed rule that made it.
  */
-export interface AuthorityDeniedEvent {
-  kind: "authority-denied";
-  cause: AuthorityDenialCause;
-  runId?: string;
-}
+export type AuthorityEvent =
+  | {
+      kind: "authority";
+      outcome: "allowed";
+      /** Time parked on a person before this decision, when the runtime measured it. */
+      waitDurationMs?: number;
+      runId?: string;
+    }
+  | {
+      kind: "authority";
+      outcome: "denied";
+      cause: AuthorityDenialCause;
+      /** Time parked on a person before this decision, when the runtime measured it. */
+      waitDurationMs?: number;
+      runId?: string;
+    };
 
 /** A context compaction that landed, or the attempt that failed to. */
 export interface CompactionEvent {
@@ -155,7 +190,7 @@ export type ObservabilityEvent =
   | ProviderAttemptEvent
   | TurnEvent
   | ToolEvent
-  | AuthorityDeniedEvent
+  | AuthorityEvent
   | CompactionEvent
   | AttachmentEvent
   | AttentionEvent
@@ -187,6 +222,12 @@ export const NOOP_OBSERVABILITY_SINK: ObservabilitySink = {
  */
 export class ObservabilityReducer {
   #turnStartedAt = new Map<string, number>();
+  /**
+   * Pi's tool-call ids are local correlation only. They are used exactly long
+   * enough to subtract an approval wait from the corresponding activity, and
+   * never leave this reducer.
+   */
+  #authorityWaitByActivityId = new Map<string, number>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -195,10 +236,12 @@ export class ObservabilityReducer {
       case "turn": {
         if (observation.state === "started") {
           this.#turnStartedAt.set(observation.turnId, this.now());
+          this.#authorityWaitByActivityId.clear();
           return null;
         }
         const startedAt = this.#turnStartedAt.get(observation.turnId);
         this.#turnStartedAt.delete(observation.turnId);
+        this.#authorityWaitByActivityId.clear();
         return {
           kind: "turn",
           outcome: observation.state,
@@ -208,16 +251,50 @@ export class ObservabilityReducer {
       case "activity": {
         if (observation.state === "started" || observation.state === "progress") return null;
         const { startedAt, endedAt } = observation.descriptor;
-        const measured = startedAt !== null && endedAt !== null && endedAt >= startedAt;
+        const elapsed =
+          startedAt !== null &&
+          endedAt !== null &&
+          Number.isFinite(startedAt) &&
+          Number.isFinite(endedAt) &&
+          endedAt >= startedAt
+            ? endedAt - startedAt
+            : undefined;
+        const waitDurationMs = this.#authorityWaitByActivityId.get(observation.activityId);
+        this.#authorityWaitByActivityId.delete(observation.activityId);
+        const durationMs =
+          elapsed === undefined
+            ? undefined
+            : waitDurationMs === undefined
+              ? elapsed
+              : elapsed >= waitDurationMs
+                ? elapsed - waitDurationMs
+                : undefined;
         return {
           kind: "tool",
           activityKind: observation.descriptor.kind,
           outcome: observation.state,
-          ...(measured ? { durationMs: endedAt - startedAt } : {}),
+          ...(durationMs === undefined ? {} : { durationMs }),
+          ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
         };
       }
-      case "authority":
-        return { kind: "authority-denied", cause: observation.cause };
+      case "authority": {
+        const waitDurationMs = measuredDuration(observation.waitDurationMs);
+        if (waitDurationMs !== undefined && observation.toolCallId !== undefined) {
+          this.#authorityWaitByActivityId.set(observation.toolCallId, waitDurationMs);
+        }
+        return observation.state === "allowed"
+          ? {
+              kind: "authority",
+              outcome: "allowed",
+              ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
+            }
+          : {
+              kind: "authority",
+              outcome: "denied",
+              cause: observation.cause,
+              ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
+            };
+      }
       case "compaction": {
         if (observation.state === "failed") {
           return { kind: "compaction", outcome: "failed", reason: observation.reason };
@@ -252,4 +329,9 @@ export class ObservabilityReducer {
       }
     }
   }
+}
+
+/** A duration is a non-negative finite count, never an unchecked clock result. */
+function measuredDuration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

@@ -6,7 +6,7 @@ import {
   type ObservabilityEvent,
 } from "@volli/shared";
 
-import { observabilitySpan } from "./genai";
+import { observabilityMetrics, observabilitySpan } from "./genai";
 
 const attempt: ObservabilityEvent = {
   kind: "provider-attempt",
@@ -104,7 +104,16 @@ describe("observabilitySpan — provider attempts", () => {
     });
   });
 
-  it("carries the bounded stop reason as `error.type` on a failed attempt", () => {
+  it("carries a bounded provider error class as `error.type` on a failed attempt", () => {
+    expect(
+      observabilitySpan({
+        ...attempt,
+        stopReason: "error",
+        providerErrorClass: "rate-limit",
+      }).attributes["error.type"],
+    ).toBe("rate-limit");
+    // Synthetic or pre-classification events retain the stop reason as the
+    // safe fallback; provider prose never crosses this boundary either way.
     expect(observabilitySpan({ ...attempt, stopReason: "error" }).attributes["error.type"]).toBe(
       "error",
     );
@@ -158,12 +167,28 @@ describe("observabilitySpan — product events", () => {
     expect(failed.attributes["error.type"]).toBe("tool_failed");
   });
 
-  it("records an authority denial as a working refusal, not a fault", () => {
-    const span = observabilitySpan({ kind: "authority-denied", cause: "call.unreadable" });
-    expect(span.failed).toBe(false);
-    expect(span.attributes).toEqual({
+  it("records allowed and denied authority decisions as working policy, not faults", () => {
+    const denied = observabilitySpan({
+      kind: "authority",
+      outcome: "denied",
+      cause: "call.unreadable",
+    });
+    const allowed = observabilitySpan({
+      kind: "authority",
+      outcome: "allowed",
+      waitDurationMs: 120,
+    });
+
+    expect(denied.failed).toBe(false);
+    expect(denied.attributes).toEqual({
       "volli.authority.outcome": "denied",
       "volli.authority.cause": "call.unreadable",
+    });
+    expect(allowed).toMatchObject({
+      name: "volli.agent.authority",
+      durationMs: 120,
+      failed: false,
+      attributes: { "volli.authority.outcome": "allowed" },
     });
   });
 
@@ -231,6 +256,135 @@ describe("observabilitySpan — product events", () => {
   });
 });
 
+describe("observabilityMetrics", () => {
+  it("maps provider requests, token splits, and cost without a run-id label", () => {
+    const metrics = observabilityMetrics(attempt);
+
+    expect(metrics).toEqual(
+      expect.arrayContaining([
+        {
+          name: "volli.agent.model.request.count",
+          instrument: "counter",
+          unit: "{request}",
+          value: 1,
+          attributes: {
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.request.model": "claude-sonnet-4",
+            "gen_ai.response.finish_reasons": "stop",
+          },
+        },
+        {
+          name: "gen_ai.client.operation.duration",
+          instrument: "histogram",
+          unit: "s",
+          value: 1.2,
+          attributes: {
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.request.model": "claude-sonnet-4",
+            "gen_ai.response.finish_reasons": "stop",
+          },
+        },
+        {
+          name: "gen_ai.client.token.usage",
+          instrument: "counter",
+          unit: "{token}",
+          value: 100,
+          attributes: {
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.request.model": "claude-sonnet-4",
+            "gen_ai.token.type": "input",
+            "volli.token.type": "input",
+          },
+        },
+        {
+          name: "volli.agent.cost.usage",
+          instrument: "counter",
+          unit: "USD",
+          value: 0.0042,
+          attributes: {
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.request.model": "claude-sonnet-4",
+          },
+        },
+      ]),
+    );
+    expect(metrics.filter((metric) => metric.name === "gen_ai.client.token.usage")).toHaveLength(5);
+    expect(metrics.every((metric) => !("volli.run.id" in metric.attributes))).toBe(true);
+    expect(
+      observabilityMetrics({ ...attempt, stopReason: "error" }).find(
+        (metric) => metric.name === "volli.agent.model.request.count",
+      )?.attributes["error.type"],
+    ).toBe("unknown");
+  });
+
+  it("counts and times tools, authority decisions, compactions, and drops", () => {
+    const tool = observabilityMetrics({
+      kind: "tool",
+      activityKind: "read-file",
+      outcome: "failed",
+      durationMs: 240,
+      waitDurationMs: 60,
+      runId: "run-1",
+    });
+    expect(tool).toEqual([
+      {
+        name: "volli.agent.tool.call.count",
+        instrument: "counter",
+        unit: "{call}",
+        value: 1,
+        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+      },
+      {
+        name: "volli.agent.tool.execution.duration",
+        instrument: "histogram",
+        unit: "s",
+        value: 0.24,
+        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+      },
+      {
+        name: "volli.agent.tool.wait.duration",
+        instrument: "histogram",
+        unit: "s",
+        value: 0.06,
+        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+      },
+    ]);
+
+    expect(observabilityMetrics({ kind: "authority", outcome: "allowed" })).toEqual([
+      {
+        name: "volli.agent.authority.decision.count",
+        instrument: "counter",
+        unit: "{decision}",
+        value: 1,
+        attributes: { "volli.authority.outcome": "allowed" },
+      },
+    ]);
+    expect(
+      observabilityMetrics({ kind: "compaction", outcome: "compacted", reason: "threshold" }),
+    ).toEqual([
+      {
+        name: "volli.agent.compaction.count",
+        instrument: "counter",
+        unit: "{compaction}",
+        value: 1,
+        attributes: {
+          "volli.compaction.outcome": "compacted",
+          "volli.compaction.reason": "threshold",
+        },
+      },
+    ]);
+    expect(observabilityMetrics({ kind: "dropped", reason: "queue-full", count: 3 })).toEqual([
+      {
+        name: "volli.observability.dropped.count",
+        instrument: "counter",
+        unit: "{event}",
+        value: 3,
+        attributes: { "volli.dropped.reason": "queue-full" },
+      },
+    ]);
+  });
+});
+
 describe("observabilitySpan — the export boundary", () => {
   /**
    * The privacy proof, stated as a property rather than a list: an attribute
@@ -252,6 +406,12 @@ describe("observabilitySpan — the export boundary", () => {
     "tool_failed",
     "compaction_failed",
     "attachment_failed",
+    "input",
+    "output",
+    "cache-read",
+    "cache-write",
+    "reasoning",
+    "unknown",
   ]);
 
   it("emits only scalars, and only strings the event itself carried", () => {
@@ -259,7 +419,7 @@ describe("observabilitySpan — the export boundary", () => {
       attempt,
       { kind: "turn", outcome: "completed", durationMs: 1 },
       { kind: "tool", activityKind: "search", outcome: "failed", durationMs: 2 },
-      { kind: "authority-denied", cause: "call.unreadable" },
+      { kind: "authority", outcome: "denied", cause: "call.unreadable" },
       { kind: "compaction", outcome: "compacted", reason: "threshold", tokensBefore: 5 },
       { kind: "attachment", phase: "failed", failureReason: "aborted" },
       { kind: "attention", phase: "cleared", reason: "context" },
@@ -276,6 +436,16 @@ describe("observabilitySpan — the export boundary", () => {
           continue;
         }
         expect(carried.has(value) || FROZEN_WORDS.has(value)).toBe(true);
+      }
+      for (const metric of observabilityMetrics(event)) {
+        expect(metric.attributes).not.toHaveProperty("volli.run.id");
+        for (const value of Object.values(metric.attributes)) {
+          if (typeof value !== "string") {
+            expect(typeof value === "number" || typeof value === "boolean").toBe(true);
+            continue;
+          }
+          expect(carried.has(value) || FROZEN_WORDS.has(value)).toBe(true);
+        }
       }
     }
   });

@@ -8,6 +8,7 @@ import {
 } from "./escalation";
 
 const ALLOW: AuthorityVerdict = { outcome: "allow" };
+const ALLOW_ASK = async (): Promise<RuntimeAskChoice> => "allow";
 
 /** A refusal consent could carry out, and so one an ask can offer to override. */
 const OVERRIDABLE: AuthorityVerdict = {
@@ -167,6 +168,56 @@ describe("AuthorityEscalation", () => {
     });
 
     expect(await resolving(machine, OVERRIDABLE, "bash")).toEqual({ outcome: "allow" });
+  });
+
+  it("measures a question locally and lets the runtime consume that measurement once", async () => {
+    let now = 100;
+    const pending = pendingAsk();
+    const machine = escalation({
+      fallback: { consecutiveDenials: 1, sessionDenials: 100 },
+      ask: pending.ask,
+      now: () => now,
+    });
+
+    const decision = resolving(machine, OVERRIDABLE, "bash");
+    await pending.asked;
+    now = 460;
+    pending.answer("allow");
+
+    await expect(decision).resolves.toEqual({ outcome: "allow" });
+    expect(machine.consumeWaitDuration("bash-call")).toBe(360);
+    expect(machine.consumeWaitDuration("bash-call")).toBeUndefined();
+  });
+
+  it("forfeits only the wait measurement when its clock is invalid, reversed, or broken", async () => {
+    const invalid = escalation({
+      fallback: { consecutiveDenials: 1, sessionDenials: 100 },
+      ask: ALLOW_ASK,
+      now: () => Number.NaN,
+    });
+    await expect(resolving(invalid, OVERRIDABLE, "invalid")).resolves.toEqual({ outcome: "allow" });
+    expect(invalid.consumeWaitDuration("invalid-call")).toBeUndefined();
+
+    const readings = [100, 50];
+    const reversed = escalation({
+      fallback: { consecutiveDenials: 1, sessionDenials: 100 },
+      ask: ALLOW_ASK,
+      now: () => readings.shift() ?? 0,
+    });
+    await expect(resolving(reversed, OVERRIDABLE, "reversed")).resolves.toEqual({
+      outcome: "allow",
+    });
+    expect(reversed.consumeWaitDuration("reversed-call")).toBeUndefined();
+
+    const broken = escalation({
+      fallback: { consecutiveDenials: 1, sessionDenials: 100 },
+      ask: ALLOW_ASK,
+      now: () => {
+        throw new Error("clock unavailable");
+      },
+    });
+    await expect(resolving(broken, OVERRIDABLE, "broken")).resolves.toEqual({ outcome: "allow" });
+    expect(broken.consumeWaitDuration("broken-call")).toBeUndefined();
   });
 
   it("refuses anyway, and records it, when a host grants what nobody may grant", async () => {

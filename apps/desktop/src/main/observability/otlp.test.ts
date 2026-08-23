@@ -9,12 +9,19 @@
  * that a delivery failure is reported once and never raised.
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { createServer } from "node:http";
 import {
   InMemorySpanExporter,
   type ReadableSpan,
   type SpanExporter,
 } from "@opentelemetry/sdk-trace";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  type MetricData,
+  type PushMetricExporter,
+} from "@opentelemetry/sdk-metrics";
 import type { ObservabilityEvent } from "@volli/shared";
 
 import { OtlpObservabilityExporter, traceIdForRun } from "./otlp";
@@ -30,12 +37,18 @@ const built: OtlpObservabilityExporter[] = [];
 
 function exporterOver(
   inner: SpanExporter,
-  options: { onDeliveryFailure?: (error: unknown) => void } = {},
+  options: {
+    onDeliveryFailure?: (error: unknown) => void;
+    metricExporter?: PushMetricExporter;
+  } = {},
 ): OtlpObservabilityExporter {
+  const metricExporter =
+    options.metricExporter ?? new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   const exporter = new OtlpObservabilityExporter({
     endpoint: "http://localhost:4318",
     serviceVersion: "0.0.0-test",
     spanExporterFactory: () => inner,
+    metricExporterFactory: () => metricExporter,
     ...options,
   });
   built.push(exporter);
@@ -55,6 +68,34 @@ afterEach(async () => {
   await Promise.all(built.splice(0).map((exporter) => exporter.shutdown(1000)));
 });
 
+async function localCollector(): Promise<{
+  endpoint: string;
+  requests: string[];
+  close: () => Promise<void>;
+}> {
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requests.push(request.url ?? "");
+      response.writeHead(200);
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("Collector did not bind TCP.");
+  return {
+    endpoint: `http://127.0.0.1:${address.port}`,
+    requests,
+    close: () =>
+      new Promise((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  };
+}
+
 describe("traceIdForRun", () => {
   it("produces a 32-character lowercase hex id", () => {
     expect(traceIdForRun("run-1")).toMatch(/^[\da-f]{32}$/);
@@ -73,7 +114,7 @@ describe("traceIdForRun", () => {
 });
 
 describe("OtlpObservabilityExporter", () => {
-  it("appends the traces path to the address a person configured", () => {
+  it("appends both signal paths to the address a person configured", () => {
     const urls: string[] = [];
     const exporter = new OtlpObservabilityExporter({
       endpoint: "http://localhost:4318",
@@ -82,9 +123,32 @@ describe("OtlpObservabilityExporter", () => {
         urls.push(url);
         return new InMemorySpanExporter();
       },
+      metricExporterFactory: (url) => {
+        urls.push(url);
+        return new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+      },
     });
     built.push(exporter);
-    expect(urls).toEqual(["http://localhost:4318/v1/traces"]);
+    expect(urls).toEqual(["http://localhost:4318/v1/traces", "http://localhost:4318/v1/metrics"]);
+  });
+
+  it("uses a fixed, explicit transport for both signal paths", async () => {
+    const collector = await localCollector();
+    const exporter = new OtlpObservabilityExporter({
+      endpoint: collector.endpoint,
+      serviceVersion: "0.0.0-test",
+    });
+    built.push(exporter);
+    try {
+      exporter.export([
+        at({ kind: "tool", activityKind: "read-file", outcome: "completed", durationMs: 10 }, 1000),
+      ]);
+      await exporter.flush(2000);
+      expect(collector.requests.toSorted()).toEqual(["/v1/metrics", "/v1/traces"]);
+    } finally {
+      await exporter.shutdown(1000);
+      await collector.close();
+    }
   });
 
   it("puts every event of one run into one trace", async () => {
@@ -101,6 +165,89 @@ describe("OtlpObservabilityExporter", () => {
     expect(traceIds[1]).toBe(traceIdForRun("run-a"));
     expect(traceIds[2]).toBe(traceIdForRun("run-b"));
     expect(new Set(spans.map((span) => span.spanContext().spanId)).size).toBe(3);
+  });
+
+  it("exports counters and histograms through the same configured owner", async () => {
+    const spans = new InMemorySpanExporter();
+    const metrics = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const exporter = exporterOver(spans, { metricExporter: metrics });
+    exporter.export([
+      at(
+        {
+          kind: "provider-attempt",
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4",
+          api: "anthropic-messages",
+          stopReason: "error",
+          providerErrorClass: "rate-limit",
+          durationMs: 1_200,
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 80,
+          cacheWriteTokens: 10,
+          reasoningTokens: 5,
+          costUsd: 0.0042,
+          runId: "run-a",
+        },
+        1000,
+      ),
+      at(
+        {
+          kind: "tool",
+          activityKind: "read-file",
+          outcome: "failed",
+          durationMs: 240,
+          waitDurationMs: 60,
+          runId: "run-a",
+        },
+        1000,
+      ),
+      at({ kind: "authority", outcome: "allowed", runId: "run-a" }, 1000),
+      at({ kind: "compaction", outcome: "compacted", reason: "threshold", runId: "run-a" }, 1000),
+      at({ kind: "dropped", reason: "queue-full", count: 3, runId: "run-a" }, 1000),
+    ]);
+
+    await exporter.flush(2000);
+    const exported = metrics
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics);
+    expect(exported.map((metric) => metric.descriptor.name).toSorted()).toEqual([
+      "gen_ai.client.operation.duration",
+      "gen_ai.client.token.usage",
+      "volli.agent.authority.decision.count",
+      "volli.agent.compaction.count",
+      "volli.agent.cost.usage",
+      "volli.agent.model.request.count",
+      "volli.agent.tool.call.count",
+      "volli.agent.tool.execution.duration",
+      "volli.agent.tool.wait.duration",
+      "volli.observability.dropped.count",
+    ]);
+
+    const byName = (name: string): MetricData =>
+      exported.find((metric) => metric.descriptor.name === name)!;
+    expect(byName("volli.agent.tool.call.count").dataPoints).toContainEqual(
+      expect.objectContaining({
+        attributes: { "gen_ai.tool.name": "read-file", "volli.tool.outcome": "failed" },
+        value: 1,
+      }),
+    );
+    expect(byName("volli.agent.tool.wait.duration").dataPoints).toContainEqual(
+      expect.objectContaining({ value: expect.objectContaining({ count: 1, sum: 0.06 }) }),
+    );
+    expect(byName("volli.agent.model.request.count").dataPoints).toContainEqual(
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          "gen_ai.provider.name": "anthropic",
+          "gen_ai.request.model": "claude-sonnet-4",
+          "gen_ai.response.finish_reasons": "error",
+          "error.type": "rate-limit",
+        }),
+        value: 1,
+      }),
+    );
+    expect(JSON.stringify(exported)).not.toContain("run-a");
   });
 
   it("gives an event with no run id its own random trace", async () => {
@@ -130,7 +277,7 @@ describe("OtlpObservabilityExporter", () => {
   it("gives a point-in-time fact a zero-length span rather than inventing a duration", async () => {
     const memory = new InMemorySpanExporter();
     const exporter = exporterOver(memory);
-    exporter.export([at({ kind: "authority-denied", cause: "call.unreadable" }, 5000)]);
+    exporter.export([at({ kind: "authority", outcome: "denied", cause: "call.unreadable" }, 5000)]);
     const [span] = await spansFrom(exporter, memory);
     expect(span?.startTime).toEqual(span?.endTime);
   });
@@ -222,6 +369,26 @@ describe("OtlpObservabilityExporter", () => {
       exporter.export([at({ kind: "turn", outcome: "completed", durationMs: 1 }, 1000)]);
       await exporter.flush(2000);
     }
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(Error);
+  });
+
+  it("reports a metric delivery failure through the same once-only Settings callback", async () => {
+    const failures: unknown[] = [];
+    const brokenMetric: PushMetricExporter = {
+      export: (_metrics, resultCallback) =>
+        resultCallback({ code: 1, error: new Error("metrics collector unreachable") }),
+      forceFlush: () => Promise.resolve(),
+      shutdown: () => Promise.resolve(),
+    };
+    const exporter = exporterOver(new InMemorySpanExporter(), {
+      onDeliveryFailure: (error) => void failures.push(error),
+      metricExporter: brokenMetric,
+    });
+
+    exporter.export([at({ kind: "tool", activityKind: "read-file", outcome: "completed" }, 1000)]);
+    await exporter.flush(2000);
+
     expect(failures).toHaveLength(1);
     expect(failures[0]).toBeInstanceOf(Error);
   });

@@ -1822,8 +1822,10 @@ describe("startSession", () => {
     );
     expect(activities.map((activity) => activity.state)).toEqual(["started", "failed"]);
     const authority = observations.find(
-      (observation): observation is Extract<RuntimeObservation, { kind: "authority" }> =>
-        observation.kind === "authority",
+      (
+        observation,
+      ): observation is Extract<RuntimeObservation, { kind: "authority"; state: "denied" }> =>
+        observation.kind === "authority" && observation.state === "denied",
     );
     expect(authority).toMatchObject({
       kind: "authority",
@@ -2021,6 +2023,56 @@ describe("startSession", () => {
     // The whole point of asking after the counters rather than before the
     // observation: history must not hold a denial for a call that then ran.
     expect(exec).toHaveBeenCalledOnce();
+    expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("records an allowed authority decision only through observability, split from tool execution", async () => {
+    const events: ObservabilityEvent[] = [];
+    const { attachment, containedEnv } = escalatingAttachment(async () => "allow");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      observability: { record: (event) => void events.push(event) },
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    const decision = events.find(
+      (event): event is Extract<ObservabilityEvent, { kind: "authority" }> =>
+        event.kind === "authority",
+    );
+    const tool = events.find(
+      (event): event is Extract<ObservabilityEvent, { kind: "tool" }> => event.kind === "tool",
+    );
+    expect(decision).toEqual(
+      expect.objectContaining({
+        kind: "authority",
+        outcome: "allowed",
+        waitDurationMs: expect.any(Number),
+      }),
+    );
+    expect(tool).toEqual(
+      expect.objectContaining({
+        kind: "tool",
+        activityKind: "run-command",
+        waitDurationMs: expect.any(Number),
+      }),
+    );
+    // Allowance is a metrics denominator, never a durable Session fact.
     expect(kinds(attachment.observations)).not.toContain("authority");
   });
 

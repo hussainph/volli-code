@@ -28,8 +28,8 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // pure JavaScript, and reads no file relative to its own package layout — the
 // property that makes jsdom unbundleable and forced it into `neverBundle` — so
 // inlining it is safe, and it is the cheaper of the two ways to make the
-// packaged app able to resolve it. The alternative is adding all ten packages
-// (four direct, six transitive) to electron-builder.yml's node_modules
+// packaged app able to resolve it. The alternative is adding every direct and
+// transitive OpenTelemetry package to electron-builder.yml's node_modules
 // whitelist and keeping that list in sync as their dependency graph moves.
 // `verify-packed-requires.mjs` is what catches getting this wrong.
 const bundleWorkspacePackages = (id: string): boolean =>

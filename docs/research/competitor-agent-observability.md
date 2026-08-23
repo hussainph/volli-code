@@ -1,6 +1,6 @@
 # How other coding agents observe themselves
 
-_Research note — 2026-08-23. Evidence and a set of Phase 3/Phase 4 decisions, not an implementation change._
+_Research note — 2026-08-23. Evidence and the decisions that informed VC-119's observability implementation. The Phase 3 evaluation proposal remains research only and is explicitly out of this ticket._
 
 ## Bottom line
 
@@ -26,11 +26,11 @@ prompt text. Volli's event union has no free-form string in it, so there is no
 flag to set and nothing to redact. That is the sharpest difference and it is
 structural, not a policy Volli chose to state.
 
-Volli is behind in one dimension that matters directly to this ticket:
-**Volli emits spans only.** Every serious competitor emits counters and
-histograms too, and "frequency of tool calls, nature and failure rates" is a
-metrics question. Jaeger cannot answer it; a `tool.call.count{kind,outcome}`
-counter can. That is Phase 4's first job.
+At the time of the survey, Volli emitted spans only. That gap is now closed in
+this PR: the same opt-in Settings owner builds the trace and metric transports,
+and the mapper emits counters and histograms for the bounded vocabulary. A
+`tool.call.count{kind,outcome}` counter answers the frequency question that a
+trace viewer cannot.
 
 Volli is also behind on **outcome measurement**. Copilot Chat measures edit
 survival at 5s/30s/2m/5m/10m/15m after acceptance; Cursor matches AI line
@@ -43,12 +43,15 @@ worktree model can compute it locally without exporting a path or a language id.
 Established from the workspace, not from memory:
 
 - **Vocabulary.** `ObservabilityEvent` is a closed union of eight event kinds —
-  `provider-attempt`, `turn`, `tool`, `authority-denied`, `compaction`,
-  `attachment`, `attention`, `dropped`. Every field is a closed vocabulary word,
-  a count, a duration, or a configuration identifier. There is no free-form
-  string in the union. [`agent-observability.ts`](../../packages/shared/src/agent-observability.ts)
-- **Signals.** Traces only. `@opentelemetry/exporter-trace-otlp-http`; no meter,
-  no logger. [`otlp.ts`](../../apps/desktop/src/main/observability/otlp.ts)
+  `provider-attempt`, `turn`, `tool`, `authority`, `compaction`, `attachment`,
+  `attention`, `dropped`. Authority has allowed and denied arms; provider errors
+  reduce to a closed class; tool time separates an approval wait from execution.
+  Every field is a closed vocabulary word, a count, a duration, or a configuration
+  identifier. There is no free-form string in the union.
+  [`agent-observability.ts`](../../packages/shared/src/agent-observability.ts)
+- **Signals.** Traces and metrics. The Electron-main OTLP adapter owns the trace
+  exporter, meter provider, metric exporter, and one vocabulary mapper; there is
+  still no logs signal. [`otlp.ts`](../../apps/desktop/src/main/observability/otlp.ts)
 - **Default.** Off, and off means `NOOP_OBSERVABILITY_SINK` rather than an idle
   exporter. No `OTEL_*` variable can switch it on; the endpoint is passed
   explicitly from a Settings row. [`settings.ts`](../../apps/desktop/src/main/observability/settings.ts)
@@ -67,14 +70,14 @@ Established from the workspace, not from memory:
   [`containment.test.ts`](../../apps/desktop/src/main/observability/containment.test.ts)
 - **Back-pressure.** Bounded queue; a full queue drops the newest and counts it;
   the count becomes a `dropped` event at the head of the next batch.
-- **Evals.** Planned (Phase 3): fixture-based Promptfoo runs over the real
-  `AgentRuntime`. Not started.
+- **Evals.** Explicitly out of VC-119. No fixtures, Promptfoo provider, or
+  Phase 3 work was started.
 
 ## Comparison — signals, default, content, destination
 
 | Product | 1. What is emitted, over which standard | 2. Default and how it is enabled | 3. Content policy | 4. Destination and reader |
 | --- | --- | --- | --- | --- |
-| **Volli** | Traces only. Volli-canonical events; GenAI names applied at the exporter | **Off.** Settings row only; no env activation path | **Metadata-only by construction.** No content flag exists; no free-form string in the event union | User-typed OTLP/HTTP collector, Jaeger as dev viewer. Local-first; no vendor endpoint |
+| **Volli** | Traces and counters/histograms. Volli-canonical events; GenAI names applied only in the exporter mapper | **Off.** One Settings row builds both transports; no env activation path | **Metadata-only by construction.** No content flag exists; no free-form string in the event union | User-typed OTLP/HTTP collector, Jaeger as trace viewer. Local-first; no vendor endpoint |
 | **Claude Code** (+ Agent SDK) | Metrics, log events, traces (beta). OTel | **Off.** `CLAUDE_CODE_ENABLE_TELEMETRY=1` plus per-signal exporter env vars; traces need `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`. Admins set the same env through managed settings | Structural by default. Five opt-in flags: prompts, assistant responses, tool details, tool content, raw API bodies (inline ≤60 KB or untruncated `file:<dir>`) | Any OTLP backend; managed settings can lock the destination and strip developer-set overrides. Separate Anthropic-side dashboards and Enterprise Analytics API |
 | **OpenAI Codex CLI** | Log events, traces, metrics. OTel | Log/trace export **off** (`exporter = "none"`); `[otel]` in user-level `config.toml`, ignored in project config. **Metrics default to Statsig** in release builds; separate `[analytics] enabled = false` opt-out | `log_user_prompt = false` by default; `codex.tool_result` carries an output snippet; session metadata carries `account_id`, `account_email`, `conversation_id`, `auth_mode`, `originator` | User OTLP (http/grpc, headers, TLS) — and, by default for metrics, `https://ab.chatgpt.com/otlp/v1/metrics` with a baked-in key |
 | **Gemini CLI** | Logs, metrics, traces. Custom `gemini_cli.*` plus GenAI convention metrics | **Off** (`telemetry.enabled = false`); settings.json, env, or CLI flags; `target` is `local` or `gcp` | **`logPrompts` defaults to `true`** — prompt text on `user_prompt`, `request_text`/`response_text` on API events. `sessionId` on every log and metric | Local file, local collector/Jaeger (`npm run telemetry`), or direct export to Google Cloud Logging/Monitoring/Trace |
@@ -93,7 +96,7 @@ Established from the workspace, not from memory:
 
 | Product | 5. Token / cost / cache visibility | 6. Tool-call and failure observability | 7. Evals and regression infrastructure disclosed | 8. Process isolation and env hygiene |
 | --- | --- | --- | --- | --- |
-| **Volli** | Per attempt: input/output/cache-read/cache-write/reasoning tokens, cost in USD, TTFT, chunk count. **No rollup, no in-app cost view, no admin surface** | `execute_tool <ActivityKind>` spans with outcome and duration; `authority-denied` with a bounded cause; bounded `error.type`, never a message. **No counters** | Phase 3 planned: Promptfoo fixtures over the real `AgentRuntime`. **Nothing shipped** | Exporter lives only in Electron main; structural test forbids `@opentelemetry` elsewhere; no `OTEL_*` written to `process.env`; `piExecutionEnv` allowlist; no trace context propagated into tools |
+| **Volli** | Counter splits for input/output/cache-read/cache-write/reasoning tokens and cost, plus per-attempt trace attributes. **No local rollup, in-app cost view, or admin surface** | Tool-call counter by `ActivityKind` + outcome; execution and approval-wait histograms; model-request counter by provider/model/stop reason; authority decision counter; bounded provider `error.type`; compaction and drop counters | Explicitly out of VC-119: no fixtures or Promptfoo provider | Exporter lives only in Electron main; structural test forbids `@opentelemetry` elsewhere; no `OTEL_*` written to `process.env`; `piExecutionEnv` allowlist; no trace context propagated into tools |
 | **Claude Code** | Metric counters for tokens and cost; `/analytics` dashboards with spend per user; Enterprise Analytics API cost reports | `tool_decision` and `tool_result` events; `claude_code.tool` span with a `blocked_on_user` child separated from `execution`; `api_error` events | Not disclosed on the monitoring or SDK pages | Documented: `OTEL_*` is **not** passed to spawned subprocesses (Bash, hooks, MCP servers, language servers). But when trace propagation is on, the CLI **forwards `TRACEPARENT` to every Bash and PowerShell command** |
 | **Codex CLI** | `gen_ai.usage.input_tokens`, `cache_read.input_tokens`, `output_tokens`, plus `codex.usage.reasoning_output_tokens` / `total_tokens` on spans. No cost metric in the catalog | `codex.tool.call` counter and duration histogram tagged `tool`+`success`; `codex.tool_decision` (approved/denied, config vs user); `api_request` counter by status/success | Not disclosed in the config docs or the otel crate | Telemetry is configured from `config.toml`, not env, and `otel` keys are ignored in project-local config. `shell_environment_policy` governs what spawned commands inherit; `ignore_default_excludes` defaults to `true`, so `KEY`/`SECRET`/`TOKEN` names are **not** auto-stripped |
 | **Gemini CLI** | `gemini_cli.token.usage` by type `input`/`output`/`thought`/`cache`/`tool`; `cached_content_token_count` on API responses; `gen_ai.client.token.usage`. No cost | `tool.call.count` with `function_name`, `success`, **`decision` (accept/reject/auto_accept/modify)**, `tool_type`; latency histogram; `tool_output_truncated`; `api_error` with `error_type` and `status_code` | Not disclosed on the telemetry page | Not documented |
@@ -335,6 +338,10 @@ be an experimental path, but no first-party documentation stands behind it.
 
 ### Phase 3 (evals) — adopt
 
+**VC-119 scope update:** evals, fixtures, and a Promptfoo provider are out of
+this ticket. The recommendations below remain survey evidence for a future
+separately-scoped evaluation ticket; no Phase 3 implementation began here.
+
 1. **Repeat each case, snapshot a baseline, gate the PR on baseline drift.**
    Copilot Chat runs each simulation test 10× and commits
    `test/simulation/baseline.json`; a PR fails on uncommitted baseline changes.
@@ -374,30 +381,29 @@ be an experimental path, but no first-party documentation stands behind it.
 
 ### Phase 4 (rollups) — adopt
 
-1. **Add a metrics signal.** This is the largest gap. Ticket asks for
-   "frequency of tool calls, nature and failure rates"; Volli exports spans and
-   nothing counts them. The convergent minimum, present in Gemini CLI, Codex and
-   Copilot Chat alike: `tool.call.count{kind,outcome}`,
-   `tool.call.duration{kind}`, `api.request.count{outcome}`,
-   `token.usage{type}`, plus `gen_ai.client.operation.duration` and
-   `gen_ai.client.token.usage` under convention names so external dashboards
-   line up. `gen_ai.token.type` values are `input`/`output`; Gemini extends the
-   custom metric with `thought`, `cache`, `tool` — Volli's cache-read,
-   cache-write and reasoning splits map onto that pattern directly.
-2. **Make authority a decision dimension, not only a denial event.** Gemini
-   tags every tool call with `decision` ∈ accept/reject/auto_accept/modify;
+**VC-119 implementation status:** items 1–3 below are now shipped as the
+metadata-only OTLP metrics layer in this PR. The later projection and product
+surface work remains separate.
+
+1. **Metrics signal (shipped).** The same explicit Settings owner now builds
+   traces and metrics. It emits `tool.call.count{kind,outcome}`, separate tool
+   execution and approval-wait histograms, `api.request.count` by provider,
+   requested model and stop reason, token usage by type, cost, compaction,
+   authority-decision, and drop counters. `gen_ai.client.operation.duration`
+   and `gen_ai.client.token.usage` use convention names; cache-read,
+   cache-write and reasoning remain under Volli's own bounded token-type label
+   where the convention has no word for those splits.
+2. **Make authority a decision dimension, not only a denial event (shipped).**
+   Gemini tags every tool call with `decision` ∈ accept/reject/auto_accept/modify;
    Claude Code emits `tool_decision` with the approver and separates a
-   `blocked_on_user` span from execution. Volli emits `authority-denied` and
-   nothing for the allowed paths, so the denial rate has no denominator and an
-   approval wait is billed as tool duration. Phase 4 should add a bounded
-   authority outcome (auto-allowed / asked-then-allowed / denied) and split
-   waiting from executing in the tool event.
-3. **Add a bounded provider-error class.** Volli currently reduces a failed
-   attempt to `stopReason: "error"`. Gemini carries `error_type` and
-   `status_code`; Codex tags counters with `status` and `success`. A closed
-   error-class vocabulary (auth, rate-limit, overloaded, timeout, transport,
-   invalid-request, unknown) is low cardinality, carries no prose, and is what a
-   failure-rate dashboard actually needs.
+   `blocked_on_user` span from execution. Volli now emits bounded allowed and
+   denied authority outcomes, so refusal rate has a denominator; it records an
+   approval wait separately from the corresponding tool execution time.
+3. **Add a bounded provider-error class (shipped).** Provider diagnostic prose
+   is reduced locally to `auth`, `rate-limit`, `overloaded`, `timeout`,
+   `transport`, `invalid-request`, or `unknown`; metrics and failed request
+   spans carry only that class. The classifier is not an export path for the
+   diagnostic text.
 4. **Derive cache-hit rate in the rollup.** The inputs already exist per
    attempt. Codex records `gen_ai.usage.cache_read.input_tokens`, Gemini has a
    `cache` token type — the durable projection should carry the ratio, not
@@ -452,12 +458,11 @@ tests; no `OTEL_*` in tool environments and no trace context either; a
 first-class counted `dropped` event where Claude Code documents silent
 best-effort export and everyone else says nothing about loss.
 
-**Behind:** no metrics and no events, only spans, so tool frequency and failure
-rate cannot be answered without a trace store doing aggregation it is bad at; no
-eval harness at all while Copilot gates PRs on a baseline and Aider publishes a
-reproducible benchmark; no authority-decision denominator and no separation of
-approval wait from execution; no bounded provider-error class; no user-facing
-cost or cache rollup; no measurement of whether an agent's edits survived.
+**Behind:** no evaluation harness (explicitly out of VC-119) while Copilot gates
+PRs on a baseline and Aider publishes a reproducible benchmark; no local
+user-facing cost or cache rollup; no measurement of whether an agent's edits
+survived; and no durable cache-hit projection. Those are separate product or
+evaluation decisions, not reasons to widen this metadata-only exporter.
 
 ## Source ledger
 

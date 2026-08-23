@@ -72,7 +72,11 @@ import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
 import { piOwnedModelAccess } from "./models";
-import { instrumentStreamFn, teeObservationsToSink } from "./observability";
+import {
+  instrumentStreamFn,
+  recordObservationToSink,
+  teeObservationsToSink,
+} from "./observability";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { createSessionTools } from "./tools";
 import {
@@ -686,12 +690,18 @@ async function attachSession(
   // tee. The run id is opaque and process-local on purpose — correlation
   // without exporting Session identity.
   const runId = randomUUID();
+  const observabilityReducer = new ObservabilityReducer(host.now);
   const observe = teeObservationsToSink(
     spec.observer,
-    new ObservabilityReducer(host.now),
+    observabilityReducer,
     host.observability,
     runId,
   );
+  // A permitted authority decision is a metrics denominator, not durable
+  // Session history. It therefore goes through the reducer's passive path and
+  // never awaits the Session observer or changes whether Pi can run the call.
+  const recordObservability = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
+    recordObservationToSink(observabilityReducer, host.observability, runId, observation);
   if (isAborted(spec.signal)) {
     return rejectCancelledAttachment(observe);
   }
@@ -1084,6 +1094,7 @@ async function attachSession(
         priorDenials: spec.priorAuthorityDenials,
         ask: spec.ask,
         signal: spec.signal,
+        now: host.now,
       });
       return async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
@@ -1102,7 +1113,17 @@ async function attachSession(
           turnId,
           signal,
         });
-        if (disposition.outcome === "allow") return undefined;
+        const waitDurationMs = escalation.consumeWaitDuration(toolCall.id);
+        if (disposition.outcome === "allow") {
+          recordObservability({
+            kind: "authority",
+            state: "allowed",
+            turnId,
+            toolCallId: toolCall.id,
+            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
+          });
+          return undefined;
+        }
         // Recorded before refused, through the same ordered queue as every other
         // observation: a refusal that overtook the turn it belongs to would be
         // filed against the wrong turn, and one that raced the activity stream
@@ -1115,6 +1136,8 @@ async function attachSession(
             kind: "authority",
             state: "denied",
             turnId,
+            toolCallId: toolCall.id,
+            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
             tool: toolCall.name,
             cause: disposition.cause,
             reason: disposition.reason,

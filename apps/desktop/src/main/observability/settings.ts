@@ -75,9 +75,9 @@ export type EndpointAdmission =
 /**
  * Whether a typed collector address may be stored, and in what form.
  *
- * Normalized to its origin, and stored that way. The exporter resolves
- * `/v1/traces` against the origin, so a path typed here would be silently
- * discarded at send time — and a setting that displays one string while using
+ * Normalized to its origin, and stored that way. The exporters resolve
+ * `/v1/traces` and `/v1/metrics` against the origin, so a path typed here would
+ * be silently discarded at send time — and a setting that displays one string while using
  * another is a setting that cannot be debugged. Refusing the path outright, and
  * saving what was validated, keeps the two the same string.
  *
@@ -121,7 +121,7 @@ interface StoredSettings {
 
 export interface AgentObservabilityOptions {
   db: Database.Database;
-  /** Stamped onto every span's resource so one collector can serve several builds. */
+  /** Stamped onto both signal resources so one collector can serve several builds. */
   serviceVersion: string;
   now?: () => number;
   /** Injected in tests so nothing has to open a socket, and to script a refusal. */

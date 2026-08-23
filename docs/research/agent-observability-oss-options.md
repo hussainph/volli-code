@@ -188,11 +188,32 @@ three adjustments worth recording:
   Volli's dependence on the convention. `gen_ai.system` is emitted beside
   `gen_ai.provider.name` because the ecosystem has not finished that rename.
 
-Dependencies added: `@opentelemetry/api`, `sdk-trace`, `resources`, and
-`exporter-trace-otlp-http` (six transitive, all pure JS, bundled into the packed
-main chunk). `docs/observability-smoke.md` is the Jaeger developer path;
+The current direct OTel dependencies are `@opentelemetry/api`,
+`@opentelemetry/otlp-exporter-base`, `@opentelemetry/otlp-transformer`,
+`@opentelemetry/resources`, `@opentelemetry/sdk-trace`, and
+`@opentelemetry/sdk-metrics`. They are all pure JavaScript and bundled into the
+packed main chunk. `docs/observability-smoke.md` is the Jaeger developer path;
 `observability/jaeger.integration.test.ts` is its executable form, verified
 against `jaegertracing/jaeger:2.18.0`.
+
+## Implementation addendum — metrics signal
+
+The same opt-in Settings owner now builds an OTLP meter provider beside the
+trace provider, with the same explicitly configured collector origin. The
+adapter sends counters and histograms to `/v1/metrics`; it does not read or
+write `OTEL_*`, register a global provider, add a logs signal, or pass trace
+context into tools.
+
+The canonical mapper is still the only translation point. It emits bounded
+labels for tool calls, model requests, token type, cost, authority decisions,
+compactions, and dropped telemetry; `runId` remains trace-only. Authority now
+has allowed and denied observability arms, an approval wait is separated from
+tool execution, and provider prose reduces locally to a closed error class.
+
+`@opentelemetry/otlp-exporter-base`, `@opentelemetry/otlp-transformer`, and
+`@opentelemetry/sdk-metrics` are bundled into the Electron-main packed chunk.
+The real meter provider is covered by an in-memory exporter test. Evals remain
+out of VC-119: no Promptfoo provider or fixture corpus was added.
 
 ## Source index
 

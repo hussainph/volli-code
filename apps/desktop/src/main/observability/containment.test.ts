@@ -16,8 +16,8 @@
  *    directory also means "telemetry is off" is checkable by reading one module
  *    rather than by auditing a process.
  *
- * 2. **Nothing writes `OTEL_*` into `process.env`.** Volli configures its
- *    exporter from a Settings row. Writing the same configuration into the
+ * 2. **Nothing reads or writes `OTEL_*` through `process.env`.** Volli
+ *    configures both signal exporters from a Settings row. Writing the same configuration into the
  *    process environment would put it one `inheritEnv` away from every tool a
  *    model can run — and `piExecutionEnv`'s allowlist is a second line, not a
  *    licence to leak into the first.
@@ -97,12 +97,12 @@ describe("OpenTelemetry stays in Electron main", () => {
 });
 
 describe("OTEL_* never enters the process environment", () => {
-  it("is written by no desktop source", () => {
-    // Matches `process.env.OTEL_…`, `process.env["OTEL_…"]` and the spread
-    // forms, on the left of an assignment or inside an object literal being
-    // handed to a child.
-    const writes = /process\.env(?:\.OTEL_|\[\s*["'`]OTEL_)/;
-    const offenders = ALL_SOURCES.filter((path) => writes.test(readFileSync(path, "utf8")));
+  it("is read or written by no desktop source", () => {
+    // Matches `process.env.OTEL_…` and `process.env["OTEL_…"]` in either
+    // direction. The Settings owner passes an explicit address to both OTLP
+    // signal exporters, so no source has a reason to inspect an ambient value.
+    const accesses = /process\.env(?:\.OTEL_|\[\s*["'`]OTEL_)/;
+    const offenders = ALL_SOURCES.filter((path) => accesses.test(readFileSync(path, "utf8")));
     expect(offenders.map((path) => path.slice(SRC.length))).toEqual([]);
   });
 

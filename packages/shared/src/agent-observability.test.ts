@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ATTEMPT_STOP_REASONS,
   NOOP_OBSERVABILITY_SINK,
+  PROVIDER_ERROR_CLASSES,
   ObservabilityReducer,
   type ObservabilityEvent,
 } from "./agent-observability";
@@ -166,12 +167,69 @@ describe("ObservabilityReducer lifecycle facts", () => {
       kind: "authority",
       state: "denied",
       turnId: null,
+      toolCallId: "activity-1",
       tool: SENSITIVE,
       cause: "call.unreadable",
       reason: SENSITIVE,
     });
-    expect(event).toEqual({ kind: "authority-denied", cause: "call.unreadable" });
+    expect(event).toEqual({ kind: "authority", outcome: "denied", cause: "call.unreadable" });
     expect(leaks(event)).toBe(false);
+  });
+
+  it("keeps an allowed authority decision and separates its wait from tool execution", () => {
+    const reducer = freshReducer();
+    const decision = reducer.reduce({
+      kind: "authority",
+      state: "allowed",
+      turnId: "turn-1",
+      toolCallId: "activity-1",
+      waitDurationMs: 40,
+    });
+    const tool = reducer.reduce(activity("completed", { startedAt: 100, endedAt: 260 }));
+
+    expect(decision).toEqual({ kind: "authority", outcome: "allowed", waitDurationMs: 40 });
+    expect(tool).toEqual({
+      kind: "tool",
+      activityKind: "run-command",
+      outcome: "completed",
+      durationMs: 120,
+      waitDurationMs: 40,
+    });
+  });
+
+  it("keeps authority decisions without a wait, and never invents negative execution time", () => {
+    const reducer = freshReducer();
+    expect(
+      reducer.reduce({
+        kind: "authority",
+        state: "allowed",
+        turnId: "turn-1",
+        toolCallId: "activity-1",
+      }),
+    ).toEqual({ kind: "authority", outcome: "allowed" });
+    expect(
+      reducer.reduce({
+        kind: "authority",
+        state: "denied",
+        turnId: "turn-1",
+        toolCallId: "activity-1",
+        waitDurationMs: 200,
+        tool: SENSITIVE,
+        cause: "call.unreadable",
+        reason: SENSITIVE,
+      }),
+    ).toEqual({
+      kind: "authority",
+      outcome: "denied",
+      cause: "call.unreadable",
+      waitDurationMs: 200,
+    });
+    expect(reducer.reduce(activity("failed", { startedAt: 100, endedAt: 150 }))).toEqual({
+      kind: "tool",
+      activityKind: "run-command",
+      outcome: "failed",
+      waitDurationMs: 200,
+    });
   });
 
   it("keeps a landed compaction's reason and both token measurements", () => {
@@ -257,5 +315,17 @@ describe("observability vocabulary", () => {
   it("holds unknown in the attempt stop-reason vocabulary for the adapter's fallback", () => {
     expect(ATTEMPT_STOP_REASONS).toContain("unknown");
     expect(new Set(ATTEMPT_STOP_REASONS).size).toBe(ATTEMPT_STOP_REASONS.length);
+  });
+
+  it("keeps provider failures in a closed error-class vocabulary", () => {
+    expect(PROVIDER_ERROR_CLASSES).toEqual([
+      "auth",
+      "rate-limit",
+      "overloaded",
+      "timeout",
+      "transport",
+      "invalid-request",
+      "unknown",
+    ]);
   });
 });

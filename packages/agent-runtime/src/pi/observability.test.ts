@@ -13,7 +13,13 @@ import {
   type RuntimeObservation,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { attemptStopReason, instrumentStreamFn, teeObservationsToSink } from "./observability";
+import {
+  attemptStopReason,
+  instrumentStreamFn,
+  providerErrorClass,
+  recordObservationToSink,
+  teeObservationsToSink,
+} from "./observability";
 
 const SENSITIVE = "SENSITIVE-user-material";
 
@@ -84,6 +90,28 @@ describe("attemptStopReason", () => {
   });
 });
 
+describe("providerErrorClass", () => {
+  it.each([
+    ["No API key found", "auth"],
+    ["HTTP 429 rate limit exceeded", "rate-limit"],
+    ["The service is overloaded", "overloaded"],
+    ["Request timed out", "timeout"],
+    ["WebSocket connection reset", "transport"],
+    ["HTTP 400 invalid request", "invalid-request"],
+    [SENSITIVE, "unknown"],
+  ] as const)("reduces %s to %s without retaining provider prose", (message, expected) => {
+    expect(providerErrorClass("error", message)).toBe(expected);
+  });
+
+  it("does not call an aborted request a provider error", () => {
+    expect(providerErrorClass("aborted", SENSITIVE)).toBeUndefined();
+  });
+
+  it("uses unknown when Pi supplied no provider diagnostic", () => {
+    expect(providerErrorClass("error", undefined)).toBe("unknown");
+  });
+});
+
 describe("teeObservationsToSink", () => {
   const turnStarted: RuntimeObservation = { kind: "turn", state: "started", turnId: "t1" };
   const turnCompleted: RuntimeObservation = { kind: "turn", state: "completed", turnId: "t1" };
@@ -131,6 +159,20 @@ describe("teeObservationsToSink", () => {
 
     await expect(teed(turnCompleted)).resolves.toBeUndefined();
     expect(seen).toEqual([turnCompleted]);
+  });
+
+  it("records an observability-only allowance without involving the runtime observer", () => {
+    const { sink, events } = recordingSink();
+    const reducer = new ObservabilityReducer(() => 0);
+
+    recordObservationToSink(reducer, sink, "run-1", {
+      kind: "authority",
+      state: "allowed",
+      turnId: "t1",
+      toolCallId: "call-1",
+    });
+
+    expect(events).toEqual([{ kind: "authority", outcome: "allowed", runId: "run-1" }]);
   });
 
   it("still delivers when the reducer itself throws", async () => {
@@ -254,6 +296,25 @@ describe("instrumentStreamFn", () => {
     await settle(stream);
 
     expect(events[0]).toMatchObject({ kind: "provider-attempt", stopReason: "aborted" });
+    expect(JSON.stringify(events)).not.toContain(SENSITIVE);
+  });
+
+  it("adds a bounded error class without carrying provider error prose", async () => {
+    const { sink, events } = recordingSink();
+    const message = settledMessage({
+      stopReason: "error",
+      errorMessage: `HTTP 429 rate limit exceeded for ${SENSITIVE}`,
+    });
+    const { inner, finish, stream } = scripted(message);
+    const wrapped = instrumentStreamFn(inner, { sink, runId: "run-9", now: steppingClock(1) });
+
+    wrapped(model(), { messages: [] });
+    finish();
+    await settle(stream);
+
+    expect(events).toMatchObject([
+      { kind: "provider-attempt", stopReason: "error", providerErrorClass: "rate-limit" },
+    ]);
     expect(JSON.stringify(events)).not.toContain(SENSITIVE);
   });
 
