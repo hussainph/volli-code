@@ -34,6 +34,16 @@ type LoadState =
   | { status: "loaded"; view: AgentObservabilityView }
   | { status: "error"; message: string };
 
+/**
+ * How often a healthy exporter is re-asked whether it is still healthy.
+ *
+ * The transport discovers a collector that has gone away on its own schedule —
+ * the first batch that does not land, which the metric reader may not attempt
+ * for half a minute. This surface is pull-only, so without a re-ask the pane
+ * would keep showing "Exporting" for a state main already knows is broken.
+ */
+const DELIVERY_RECHECK_MS = 5000;
+
 export function AgentObservabilitySettings() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [endpoint, setEndpoint] = useState("");
@@ -59,14 +69,49 @@ export function AgentObservabilitySettings() {
     }
   }, [settingsFetch]);
 
+  /**
+   * Re-read the setting without touching the address field.
+   *
+   * Deliberately not {@link load}: that adopts the stored address, which would
+   * overwrite whatever somebody is in the middle of typing. A recheck is only
+   * ever about the delivery state.
+   */
+  const recheck = useCallback(async () => {
+    const token = settingsFetch.claim();
+    try {
+      const result = await window.api.agentObservability.get();
+      if (!settingsFetch.isCurrent(token) || !result.ok) return;
+      setState({ status: "loaded", view: result.settings });
+    } catch {
+      // A failed recheck is not news. The pane keeps the last answer it got
+      // rather than replacing a real setting with a transport hiccup.
+    }
+  }, [settingsFetch]);
+
   useEffect(() => {
     void load();
     return () => settingsFetch.invalidate();
   }, [load, settingsFetch]);
 
+  // Only a working exporter is worth watching, and only while nothing is being
+  // written. `problem` is latched in main, so the moment the answer changes
+  // there is nothing further to learn until the person changes the
+  // configuration — which means this timer stops itself rather than running for
+  // as long as the page is open.
+  const watchingDelivery = state.status === "loaded" && state.view.status === "exporting" && !busy;
+  useEffect(() => {
+    if (!watchingDelivery) return;
+    const timer = setInterval(() => void recheck(), DELIVERY_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [watchingDelivery, recheck]);
+
   /** One shape for every write: run it, take the view, put a refusal in the row. */
   async function write(enabled: boolean, address: string): Promise<void> {
     if (busy) return;
+    // A write is the newest word on this setting, so it supersedes any read
+    // already in flight: a recheck that started first must not land afterwards
+    // and paint the state this write just replaced.
+    settingsFetch.claim();
     setBusy(true);
     setFieldError(null);
     try {

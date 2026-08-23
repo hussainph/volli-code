@@ -197,14 +197,24 @@ export class AgentObservability implements ObservabilitySink {
    * what was just typed rather than a mystery six hours later. Saving anything
    * clears the latched problem: the person has changed the configuration, so
    * whatever was true of the last one is no longer the thing to show them.
+   *
+   * **Turning export off is unconditional.** The switch and the address travel
+   * together, so a person who mistyped an address and then reached for the off
+   * switch would otherwise be refused — told to repair a field in order to stop
+   * using it. An address is only a question when something is being asked to
+   * send telemetry to it; switching off keeps whatever address was last stored
+   * and simply does not adopt the one being abandoned.
    */
   configure(input: { enabled: boolean; endpoint: string }): AgentObservabilityView {
     const admission = admitCollectorEndpoint(input.endpoint);
-    if (admission.outcome === "refuse") throw new AgentObservabilityError(admission.reason);
-    this.#write({ enabled: input.enabled, endpoint: admission.endpoint });
+    if (admission.outcome === "refuse" && input.enabled) {
+      throw new AgentObservabilityError(admission.reason);
+    }
+    const endpoint = admission.outcome === "admit" ? admission.endpoint : this.#read().endpoint;
+    this.#write({ enabled: input.enabled, endpoint });
     this.#problem = null;
     this.#close();
-    if (input.enabled) this.#open(admission.endpoint);
+    if (input.enabled) this.#open(endpoint);
     return this.view();
   }
 

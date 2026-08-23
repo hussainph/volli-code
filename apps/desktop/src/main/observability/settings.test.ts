@@ -224,6 +224,34 @@ describe("AgentObservability", () => {
     expect(factory.built[0]?.exporter.batches).toEqual([]);
   });
 
+  it("turns export off even when the address field holds nonsense", () => {
+    const factory = exporterFactory();
+    const observability = owner(factory);
+    observability.configure({ enabled: true, endpoint: "http://localhost:4318" });
+
+    // Somebody mistyped the address and then reached for the off switch. The
+    // switch and the field are saved together, so the bad value arrives with
+    // the decision to stop — and being told to repair a field in order to stop
+    // using it would leave them unable to turn telemetry off at all.
+    const view = observability.configure({ enabled: false, endpoint: "nope" });
+
+    expect(view.status).toBe("off");
+    // The abandoned value is not adopted; the last good address survives, so
+    // switching back on does not need it retyped.
+    expect(view.endpoint).toBe("http://localhost:4318");
+    observability.record(toolEvent);
+    expect(factory.built[0]?.exporter.batches).toEqual([]);
+  });
+
+  it("still refuses a bad address when it is being asked to carry telemetry", () => {
+    const observability = owner(exporterFactory());
+    // The same value, the opposite decision: this one is asking Volli to send
+    // somewhere, so it has to be somewhere.
+    expect(() => observability.configure({ enabled: true, endpoint: "nope" })).toThrow(
+      AgentObservabilityError,
+    );
+  });
+
   it("replaces the transport when the address changes", () => {
     const factory = exporterFactory();
     const observability = owner(factory);
