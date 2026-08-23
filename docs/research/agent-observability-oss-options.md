@@ -210,6 +210,10 @@ compactions, and dropped telemetry; `runId` remains trace-only. Authority now
 has allowed and denied observability arms, an approval wait is separated from
 tool execution, and provider prose reduces locally to a closed error class.
 
+`@opentelemetry/otlp-exporter-base`, `@opentelemetry/otlp-transformer`, and
+`@opentelemetry/sdk-metrics` are bundled into the Electron-main packed chunk.
+The real meter provider is covered by an in-memory exporter test.
+
 ## Implementation addendum — convention conformance and tool identity
 
 A review pass against the published GenAI conventions found three places where
@@ -241,10 +245,17 @@ instrument type and its required attributes, or else keep the measurement under
 `volli.`. A near-miss is worse than a custom name, because a dashboard consumes
 it silently.
 
-`@opentelemetry/otlp-exporter-base`, `@opentelemetry/otlp-transformer`, and
-`@opentelemetry/sdk-metrics` are bundled into the Electron-main packed chunk.
-The real meter provider is covered by an in-memory exporter test. Evals remain
-out of VC-119: no Promptfoo provider or fixture corpus was added.
+## Evals are not part of VC-119
+
+No Promptfoo provider and no fixture corpus were added. The recommendation above
+stands and is now tracked as **VC-171**, rather than living only in this note.
+
+The split is not just scheduling. Telemetry answers what an agent did in one
+run; evals answer whether it is getting better across runs, which needs a fixed
+corpus, repeatable inputs, and retained outputs to judge. The privacy boundary
+that makes this side channel safe — no prompt, no path, no tool argument, no
+output — is precisely what an eval needs, so evals must run against synthetic
+fixtures rather than over recorded Session traces.
 
 ## Source index
 
