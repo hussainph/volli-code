@@ -7,6 +7,11 @@
  * whatever it was handed. So it drives the real surfaces: the renderer's
  * bootstrap, the Web Access door, and a Session attaching with the ports a
  * configured profile produces.
+ *
+ * The key is stored in the clear now (migration 023), which makes these the
+ * only checks standing between it and a wire. Before, a leaked `secrets` row
+ * was ciphertext and a leak was a scare; now every assertion below is about the
+ * key itself, and each one is load-bearing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -38,32 +43,13 @@ import { openTestDb, type TestDb } from "../db/test-helpers";
 import { readSecret } from "../db/secrets-repo";
 import { registerDataIpcHandlers } from "../data-ipc";
 import { createPiNativeAdapter, type PiRuntimeContext } from "../session-runtime/pi-adapter";
-import {
-  BRAVE_SEARCH_KEY_SECRET,
-  EXA_SEARCH_KEY_SECRET,
-  WebCredentialStore,
-  type SecretCipher,
-} from "./credential";
+import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
 import { registerWebAccessIpcHandlers } from "./ipc";
 import { webPortsFor } from "./ports";
 import { WebAccessSettings } from "./settings";
 
 const KEY = "BSA-super-secret-brave-key-42";
 const EXA_KEY = "exa-super-secret-second-key-77";
-
-class FakeCipher implements SecretCipher {
-  isEncryptionAvailable(): boolean {
-    return true;
-  }
-
-  encryptString(plainText: string): Buffer {
-    return Buffer.from(`v1:${Buffer.from(plainText, "utf8").toString("base64")}`, "utf8");
-  }
-
-  decryptString(encrypted: Buffer): string {
-    return Buffer.from(encrypted.toString("utf8").slice("v1:".length), "base64").toString("utf8");
-  }
-}
 
 /** A runtime that keeps the spec it was started with, and nothing else. */
 class SpecRecordingRuntime implements AgentRuntime {
@@ -150,13 +136,10 @@ beforeEach(() => {
   ctx = openTestDb();
   settings = new WebAccessSettings({
     db: ctx.db,
-    credentials: (() => {
-      const cipher = new FakeCipher();
-      return {
-        brave: new WebCredentialStore({ db: ctx.db, cipher, secretName: BRAVE_SEARCH_KEY_SECRET }),
-        exa: new WebCredentialStore({ db: ctx.db, cipher, secretName: EXA_SEARCH_KEY_SECRET }),
-      };
-    })(),
+    credentials: {
+      brave: new WebCredentialStore({ db: ctx.db, secretName: BRAVE_SEARCH_KEY_SECRET }),
+      exa: new WebCredentialStore({ db: ctx.db, secretName: EXA_SEARCH_KEY_SECRET }),
+    },
   });
   registerWebAccessIpcHandlers(settings);
   registerDataIpcHandlers({ ok: true, db: ctx.db }, {});
@@ -175,16 +158,15 @@ describe("where a stored API key can and cannot be seen", () => {
     const bootstrap = (await invoke("volli:data-bootstrap")) as BootstrapResult;
 
     // The whole renderer bootstrap, `app_state` included — which is exactly why
-    // the ciphertext lives in its own table and the settings in another, rather
-    // than in the key/value store that ships wholesale to the renderer.
+    // the key lives in its own table and the settings in another, rather than in
+    // the key/value store that ships wholesale to the renderer.
     const payload = JSON.stringify(bootstrap);
     expect(payload).not.toContain(KEY);
-    // Not even the ciphertext: the renderer is told nothing it could carry to a
-    // machine whose keychain would open it.
-    const ciphertext = readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET);
-    expect(ciphertext).not.toBeNull();
-    expect(payload).not.toContain(ciphertext?.toString("utf8"));
-    expect(payload).not.toContain(ciphertext?.toString("base64"));
+    // Stored, and stored as itself: the assertion above is about a key that is
+    // really there, and the row is the plaintext the renderer must never be
+    // handed rather than ciphertext it could do nothing with.
+    expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).toBe(KEY);
+    expect(payload).not.toContain("web-access.brave.api-key");
   });
 
   /**
@@ -215,11 +197,9 @@ describe("where a stored API key can and cannot be seen", () => {
     // Session's absences.
     expect(typeof runtime.spec?.webSearch).toBe("function");
 
-    const ciphertext = readSecret(ctx.db, EXA_SEARCH_KEY_SECRET);
-    expect(ciphertext).not.toBeNull();
+    expect(readSecret(ctx.db, EXA_SEARCH_KEY_SECRET)).toBe(EXA_KEY);
     const payload = JSON.stringify(bootstrap);
     expect(payload).not.toContain(EXA_KEY);
-    expect(payload).not.toContain(ciphertext?.toString("base64"));
     expect(JSON.stringify(runtime.spec)).not.toContain(EXA_KEY);
     expect(JSON.stringify(sink.observations)).not.toContain(EXA_KEY);
     expect(JSON.stringify(printed)).not.toContain(EXA_KEY);
@@ -229,12 +209,9 @@ describe("where a stored API key can and cannot be seen", () => {
     await invoke("volli:web-access-set-key", "brave", KEY);
     await invoke("volli:web-access-set-key", "exa", EXA_KEY);
 
-    // Two rows, two ciphertexts, and neither contains the other's plaintext.
-    const brave = readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET);
-    const exa = readSecret(ctx.db, EXA_SEARCH_KEY_SECRET);
-    expect(brave).not.toBeNull();
-    expect(exa).not.toBeNull();
-    expect(brave?.equals(exa ?? Buffer.alloc(0))).toBe(false);
+    // Two rows, two keys, and neither store answered with the other's.
+    expect(readSecret(ctx.db, BRAVE_SEARCH_KEY_SECRET)).toBe(KEY);
+    expect(readSecret(ctx.db, EXA_SEARCH_KEY_SECRET)).toBe(EXA_KEY);
 
     // And clearing one leaves the other where it was.
     await invoke("volli:web-access-clear-key", "exa");
