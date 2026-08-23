@@ -162,6 +162,38 @@ The shipped vocabulary and reduction live in
 `packages/shared/src/agent-observability.ts`; the runtime tee and stream
 instrument live in `packages/agent-runtime/src/pi/observability.ts`.
 
+## Implementation addendum — Phase 2 exporter
+
+The OTLP side channel is shipped, opt-in and off by default. It lives entirely
+in `apps/desktop/src/main/observability/`, and it confirmed the shape above with
+three adjustments worth recording:
+
+- **No Pi telemetry context is injected, and no OTel global is registered.**
+  Following the 2026-08-23 finding, spans are built from Volli's own event
+  stream. `TracerProvider` is constructed and held as an object —
+  `provider.register()` is never called, no context manager or propagator is
+  installed, and `diag` keeps its no-op logger — so "observability is off" means
+  nothing is running rather than a tracer sampling into a void.
+- **One Session run is one trace, with sibling roots.** The plan's "opaque
+  per-process trace ID only for nesting" is implemented by hashing the
+  per-attachment `runId` into a trace id staged on the SDK's `IdGenerator`
+  immediately before each synchronous `startSpan`. Events are sibling roots
+  rather than a nested tree, because the event stream establishes that a tool
+  call and a turn share a run — not that one happened inside the other.
+- **Convention attribute names are inlined literals, not imported symbols.**
+  `@opentelemetry/semantic-conventions` exports the GenAI names only from its
+  explicitly unstable `/incubating` entrypoint, so importing them would let a
+  patch bump change what Volli emits. The names are quoted from
+  semantic-conventions 1.43.0 in `observability/genai.ts` and are the whole of
+  Volli's dependence on the convention. `gen_ai.system` is emitted beside
+  `gen_ai.provider.name` because the ecosystem has not finished that rename.
+
+Dependencies added: `@opentelemetry/api`, `sdk-trace`, `resources`, and
+`exporter-trace-otlp-http` (six transitive, all pure JS, bundled into the packed
+main chunk). `docs/observability-smoke.md` is the Jaeger developer path;
+`observability/jaeger.integration.test.ts` is its executable form, verified
+against `jaegertracing/jaeger:2.18.0`.
+
 ## Source index
 
 Primary project/repository sources used above:
