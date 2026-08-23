@@ -17,7 +17,7 @@
  */
 
 import type { ActivityKind } from "./session-activity";
-import type { AuthorityDenialCause } from "./authority";
+import { NON_CODING_TOOL_IDS, type AuthorityDenialCause } from "./authority";
 import type {
   CompactionReason,
   ReasoningLevel,
@@ -126,20 +126,20 @@ export interface TurnEvent {
  * union whose whole safety property is that it contains none.
  *
  * So the tools Volli ships are listed, and only a name on this list is spoken.
- * Anything else is absent, and the capability class still carries the call. A
- * tool added to the product is one line here — and until somebody writes that
- * line, the new tool is counted without being named, which is the failure
- * direction worth having.
+ * Anything else is absent, and the capability class still carries the call — and
+ * until somebody adds a new tool's name here, that tool is counted without being
+ * named, which is the failure direction worth having.
+ *
+ * The non-coding half is derived rather than retyped, so those three names
+ * cannot drift. The coding half cannot be: {@link CodingToolId} is Volli's
+ * policy vocabulary (`execute`) while the name the model actually calls is Pi's
+ * (`bash`), and only the latter ever appears on an activity. Those four are
+ * therefore quoted from Pi, and `agent-runtime` owns a test that fails if its
+ * own tool-name map ever disagrees with this list.
  */
-export const OBSERVED_TOOL_IDS = [
-  "read",
-  "edit",
-  "write",
-  "bash",
-  "ask_user",
-  "web_fetch",
-  "web_search",
-] as const;
+const PI_CODING_TOOL_NAMES = ["read", "edit", "write", "bash"] as const;
+
+export const OBSERVED_TOOL_IDS = [...PI_CODING_TOOL_NAMES, ...NON_CODING_TOOL_IDS] as const;
 
 export type ObservedToolId = (typeof OBSERVED_TOOL_IDS)[number];
 
