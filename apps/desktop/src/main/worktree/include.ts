@@ -31,9 +31,9 @@
  *
  * Performance note: matching an unanchored basename pattern is depth-agnostic,
  * so the walk visits every directory it does not prune, and never follows
- * symlinked dirs. Two are pruned: `.git`, which is git's own metadata and can
- * never be transported, and the {@link DEFAULT_PRUNED_DIRS} below, which a
- * `.worktreeinclude` line can ask for back by name. The walk and every copy run
+ * symlinked dirs. Two kinds are pruned: `.git`, which is git's own metadata and
+ * can never be transported, and the {@link DEFAULT_PRUNED_DIRS} below, any of
+ * which a `.worktreeinclude` line can ask for back by name. The walk and every copy run
  * through `fs/promises` — this step executes on Electron main, and the
  * synchronous version froze every window for the walk's whole duration on a
  * large Main checkout (VC-16's rainbow wheel).
@@ -42,6 +42,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { copyFile, lstat, mkdir, readdir, readlink, symlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
+import { DEPENDENCY_AND_BUILD_DIRS } from "@volli/shared";
+
 import { isInside } from "./paths";
 
 /** Applied even with no `.worktreeinclude` file; a `!` line in the file can suppress them. */
@@ -49,20 +51,24 @@ export const DEFAULT_INCLUDE_PATTERNS = [".env*", ".claude/settings.local.json"]
 
 /**
  * Directory names the walk does not descend into unless a `.worktreeinclude`
- * line names one.
+ * line names one — the shared per-ecosystem dependency/build list
+ * ({@link DEPENDENCY_AND_BUILD_DIRS}), which the file index's fallback walk and
+ * the Project Files watcher read too, so the three cannot drift apart.
  *
- * `node_modules` is the whole list, and it earns the place twice over. It is
- * the dominant cost of the walk on a JS checkout — the seconds VC-16 reported —
- * and it is also a correctness trap: `.env*` is an unanchored default, packages
- * ship `.env.example` files, and a depth-agnostic walk transported other
- * people's samples into the agent's checkout. Nothing under here is local
- * config a person wrote, which is the only thing this step exists to carry.
+ * `node_modules` is the member this walk measured, and it earns the place twice
+ * over. It is the dominant cost of the walk on a JS checkout — the seconds
+ * VC-16 reported — and it is also a correctness trap: `.env*` is an unanchored
+ * default, packages ship `.env.example` files, and a depth-agnostic walk
+ * transported other people's samples into the agent's checkout. Both halves of
+ * that hold for a Python `.venv` or a Go `vendor` too, and the cost was simply
+ * never measured here because the checkout under the walk was this repository
+ * (VC-160's bias audit).
  *
  * Deliberately NOT a general ignore list. A directory that is merely large is
- * still walked: this names the one whose contents are, by construction, not
- * ours.
+ * still walked: these are the ones whose contents are, by construction, not
+ * ours — see the membership rule in `walk-prune.ts`.
  */
-export const DEFAULT_PRUNED_DIRS = ["node_modules"] as const;
+export const DEFAULT_PRUNED_DIRS = DEPENDENCY_AND_BUILD_DIRS;
 
 const INCLUDE_FILE_NAME = ".worktreeinclude";
 

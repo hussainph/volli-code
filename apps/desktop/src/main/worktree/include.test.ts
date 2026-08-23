@@ -188,6 +188,30 @@ describe("copyIncludedFiles", () => {
     expect(existsSync(join(worktree, "node_modules"))).toBe(false);
   });
 
+  it("never descends into another ecosystem's dependency or build tree either", async () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    write(project, ".env", "SECRET=1");
+    // The same walk cost and the same `.env*` correctness trap as node_modules,
+    // on the checkouts whose ecosystem nobody measured here (VC-160): a Python
+    // virtualenv, a Rust/Maven target dir, Go's vendored source, bundler's gems.
+    write(project, ".venv/lib/python3.12/site-packages/pkg/.env.example", "NOT_MINE=1");
+    write(project, "venv/lib/pkg/.env", "NOT_MINE=1");
+    write(project, "__pycache__/module.cpython-312.pyc", "\0");
+    write(project, ".tox/py312/bin/.env", "NOT_MINE=1");
+    write(project, "target/debug/build/.env", "NOT_MINE=1");
+    write(project, "vendor/github.com/pkg/.env", "NOT_MINE=1");
+    write(project, ".gradle/8.5/checksums/.env", "NOT_MINE=1");
+    write(project, ".bundle/gems/rails/.env", "NOT_MINE=1");
+
+    const { copied } = await copyIncludedFiles(project, worktree);
+
+    expect(copied).toEqual([".env"]);
+    for (const pruned of [".venv", "venv", "__pycache__", ".tox", "target", "vendor"]) {
+      expect(existsSync(join(worktree, pruned))).toBe(false);
+    }
+  });
+
   it("descends into a pruned directory a .worktreeinclude line asks for by name", async () => {
     const project = tempDir("proj");
     const worktree = tempDir("wt");
@@ -200,6 +224,21 @@ describe("copyIncludedFiles", () => {
     // The named path is reachable again; the rest of the directory is not
     // suddenly walked back in as a side effect of asking for one corner.
     expect(copied).toEqual(["node_modules/.bin/local-tool"]);
+  });
+
+  it("honors that escape hatch for every name on the widened prune list", async () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    // A Python project's real, uncommitted local config genuinely can live in
+    // the virtualenv (a `.pth` file, an activate hook a person edited). The
+    // contract is unchanged by the widening: naming it brings it back.
+    write(project, ".worktreeinclude", ".venv/bin/activate.local\n");
+    write(project, ".venv/bin/activate.local", "export API=1\n");
+    write(project, ".venv/lib/pkg/settings.cfg", "NOT_MINE=1");
+
+    const { copied } = await copyIncludedFiles(project, worktree);
+
+    expect(copied).toEqual([".venv/bin/activate.local"]);
   });
 
   it("keeps the prune when the only mention of the directory is a negation", async () => {

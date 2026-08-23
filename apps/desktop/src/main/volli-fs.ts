@@ -27,6 +27,7 @@ import type Database from "better-sqlite3";
 import {
   artifactBaseName,
   classifyFileKind,
+  DEPENDENCY_AND_BUILD_DIRS,
   errorMessage,
   imageMimeType,
   isArtifactRelPath,
@@ -90,8 +91,23 @@ const IMAGE_CAP_BYTES = 10 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 64 * 1024;
 /** File-index entry cap (~20k, decision on `truncated`). */
 const INDEX_CAP = 20_000;
-/** Directory names never descended into by the fallback walk (and the git list already excludes `.volli`). */
-const FALLBACK_SKIP_DIRS = new Set([".git", "node_modules", ".volli"]);
+/**
+ * Directory names never descended into by the fallback walk (and the git list
+ * already excludes `.volli`). Git's own metadata and Volli's own directory,
+ * plus the shared per-ecosystem dependency/build list the worktree copy walk
+ * prunes ({@link DEPENDENCY_AND_BUILD_DIRS}) — this walk is the one that runs
+ * when `git ls-files` could NOT answer, so nothing else is filtering a `.venv`
+ * or a `target` out of the 20k cap for it.
+ */
+const FALLBACK_SKIP_DIRS = new Set([".git", ".volli", ...DEPENDENCY_AND_BUILD_DIRS]);
+
+/**
+ * The same names as a watch-event prefix (`node_modules/`), for the one thing
+ * {@link DirWatchManager.matches} drops. Precomputed: a watcher fires per
+ * filesystem event, and rebuilding this per event would pay for the list's
+ * length forever.
+ */
+const DEPENDENCY_AND_BUILD_DIR_PREFIXES = DEPENDENCY_AND_BUILD_DIRS.map((name) => `${name}${sep}`);
 
 // ---- low-level fs helpers ----------------------------------------------------
 
@@ -1074,15 +1090,19 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
    * main-process + IPC waste, and the sidebar's root watch stays armed for the
    * whole life of the tree, including while Files is off screen.
    *
-   * `node_modules` is deliberately NOT excluded by name: it IS a visible row, so
-   * its creation/removal must still refresh the level. Only writes DEEPER inside
-   * it are dropped, which cannot change the listing either. A null filename
+   * A dependency or build directory ({@link DEPENDENCY_AND_BUILD_DIRS}) is
+   * deliberately NOT excluded by name: each IS a visible row, so its
+   * creation/removal must still refresh the level. Only writes DEEPER inside one
+   * are dropped, which cannot change the listing either — and those are exactly
+   * the events that arrive in floods (an install, a `cargo build`, a `.venv`
+   * being populated). Only `node_modules` was named here until VC-160, so a
+   * non-JS repo's flood was re-listed in full. A null filename
    * (coalesced/platform event) is unfilterable, so it broadcasts conservatively.
    */
   protected override matches(_sub: WatchSubscription, filename: string | null): boolean {
     if (filename === null) return true;
     if (filename === ".git" || filename.startsWith(`.git${sep}`)) return false;
-    return !filename.startsWith(`node_modules${sep}`);
+    return !DEPENDENCY_AND_BUILD_DIR_PREFIXES.some((prefix) => filename.startsWith(prefix));
   }
 
   protected override sendChanged(sub: WatchSubscription, final: boolean): void {
