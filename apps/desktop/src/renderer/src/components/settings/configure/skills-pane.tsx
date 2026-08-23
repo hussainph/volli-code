@@ -95,6 +95,25 @@ export function SkillsPane({ project }: { project: Project }) {
   );
 }
 
+/**
+ * The modes map after ruling `slugs`.
+ *
+ * `auto` DELETES rather than storing "auto", because the map holds only
+ * departures from the frontmatter default — storing the default would make
+ * "never touched" and "set back to normal" two states that behave alike and
+ * read differently.
+ *
+ * Pure, and at module scope so one bulk write and one row write share exactly
+ * the same rule rather than two that agree today.
+ */
+function ruled(current: SkillModes, slugs: readonly string[], mode: SkillMode): SkillModes {
+  const targeted = new Set(slugs);
+  const kept = Object.entries(current).filter(([key]) => !targeted.has(key));
+  return mode === "auto"
+    ? Object.fromEntries(kept)
+    : { ...Object.fromEntries(kept), ...Object.fromEntries(slugs.map((slug) => [slug, mode])) };
+}
+
 function SkillsTable({
   project,
   skills,
@@ -117,11 +136,7 @@ function SkillsTable({
     [skills, filter],
   );
 
-  async function setMode(slug: string, mode: SkillMode): Promise<void> {
-    const next: SkillModes =
-      mode === "auto"
-        ? Object.fromEntries(Object.entries(modes).filter(([key]) => key !== slug))
-        : { ...modes, [slug]: mode };
+  async function write(next: SkillModes): Promise<void> {
     setPending(next);
     const saved = await writeThrough("update this project's skills", () =>
       window.api.projects.setSkillModes({ id: project.id, modes: next }),
@@ -129,6 +144,23 @@ function SkillsTable({
     setPending(null);
     if (saved !== null) adoptProject(saved.project);
   }
+
+  const setMode = (slug: string, mode: SkillMode): Promise<void> =>
+    write(ruled(modes, [slug], mode));
+
+  /**
+   * ONE write for the whole set, not one per skill. Sixty sequential round
+   * trips would leave the table visibly rippling, and any failure among them
+   * would strand the project half-ruled with no way to say which half.
+   */
+  const setAllModes = (targets: readonly SkillReference[], mode: SkillMode): Promise<void> =>
+    write(
+      ruled(
+        modes,
+        targets.map((skill) => skill.name),
+        mode,
+      ),
+    );
 
   return (
     <DataTable
@@ -138,6 +170,7 @@ function SkillsTable({
       rows="fill"
       search={(skill) => `${skill.name} ${skill.description}`}
       placeholder="Search skills"
+      bulk={(matched) => <BulkMode skills={matched} onApply={setAllModes} />}
       filter={{
         label: "Filter by source",
         value: filter,
@@ -221,4 +254,49 @@ function SkillsTable({
 async function revealSkill(project: Project, skill: SkillReference): Promise<void> {
   const path = skill.root.startsWith(".") ? `${project.path}/${skill.root}` : skill.root;
   await writeThrough("reveal the skill", () => window.api.fs.revealInFinder(path));
+}
+
+/**
+ * Set the mode of every skill the table is currently listing.
+ *
+ * A SELECT THAT DOES NOT KEEP ITS VALUE. It reads "Set all to…" again the
+ * moment it has acted, because it is a verb, not a setting: the rows below
+ * hold the state, and a bulk control left sitting on "Manual" would claim a
+ * uniformity that the next single-row change immediately breaks.
+ *
+ * The count is in the label, and it counts what is ON SCREEN — filter a source
+ * or type in the search and this narrows with it, so "all" always means the
+ * rows you can see.
+ */
+function BulkMode({
+  skills,
+  onApply,
+}: {
+  skills: readonly SkillReference[];
+  onApply: (targets: readonly SkillReference[], mode: SkillMode) => Promise<void>;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const label = `Set all ${skills.length} to…`;
+
+  return (
+    <Select
+      value=""
+      disabled={busy || skills.length === 0}
+      onValueChange={(next) => {
+        setBusy(true);
+        void onApply(skills, next as SkillMode).finally(() => setBusy(false));
+      }}
+    >
+      <SelectTrigger size="sm" className={CONTROL_W.md} aria-label={label}>
+        <SelectValue placeholder={label} />
+      </SelectTrigger>
+      <SelectContent>
+        {(["auto", "manual", "off"] as const).map((mode) => (
+          <SelectItem key={mode} value={mode}>
+            {MODE_LABEL[mode]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }

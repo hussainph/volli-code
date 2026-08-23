@@ -139,14 +139,27 @@ function pathPositionCheck(observation: DoctorObservation, facts: DoctorFacts): 
 }
 
 /**
- * Does typing the harness's own name actually reach the wrapper? This is the
- * outcome the whole design rests on, and the one nothing previously asserted.
+ * Where does typing the harness's own name actually land?
+ *
+ * REPORTED, NOT JUDGED. This once failed whenever the name reached anything
+ * other than Volli's wrapper, on the reasoning that a harness Volli does not
+ * front reports no events to it. That is true of Volli and false of the user:
+ * someone who installed `claude` themselves, and expects `claude` to run it,
+ * has a machine that works exactly as intended. Doctor telling them to repair
+ * it — with a remedy that cannot change the answer, because Volli is not
+ * entitled to take the name — was doctor being wrong, loudly, on every run.
+ *
+ * So a resolution to some other binary is `ok` and simply says which. What
+ * remains a warning is the genuinely unhelpful case: a name that resolves to
+ * NOTHING, where the harness cannot be launched by anyone.
  */
 function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck[] {
   return Object.entries(facts.wrappers).map(([command, wrapperPath]) => {
     const actual = observation.resolved[command];
     const id = `resolves-${command}`;
-    const title = `\`${command}\` runs Volli's wrapper`;
+    // The title is a QUESTION the detail answers, not a claim about the
+    // wrapper: the check no longer insists the wrapper is what runs.
+    const title = `\`${command}\` resolves to`;
     if (actual === wrapperPath) return ok(id, title, wrapperPath);
     if (actual === undefined) {
       // A wrapper the caller never tried to resolve. Silence about it is the
@@ -164,13 +177,7 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
     if (actual === null) {
       return bad(id, title, "warn", `\`${command}\` resolves to nothing on this PATH`);
     }
-    return bad(
-      id,
-      title,
-      "fail",
-      `resolves to ${actual}, not ${wrapperPath} — this harness reports no events`,
-      "Run `volli doctor --fix`, then open a new terminal.",
-    );
+    return ok(id, title, actual);
   });
 }
 

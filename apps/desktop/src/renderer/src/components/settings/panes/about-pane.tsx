@@ -18,12 +18,10 @@
  */
 import * as React from "react";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
 import { errorMessage, type DoctorCheck } from "@volli/shared";
 
 import { useHarnessListingsState } from "@renderer/components/pages/harness-picker";
 import {
-  DetailLine,
   HealthPanel,
   ItemRow,
   PrefSection,
@@ -95,10 +93,10 @@ export function AboutPane() {
    * says nothing until you press something is a health surface that reports
    * "fine" by default. `--fix` stays explicit — it writes.
    */
-  const runDoctor = React.useCallback(async (fix: boolean) => {
+  const runDoctor = React.useCallback(async () => {
     setDoctorState("loading");
     try {
-      const result = await window.api.cli.doctor({ fix });
+      const result = await window.api.cli.doctor({ fix: false });
       if (!result.ok) {
         setDoctorState("unavailable");
         toastError(`Doctor couldn't run: ${result.error}`);
@@ -113,7 +111,7 @@ export function AboutPane() {
   }, []);
 
   React.useEffect(() => {
-    void runDoctor(false);
+    void runDoctor();
   }, [runDoctor]);
 
   // Only what is WRONG becomes a fault. A passing check is not news, and the
@@ -130,7 +128,7 @@ export function AboutPane() {
    * function hands back `detailRows` — a promoted row is not ALSO repeated in
    * the details behind it.
    */
-  const { attentionRows, detailRows } = React.useMemo(() => cliStatusDisclosure(rows), [rows]);
+  const { attentionRows } = React.useMemo(() => cliStatusDisclosure(rows), [rows]);
 
   const faults: readonly Fault[] = React.useMemo(
     () => [
@@ -181,17 +179,6 @@ export function AboutPane() {
         faults={faults}
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {faults.length > 0 ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={checking}
-                onClick={() => void runDoctor(true)}
-              >
-                <WrenchIcon />
-                Fix
-              </Button>
-            ) : null}
             <CopyReportDialog report={report} availability={reportAvailability} />
             <Button
               size="sm"
@@ -200,18 +187,14 @@ export function AboutPane() {
               onClick={() => {
                 harnesses.refresh();
                 void load();
-                void runDoctor(false);
+                void runDoctor();
               }}
             >
               {checking ? "Checking…" : "Re-check"}
             </Button>
           </div>
         }
-      >
-        {detailRows.map((row) => (
-          <DetailLine key={row.key} label={row.label} value={row.detail ?? row.value} />
-        ))}
-      </HealthPanel>
+      />
 
       {/*
        * Harness INVENTORY — small enough to stay a list. `DataTable`'s rule is

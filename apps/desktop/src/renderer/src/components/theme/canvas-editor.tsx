@@ -1107,27 +1107,45 @@ export function CanvasEditor({
 
   return (
     <>
-      <div className="flex flex-col gap-4 pb-2">
-        <GradientPad
-          canvas={live}
-          resolved={resolved}
-          onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
-          onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
-          onSettle={settle}
-        />
-        <StopRow
-          canvas={live}
-          resolved={resolved}
-          onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
-          onAdd={() => commit(addStop)}
-          onRemove={() => commit(removeStop)}
-        />
-        <PrimaryColourRow
-          hex={canvas.stops[canvas.primaryIndex].hex}
-          onPick={(next) => commit((current) => withPrimaryHex(current, next))}
-          onPreview={(next) => edit((current) => withPrimaryHex(current, next))}
-          onAbandon={abandon}
-        />
+      {/*
+       * The pad SITS BESIDE its controls rather than above them.
+       *
+       * It is a 16:10 picture of the window, so `w-full` made it as wide as the
+       * pane — which on the workbench measure is a 1,200px slab of gradient
+       * dominating a settings page, with the controls that operate it pushed
+       * off the bottom of the screen. Capped, it is a swatch you can take in at
+       * a glance with everything that changes it in the same glance.
+       *
+       * `flex-wrap`, not a breakpoint: on a narrow window the controls simply
+       * wrap under the pad, which is the stacked layout this replaced.
+       * Responsiveness is the whitespace (docs/DESIGN.md).
+       */}
+      <div className="flex flex-wrap items-start gap-4 pb-2">
+        <div className="w-full max-w-[22rem] shrink-0 grow-0">
+          <GradientPad
+            canvas={live}
+            resolved={resolved}
+            onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
+            onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
+            onSettle={settle}
+          />
+        </div>
+
+        <div className="flex min-w-[18rem] flex-1 flex-col gap-4">
+          <StopRow
+            canvas={live}
+            resolved={resolved}
+            onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
+            onAdd={() => commit(addStop)}
+            onRemove={() => commit(removeStop)}
+          />
+          <PrimaryColourRow
+            hex={canvas.stops[canvas.primaryIndex].hex}
+            onPick={(next) => commit((current) => withPrimaryHex(current, next))}
+            onPreview={(next) => edit((current) => withPrimaryHex(current, next))}
+            onAbandon={abandon}
+          />
+        </div>
       </div>
 
       <PrefRow label="Vibrancy" htmlFor="canvas-vibrancy">

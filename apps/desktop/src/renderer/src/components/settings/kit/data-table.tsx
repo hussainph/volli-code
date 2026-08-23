@@ -84,6 +84,7 @@ export function DataTable<T>({
   search,
   placeholder = "Search",
   filter,
+  bulk,
   rows = 8,
   maxItems = 500,
   empty,
@@ -97,6 +98,16 @@ export function DataTable<T>({
   search?: (item: T) => string;
   placeholder?: string;
   filter?: TableFilter;
+  /**
+   * A control that acts on MANY rows, rendered in the toolbar and handed
+   * exactly the rows currently listed.
+   *
+   * It takes `matched` rather than `items` because the search box lives in
+   * here. A bulk control fed the unfiltered set would read "apply to these
+   * four" while quietly changing four hundred — the table is the only thing
+   * that knows what "these" means, so it is the table that says.
+   */
+  bulk?: (matched: readonly T[]) => React.ReactNode;
   /**
    * How many rows before it scrolls, or `"fill"` to take the height the pane
    * has left over.
@@ -137,7 +148,7 @@ export function DataTable<T>({
 
   return (
     <div className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
-      {search || filter ? (
+      {search || filter || bulk ? (
         <div className="flex items-center gap-2">
           {search ? (
             <InputGroup className="min-w-0 flex-1">
@@ -171,6 +182,7 @@ export function DataTable<T>({
               </SelectContent>
             </Select>
           ) : null}
+          {bulk?.(matched)}
         </div>
       ) : null}
 

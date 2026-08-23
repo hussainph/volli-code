@@ -125,10 +125,14 @@ export function PrefShell({
       <div className="flex h-full min-h-0 w-full flex-1">
         <nav
           aria-label={`${surfaceLabel} categories`}
-          className="flex w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-4"
+          className="flex w-52 shrink-0 flex-col gap-4 overflow-x-hidden overflow-y-auto border-r border-border p-4"
         >
           {header}
-          <InputGroup className="mx-1">
+          {/* No `mx-1`: a `w-full` control plus horizontal margins is wider
+              than the box that padded it, and `overflow-y-auto` makes the
+              other axis `auto` too, so the rail scrolled sideways by exactly
+              those 8px. */}
+          <InputGroup>
             <InputGroupAddon>
               <MagnifyingGlassIcon />
             </InputGroupAddon>

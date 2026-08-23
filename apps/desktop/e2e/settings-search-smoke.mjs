@@ -59,9 +59,15 @@ async function visibleRowLabels(page) {
     const selector = '[data-slot="pref-section-title"], [data-slot="pref-row-label"]';
     for (const node of document.querySelectorAll(selector)) {
       if (node.closest("[hidden]") !== null) continue;
-      // Provider names are catalogue data. The Accounts section title remains
-      // searchable; its unbounded rows do not belong in rail keywords.
-      if (node.closest('[data-slot="model-access-accounts"]') !== null) continue;
+      // Provider names are catalogue data. Section TITLES remain searchable —
+      // they sit in the header, outside these containers — but the unbounded
+      // rows inside do not belong in rail keywords.
+      //
+      // Prefix match, so both halves are covered. An exact match on
+      // `model-access-accounts` missed `-available`, and because that list only
+      // renders once the catalogue has loaded, the check failed or passed
+      // depending on timing. It was written off as a flake once; it was not.
+      if (node.closest('[data-slot^="model-access-accounts"]') !== null) continue;
       const text = (node.textContent ?? "").trim();
       if (text.length >= 4 && text.length <= 40) texts.add(text);
     }

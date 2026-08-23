@@ -133,11 +133,7 @@ export function ModelAccessAccounts({
         </div>
       </PrefSection>
 
-      {available.length > 0 ? (
-        <PrefSection title="Available to connect" icon={PlugsIcon}>
-          <FilteredAccounts providers={available} row={row} />
-        </PrefSection>
-      ) : null}
+      {available.length > 0 ? <FilteredAccounts providers={available} row={row} /> : null}
     </>
   );
 }
@@ -164,25 +160,34 @@ function FilteredAccounts({
     : providers;
 
   return (
-    <div className="flex flex-col gap-2">
-      {providers.length > 8 ? (
-        <InputGroup>
-          <InputGroupAddon>
-            <MagnifyingGlassIcon />
-          </InputGroupAddon>
-          <InputGroupInput
-            type="search"
-            value={query}
-            aria-label="Search providers"
-            placeholder="Search providers"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </InputGroup>
-      ) : null}
+    <PrefSection
+      title="Available to connect"
+      icon={PlugsIcon}
+      // The field belongs on the header rail, not under it. Full-width below
+      // the rule it read as the first ROW of the list — a text input where the
+      // eye expects the first provider — and the section then owned two
+      // horizontal rules, its own and the field's box.
+      action={
+        providers.length > 8 ? (
+          <InputGroup className="w-56">
+            <InputGroupAddon>
+              <MagnifyingGlassIcon />
+            </InputGroupAddon>
+            <InputGroupInput
+              type="search"
+              value={query}
+              aria-label="Search providers"
+              placeholder="Search providers"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </InputGroup>
+        ) : undefined
+      }
+    >
       <div data-slot="model-access-accounts-available">
         {shown.length === 0 ? <Empty>No providers match.</Empty> : shown.map(row)}
       </div>
-    </div>
+    </PrefSection>
   );
 }
 
