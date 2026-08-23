@@ -1636,7 +1636,10 @@ app.whenReady().then(async () => {
     channel: dbHandle.ok
       ? {
           read: () => readUpdateChannel(dbHandle.db),
-          write: (channel) => writeUpdateChannel(dbHandle.db, channel, Date.now()),
+          // The updater rides along so entering canary widens the RUNNING
+          // process too — "Check now" right after switching must actually
+          // see prereleases. One-way; see `writeUpdateChannel`.
+          write: (channel) => writeUpdateChannel(dbHandle.db, channel, Date.now(), autoUpdater),
         }
       : undefined,
   });

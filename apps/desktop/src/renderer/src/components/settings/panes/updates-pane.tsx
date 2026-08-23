@@ -97,7 +97,11 @@ export function UpdatesPane() {
         <PrefRow
           label="Channel"
           htmlFor="update-channel"
-          hint={<>Canary updates break more often, and you can&rsquo;t go back to stable.</>}
+          hint={
+            <>
+              Canary builds break more often, and an installed canary won&rsquo;t downgrade itself.
+            </>
+          }
         >
           <Select
             value={channel ?? "stable"}

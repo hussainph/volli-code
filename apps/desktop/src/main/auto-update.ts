@@ -92,16 +92,22 @@ export function readUpdateChannel(db: Database.Database): UpdateChannelName {
  * that moves on screen and changes nothing, which is the specific failure the
  * round-trip test above exists to prevent.
  *
- * Takes effect on the NEXT check, not this instant: `allowPrerelease` is read
- * onto the updater at startup. Nothing here downgrades an install that is
- * already on a canary build (see the note above on why that is one-way).
+ * Entering canary reaches the RUNNING updater too, when the caller hands it
+ * over — without that, "Check now" pressed right after switching silently
+ * checked the stable feed until the next launch. The live apply is one-way,
+ * exactly like startup's: `false` is never assigned, so leaving canary takes
+ * effect at the next LAUNCH on a stable install and — deliberately — never
+ * forces a canary install off the prerelease feed (see the stranding note on
+ * the key above). Nothing here downgrades an installed canary build either.
  */
 export function writeUpdateChannel(
   db: Database.Database,
   channel: UpdateChannelName,
   now: number,
+  updater?: { allowPrerelease: boolean },
 ): UpdateChannelName {
   setAppState(db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, JSON.stringify(channel === "canary"), now);
+  if (channel === "canary" && updater !== undefined) updater.allowPrerelease = true;
   return channel;
 }
 

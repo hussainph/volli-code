@@ -147,6 +147,22 @@ describe("writeUpdateChannel", () => {
     expect(readUpdateChannel(ctx.db)).toBe("stable");
   });
 
+  it("widens a handed-over running updater on canary — and only widens", () => {
+    ctx = openTestDb();
+    const updater = { allowPrerelease: false };
+
+    // Entering canary must reach the RUNNING updater, or "Check now" pressed
+    // right after switching silently checks the stable feed until relaunch.
+    writeUpdateChannel(ctx.db, "canary", 1, updater);
+    expect(updater.allowPrerelease).toBe(true);
+
+    // Leaving is one-way live: `false` is never assigned over the updater's
+    // version-derived default (the stranding rule startup already follows).
+    writeUpdateChannel(ctx.db, "stable", 2, updater);
+    expect(updater.allowPrerelease).toBe(true);
+    expect(readUpdateChannel(ctx.db)).toBe("stable");
+  });
+
   it("writes the exact JSON true the reader fails closed against", () => {
     ctx = openTestDb();
     writeUpdateChannel(ctx.db, "canary", 1);

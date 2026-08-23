@@ -94,9 +94,11 @@ export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
         : { ok: true as const, channel: deps.channel.read() },
 
     /**
-     * Takes effect on the next check. Nothing here restarts the updater or
-     * re-runs one immediately: `allowPrerelease` is read onto the handle at
-     * startup, and a check fired mid-write would race the row it depends on.
+     * The write's own doc (`writeUpdateChannel`) carries the effect story:
+     * entering canary widens the running updater immediately; leaving canary
+     * applies at the next launch on stable installs, and never forces a
+     * canary install off the prerelease feed. Nothing here re-runs a check —
+     * one fired mid-write would race the row it depends on.
      */
     "volli:update-channel-set": (channel: UpdateChannel) =>
       deps.channel === undefined
