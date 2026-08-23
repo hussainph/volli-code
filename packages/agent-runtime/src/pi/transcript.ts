@@ -29,7 +29,17 @@ const OPAQUE_SECRET = /[A-Za-z0-9_-]{24,}/g;
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
 const AUTH_SIGNAL =
   /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
-const CONTEXT_SIGNAL = /(context (?:length|limit|window)|too many tokens|maximum tokens)/i;
+/**
+ * How a provider says the window is spent, across the vocabularies they
+ * actually use. Overflow recovery hangs off this classification: a refusal it
+ * does not recognize is a Session told it broke instead of one that compacts
+ * and continues, so each provider family's phrasing is pinned by a test with
+ * its real sentence — OpenAI's "context window"/"maximum context length",
+ * Anthropic's "prompt is too long", Bedrock's "input is too long", Google's
+ * "input token count … exceeds the maximum number of tokens" (VC-155).
+ */
+const CONTEXT_SIGNAL =
+  /(context (?:length|limit|window)|too many tokens|maximum tokens|(?:prompt|input) is too long|exceeds the maximum number of tokens)/i;
 /**
  * How a connection that died mid-stream reads once the provider has rethrown
  * it. Deliberately narrower than pi-ai's own retry predicate: everything else a
@@ -107,12 +117,18 @@ function usageOf(usage: {
   // they are what the provider counts them as, and the sum of all four is the
   // context the model was actually holding when it answered — the number the
   // Session's context-usage surface is built on.
+  //
+  // Non-finite values are dropped rather than carried: a model with no cost
+  // table multiplies through to a NaN total, JSON persists NaN as null, and
+  // the recovery marker validator rightly refuses a null where a number
+  // belongs. Every field is optional in SanitizedUsage for exactly this — an
+  // absent number is honest, a poisoned marker is not (VC-155).
   return {
-    inputTokens: usage.input,
-    outputTokens: usage.output,
-    cacheReadTokens: usage.cacheRead,
-    cacheWriteTokens: usage.cacheWrite,
-    costUsd: usage.cost.total,
+    ...(Number.isFinite(usage.input) ? { inputTokens: usage.input } : {}),
+    ...(Number.isFinite(usage.output) ? { outputTokens: usage.output } : {}),
+    ...(Number.isFinite(usage.cacheRead) ? { cacheReadTokens: usage.cacheRead } : {}),
+    ...(Number.isFinite(usage.cacheWrite) ? { cacheWriteTokens: usage.cacheWrite } : {}),
+    ...(Number.isFinite(usage.cost.total) ? { costUsd: usage.cost.total } : {}),
   };
 }
 
