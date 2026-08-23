@@ -217,6 +217,15 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
+        // The agent-observability export boundary (VC-119). The mapping module
+        // is the ONLY place Volli's metadata-only vocabulary becomes somebody
+        // else's attribute names, and the sink is the bound that stops a
+        // collector from reaching a turn — both are enrolled here for the same
+        // reason the IPC handlers are: a missed branch is a privacy or a
+        // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
+        // `index.ts`: it is transport bootstrap around an SDK.
+        "**/src/main/observability/genai.ts",
+        "**/src/main/observability/sink.ts",
         "**/src/main/project-roots.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
