@@ -81,7 +81,7 @@ export const WEB_EXTRACT_LIMITS = {
    * is what sets the number, and it is not set from the output bound: chrome
    * comes *before* the article, so the budget has to be large enough to reach
    * past a page's navigation or it cuts the very thing it was spent looking
-   * for. A documentation sidebar of 2,500 links — the shape `safe-fetch.test.ts`
+   * for. A documentation sidebar of 2,500 links — the shape `extract.test.ts`
    * pins — is the case that decides this, and a tighter bound was measured
    * dropping that page's article on the floor.
    *

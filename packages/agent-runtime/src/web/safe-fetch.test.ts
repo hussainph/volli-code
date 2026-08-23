@@ -354,11 +354,17 @@ describe("safe web fetch", () => {
 
   it("extracts HTML to its article, so the bound is spent on prose not chrome", async () => {
     // A page whose chrome dwarfs its article the way real documentation does:
-    // a nav of links well past the character bound, then the article at the
-    // end. Returned raw, the bound would be spent entirely inside the nav and
-    // the model would never see a word of the article.
+    // a nav of links past the character bound, then the article at the end.
+    // Returned raw, the bound would be spent entirely inside the nav and the
+    // model would never see a word of the article.
+    //
+    // 700 links is ~27,000 characters against the 25,000 the bound allows —
+    // the smallest nav that still outruns it, because what this test owns is
+    // the wiring: HTML reaches the extractor and prose comes back. How large a
+    // sidebar the *element* budget can see past is a different claim, and
+    // `extract.test.ts` pins that one against the full 2,500 (VC-142).
     const nav = Array.from(
-      { length: 2500 },
+      { length: 700 },
       (_, index) => `<a href="/section/${index}">section ${index}</a>`,
     ).join(" ");
     const { fetcher } = await fetcherFor((_request, response) => {
