@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  isGitRepository,
+  requiredSessionEnvTools,
   resolveOnPath,
   resolveSessionEnvTools,
   SESSION_ENV_TOOLS,
   workspaceDependenciesStatus,
   workspaceInstallCommand,
+  workspacePackageManager,
 } from "./session-env";
 import type { PathResolver } from "./session-env";
 
@@ -22,11 +25,12 @@ function resolver(
 }
 
 describe("SESSION_ENV_TOOLS", () => {
-  // The census is the contract: identify reports exactly this set and doctor
-  // audits exactly this set. A tool added here without a doctor check is a
-  // silent gap; the list is deliberately short to keep that coupling real.
-  it("names the four tools a session's first commands depend on", () => {
-    expect(SESSION_ENV_TOOLS).toEqual(["git", "gh", "node", "pnpm"]);
+  // The census is what is MEASURED: identify reports exactly this set and
+  // doctor looks up exactly this set. Requiring is the per-project question
+  // `requiredSessionEnvTools` answers, and every package manager a lockfile
+  // can name has to be measurable for that answer to be reportable.
+  it("names every tool a session's PATH is measured for", () => {
+    expect(SESSION_ENV_TOOLS).toEqual(["git", "gh", "node", "npm", "pnpm", "yarn", "bun"]);
   });
 });
 
@@ -45,7 +49,7 @@ describe("resolveOnPath", () => {
 });
 
 describe("resolveSessionEnvTools", () => {
-  it("answers for every contract tool, found or missing", async () => {
+  it("answers for every measured tool, found or missing", async () => {
     const tools = await resolveSessionEnvTools(
       ["/usr/bin", "/opt/homebrew/bin"],
       resolver(["/usr/bin/git", "/opt/homebrew/bin/gh", "/opt/homebrew/bin/node"]),
@@ -57,7 +61,10 @@ describe("resolveSessionEnvTools", () => {
       git: "/usr/bin/git",
       gh: "/opt/homebrew/bin/gh",
       node: "/opt/homebrew/bin/node",
+      npm: null,
       pnpm: null,
+      yarn: null,
+      bun: null,
     });
   });
 
@@ -66,7 +73,10 @@ describe("resolveSessionEnvTools", () => {
       git: null,
       gh: null,
       node: null,
+      npm: null,
       pnpm: null,
+      yarn: null,
+      bun: null,
     });
   });
 });
@@ -233,5 +243,106 @@ describe("workspaceInstallCommand", () => {
         ).exists,
       ),
     ).toBe("npm install");
+  });
+});
+
+describe("workspacePackageManager", () => {
+  it.each([
+    ["pnpm-lock.yaml", "pnpm"],
+    ["yarn.lock", "yarn"],
+    ["package-lock.json", "npm"],
+    ["bun.lock", "bun"],
+    ["bun.lockb", "bun"],
+  ])("reads %s as %s", (lockfile, manager) => {
+    expect(
+      workspacePackageManager(
+        "/work/acme",
+        resolver([], ["/work/acme/package.json", `/work/acme/${lockfile}`]).exists,
+      ),
+    ).toBe(manager);
+  });
+
+  it("is npm for a manifest no lockfile speaks for", () => {
+    expect(
+      workspacePackageManager("/work/acme", resolver([], ["/work/acme/package.json"]).exists),
+    ).toBe("npm");
+  });
+
+  it("is null where no ancestor is a package workspace", () => {
+    expect(workspacePackageManager("/home/me", resolver().exists)).toBeNull();
+  });
+});
+
+describe("isGitRepository", () => {
+  it("finds the marker in the directory itself", () => {
+    expect(isGitRepository("/repo", resolver([], ["/repo/.git"]).exists)).toBe(true);
+  });
+
+  it("finds it up the chain, from a subdirectory of the checkout", () => {
+    expect(isGitRepository("/repo/packages/a", resolver([], ["/repo/.git"]).exists)).toBe(true);
+  });
+
+  it("is false for a plain folder that no repository encloses", () => {
+    expect(isGitRepository("/Users/me/notes", resolver().exists)).toBe(false);
+  });
+});
+
+// VC-157: the census a project IMPLIES, as opposed to the one Volli's own
+// toolchain used to impose on every project it opened.
+describe("requiredSessionEnvTools", () => {
+  it("requires git, node and the lockfile's manager for a pnpm checkout", () => {
+    expect(
+      requiredSessionEnvTools(
+        "/repo",
+        resolver([], ["/repo/.git", "/repo/package.json", "/repo/pnpm-lock.yaml"]).exists,
+      ),
+    ).toEqual(["git", "node", "pnpm"]);
+  });
+
+  // The measured cost this ticket removes: a yarn workspace was told it was
+  // missing pnpm, forever, by a product that had already read its lockfile.
+  it("never names pnpm for a yarn workspace", () => {
+    expect(
+      requiredSessionEnvTools(
+        "/repo",
+        resolver([], ["/repo/.git", "/repo/package.json", "/repo/yarn.lock"]).exists,
+      ),
+    ).toEqual(["git", "node", "yarn"]);
+  });
+
+  it("requires only git for a repository with no JavaScript manifest", () => {
+    expect(
+      requiredSessionEnvTools("/repo", resolver([], ["/repo/.git", "/repo/pyproject.toml"]).exists),
+    ).toEqual(["git"]);
+  });
+
+  it("requires node and npm for a package folder that is not a repository", () => {
+    expect(
+      requiredSessionEnvTools("/scratch/app", resolver([], ["/scratch/app/package.json"]).exists),
+    ).toEqual(["node", "npm"]);
+  });
+
+  it("requires nothing of a folder that is neither repository nor workspace", () => {
+    expect(requiredSessionEnvTools("/Users/me/notes", resolver().exists)).toEqual([]);
+  });
+
+  // gh is measured everywhere and required nowhere: its absence is classified
+  // at the moment a PR action runs, not on the way in.
+  it("never requires gh, whatever the project is", () => {
+    expect(
+      requiredSessionEnvTools(
+        "/repo",
+        resolver([], ["/repo/.git", "/repo/package.json", "/repo/pnpm-lock.yaml"]).exists,
+      ),
+    ).not.toContain("gh");
+  });
+
+  it("lists requirements in census order, whatever the manager", () => {
+    expect(
+      requiredSessionEnvTools(
+        "/repo",
+        resolver([], ["/repo/.git", "/repo/package.json", "/repo/bun.lock"]).exists,
+      ),
+    ).toEqual(["git", "node", "bun"]);
   });
 });

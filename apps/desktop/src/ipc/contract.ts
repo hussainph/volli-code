@@ -773,8 +773,15 @@ export interface CliSessionPathStatus {
   provenance: SessionEnvProvenance;
   /** What the later interactive pass could establish, if it has landed. */
   interactiveProvenance: SessionEnvInteractiveProvenance;
-  /** Where each tool a Session contract requires resolves, or `null` when it does not. */
+  /** Where each measured Session tool resolves, or `null` when it does not. */
   tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /**
+   * The subset of {@link tools} the scoped project implies — a repository
+   * implies `git`, a JavaScript workspace implies `node` and the manager its
+   * lockfile names (`@volli/shared`'s `requiredSessionEnvTools`). Only these
+   * absences are faults; empty when no project workspace was supplied.
+   */
+  requiredTools: readonly SessionEnvTool[];
   /** Project-scoped dependency state; `null` when no project workspace was supplied. */
   dependencies: WorkspaceDependenciesStatus;
   /**

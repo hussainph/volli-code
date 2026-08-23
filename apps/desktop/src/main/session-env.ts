@@ -20,7 +20,11 @@
 import { constants, existsSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 
-import { resolveSessionEnvTools, workspaceDependenciesStatus } from "@volli/shared";
+import {
+  requiredSessionEnvTools,
+  resolveSessionEnvTools,
+  workspaceDependenciesStatus,
+} from "@volli/shared";
 import type {
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
@@ -71,6 +75,13 @@ export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise
     tools: await resolveSessionEnvTools(pathEntries, {
       isExecutable: deps.isExecutable ?? executableAt,
     }),
+    // Which of those measurements is allowed to be a fault, decided by what
+    // the scoped workspace is (VC-157). A host-wide read has no project to
+    // imply anything, and requires nothing.
+    requiredTools:
+      deps.cwd === undefined
+        ? []
+        : requiredSessionEnvTools(deps.cwd, deps.pathExists ?? existsSync),
     dependencies:
       deps.cwd === undefined
         ? null

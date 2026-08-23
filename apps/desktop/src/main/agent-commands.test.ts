@@ -3414,8 +3414,12 @@ describe("identify env block (VC-94)", () => {
       git: "/usr/bin/git",
       gh: "/opt/homebrew/bin/gh",
       node: "/opt/homebrew/bin/node",
+      npm: "/opt/homebrew/bin/npm",
       pnpm: "/opt/homebrew/bin/pnpm",
+      yarn: null,
+      bun: null,
     },
+    requiredTools: ["git", "node", "pnpm"] as const,
     dependencies: "installed" as const,
   };
 
@@ -3579,6 +3583,36 @@ describe("doctor", () => {
     // The rest of the report still ran, which is the reason this does not
     // refuse the request outright.
     expect((await checkFrom(malformed, "path-position")).status).toBe("ok");
+  });
+
+  // VC-157: the caller names what its workspace implies, and only those
+  // absences may be faults. Main cannot see that workspace, so it takes the
+  // list — and takes an unreadable one as "nothing", the direction that costs
+  // a fault rather than inventing one.
+  it("faults only the tools the caller's workspace said it needs", async () => {
+    const yarnWorkspace = {
+      ...observation,
+      resolved: { claude: "/ud/bin/claude", git: "/usr/bin/git", node: null, pnpm: null },
+      requiredTools: ["git", "node", "yarn"],
+    };
+
+    expect((await checkFrom(yarnWorkspace, "tool-node")).status).toBe("fail");
+    const pnpm = await checkFrom(yarnWorkspace, "tool-pnpm");
+    expect(pnpm.status).toBe("ok");
+    expect(pnpm.detail).toContain("nothing here asks for it");
+  });
+
+  it("drops unknown or malformed requirement names instead of faulting on them", async () => {
+    const noJs = {
+      ...observation,
+      resolved: { claude: "/ud/bin/claude", git: null, gh: null },
+      requiredTools: ["git", "cargo", 7],
+    };
+    expect((await checkFrom(noJs, "tool-git")).status).toBe("fail");
+    expect((await checkFrom(noJs, "tool-gh")).status).toBe("ok");
+
+    const unreadable = { ...observation, resolved: { git: null }, requiredTools: "git" };
+    expect((await checkFrom(unreadable, "tool-git")).status).toBe("ok");
   });
 
   it("gives a malformed resolution the same treatment as an unreported one", async () => {

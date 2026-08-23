@@ -2017,8 +2017,9 @@ app.whenReady().then(async () => {
           // change, so this is never chatter.
           onSessionHarness: (notice) => broadcastSessionHarness(notice),
           // The `env` block `volli identify` prints (VC-94): the PATH main
-          // adopted, its latest non-interactive provenance, the contract tools
-          // resolved against it, and the workspace dependency state. It awaits
+          // adopted, its latest non-interactive provenance, the measured tools
+          // resolved against it (and which of them this workspace implies),
+          // and the workspace dependency state. It awaits
           // the one current pass — boot normally, a fresh pass after repair —
           // so the report never describes a PATH from before adoption finished
           // and is read at CALL time, never captured.

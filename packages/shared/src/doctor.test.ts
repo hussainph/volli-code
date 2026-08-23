@@ -14,9 +14,15 @@ function observation(overrides: Partial<DoctorObservation> = {}): DoctorObservat
       git: "/usr/bin/git",
       gh: "/opt/homebrew/bin/gh",
       node: "/opt/homebrew/bin/node",
+      npm: "/opt/homebrew/bin/npm",
       pnpm: "/opt/homebrew/bin/pnpm",
+      yarn: "/opt/homebrew/bin/yarn",
+      bun: "/opt/homebrew/bin/bun",
     },
     volliPath: `${BIN}/volli`,
+    // The Volli checkout the caller usually stands in: a git repository with
+    // a pnpm lockfile. `gh` is measured beside these and required by none.
+    requiredTools: ["git", "node", "pnpm"],
     ...overrides,
   };
 }
@@ -113,7 +119,7 @@ describe("runDoctorChecks — resolution", () => {
   });
 });
 
-describe("runDoctorChecks — contract tools", () => {
+describe("runDoctorChecks — session tools", () => {
   it("passes each tool that resolves on the reported PATH, with its absolute path", () => {
     const check = find(runDoctorChecks(observation(), facts()), "tool-gh");
     expect(check.status).toBe("ok");
@@ -122,50 +128,120 @@ describe("runDoctorChecks — contract tools", () => {
 
   // The check cannot distinguish "not installed" from "installed but the
   // session PATH never adopted it", so the remedy must name both causes and
-  // the discriminator — never a bare "install gh".
-  it("fails a measured absence with a remedy naming both causes", () => {
+  // the discriminator — never a bare "install git".
+  it("fails a required tool's measured absence with a remedy naming both causes", () => {
     const check = find(
-      runDoctorChecks(observation({ resolved: { gh: null } }), facts()),
-      "tool-gh",
+      runDoctorChecks(observation({ resolved: { git: null } }), facts()),
+      "tool-git",
     );
     expect(check.status).toBe("fail");
     expect(check.detail).toContain("resolves to nothing");
-    expect(check.remedy).toContain("brew install gh");
+    expect(check.remedy).toContain("xcode-select --install");
     expect(check.remedy).toContain("volli doctor --fix");
     expect(check.remedy).toContain("volli identify");
   });
 
-  it("points every missing contract tool at the same PATH repair", () => {
+  it("points every missing required tool at the same PATH repair", () => {
     const base = observation();
-    for (const tool of ["git", "gh", "node", "pnpm"] as const) {
+    for (const tool of ["git", "node", "npm", "pnpm", "yarn", "bun"] as const) {
       const check = find(
-        runDoctorChecks(observation({ resolved: { ...base.resolved, [tool]: null } }), facts()),
+        runDoctorChecks(
+          observation({
+            resolved: { ...base.resolved, [tool]: null },
+            requiredTools: [tool],
+          }),
+          facts(),
+        ),
         `tool-${tool}`,
       );
+      expect(check.status).toBe("fail");
       expect(check.remedy).toContain("volli doctor --fix");
     }
   });
 
   // VC-94's exact shape: git answers from the bare launchd PATH's /usr/bin
-  // while gh is gone, so the session looks operational — it can commit — and
-  // cannot merge. Both facts must be visible in the same report.
-  it("reports git present and gh missing together, which is the incident's shape", () => {
+  // while node is gone, so the session looks operational — it can commit —
+  // and cannot install. Both facts must be visible in the same report.
+  it("reports git present and node missing together, which is the incident's shape", () => {
     const base = observation();
     const checks = runDoctorChecks(
-      observation({ resolved: { ...base.resolved, gh: null } }),
+      observation({ resolved: { ...base.resolved, node: null } }),
       facts(),
     );
     expect(find(checks, "tool-git").status).toBe("ok");
-    expect(find(checks, "tool-gh").status).toBe("fail");
+    expect(find(checks, "tool-node").status).toBe("fail");
   });
 
-  // A caller that never measured a tool is silence, not absence; reporting it
-  // as absent would be the diagnostic inventing a negative.
+  // A caller that never measured a required tool is silence, not absence;
+  // reporting it as absent would be the diagnostic inventing a negative.
   it("warns rather than failing when no resolution was reported", () => {
     const check = find(runDoctorChecks(observation({ resolved: {} }), facts()), "tool-node");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("no resolution was reported");
     expect(check.detail).not.toContain("resolves to nothing");
+  });
+});
+
+// VC-157: the census measures every tool and the project decides which
+// absences are faults. A repo that never runs `gh` or `pnpm` must not wear
+// their absence as a failure — reporting is not alarming.
+describe("runDoctorChecks — tools this project does not require", () => {
+  it("reports a missing gh as a measurement, and says where its absence is judged", () => {
+    const check = find(
+      runDoctorChecks(observation({ resolved: { ...observation().resolved, gh: null } }), facts()),
+      "tool-gh",
+    );
+    expect(check.status).toBe("ok");
+    expect(check.title).toBe("`gh` is not required by this project");
+    expect(check.detail).toContain("resolves to nothing on this PATH");
+    expect(check.detail).toContain("when a PR action actually needs it");
+    expect(check.remedy).toBeUndefined();
+  });
+
+  it("never faults the package managers a yarn workspace does not name", () => {
+    const checks = runDoctorChecks(
+      observation({
+        resolved: { claude: `${BIN}/claude`, git: "/usr/bin/git", node: "/opt/node" },
+        requiredTools: ["git", "node", "yarn"],
+      }),
+      facts(),
+    );
+    expect(find(checks, "tool-pnpm").status).toBe("ok");
+    expect(find(checks, "tool-pnpm").detail).toContain("nothing here asks for it");
+    expect(find(checks, "tool-yarn").status).toBe("warn");
+  });
+
+  // A Python or Go repo: git is the only implication, and a host with no
+  // Node toolchain at all reports a clean bill.
+  it("passes a repo that implies only git, whatever else is missing", () => {
+    const checks = runDoctorChecks(
+      observation({
+        resolved: {
+          claude: `${BIN}/claude`,
+          git: "/usr/bin/git",
+          gh: null,
+          node: null,
+          pnpm: null,
+        },
+        requiredTools: ["git"],
+      }),
+      facts(),
+    );
+    expect(checks.filter((check) => check.id.startsWith("tool-") && check.status !== "ok")).toEqual(
+      [],
+    );
+  });
+
+  // A caller that named no requirements gets a pure report: with nothing
+  // known to be needed, an absence has no consequence to name.
+  it("reports an unmeasured, unrequired tool without inventing a finding", () => {
+    const check = find(
+      runDoctorChecks(observation({ resolved: {}, requiredTools: [] }), facts()),
+      "tool-node",
+    );
+    expect(check.status).toBe("ok");
+    expect(check.detail).toContain("no resolution was reported");
+    expect(check.detail).toContain("nothing here asks for it");
   });
 });
 

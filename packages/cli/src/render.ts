@@ -440,6 +440,17 @@ function renderStableLines(command: string, data: unknown): string | null {
       for (const tool of SESSION_ENV_TOOLS) {
         lines.push(`env.tools.${tool}  ${envValue(tools[tool])}`);
       }
+      // Which of those measurements this project actually needs (VC-157).
+      // Printed after them so a reader takes the list as a filter over what
+      // they just read: a `-` above a name absent from this line is a tool
+      // nothing here runs, not a fault. `-` here means the project implies
+      // no tool at all — a folder that is neither repository nor workspace.
+      const requiredTools = Array.isArray(env["requiredTools"]) ? env["requiredTools"] : [];
+      lines.push(
+        `env.requiredTools  ${
+          requiredTools.length === 0 ? "-" : requiredTools.map(terminalSafeInline).join(" ")
+        }`,
+      );
       lines.push(`env.dependencies  ${envValue(env["dependencies"])}`);
     }
     if (data["degraded"] === true) lines.push("degraded  true");

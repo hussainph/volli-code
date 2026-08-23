@@ -526,8 +526,12 @@ describe("renderCliSuccess", () => {
               git: "/usr/bin/git",
               gh: "/opt/homebrew/bin/gh",
               node: null,
+              npm: null,
               pnpm: null,
+              yarn: null,
+              bun: null,
             },
+            requiredTools: ["git", "node", "pnpm"],
             dependencies: "absent",
           },
         },
@@ -546,7 +550,11 @@ describe("renderCliSuccess", () => {
         "env.tools.git  /usr/bin/git\n" +
         "env.tools.gh  /opt/homebrew/bin/gh\n" +
         "env.tools.node  -\n" +
+        "env.tools.npm  -\n" +
         "env.tools.pnpm  -\n" +
+        "env.tools.yarn  -\n" +
+        "env.tools.bun  -\n" +
+        "env.requiredTools  git node pnpm\n" +
         "env.dependencies  absent\n",
     );
   });
@@ -605,7 +613,16 @@ describe("renderCliSuccess", () => {
             path: "/usr/bin",
             provenance: null,
             interactiveProvenance: null,
-            tools: { git: null, gh: null, node: null, pnpm: null },
+            tools: {
+              git: null,
+              gh: null,
+              node: null,
+              npm: null,
+              pnpm: null,
+              yarn: null,
+              bun: null,
+            },
+            requiredTools: [],
             dependencies: null,
           },
           degraded: true,
@@ -625,7 +642,12 @@ describe("renderCliSuccess", () => {
         "env.tools.git  -\n" +
         "env.tools.gh  -\n" +
         "env.tools.node  -\n" +
+        "env.tools.npm  -\n" +
         "env.tools.pnpm  -\n" +
+        "env.tools.yarn  -\n" +
+        "env.tools.bun  -\n" +
+        // Nothing on disk implied a tool, so nothing here can be missing.
+        "env.requiredTools  -\n" +
         "env.dependencies  -\n" +
         "degraded  true\n",
     );

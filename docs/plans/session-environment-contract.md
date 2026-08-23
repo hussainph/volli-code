@@ -384,14 +384,27 @@ cheapest first step is the declaration — B1's `env` block reporting
 
 **✅ B1 · Add an `env` block to `volli identify`.** (`bdd52746`; A3 added
 `env.interactiveProvenance`.) Prints `env.path`, `env.provenance`,
-`env.interactiveProvenance`, `env.tools.<tool>` per contract tool, and
-`env.dependencies`, in both text and `--json`. `-` means measured and not found;
-an absent block means the answering process had no env facts at all — the same
-measured-versus-unmeasured discipline `doctor`'s `Observed<T>` already keeps.
+`env.interactiveProvenance`, `env.tools.<tool>` per measured tool,
+`env.requiredTools`, and `env.dependencies`, in both text and `--json`. `-`
+means measured and not found; an absent block means the answering process had no
+env facts at all — the same measured-versus-unmeasured discipline `doctor`'s
+`Observed<T>` already keeps.
 
-**✅ B2 · Add tool checks to `doctor`.** (`028c3719`.) One check per contract
+**✅ B2 · Add tool checks to `doctor`.** (`028c3719`.) One check per measured
 tool, with remedies that name the real cause — a `PATH` adoption failure rather
 than a generic "install it".
+
+**✅ B5 · Make the census project-implied.** (VC-157.) Measuring stayed wide and
+requiring became narrow: `SESSION_ENV_TOOLS` is now every name a session's
+`PATH` is looked up for (`git`, `gh`, `node`, `npm`, `pnpm`, `yarn`, `bun`), and
+`requiredSessionEnvTools` derives the faultable subset from what is on disk —
+`git` when the folder is a repository, `node` plus the manager the lockfile
+names when it is a package workspace, and `gh` never (its absence is already
+classified by `GhResult` at the moment a PR action runs). The fixed
+`git, gh, node, pnpm` list was Volli-repo bias: a Python repo, or any host
+without `gh`, wore a permanent "Sessions aren't ready" banner for tools it never
+runs. `volli doctor` still reports every measurement — an unrequired absence is
+an `ok` check that says what was seen, because reporting is not alarming.
 
 **✅ B3 · Report the *session* `PATH` in Settings → CLI, beside the login one.**
 (`474f77de`.) The pane now folds the two long values into a side-by-side
