@@ -5,6 +5,7 @@ import {
   agentCommandsFrom,
   cliVerbName,
   REFERENCE_VERBS,
+  referenceVerbsFrom,
   VERB_REGISTRY,
   verbEntry,
   verbTier,
@@ -139,6 +140,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 20,
     group: "Read",
     summary: "On the socket.",
     options: [],
@@ -148,7 +150,8 @@ const SYNTHETIC: readonly VerbEntry[] = [
     accessModes: ["tool"],
     actor: "role",
     handler: "main",
-    listed: false,
+    listed: true,
+    referenceOrder: 0,
     group: "Session",
     summary: "A named tool, never a command.",
     options: [],
@@ -159,6 +162,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     actor: "any",
     handler: "cli",
     listed: true,
+    referenceOrder: 10,
     group: "App",
     summary: "Answered in the CLI process.",
     options: [],
@@ -193,6 +197,36 @@ describe("AGENT_COMMANDS projection", () => {
   });
 });
 
+describe("CLI reference projection", () => {
+  it("keeps only listed CLI entries and orders them from entry data", () => {
+    expect(referenceVerbsFrom(SYNTHETIC).map((entry) => entry.key)).toEqual([
+      "local.verb",
+      "socket.verb",
+    ]);
+  });
+
+  it("lets listed remove a CLI entry without another projection edit", () => {
+    const hidden = { ...SYNTHETIC[0]!, listed: false } satisfies VerbEntry;
+    expect(referenceVerbsFrom([hidden])).toEqual([]);
+  });
+
+  it("requires a listed CLI entry to declare its order on that entry", () => {
+    const unordered: VerbEntry = {
+      key: "unordered.verb",
+      accessModes: ["cli"],
+      actor: "any",
+      handler: "main",
+      listed: true,
+      group: "Read",
+      summary: "Missing its reference position.",
+      options: [],
+    };
+    expect(() => referenceVerbsFrom([unordered])).toThrow(
+      "Listed CLI verb unordered.verb requires referenceOrder",
+    );
+  });
+});
+
 describe("verbTier", () => {
   it("derives VC-92's audit for every declared verb", () => {
     const derived = Object.fromEntries(VERB_REGISTRY.map((entry) => [entry.key, verbTier(entry)]));
@@ -214,14 +248,23 @@ describe("verbTier", () => {
     expect(verbTier({ accessModes: [], actor: "any" })).toBeNull();
   });
 
-  it("reads a Role requirement as control tier wherever it appears", () => {
+  it("derives control only when a Role-gated verb is absent from the CLI", () => {
     expect(verbTier({ accessModes: ["tool"], actor: "role" })).toBe("control");
-    expect(verbTier({ accessModes: ["cli"], actor: "role" })).toBe("control");
+    expect(() => verbTier({ accessModes: ["cli"], actor: "role" })).toThrow(
+      "A control-tier verb cannot carry a cli access mode",
+    );
   });
 
-  it("reads absence from the agent socket as control tier", () => {
-    expect(verbTier({ accessModes: ["tool"], actor: "session" })).toBe("control");
-    expect(verbTier({ accessModes: ["hostApi"], actor: "any" })).toBe("control");
+  it("rejects non-Role and non-tool attempts to declare control tier", () => {
+    for (const entry of [
+      { accessModes: ["tool"], actor: "session" },
+      { accessModes: ["hostApi"], actor: "any" },
+      { accessModes: ["tool", "hostApi"], actor: "role" },
+    ] as const) {
+      expect(() => verbTier(entry)).toThrow(
+        "Control tier requires tool-only access and a role actor",
+      );
+    }
   });
 
   it("splits the socket by actor: any caller reads, a session actor coordinates", () => {
@@ -262,6 +305,16 @@ describe("the registry table", () => {
     expect(unlisted).toEqual(["session.harness", "hook"]);
   });
 
+  it("stores each listed verb's reference position on that entry", () => {
+    const listed = VERB_REGISTRY.filter((entry) => entry.listed);
+    const orders = listed.map((entry) => entry.referenceOrder);
+    expect(orders.every((order) => Number.isFinite(order))).toBe(true);
+    expect(new Set(orders).size).toBe(listed.length);
+    for (const entry of VERB_REGISTRY.filter((candidate) => !candidate.listed)) {
+      expect("referenceOrder" in entry).toBe(false);
+    }
+  });
+
   it("gives every listed verb the example its detail page prints", () => {
     for (const entry of VERB_REGISTRY.filter((candidate) => candidate.listed)) {
       expect(entry.example).toMatch(/^volli /);
@@ -287,6 +340,10 @@ describe("the registry table", () => {
 });
 
 describe("REFERENCE_VERBS", () => {
+  it("is derived from the registry's listing data", () => {
+    expect(referenceVerbsFrom(VERB_REGISTRY)).toEqual(REFERENCE_VERBS);
+  });
+
   it("is the CLI reference in the order it prints", () => {
     expect(REFERENCE_VERBS.map((entry) => entry.key)).toEqual(REFERENCE_SURFACE);
   });

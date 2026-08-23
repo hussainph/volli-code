@@ -167,21 +167,39 @@ describe("renderHelp groups and topics", () => {
  * hold — and the only way to show that the real surface refuses it.
  */
 describe("renderHelp over a supplied entry list", () => {
-  /** A control-tier verb of the shape VC-162 introduces: a named tool, off the shell. */
+  /**
+   * A control-tier verb of the shape VC-162 introduces: a named tool, off the
+   * shell. It is deliberately marked listed to prove access mode still keeps it
+   * out of shell help.
+   */
   const toolOnly: VerbEntry = {
     key: "vault.rotate",
     accessModes: ["tool"],
     actor: "role",
     handler: "main",
-    listed: false,
+    listed: true,
+    referenceOrder: 1,
     group: "Session",
     summary: "Rotate a stored credential.",
     options: [],
   };
 
-  it("renders exactly the verbs it is handed, and nothing else", () => {
+  /** A listed CLI verb with no example, exercising optional presentation data. */
+  const shellOnly: VerbEntry = {
+    key: "vault.inspect",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: "main",
+    listed: true,
+    referenceOrder: 1,
+    group: "Read",
+    summary: "Inspect stored credential metadata.",
+    options: [],
+  };
+
+  it("projects supplied registry entries before rendering shell help", () => {
     const text = bareHelpText([toolOnly]);
-    expect(text).toContain("vault rotate");
+    expect(text).not.toContain("vault rotate");
     expect(text).not.toContain("ticket create");
   });
 
@@ -189,8 +207,9 @@ describe("renderHelp over a supplied entry list", () => {
   // mode is not on the shell surface, so the reference a shell caller reads
   // must not name it and no help path may render its detail.
   it("keeps a verb that is off the CLI out of what a shell caller sees", () => {
-    expect(bareHelpText()).not.toContain("vault rotate");
-    expect(renderHelp(["vault", "rotate"])).toBe(bareHelpText());
+    const reference = bareHelpText([toolOnly]);
+    expect(reference).not.toContain("vault rotate");
+    expect(renderHelp(["vault", "rotate"], [toolOnly])).toBe(reference);
   });
 
   // `hook` and `session harness` are on the socket but unlisted: fired by a
@@ -201,12 +220,12 @@ describe("renderHelp over a supplied entry list", () => {
     expect(renderHelp(["session", "harness"])).toBe(renderHelp(["session"]));
   });
 
-  // Every listed verb carries one, so this branch only opens for a verb nobody
-  // should ever type — which is exactly the kind that stays unlisted.
+  // Synthetic entries need not carry the real registry's stricter presentation
+  // invariant, so keep the renderer honest when one omits an example.
   it("omits the Example line for a verb that declares none", () => {
-    const detail = renderHelp(["vault", "rotate"], [toolOnly]);
-    expect(detail).toContain("vault rotate — Rotate a stored credential.");
-    expect(detail).toContain("Usage: volli vault rotate");
+    const detail = renderHelp(["vault", "inspect"], [shellOnly]);
+    expect(detail).toContain("vault inspect — Inspect stored credential metadata.");
+    expect(detail).toContain("Usage: volli vault inspect");
     expect(detail).not.toContain("Example:");
   });
 });

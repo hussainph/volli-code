@@ -109,6 +109,8 @@ export interface VerbEntry {
   readonly handler: VerbHandlerSite;
   /** Whether `volli help` prints the verb. Involuntary verbs stay unlisted. */
   readonly listed: boolean;
+  /** Its position in the CLI reference; ignored when the verb is unlisted. */
+  readonly referenceOrder?: number;
   readonly group: VerbGroup;
   /** One-line description; feeds both help text and tool schema. */
   readonly summary: string;
@@ -154,6 +156,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 0,
     group: "Read",
     summary: "Resolve and print the active project, ticket, session, and session environment.",
     example: "volli identify",
@@ -177,6 +180,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 1,
     group: "Read",
     summary: "Show a project's board grouped by column.",
     example: "volli board --project VC",
@@ -188,6 +192,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 2,
     group: "Read",
     summary: "List a project's tickets, optionally filtered.",
     example: "volli ticket list --status doing --priority high",
@@ -216,6 +221,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 3,
     group: "Read",
     summary: "Show one ticket with recent events and comments.",
     example: "volli ticket show VC-12 --comments 5",
@@ -241,6 +247,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 4,
     group: "Read",
     summary: "Print a ticket's event log.",
     example: "volli ticket events VC-12 --limit 20",
@@ -255,6 +262,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 11,
     group: "Write",
     summary: "Create a ticket (defaults to Backlog).",
     example: 'volli ticket create --title "Fix auth" --label bug',
@@ -310,6 +318,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 12,
     group: "Write",
     summary: "Update a ticket's fields or body.",
     example: 'volli ticket update VC-12 --edit "old" "new"',
@@ -374,6 +383,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 13,
     group: "Write",
     summary: "Move a ticket to another column.",
     example: "volli ticket move VC-12 --to needs-review",
@@ -396,6 +406,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 14,
     group: "Write",
     summary: "Add a comment to a ticket.",
     example: 'volli ticket comment VC-12 -m "Ready for review"',
@@ -436,6 +447,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 15,
     group: "Write",
     summary: "Archive a ticket (its worktree is preserved).",
     example: "volli ticket archive VC-12",
@@ -448,6 +460,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 5,
     group: "Read",
     summary: "Print the agent kickoff prompt for a ticket.",
     example: "volli ticket brief VC-12",
@@ -460,6 +473,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 6,
     group: "Read",
     summary: "Show a ticket's worktree branch, base, and sync state.",
     example: "volli worktree status VC-12",
@@ -473,6 +487,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 7,
     group: "Read",
     summary: "Summarize a ticket's diff (the PR range by default).",
     example: "volli worktree diff VC-12 --working-tree",
@@ -496,6 +511,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 8,
     group: "Read",
     summary: "List all registered projects.",
     example: "volli project list",
@@ -507,6 +523,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 9,
     group: "Read",
     summary: "List a project's labels.",
     example: "volli label list --project VC",
@@ -520,6 +537,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 10,
     group: "Read",
     summary: "List signed-in providers, model ids, and reasoning levels.",
     example: "volli model list",
@@ -541,6 +559,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 17,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
@@ -558,6 +577,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 18,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -592,6 +612,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 16,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
@@ -639,6 +660,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 19,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -656,6 +678,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 20,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -673,6 +696,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 21,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -719,6 +743,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: "main",
     listed: true,
+    referenceOrder: 22,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -767,6 +792,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 25,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -794,6 +820,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "main",
     listed: true,
+    referenceOrder: 24,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -827,6 +854,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "cli",
     listed: true,
+    referenceOrder: 23,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -846,6 +874,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: "cli",
     listed: true,
+    referenceOrder: 26,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
@@ -903,54 +932,46 @@ export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly Agent
  * - **read** — Agent CLI, any caller. Composability and zero context cost.
  * - **coordination** — Agent CLI, authenticated session actor. Visible,
  *   attributable, reversible writes.
- * - **control** — off the socket, or gated on a Role that holds the verb: the
- *   two ways an arbitrary same-uid process is shut out.
+ * - **control** — `tool` access only, gated on a Role that holds the verb, and
+ *   absent from the agent socket.
  * - **null** — no access mode at all. An app-only verb is on no agent surface,
  *   so it holds no governance class; `ticket.archive` becomes this in VC-163.
+ *
+ * Contradictory combinations throw instead of being mislabeled: a Role-gated
+ * verb cannot remain on `cli`, and absence from `cli` alone does not make a
+ * non-Role or `hostApi` verb control tier.
  */
 export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbTier | null {
   if (entry.accessModes.length === 0) return null;
-  if (entry.actor === "role") return "control";
-  if (!entry.accessModes.includes("cli")) return "control";
-  return entry.actor === "any" ? "read" : "coordination";
+  if (entry.accessModes.includes("cli")) {
+    if (entry.actor === "role") {
+      throw new Error("A control-tier verb cannot carry a cli access mode");
+    }
+    return entry.actor === "any" ? "read" : "coordination";
+  }
+  if (entry.actor !== "role" || entry.accessModes.length !== 1 || entry.accessModes[0] !== "tool") {
+    throw new Error("Control tier requires tool-only access and a role actor");
+  }
+  return "control";
 }
 
 /**
- * The order `volli help` prints the listed verbs in, within their group. It is
- * NOT the socket order above — the reference leads its Session group with
- * `session start` and its App group with `app launch`, and the socket list
- * grew in a different order. Keys, so a typo cannot compile; the test asserts
- * this covers the listed entries exactly once each.
+ * The CLI reference projection: listed verbs carrying a `cli` access mode,
+ * ordered by data on the entries themselves. Takes its entries as an argument
+ * so future tool-only verbs can be proven absent without changing the real
+ * registry.
  */
-const REFERENCE_ORDER = [
-  "identify",
-  "board",
-  "ticket.list",
-  "ticket.show",
-  "ticket.events",
-  "ticket.brief",
-  "worktree.status",
-  "worktree.diff",
-  "project.list",
-  "label.list",
-  "model.list",
-  "ticket.create",
-  "ticket.update",
-  "ticket.move",
-  "ticket.comment",
-  "ticket.archive",
-  "session.start",
-  "session.list",
-  "session.peek",
-  "session.done",
-  "session.blocked",
-  "session.link",
-  "notify",
-  "app.launch",
-  "prompt.baseline",
-  "doctor",
-  "help",
-] as const satisfies readonly VerbKey[];
+export function referenceVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  const referenceEntries = entries.filter(
+    (entry) => entry.listed && entry.accessModes.includes("cli"),
+  );
+  for (const entry of referenceEntries) {
+    if (!Number.isFinite(entry.referenceOrder)) {
+      throw new Error(`Listed CLI verb ${entry.key} requires referenceOrder`);
+    }
+  }
+  return referenceEntries.toSorted((left, right) => left.referenceOrder! - right.referenceOrder!);
+}
 
 const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
   VERB_REGISTRY.map((entry) => [entry.key, entry]),
@@ -966,6 +987,4 @@ export function verbEntry(key: string): VerbEntry | undefined {
  * help` groups these by {@link VerbEntry.group}; the involuntary verbs (`hook`,
  * `session.harness`) are absent because nothing should type them.
  */
-export const REFERENCE_VERBS: readonly VerbEntry[] = REFERENCE_ORDER.map(
-  (key) => ENTRY_BY_KEY.get(key)!,
-);
+export const REFERENCE_VERBS: readonly VerbEntry[] = referenceVerbsFrom(VERB_REGISTRY);

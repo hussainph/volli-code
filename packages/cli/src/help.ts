@@ -1,4 +1,4 @@
-import { AGENT_ERROR_CODES, cliVerbName, REFERENCE_VERBS } from "@volli/shared";
+import { AGENT_ERROR_CODES, cliVerbName, REFERENCE_VERBS, referenceVerbsFrom } from "@volli/shared";
 import type { VerbEntry, VerbOption } from "@volli/shared";
 
 import { exitCodeForError } from "./render";
@@ -139,9 +139,10 @@ function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
  * here can decide for itself which verbs exist.
  */
 export function bareHelpText(entries: readonly VerbEntry[] = REFERENCE_VERBS): string {
+  const referenceEntries = referenceVerbsFrom(entries);
   const order = ["Read", "Write", "Session", "App"] as const;
   const sections = order.map((group) => {
-    const lines = entries
+    const lines = referenceEntries
       .filter((entry) => entry.group === group)
       .map((entry) => `  ${usageLine(entry, "reference")}`);
     return `${group}\n${lines.join("\n")}`;
@@ -237,14 +238,15 @@ export function renderHelp(
   rawPath: readonly string[],
   entries: readonly VerbEntry[] = REFERENCE_VERBS,
 ): string {
+  const referenceEntries = referenceVerbsFrom(entries);
   // A quoted multi-word argument (`volli help "ticket create"`) must resolve
   // the same as separate words, so split every element on whitespace first.
   const path = rawPath.flatMap((part) => part.split(/\s+/)).filter((part) => part.length > 0);
-  if (path.length === 0) return bareHelpText(entries);
-  const command = matchCommand(path, entries);
+  if (path.length === 0) return bareHelpText(referenceEntries);
+  const command = matchCommand(path, referenceEntries);
   if (command !== null) return commandDetail(command);
   const first = path[0]!;
-  if (groupWords(entries).has(first)) return groupDetail(first, entries);
+  if (groupWords(referenceEntries).has(first)) return groupDetail(first, referenceEntries);
   if (path.length === 1 && isTopic(first)) return topicText(first);
-  return bareHelpText(entries);
+  return bareHelpText(referenceEntries);
 }
