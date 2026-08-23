@@ -13,7 +13,7 @@
  */
 import * as React from "react";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { isWritablePromptTemplateName } from "@volli/shared";
+import { errorMessage, isWritablePromptTemplateName } from "@volli/shared";
 
 import { CONTROL_W } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
@@ -89,7 +89,7 @@ export function NewCommandDialog({
       setOpen(false);
       onCreated();
     } catch (error) {
-      toastError(`Couldn't create the command: ${String(error)}`);
+      toastError(`Couldn't create the command: ${errorMessage(error)}`);
     } finally {
       setSaving(false);
     }

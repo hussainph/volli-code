@@ -43,7 +43,13 @@ import {
 } from "@volli/shared";
 
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
-import { Cell, DataTable, PrefRow, PrefSection } from "@renderer/components/settings/kit";
+import {
+  Cell,
+  DataTable,
+  PrefRow,
+  PrefSection,
+  TableSearch,
+} from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
   Select,
@@ -260,81 +266,15 @@ export function ModelAccessSettings({
         </PrefRow>
       </PrefSection>
       {offerable.length > 0 ? (
-        <PrefSection title="Catalog" icon={EyeIcon}>
-          {/*
-           * THE CATALOGUE AS A TABLE (VC-111), not a stack of rows grouped by
-           * a provider paragraph.
-           *
-           * A signed-in profile can offer a hundred models. As rows this was a
-           * section with no bottom: Accounts sat below it and was effectively
-           * unreachable, and the provider — half a model's identity, since the
-           * same name ships from several — was a heading you had to scroll back
-           * to rather than a value you could read across.
-           *
-           * As a table it caps at eight rows and scrolls inside its own box, so
-           * the PAGE stays navigable while the COLLECTION grows; provider
-           * becomes a column that aligns and can be searched; and the two
-           * per-model controls line up in their own columns instead of being
-           * crammed into a row's trailing slot.
-           */}
-          <DataTable
-            label="Model catalog"
-            items={offerable}
-            keyOf={(model) => `${model.providerId}/${model.modelId}`}
-            rows={8}
-            search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
-            placeholder="Search models"
-            empty="No models. Sign in to a provider below."
-            noResults="No models match."
-            columns={[
-              { key: "name", header: "Model", cell: (model) => <Cell>{model.label}</Cell> },
-              {
-                key: "provider",
-                header: "Provider",
-                width: "10rem",
-                cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
-              },
-              {
-                key: "reserve",
-                header: "Reserve",
-                width: "9rem",
-                align: "end",
-                cell: (model) => (
-                  <CompactionReserveSelect
-                    model={model}
-                    policy={compaction}
-                    disabled={loading}
-                    onSave={(reserveTokens) =>
-                      void saveCompaction({
-                        ...compaction,
-                        modelLimits: withModelCompactionReserve(
-                          compaction.modelLimits,
-                          model,
-                          reserveTokens,
-                        ),
-                      })
-                    }
-                  />
-                ),
-              },
-              {
-                key: "shown",
-                header: "Shown",
-                width: "4rem",
-                align: "end",
-                headerHidden: true,
-                cell: (model) => (
-                  <Switch
-                    aria-label={`Show ${model.label} by ${providerLabelFor(providers, model.providerId)} in pickers`}
-                    data-testid={`visibility-${model.providerId}-${model.modelId}`}
-                    checked={!isModelHidden(hidden, model)}
-                    onCheckedChange={(visible) => void saveVisibility(model, visible)}
-                  />
-                ),
-              },
-            ]}
-          />
-        </PrefSection>
+        <CatalogSection
+          offerable={offerable}
+          providers={providers}
+          hidden={hidden}
+          compaction={compaction}
+          loading={loading}
+          onSaveCompaction={(next) => void saveCompaction(next)}
+          onSaveVisibility={(model, visible) => void saveVisibility(model, visible)}
+        />
       ) : null}
       <ModelAccessAccounts
         providers={providers}
@@ -343,6 +283,111 @@ export function ModelAccessSettings({
         onChanged={() => load(true)}
       />
     </>
+  );
+}
+
+/**
+ * THE CATALOGUE AS A TABLE (VC-111), not a stack of rows grouped by a
+ * provider paragraph.
+ *
+ * A signed-in profile can offer a hundred models. As rows this was a section
+ * with no bottom: Accounts sat below it and was effectively unreachable, and
+ * the provider — half a model's identity, since the same name ships from
+ * several — was a heading you had to scroll back to rather than a value you
+ * could read across. As a table it caps at eight rows and scrolls inside its
+ * own box; provider becomes a column; the two per-model controls line up in
+ * columns of their own.
+ *
+ * SEARCH LIVES ON THE HEADER RAIL, beside the title — the same place and the
+ * same w-56 field as "Available to connect" below it. It is the table's only
+ * control, so a toolbar row for it alone drew a lone right-floating field
+ * under an empty header rail. The query is owned HERE and handed down, which
+ * is also why this is its own component: keystrokes re-render this section,
+ * not the whole Models pane above it.
+ */
+function CatalogSection({
+  offerable,
+  providers,
+  hidden,
+  compaction,
+  loading,
+  onSaveCompaction,
+  onSaveVisibility,
+}: {
+  offerable: readonly ModelAccessModel[];
+  providers: readonly ModelAccessProvider[];
+  hidden: readonly HiddenModelRef[];
+  compaction: CompactionPolicy;
+  loading: boolean;
+  onSaveCompaction(next: CompactionPolicy): void;
+  onSaveVisibility(model: HiddenModelRef, visible: boolean): void;
+}) {
+  const [query, setQuery] = React.useState("");
+
+  return (
+    <PrefSection
+      title="Catalog"
+      icon={EyeIcon}
+      action={<TableSearch value={query} placeholder="Search models" onChange={setQuery} />}
+    >
+      <DataTable
+        label="Model catalog"
+        items={offerable}
+        keyOf={(model) => `${model.providerId}/${model.modelId}`}
+        rows={8}
+        search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
+        query={query}
+        placeholder="Search models"
+        empty="No models. Sign in to a provider below."
+        noResults="No models match."
+        columns={[
+          { key: "name", header: "Model", cell: (model) => <Cell strong>{model.label}</Cell> },
+          {
+            key: "provider",
+            header: "Provider",
+            width: "10rem",
+            cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
+          },
+          {
+            key: "reserve",
+            header: "Reserve",
+            width: "9rem",
+            cell: (model) => (
+              <CompactionReserveSelect
+                model={model}
+                policy={compaction}
+                disabled={loading}
+                onSave={(reserveTokens) =>
+                  onSaveCompaction({
+                    ...compaction,
+                    modelLimits: withModelCompactionReserve(
+                      compaction.modelLimits,
+                      model,
+                      reserveTokens,
+                    ),
+                  })
+                }
+              />
+            ),
+          },
+          {
+            key: "shown",
+            header: "Shown",
+            width: "4rem",
+            align: "end",
+            headerHidden: true,
+            cell: (model) => (
+              <Switch
+                aria-label={`Show ${model.label} by ${providerLabelFor(providers, model.providerId)} in pickers`}
+                data-testid={`visibility-${model.providerId}-${model.modelId}`}
+                checked={!isModelHidden(hidden, model)}
+                onCheckedChange={(visible) => onSaveVisibility(model, visible)}
+              />
+            ),
+          },
+        ]}
+      />
+    </PrefSection>
   );
 }
 

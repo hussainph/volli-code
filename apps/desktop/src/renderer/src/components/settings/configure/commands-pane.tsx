@@ -78,7 +78,7 @@ function CommandsTable({
           key: "name",
           header: "Command",
           width: "10rem",
-          cell: (command) => <Cell>/{command.name}</Cell>,
+          cell: (command) => <Cell strong>/{command.name}</Cell>,
         },
         {
           key: "description",

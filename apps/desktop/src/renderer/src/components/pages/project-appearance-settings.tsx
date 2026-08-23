@@ -11,11 +11,7 @@ import {
 } from "@renderer/components/theme/appearance-catalog";
 import { OverrideControl, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
-import {
-  describeAppearance,
-  projectAppearanceChoice,
-  projectCanvasChoice,
-} from "@renderer/components/theme/canvas-editor-model";
+import { describeAppearance } from "@renderer/components/theme/canvas-editor-model";
 import { ThemeComboBox } from "@renderer/components/theme/theme-combo-box";
 import {
   projectTerminalChoice,
@@ -122,30 +118,26 @@ function projectScope(project: Project) {
 }
 
 /**
- * This project's mode and its own gradient — the Configure twin of the global
- * page's "App theme".
+ * This project's mode and its own gradient — the SAME PICKER the global page
+ * mounts, wearing this project's scope.
  *
- * ONE SECTION, TWO SCOPES, and that is the whole subtlety. The two settings stay
- * genuinely independent: a project may pin dark while inheriting the gradient,
- * or take its own gradient and still follow the app-wide mode, and collapsing
- * them onto one Inherit/Custom control would make three of those four states
- * unreachable. So each row owns its own scope switch instead of the section
- * owning one for both — the rule this page follows everywhere is that the scope
- * control sits at the level of the thing it scopes, which for Editor and
- * Terminal is the section (one surface each) and here is the row.
+ * ONE SECTION, TWO SCOPES, and that is the whole subtlety. The two settings
+ * stay genuinely independent: a project may pin dark while inheriting the
+ * gradient, or take its own gradient and still follow the app-wide mode.
  *
- * Same tri-state as every other surface on this page, and the same rule behind
- * it: **Custom** opens on what the project is ALREADY wearing — the app-wide
- * value — so the switch changes what the choice means without changing what is
- * on screen. **Inherit** clears the column rather than storing a marker, so a
- * project that has been reset reads exactly like one never touched. For mode,
- * Custom pins whatever is currently inherited, `auto` included: "follows the
- * system, in this project only" is a real choice and not the same as inheriting
- * an `auto` that could later be changed app-wide.
+ * TOUCHING THE PICKER IS THE OVERRIDE — there is no "Give this project its
+ * own" gate to press first (that was exactly the enter-a-mode step
+ * `kit/override.tsx` retired everywhere else). The editor mounts on the
+ * project's EFFECTIVE canvas (its own, else the app-wide one); the first edit
+ * previews from there and the commit writes the project row, which is what
+ * creates the override (`commitPreview` → `setProjectCanvas`). Divergence is
+ * then said once per scope, in the override grammar: the mode's revert rides
+ * the pad chip beside the control it reverts, and the canvas gets one quiet
+ * row below the editor that EXISTS only while a project canvas does.
  *
- * The editor's own preview mechanism is scope-aware, so a drag here paints this
- * window and commits to this project's `projects` row — the global canvas is
- * never touched by it.
+ * The editor's own preview mechanism is scope-aware, so a drag here paints
+ * this window and commits to this project's `projects` row — the global
+ * canvas is never touched by it.
  */
 function ProjectAppThemeSection({ project }: { project: Project }) {
   const own = useThemeStore((state) => state.projectOverride?.canvas ?? null);
@@ -154,8 +146,6 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   const globalAppearance = useThemeStore((state) => state.globalAppearance);
   const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
 
-  const choice = projectCanvasChoice(own);
-  const modeChoice = projectAppearanceChoice(appearance);
   // The scope descriptor is memoised for the same reason the global page's is a
   // module constant: the editor holds it in `useCallback` dependencies.
   const scope = React.useMemo<ThemeScope>(
@@ -175,54 +165,40 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
 
   return (
     <PrefSection title="App theme" icon={PaletteIcon}>
-      {/*
-       * No scope switch. Touching the control IS the override — choosing a
-       * value was always the act of overriding, and the Inherit/Custom pair
-       * in front of it was a mode you had to enter before you were allowed to
-       * mean it. What remains is a revert button on exactly the rows that
-       * have diverged (see kit/override.tsx).
-       */}
-      <PrefRow label="Mode" align="center" testId="project-appearance-mode-row">
-        <OverrideControl
-          label="Mode"
-          inheritedValue={inherited}
-          overridden={modeChoice.kind !== "inherit"}
-          onRevert={() => writeMode(null)}
-        >
-          <AppearanceModeChoice
-            value={modeChoice.kind === "inherit" ? globalAppearance : modeChoice.appearance}
-            testId="project-appearance-mode"
-            onChange={writeMode}
-          />
-        </OverrideControl>
-      </PrefRow>
+      <CanvasEditor
+        scope={scope}
+        canvas={own ?? globalCanvas}
+        resolved={resolved}
+        mode={
+          <OverrideControl
+            label="Mode"
+            inheritedValue={inherited}
+            overridden={appearance !== null}
+            onRevert={() => writeMode(null)}
+          >
+            <AppearanceModeChoice
+              iconOnly
+              value={appearance ?? globalAppearance}
+              testId="project-appearance-mode"
+              onChange={writeMode}
+            />
+          </OverrideControl>
+        }
+      />
 
-      <PrefRow label="Canvas" align="center" testId="project-appearance-canvas-row">
-        <OverrideControl
-          label="Canvas"
-          inheritedValue="the app-wide canvas"
-          overridden={choice.kind !== "inherit"}
-          onRevert={() => {
-            void useThemeStore.getState().setProjectCanvas(project.id, null);
-          }}
-        >
-          <Button
-            size="sm"
-            variant="outline"
-            data-testid="project-appearance-canvas-mode"
-            onClick={() => {
-              void useThemeStore.getState().setProjectCanvas(project.id, globalCanvas);
+      {own === null ? null : (
+        <PrefRow label="Canvas" align="center" testId="project-appearance-canvas-row">
+          <OverrideControl
+            label="Canvas"
+            inheritedValue="the app-wide canvas"
+            overridden
+            onRevert={() => {
+              void useThemeStore.getState().setProjectCanvas(project.id, null);
             }}
           >
-            {choice.kind === "inherit" ? "Give this project its own" : "Editing this project's"}
-          </Button>
-        </OverrideControl>
-      </PrefRow>
-
-      {choice.kind === "inherit" ? null : (
-        <div className="pt-2">
-          <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />
-        </div>
+            <span className="text-ui text-muted-foreground">This project&rsquo;s own</span>
+          </OverrideControl>
+        </PrefRow>
       )}
     </PrefSection>
   );

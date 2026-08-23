@@ -6,7 +6,7 @@
  * of nine is a list you read top to bottom every time; three groups of three is
  * a structure you learn once.
  *
- * `keywords` is hand-maintained and guarded — `vc111-settings-search.mjs` walks
+ * `keywords` is hand-maintained and guarded — `settings-search-smoke.mjs` walks
  * every row label on both surfaces and fails if one cannot be reached from rail
  * search. Keep it green when you add rows.
  */
@@ -107,6 +107,12 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "font family",
             "font size",
             "config file",
+            // The canvas editor's own row labels.
+            "colours",
+            "colors",
+            "primary",
+            "swatch",
+            "swatches",
           ],
           content: (
             <>
@@ -160,10 +166,6 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "catalog",
             "signed in",
             "available to connect",
-            "accounts",
-            "project chats",
-            "ticket sessions",
-            "utility",
           ],
           content: <ModelAccessSettings autoSignInProviderId={signInProviderId} />,
         },
@@ -185,7 +187,6 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "zed",
             "external apps",
             "open in",
-            "open files in",
             "open files in",
             "terminal",
             "external",
@@ -244,21 +245,21 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
           key: "about",
           label: "About",
           icon: InfoIcon,
+          // No harness keywords: the inventory left the visible pane (it was
+          // multi-harness-era diagnosis, and it lives in the copy report now).
           keywords: [
             "version",
             "diagnostics",
             "doctor",
             "cli",
-            "harness",
-            "harnesses",
             "health",
             "path",
+            "fix",
             "re-check",
             "copy",
             "copy report",
             "report",
             "support",
-            "claude code",
           ],
           content: <AboutPane />,
         },

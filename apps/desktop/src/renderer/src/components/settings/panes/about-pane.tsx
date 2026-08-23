@@ -1,5 +1,6 @@
 /**
- * Settings → About: is this install working, and what is it made of.
+ * Settings → About: is this install working — one line — and the report we
+ * ask for when it is not.
  *
  * ABSORBS THREE CATEGORIES. "CLI", "Harness Runtimes" and the Doctor were
  * separate rail entries, and two of them had nothing to change — a settings
@@ -7,27 +8,21 @@
  * not worth reading. What they had in common is that they are all *facts about
  * this install*, which is what About is.
  *
- * The shape inverts the old one. `cli-settings.tsx` listed every check it ran,
- * pass and fail alike, at equal weight — so "everything is fine" and "two
- * things are broken" drew the same wall of rows. Here the healthy case is one
- * line, anything wrong is a fault with its remedy beside it, and the raw
- * measurements are behind a disclosure for whoever wants them.
- *
- * `cli-status-model.ts` already computes a per-check remedy, so the fault list
- * is a fold over what it returns rather than a second opinion about it.
+ * WHAT A USER SEES vs WHAT SUPPORT GETS is the whole design now. The healthy
+ * case is one line. A fault shows its headline and the one thing to do about
+ * it — the remedy when the check computed one — plus a Fix button that runs
+ * main's idempotent repair. Everything else (PATHs, socket paths, per-check
+ * measurements, the harness inventory) lives ONLY in the copy report, because
+ * that material is for us: diagnosing why an install is broken is our job, and
+ * a settings page reciting it at the user was asking them to do it. The
+ * harness inventory in particular was legacy of the multi-harness terminal
+ * days — an inventory nothing on this page can change.
  */
 import * as React from "react";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { errorMessage, type DoctorCheck } from "@volli/shared";
 
 import { useHarnessListingsState } from "@renderer/components/pages/harness-picker";
-import {
-  HealthPanel,
-  ItemRow,
-  PrefSection,
-  Provenance,
-  type Fault,
-} from "@renderer/components/settings/kit";
+import { HealthPanel, type Fault } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -115,7 +110,7 @@ export function AboutPane() {
   }, [runDoctor]);
 
   // Only what is WRONG becomes a fault. A passing check is not news, and the
-  // measurements behind it are one disclosure away.
+  // measurements behind it live in the copy report.
   /**
    * Warning-toned STATUS rows are faults too, and the split comes from
    * `cliStatusDisclosure` (VC-64) rather than being re-derived here.
@@ -124,9 +119,12 @@ export function AboutPane() {
    * decides the headline while a warning discovered by detection sits inside a
    * collapsed disclosure, so the panel can say "Everything's working" over a
    * hidden row that says the CLI is not on PATH. Folding them into one fault
-   * list means the headline counts everything wrong, and — because the same
-   * function hands back `detailRows` — a promoted row is not ALSO repeated in
-   * the details behind it.
+   * list means the headline counts everything wrong.
+   *
+   * A fault's detail is the REMEDY when the check computed one, never
+   * `detail → remedy` glued together: the detail half is a measurement (a
+   * path, a symlink target), which is diagnosis — our job, and already in the
+   * copy report. What the user needs on screen is the one thing to do.
    */
   const { attentionRows } = React.useMemo(() => cliStatusDisclosure(rows), [rows]);
 
@@ -137,7 +135,7 @@ export function AboutPane() {
         .map((check) => ({
           id: check.id,
           headline: check.title,
-          detail: check.remedy ? `${check.detail} → ${check.remedy}` : check.detail,
+          detail: check.remedy ?? check.detail,
         })),
       ...attentionRows.map((row) => ({
         id: `cli-status:${row.key}`,
@@ -167,62 +165,70 @@ export function AboutPane() {
   const checking = reportAvailability === "loading";
   const healthy = faults.length === 0;
 
+  /**
+   * One press that repairs instead of a wall that explains. `fix: true` runs
+   * main's idempotent repair (regenerate + reinstall) before re-probing, and
+   * the status read re-runs after it so the fault list reflects the repaired
+   * install rather than the one that earned the button.
+   */
+  const [fixing, setFixing] = React.useState(false);
+  const runFix = React.useCallback(async () => {
+    setFixing(true);
+    setDoctorState("loading");
+    try {
+      const result = await window.api.cli.doctor({ fix: true });
+      if (!result.ok) {
+        setDoctorState("unavailable");
+        toastError(`Couldn't repair this install: ${result.error}`);
+        return;
+      }
+      setChecks(result.checks);
+      setDoctorState("ready");
+      await load();
+    } catch (error) {
+      setDoctorState("unavailable");
+      toastError(`Couldn't repair this install: ${errorMessage(error)}`);
+    } finally {
+      setFixing(false);
+    }
+  }, [load]);
+
   return (
-    <>
-      <HealthPanel
-        healthy={healthy}
-        headline={
-          healthy
-            ? "Everything's working"
-            : `${faults.length} thing${faults.length === 1 ? "" : "s"} need attention`
-        }
-        faults={faults}
-        actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <CopyReportDialog report={report} availability={reportAvailability} />
+    <HealthPanel
+      healthy={healthy}
+      headline={
+        healthy
+          ? "Everything's working"
+          : `${faults.length} thing${faults.length === 1 ? "" : "s"} need attention`
+      }
+      faults={faults}
+      actions={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <CopyReportDialog report={report} availability={reportAvailability} />
+          {healthy ? null : (
             <Button
               size="sm"
-              variant="outline"
-              disabled={checking}
-              onClick={() => {
-                harnesses.refresh();
-                void load();
-                void runDoctor();
-              }}
+              variant="secondary"
+              disabled={checking || fixing}
+              onClick={() => void runFix()}
             >
-              {checking ? "Checking…" : "Re-check"}
+              {fixing ? "Fixing…" : "Fix"}
             </Button>
-          </div>
-        }
-      />
-
-      {/*
-       * Harness INVENTORY — small enough to stay a list. `DataTable`'s rule is
-       * that a table is for a collection that GROWS; this is three or four
-       * entries and a table would be ceremony around them.
-       *
-       * Every harness is listed, including ones with nothing to configure. A
-       * list pruned to the configurable one would quietly claim this host can
-       * launch exactly one harness.
-       */}
-      <PrefSection
-        title="Harnesses"
-        icon={CpuIcon}
-        hint={<>The agents Volli can run. Choose one per project in Configure.</>}
-      >
-        {listings.map((listing) => (
-          <ItemRow
-            key={listing.id}
-            name={listing.label}
-            meta={listing.command}
-            badges={
-              <Provenance mine={listing.origin !== "built-in"}>
-                {listing.origin === "built-in" ? "Built-in" : "Registered"}
-              </Provenance>
-            }
-          />
-        ))}
-      </PrefSection>
-    </>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={checking || fixing}
+            onClick={() => {
+              harnesses.refresh();
+              void load();
+              void runDoctor();
+            }}
+          >
+            {checking ? "Checking…" : "Re-check"}
+          </Button>
+        </div>
+      }
+    />
   );
 }

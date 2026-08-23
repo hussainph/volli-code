@@ -58,6 +58,13 @@ export interface Column<T> {
    * Two omitted columns split the remainder evenly. Use percentages for a ratio.
    */
   width?: string;
+  /**
+   * `end` is for NUMBERS and for hidden-header glyph columns — the two cases
+   * where right-alignment carries meaning (digits line up; actions hug the
+   * table's edge). A worded column of controls stays `start` like its
+   * neighbours: one right-aligned header in a row of left-aligned ones reads
+   * as a mistake, not as a convention.
+   */
   align?: "start" | "end";
   /** Header text is hidden but still read. For an actions or toggle column. */
   headerHidden?: boolean;
@@ -82,6 +89,7 @@ export function DataTable<T>({
   keyOf,
   columns,
   search,
+  query,
   placeholder = "Search",
   filter,
   bulk,
@@ -96,6 +104,16 @@ export function DataTable<T>({
   columns: readonly Column<T>[];
   /** The haystack. Omit for a table that isn't searchable. */
   search?: (item: T) => string;
+  /**
+   * A CONTROLLED query, for a section that parks its {@link TableSearch} on
+   * the header rail instead. When set, the table draws no search field of its
+   * own — two fields filtering one table would fight — and the toolbar only
+   * renders if a filter or bulk control still needs the row. This exists for
+   * the table whose ONLY control is search: a toolbar row holding one lone
+   * field under an otherwise-empty header rail read as a dead row, when the
+   * header had exactly one action slot going spare.
+   */
+  query?: string;
   placeholder?: string;
   filter?: TableFilter;
   /**
@@ -126,13 +144,14 @@ export function DataTable<T>({
   /** The table's accessible name. */
   label: string;
 }) {
-  const [query, setQuery] = React.useState("");
+  const [ownQuery, setOwnQuery] = React.useState("");
+  const effectiveQuery = query ?? ownQuery;
 
   const matched = React.useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = effectiveQuery.trim().toLowerCase();
     if (!needle || !search) return items;
     return items.filter((item) => search(item).toLowerCase().includes(needle));
-  }, [items, query, search]);
+  }, [items, effectiveQuery, search]);
 
   // Cap AFTER filtering, so narrowing the search always reaches a withheld row.
   const shown = matched.length > maxItems ? matched.slice(0, maxItems) : matched;
@@ -148,41 +167,38 @@ export function DataTable<T>({
 
   return (
     <div className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
-      {search || filter || bulk ? (
-        <div className="flex items-center gap-2">
-          {search ? (
-            <InputGroup className="min-w-0 flex-1">
-              <InputGroupAddon>
-                <MagnifyingGlassIcon />
-              </InputGroupAddon>
-              <InputGroupInput
-                type="search"
-                value={query}
-                aria-label={placeholder}
-                placeholder={placeholder}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </InputGroup>
+      {(search && query === undefined) || filter || bulk ? (
+        // Search ANCHORS THE LEFT, scope controls sit right — the toolbar
+        // spans the table it governs, like the column row under it. It was
+        // briefly `justify-end`, which just moved the dead space to the left
+        // of the row. The field itself is the compact w-56 object the provider
+        // list carries on its header rail: one search grammar everywhere,
+        // never the full-width bar that read as the table's first row.
+        <div className="flex items-center justify-between gap-2">
+          {search && query === undefined ? (
+            <TableSearch value={ownQuery} placeholder={placeholder} onChange={setOwnQuery} />
           ) : (
-            <div className="flex-1" />
+            <span />
           )}
-          {/* ONE control replaces N pills. The provenance a reader wanted to
-              scan for is now something they can filter to. */}
-          {filter ? (
-            <Select value={filter.value} onValueChange={filter.onChange}>
-              <SelectTrigger size="sm" className={CONTROL_W.md} aria-label={filter.label}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {filter.options.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          {bulk?.(matched)}
+          <div className="flex items-center gap-2">
+            {/* ONE control replaces N pills. The provenance a reader wanted to
+                scan for is now something they can filter to. */}
+            {filter ? (
+              <Select value={filter.value} onValueChange={filter.onChange}>
+                <SelectTrigger size="sm" className={CONTROL_W.md} aria-label={filter.label}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {filter.options.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+            {bulk?.(matched)}
+          </div>
         </div>
       ) : null}
 
@@ -271,9 +287,42 @@ export function DataTable<T>({
         </p>
       ) : null}
       <p aria-live="polite" className="sr-only">
-        {query.trim() ? `${shown.length} of ${matched.length} shown` : ""}
+        {effectiveQuery.trim() ? `${shown.length} of ${matched.length} shown` : ""}
       </p>
     </div>
+  );
+}
+
+/**
+ * The one search field a collection gets — compact, iconed, w-56.
+ *
+ * Rendered by the table's own toolbar normally; rendered by the SECTION, on
+ * its header rail beside the title, when search is the table's only control
+ * (pass the value back down through `DataTable`'s `query`). Either way it is
+ * this component, so the two positions can never drift apart in shape.
+ */
+export function TableSearch({
+  value,
+  placeholder = "Search",
+  onChange,
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <InputGroup className="w-56">
+      <InputGroupAddon>
+        <MagnifyingGlassIcon />
+      </InputGroupAddon>
+      <InputGroupInput
+        type="search"
+        value={value}
+        aria-label={placeholder}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </InputGroup>
   );
 }
 
@@ -285,11 +334,24 @@ export function DataTable<T>({
  * cannot recover is worse than a wrapped one. This is the content itself on
  * hover, not a tutorial tooltip.
  */
-export function Cell({ children, muted }: { children: React.ReactNode; muted?: boolean }) {
+export function Cell({
+  children,
+  muted,
+  strong,
+}: {
+  children: React.ReactNode;
+  muted?: boolean;
+  /**
+   * The row's identity column — the one word a reader scans the table BY.
+   * One weight step, nothing else: at equal weight the name and its
+   * description read as one grey run and the eye has no landing point per row.
+   */
+  strong?: boolean;
+}) {
   return (
     <span
       title={typeof children === "string" ? children : undefined}
-      className={cn("min-w-0 truncate", muted && "text-muted-foreground")}
+      className={cn("min-w-0 truncate", muted && "text-muted-foreground", strong && "font-medium")}
     >
       {children}
     </span>

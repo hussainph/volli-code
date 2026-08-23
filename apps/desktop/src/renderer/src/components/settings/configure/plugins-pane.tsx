@@ -51,7 +51,7 @@ export function PluginsPane() {
           rows="fill"
           empty="No plugins installed."
           columns={[
-            { key: "name", header: "Plugin", cell: (plugin) => <Cell>{plugin.name}</Cell> },
+            { key: "name", header: "Plugin", cell: (plugin) => <Cell strong>{plugin.name}</Cell> },
             {
               key: "contents",
               header: "Contents",

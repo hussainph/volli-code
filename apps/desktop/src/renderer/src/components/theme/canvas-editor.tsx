@@ -1,10 +1,8 @@
 /**
  * The canvas editor — the one authoring surface for what the window is painted
- * with, mounted at both scopes.
- *
- * Handoff: another agent paused you and stripped the tutorial UI copy from
- * here (row descriptions, tooltips, contrast lectures). Labels + controls only
- * from now on — AGENTS.md / CLAUDE.md ("UI copy: let controls talk").
+ * with, mounted at both scopes. Labels + controls only, per AGENTS.md /
+ * CLAUDE.md ("UI copy: let controls talk"): no row descriptions, no tutorial
+ * tooltips, no contrast lectures.
  *
  * Ported from `lab/scratches/canvas.tsx`, which is where the interaction was
  * designed: the pad is a MINIMAP (a stop's position on it is where its pool
@@ -20,22 +18,16 @@
  * card tint, surface spread, shadow, text weight and the seam are settled and
  * now live in `ARC_SETTLED`, so they are no longer settings.
  *
- * ## Two controls, deliberately not the same control
+ * ## The two faders
  *
- * Vibrancy is a TRACK and grain is a KNOB, and that is a decision rather than a
- * leftover — a rushed first port flattened both into `<input type="range">` and
- * lost the reason each one has its shape.
- *
- *  - Vibrancy is the platform's own slider. It has a position along a line, so
- *    clicking anywhere on the track to jump there is the fastest way to set it,
- *    and the native control brings that, the keyboard and both modes' rendering
- *    for free.
- *  - Grain is {@link GrainDial}, and its face carries the actual grain texture
- *    at its current amount. There is no other way to judge a value this subtle
- *    at this size, and showing a texture needs a surface to show it on. A knob
- *    has only an angle around it, not a position under the pointer, so it is
- *    grabbed rather than tapped: a press that never travels does nothing at all
- *    instead of jumping the value to wherever it landed.
+ * Vibrancy and grain are MATCHING VERTICAL FADERS flanking the pad — an owner
+ * decision that reversed the earlier track-and-knob split, trading the grain
+ * dial's textured face for a symmetric instrument (the pad wears the live
+ * grain layer now, so the readout the face carried was not lost). Both are
+ * the platform's own slider, stood upright ({@link WaveSlider}): a unit value
+ * has a position along a line, so clicking anywhere on the track to jump
+ * there is the fastest way to set it, and the native control brings that, the
+ * keyboard and both modes' rendering for free.
  *
  * ## Preview
  *
@@ -58,19 +50,19 @@
  */
 
 import * as React from "react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { DotsNineIcon } from "@phosphor-icons/react/dist/csr/DotsNine";
+import { DropHalfIcon } from "@phosphor-icons/react/dist/csr/DropHalf";
 import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
 import { MoonStarsIcon } from "@phosphor-icons/react/dist/csr/MoonStars";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
   addStop,
   canvasBackground,
-  effectiveStopHexes,
   grainLayer,
   MAX_STOPS,
   moveStop,
@@ -84,24 +76,13 @@ import {
 } from "@volli/shared";
 
 import {
-  canvasContrastReport,
   CANVAS_SWATCH_PAGES,
-  dialAngle,
-  dialPoint,
-  DIAL_MAX_ANGLE,
-  DIAL_MIN_ANGLE,
   droppedStopIndex,
-  easedVibrancy,
-  grainForAngle,
   normalizeStopHex,
   padAnchor,
-  percentLabel,
-  pointerBearing,
   swatchPageOf,
-  unitStepForKey,
   UNIT_STEP,
   UNIT_STEP_COARSE,
-  type CanvasContrastReport,
 } from "@renderer/components/theme/canvas-editor-model";
 import {
   SLIDER_SQUIGGLE_AMPLITUDE,
@@ -119,7 +100,25 @@ import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 
 /** 16:10 — the app's real default window (1280×800). See the module header. */
 const PAD_ASPECT = "16 / 10";
+const PAD_RATIO = 16 / 10;
 const PAD_DOT_SPACING = 14;
+
+/**
+ * The foot of a fader column: the glyph that names it (size-3.5 → 14px) plus
+ * the gap-2 above it. Part of the pad-height equation below — change the
+ * icon size or the gap and this must move with it.
+ */
+const FADER_FOOT = 22;
+
+/**
+ * The pad's width, DERIVED from the fader column: at 16:10, a pad this wide
+ * is exactly as tall as track + foot, so the two columns flanking it run
+ * precisely the height of the picture they tune — matched by construction,
+ * not by two numbers that happen to agree today. The FOOT is in the sum
+ * because it was once left out: the track alone matched the pad, and the
+ * icon shoved the whole column up past the section rule above.
+ */
+const PAD_WIDTH = (SLIDER_SQUIGGLE_WIDTH + FADER_FOOT) * PAD_RATIO;
 
 /**
  * The lab's orb sizes, and a promotion that is a 1.6× jump.
@@ -134,27 +133,6 @@ const PRIMARY_ORB_SIZE = 44;
 
 /** Travel under which a press is a click (promote, or nothing) rather than a drag. */
 const CLICK_SLOP = 4;
-
-/**
- * Mid-grey, under both the grain dial's face and the vibrancy chip.
- *
- * A literal rather than a token, and it is the one place in this file that
- * refuses one: the grain layer is BLACK noise and the dial's notch is WHITE, so
- * the surface underneath has to be something each of them can be seen on. Every
- * neutral token is near-paper in light or near-page in dark, and both ends lose
- * one of the two.
- */
-const GRAIN_BACKDROP = "#8a8a8a";
-
-/** The dial, and the ring of scale dots around it. */
-const DIAL_SIZE = 56;
-const DIAL_DOTS = 16;
-const DIAL_DOT_RADIUS = 25.5;
-const DIAL_NOTCH_INNER = 12;
-const DIAL_NOTCH_OUTER = 19;
-/** The scale dots, lit and unlit — the lab's alpha pair, carried over. */
-const DIAL_DOT_LIT = 0.85;
-const DIAL_DOT_UNLIT = 0.25;
 
 /** The three modes, in the order the control lists them. */
 const APPEARANCE_OPTIONS = [
@@ -174,10 +152,13 @@ const APPEARANCE_OPTIONS = [
 export function AppearanceModeChoice({
   value,
   testId,
+  iconOnly = false,
   onChange,
 }: {
   value: Appearance;
   testId: string;
+  /** Sun · moon · monitor with no words — the form it takes floating on the pad. */
+  iconOnly?: boolean;
   onChange(next: Appearance): void;
 }) {
   return (
@@ -186,6 +167,7 @@ export function AppearanceModeChoice({
       testId={testId}
       value={value}
       options={APPEARANCE_OPTIONS}
+      iconOnly={iconOnly}
       onChange={onChange}
     />
   );
@@ -213,15 +195,11 @@ interface GrabOffset {
  *
  * `CLICK_SLOP` is what makes a press and a drag two gestures rather than one:
  * nothing moves until the pointer has travelled that far, and a release before
- * it does is reported to `onClick` instead. Both users of this hook want that
- * and want it for the same reason, which is why there is one hook:
- *
- *  - an orb is PROMOTED by a press and MOVED by a drag, two things one control
- *    has to be able to do;
- *  - the dial has nothing for a press to mean, so `onClick` is omitted and a
- *    press that never travels does nothing — which is the point. A knob has an
- *    angle around it and no position under the pointer, so jumping the value to
- *    wherever a finger landed would be answering a question nobody asked.
+ * it does is reported to `onClick` instead — an orb is PROMOTED by a press and
+ * MOVED by a drag, two things one control has to be able to do. (The grain
+ * dial was this hook's second user until the owner traded it for a fader;
+ * `onClick` stays optional because omitting it is what "a press means nothing
+ * here" looks like.)
  *
  * `onSettle` fires once at the end of any gesture that actually moved, which is
  * the editor's single write per drag — every intermediate frame is a preview.
@@ -390,7 +368,14 @@ function GradientPad({
   onSettle(): void;
 }) {
   const padRef = React.useRef<HTMLDivElement>(null);
-  const gradient = React.useMemo(() => canvasBackground(canvas, resolved), [canvas, resolved]);
+  // The grain rides the pad, layered over the gradient — since the dial's
+  // textured face went, this is where the grain fader's value is SEEN (the
+  // pad is a minimap of the window, and the window wears grain too).
+  const gradient = React.useMemo(() => {
+    const painted = canvasBackground(canvas, resolved);
+    const grain = grainLayer(canvas.grain);
+    return grain === null ? painted : `${grain}, ${painted}`;
+  }, [canvas, resolved]);
 
   return (
     <div
@@ -432,81 +417,72 @@ function GradientPad({
   );
 }
 
-/** The stop chips — authored colour, what it paints as, and which one leads. */
-function StopRow({
+/**
+ * A quiet translucent chip for a control FLOATING ON THE PAD.
+ *
+ * The pad paints the user's own gradient, which can be any colour at all, so
+ * a floating control cannot borrow the pad as its surface — white glyphs
+ * vanish on a pale canvas, dark ones on a deep canvas (the orbs' two-tone
+ * ring exists for the same reason). The chip brings its own token surface at
+ * partial opacity, so the controls read on anything while the canvas still
+ * shows through.
+ */
+function PadChip({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-background/60 p-0.5 backdrop-blur-sm">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * −/+ — how many colours the canvas carries, floating at the pad's foot.
+ *
+ * On the pad rather than in a row of their own (the Arc arrangement): they
+ * add and remove ORBS, and the orbs are right there. The hex chips that used
+ * to restate every stop are gone with the move — the orbs already show the
+ * colours, promotion is a press on an orb, and the primary's hex lives in
+ * the field below.
+ */
+function StopCountControls({
   canvas,
-  resolved,
-  onPromote,
   onAdd,
   onRemove,
 }: {
   canvas: Canvas;
-  resolved: ResolvedAppearance;
-  onPromote(index: number): void;
   onAdd(): void;
   onRemove(): void;
 }) {
-  const painted = React.useMemo(() => effectiveStopHexes(canvas, resolved), [canvas, resolved]);
   const dropped = droppedStopIndex(canvas);
-
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {canvas.stops.map((stop, index) => {
-        const primary = index === canvas.primaryIndex;
-        return (
-          <button
-            // Slot is identity — see the pad's orbs.
-            // oxlint-disable-next-line react/no-array-index-key
-            key={index}
-            type="button"
-            onClick={() => onPromote(index)}
-            aria-pressed={primary}
-            aria-label={`Colour ${index + 1}, ${stop.hex}${primary ? ", primary" : ""}`}
-            data-testid={`canvas-stop-chip-${index}`}
-            className="flex items-center gap-1 rounded-full border border-border py-1 pr-2 pl-1 font-mono text-label transition-colors hover:bg-accent aria-pressed:border-ring aria-pressed:bg-muted"
-          >
-            <span
-              aria-hidden
-              className="size-3 rounded-full ring-1 ring-black/30"
-              style={{ background: painted[index] }}
-            />
-            <span className={primary ? "text-foreground" : "text-muted-foreground"}>
-              {stop.hex}
-            </span>
-            {primary ? <span className="text-primary-text uppercase">primary</span> : null}
-          </button>
-        );
-      })}
-
-      <div className="ml-auto flex items-center gap-1">
-        <Button
-          variant="outline"
-          size="icon-sm"
-          onClick={onRemove}
-          disabled={dropped === null}
-          // Names which one goes: the last stop, unless the last stop is the
-          // primary — then the one below it, so "−" never recolours the window.
-          aria-label={dropped === null ? "Remove a colour" : `Remove colour ${dropped + 1}`}
-          title={dropped === null ? "A canvas needs at least one colour" : undefined}
-        >
-          <MinusIcon />
-        </Button>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          onClick={onAdd}
-          disabled={canvas.stops.length >= MAX_STOPS}
-          aria-label="Add a colour"
-          title={
-            canvas.stops.length >= MAX_STOPS
-              ? `A canvas carries at most ${MAX_STOPS} colours`
-              : undefined
-          }
-        >
-          <PlusIcon />
-        </Button>
-      </div>
-    </div>
+    <PadChip>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={onRemove}
+        disabled={dropped === null}
+        // Names which one goes: the last stop, unless the last stop is the
+        // primary — then the one below it, so "−" never recolours the window.
+        aria-label={dropped === null ? "Remove a colour" : `Remove colour ${dropped + 1}`}
+        title={dropped === null ? "A canvas needs at least one colour" : undefined}
+      >
+        <MinusIcon />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={onAdd}
+        disabled={canvas.stops.length >= MAX_STOPS}
+        aria-label="Add a colour"
+        title={
+          canvas.stops.length >= MAX_STOPS
+            ? `A canvas carries at most ${MAX_STOPS} colours`
+            : undefined
+        }
+      >
+        <PlusIcon />
+      </Button>
+    </PadChip>
   );
 }
 
@@ -583,42 +559,48 @@ function PrimaryColourRow({
 
   const chevron = "text-muted-foreground";
   return (
-    <div className="flex items-center gap-2">
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={() => turn(-1)}
-        aria-label="Previous swatches"
-        className={chevron}
-      >
-        <CaretLeftIcon />
-      </Button>
-      {/* FIXED-SIZE chips, not a stretching grid. `flex-1` with `aspect-square
-          w-full` squares meant each swatch was a ninth of whatever width the
-          row was given — on the workbench measure that made nine 85px discs
-          dominating the pane. A colour chip is a chip at any window size. */}
-      <div role="group" aria-label="Primary colour presets" className="flex flex-1 gap-1.5">
-        {CANVAS_SWATCH_PAGES[page].map((swatch) => (
-          <button
-            key={swatch}
-            type="button"
-            onClick={() => onPick(swatch)}
-            aria-label={swatch}
-            aria-pressed={swatch === normalized}
-            style={{ background: swatch }}
-            className="size-6 shrink-0 rounded-full outline-offset-2 ring-1 ring-black/10 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-ring"
-          />
-        ))}
+    <div className="flex w-full items-center justify-between gap-3">
+      {/* ONE TIGHT CLUSTER: chevron, swatches, chevron, no air between them —
+          a pager whose arrows drift from its pages reads as two controls. The
+          hex field takes the row's far end; the space lives between the two
+          clusters, not inside either. */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => turn(-1)}
+          aria-label="Previous swatches"
+          className={chevron}
+        >
+          <CaretLeftIcon />
+        </Button>
+        {/* FIXED-SIZE chips, not a stretching grid. `flex-1` with
+            `aspect-square w-full` squares meant each swatch was a ninth of
+            whatever width the row was given — nine 85px discs dominating the
+            pane. A colour chip is a chip at any window size. */}
+        <div role="group" aria-label="Primary colour presets" className="flex gap-2">
+          {CANVAS_SWATCH_PAGES[page].map((swatch) => (
+            <button
+              key={swatch}
+              type="button"
+              onClick={() => onPick(swatch)}
+              aria-label={swatch}
+              aria-pressed={swatch === normalized}
+              style={{ background: swatch }}
+              className="size-7 shrink-0 rounded-full outline-offset-2 ring-1 ring-black/10 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-ring"
+            />
+          ))}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => turn(1)}
+          aria-label="More swatches"
+          className={chevron}
+        >
+          <CaretRightIcon />
+        </Button>
       </div>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={() => turn(1)}
-        aria-label="More swatches"
-        className={chevron}
-      >
-        <CaretRightIcon />
-      </Button>
       <Input
         value={draft}
         aria-label="Primary colour hex"
@@ -697,45 +679,44 @@ function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string 
 }
 
 /**
- * Vibrancy, as the platform's own slider.
+ * A unit value as a VERTICAL wave fader — one on each side of the pad.
  *
- * A track is the right shape for it — the value has a position along a line, so
- * clicking anywhere on it to jump there is the fastest way to set it, and the
- * native control brings that, the keyboard and both modes' rendering for free.
+ * Vibrancy and grain flank the canvas they tune (the owner's call, trading
+ * the grain dial for symmetry): two of the same control bracketing the
+ * picture, rising together, instead of one track and one knob sharing a row
+ * under it. The wave still earns its place on both — its amplitude ramps
+ * with the value, and "how vivid" and "how grainy" are both intensities the
+ * groove can say without a word of copy. What the dial's textured face used
+ * to show, the PAD now shows: it wears the live grain layer, so the fader
+ * previews on the picture itself.
  *
- * The chip beside it is what the lab's hand-drawn track was for: a value this
- * subtle cannot be judged from a number, so the control shows what it is
- * setting.
- *
- * `--slider-fill` is how much of the track is filled; globals.css's
- * `::-webkit-slider-runnable-track` rule reads it. The track is declared there
- * rather than left to `accent-color`, which cannot paint an unfilled half that
- * follows the appearance — see that rule.
- *
- * THE TRACK IS A WAVE, the Arc-lineage form VC-57 authored and VC-82 took out
- * of the effort slider. Not a wave ON the track: the native paint is suppressed
- * in globals.css for this one input and the groove is drawn here, so the thing
- * you drag along IS the wave. Its amplitude ramps with the value, which is what
- * earns it this control rather than any other — "vibrancy" is how vivid, and a
- * groove that stands taller as it rises says that without a word of copy.
- *
- * The wave is part of THIS control, not an option on it — vibrancy is the only
- * unit value in the editor, and a wave on a slider that does not mean "how
- * vivid" would be decoration rather than report. If a second unit slider ever
- * lands here, split the wave out with it rather than reaching for a flag.
+ * BUILT HORIZONTAL, STOOD UP BY ONE ROTATION. The seam arithmetic, the
+ * native input's value-from-position mapping and the wave path all live on
+ * one x-axis; rotating the finished control keeps every one of them true
+ * (the browser inverts the transform for hit-testing), where a hand-built
+ * vertical twin would be a second copy of the seam math to drift. `-rotate-90`
+ * points the value UP, and the native input keeps click-to-jump, the
+ * keyboard (both arrow axes work on a range) and the focus ring for free —
+ * its own paint stays suppressed in globals.css for this one input.
  */
-function UnitSlider({
+function WaveSlider({
   id,
   label,
+  icon: Icon,
   value,
-  chip,
   onInput,
   onSettle,
 }: {
-  id: string;
+  id?: string;
   label: string;
+  /**
+   * The fader's one glyph, at its foot — mixer-style. Two identical waves
+   * flanking the pad are only tellable apart by what stands at their feet,
+   * and a glyph says it without spending a word (the aria-label still names
+   * it for the reader; `title` names it for whoever hovers).
+   */
+  icon: PhosphorIcon;
   value: number;
-  chip: React.ReactNode;
   onInput(next: number): void;
   onSettle(): void;
 }) {
@@ -744,255 +725,60 @@ function UnitSlider({
   const seam = sliderSeam(value, SLIDER_SQUIGGLE_WIDTH, SLIDER_THUMB_WIDTH);
   const stand = sliderSquiggleScale(value);
   return (
-    <div className="flex items-center gap-4">
-      {chip}
-      <span className="relative inline-flex h-4 w-44 items-center">
-        <Wave stand={stand} ink="stroke-border-strong" />
-        <Wave
-          stand={stand}
-          ink="stroke-primary"
-          clip={`inset(0 ${SLIDER_SQUIGGLE_WIDTH - seam}px 0 0)`}
-        />
-        {/* The capsule, centred on the seam and overhanging the trough, which is
-            what makes it a fader handle rather than a dot on a line. */}
+    <span className="flex w-5 shrink-0 flex-col items-center gap-2">
+      {/* The upright box the layout sees: as tall as the fader is long. */}
+      <span className="relative inline-block w-5" style={{ height: SLIDER_SQUIGGLE_WIDTH }}>
+        {/* Length comes from the squiggle module, never a `w-*` class: the seam
+          clip and the thumb's travel are computed in that constant's space,
+          and a class beside it is how the two once drifted apart. */}
         <span
-          aria-hidden
-          style={{ left: seam }}
-          className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
-        />
-        {/* Last, so it takes the pointer: the platform's own control with its
+          className="absolute top-1/2 left-1/2 inline-flex h-5 -translate-x-1/2 -translate-y-1/2 -rotate-90 items-center"
+          style={{ width: SLIDER_SQUIGGLE_WIDTH }}
+        >
+          <Wave stand={stand} ink="stroke-border-strong" />
+          <Wave
+            stand={stand}
+            ink="stroke-primary"
+            clip={`inset(0 ${SLIDER_SQUIGGLE_WIDTH - seam}px 0 0)`}
+          />
+          {/* The capsule, centred on the seam and overhanging the trough, which is
+            what makes it a fader handle rather than a dot on a line. */}
+          <span
+            aria-hidden
+            style={{ left: seam }}
+            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
+          />
+          {/* Last, so it takes the pointer: the platform's own control with its
             paint suppressed, which keeps click-to-jump, the keyboard, and the
             focus ring while this file owns every pixel you can see. */}
-        <input
-          id={id}
-          type="range"
-          min={0}
-          max={1}
-          step={UNIT_STEP}
-          value={value}
-          aria-label={label}
-          data-slot="wave-slider"
-          onChange={(event) => onInput(Number(event.target.value))}
-          // One write per gesture: the drag and the key repeat are previews, and
-          // the release is the commit.
-          onPointerUp={onSettle}
-          onKeyUp={onSettle}
-          onBlur={onSettle}
-          className="absolute inset-0 w-full"
-        />
+          <input
+            id={id}
+            type="range"
+            min={0}
+            max={1}
+            step={UNIT_STEP}
+            value={value}
+            aria-label={label}
+            data-slot="wave-slider"
+            onChange={(event) => onInput(Number(event.target.value))}
+            // One write per gesture: the drag and the key repeat are previews, and
+            // the release is the commit.
+            onPointerUp={onSettle}
+            onKeyUp={onSettle}
+            onBlur={onSettle}
+            className="absolute inset-0 w-full"
+          />
+        </span>
+        {/* No percentage. The wave's own stand is the readout — a number
+            beside it was the control narrating itself. The native input still
+            reports its value to the reader. */}
       </span>
-      <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
-        {percentLabel(value)}
+      {/* `title` on a wrapping span — Phosphor's icon props carry no title of
+          their own, and the input above already names the fader for readers. */}
+      <span title={label} className="inline-flex">
+        <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       </span>
-    </div>
-  );
-}
-
-/**
- * Grain, as a rotary knob — ported from the lab, where it was designed.
- *
- * The face carries the grain texture at its CURRENT amount, and that is the
- * whole argument for the shape: grain at 6% and grain at 12% are not
- * distinguishable from a number or a thumb position, and the only honest readout
- * is the texture itself. A texture needs a surface, and a surface that is being
- * turned is a knob.
- *
- * The rest follows from that. The ring of dots is the progress the track would
- * otherwise show; the notch says which way the face is turned; and the gesture
- * is an ANGLE around the control rather than a position under the pointer, which
- * is why it takes the slopped press (see {@link useSlopDrag}) and the slider
- * beside it does not.
- */
-function GrainDial({
-  value,
-  onInput,
-  onSettle,
-}: {
-  value: number;
-  onInput(next: number): void;
-  onSettle(): void;
-}) {
-  const dialRef = React.useRef<HTMLDivElement>(null);
-
-  const handlers = useSlopDrag({
-    onDrag(event) {
-      const dial = dialRef.current;
-      if (dial === null) return;
-      onInput(
-        grainForAngle(
-          pointerBearing({
-            pointerX: event.clientX,
-            pointerY: event.clientY,
-            rect: dial.getBoundingClientRect(),
-          }),
-        ),
-      );
-    },
-    onSettle,
-  });
-
-  const turn = (event: React.KeyboardEvent): void => {
-    const next = unitStepForKey(event.key, value, event.shiftKey);
-    if (next === null) return;
-    event.preventDefault();
-    onInput(next);
-  };
-
-  const centre = DIAL_SIZE / 2;
-  const notchFrom = dialPoint(centre, dialAngle(value), DIAL_NOTCH_INNER);
-  const notchTo = dialPoint(centre, dialAngle(value), DIAL_NOTCH_OUTER);
-  const grain = grainLayer(value);
-
-  return (
-    <div
-      ref={dialRef}
-      {...handlers}
-      onKeyDown={turn}
-      onKeyUp={onSettle}
-      // The slider beside this one settles on blur too, and for a reason that
-      // applies here identically: focus leaving while an arrow key is still
-      // down sends the `keyup` to whatever took focus, so without this the
-      // grain preview stays painted and unwritten.
-      onBlur={onSettle}
-      role="slider"
-      tabIndex={0}
-      data-testid="canvas-grain-dial"
-      aria-label="Grain"
-      aria-valuemin={0}
-      aria-valuemax={1}
-      aria-valuenow={Number(value.toFixed(2))}
-      style={{ width: DIAL_SIZE, height: DIAL_SIZE }}
-      className="relative shrink-0 cursor-grab touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {/* The face, mid-grey in BOTH modes — see GRAIN_BACKDROP. The tile is
-          black noise and the notch above it is white, so this is the one
-          surface both can be read on. */}
-      <div
-        aria-hidden
-        style={{ background: grain === null ? GRAIN_BACKDROP : `${grain}, ${GRAIN_BACKDROP}` }}
-        className="absolute inset-[7px] rounded-full"
-      />
-      <svg
-        aria-hidden
-        width={DIAL_SIZE}
-        height={DIAL_SIZE}
-        viewBox={`0 0 ${DIAL_SIZE} ${DIAL_SIZE}`}
-        className="absolute inset-0"
-      >
-        {/* The dots sit on the CARD rather than on the face, so unlike the notch
-            they take the card's own ink and flip with it.
-
-            Lit and unlit are one colour at two opacities rather than two tokens.
-            Measured on the shipped canvas, `--foreground` and
-            `--muted-foreground` are close enough that the ring read as sixteen
-            identical dots — a progress indicator showing no progress. The gap
-            has to be an alpha gap, which is what the lab's own pair was. */}
-        {Array.from({ length: DIAL_DOTS }, (_, index) => {
-          const progress = index / (DIAL_DOTS - 1);
-          const at = dialPoint(
-            centre,
-            DIAL_MIN_ANGLE + (DIAL_MAX_ANGLE - DIAL_MIN_ANGLE) * progress,
-            DIAL_DOT_RADIUS,
-          );
-          return (
-            <circle
-              // The dot's index IS its position on the arc; there is nothing
-              // else to key on and nothing ever reorders.
-              // oxlint-disable-next-line react/no-array-index-key
-              key={index}
-              cx={at.x}
-              cy={at.y}
-              r={1.1}
-              fill="var(--foreground)"
-              fillOpacity={progress <= value ? DIAL_DOT_LIT : DIAL_DOT_UNLIT}
-            />
-          );
-        })}
-        {/* White in both modes, like Arc's. The notch is the one thing in this
-            panel that reads as hardware rather than as text, and flipping it
-            with the appearance would lose that — it sits on the mid-grey face,
-            which gives it something to read on either way. */}
-        <line
-          x1={notchFrom.x}
-          y1={notchFrom.y}
-          x2={notchTo.x}
-          y2={notchTo.y}
-          stroke="white"
-          strokeWidth={2.5}
-          strokeLinecap="round"
-        />
-      </svg>
-    </div>
-  );
-}
-
-/**
- * The one state the engine cannot report for itself.
- *
- * `deriveCanvasTokens` never throws: a floor its surface cannot physically carry
- * is clamped to the best that surface allows, because the gradient is the user's
- * to author and an exception would blank the window on a swatch click. That is
- * the right call and it has a cost — the ask silently goes unmet — and this is
- * where the cost is paid back.
- *
- * NOTHING RENDERS UNTIL SOMETHING IS WRONG. This used to sit under an
- * always-visible readout of every floor and its measured Lc. That readout was
- * instrumentation: true, occasionally useful while the solver was being tuned,
- * and a table of colour-science numbers on a settings page the rest of the time
- * — the "contrast lecture" this file's own header was told to stop giving. It
- * came out at the owner's call.
- *
- * What stays is the ALERT, which is not instrumentation: a floor stranded by
- * more than the emitted hex can even express, caused only by the user's own
- * choice of colour and vibrancy, and invisible everywhere else in the app. It
- * says what is unreachable and — when one exists — offers the slider position
- * that recovers it. A canvas can still be authored into unreadable copy; this
- * is the only thing that says so.
- */
-function ContrastAlert({
-  report,
-  eased,
-  onEase,
-}: {
-  report: CanvasContrastReport;
-  eased: number | null;
-  onEase(vibrancy: number): void;
-}) {
-  if (report.stranded.length === 0) return null;
-
-  return (
-    <div className="border-t border-border/50 pt-4">
-      <div
-        role="status"
-        data-testid="canvas-contrast-stranded"
-        className="flex gap-2 rounded-md border border-border bg-muted/50 p-4"
-      >
-        {/* Filled: this is the one thing on the page that went wrong, and the
-            only glyph in the editor that is not a control's own noun. */}
-        <WarningIcon weight="fill" className="mt-1 size-4 shrink-0 text-primary-text" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">
-            {report.stranded.length === 1
-              ? `${report.stranded[0].what} can't reach its contrast floor on this canvas.`
-              : `${report.stranded
-                  .map((reading) => reading.what.toLowerCase())
-                  .join(" and ")} can't reach their contrast floors on this canvas.`}
-          </p>
-          {eased === null ? null : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={() => onEase(eased)}
-              data-testid="canvas-contrast-ease"
-            >
-              <SlidersHorizontalIcon />
-              Ease vibrancy to {percentLabel(eased)}
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
+    </span>
   );
 }
 
@@ -1013,52 +799,33 @@ function ContrastAlert({
  * forever.
  *
  * The feedback loop this was guarding against is real but narrower than it
- * looks. `padAnchor` and `pointerBearing` both position from where the pointer
- * IS, minus a grab offset captured once at press time, so neither can accumulate
- * its own output. The one control that genuinely cannot read the preview is the
- * hex field — see {@link PrimaryColourRow}.
+ * looks. `padAnchor` positions from where the pointer IS, minus a grab offset
+ * captured once at press time, so it cannot accumulate its own output. The one
+ * control that genuinely cannot read the preview is the hex field — see
+ * {@link PrimaryColourRow}.
  *
  * The store is read imperatively for every write, so no handler closes over a
  * snapshot that a concurrent hydrate has already replaced.
  */
-/**
- * A label and its control INSIDE the editor cluster, not across the pane.
- *
- * These were `PrefRow`s, which is right for a setting on the page and wrong
- * here: `PrefRow` justifies label and control to the section's two edges, so
- * on the workbench measure the Vibrancy track sat some 800px from the word
- * "Vibrancy" with nothing between them. A control belongs beside the thing it
- * is named by; the cluster's own width is the measure that keeps it there.
- */
-function EditorRow({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  htmlFor?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <label htmlFor={htmlFor} className="text-sm font-medium">
-        {label}
-      </label>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
-    </div>
-  );
-}
-
 export function CanvasEditor({
   scope,
   canvas,
   resolved,
+  mode,
 }: {
   scope: ThemeScope;
   /** What this scope has STORED — the canvas the controls sit on. */
   canvas: Canvas;
   /** What that canvas renders as right now, `auto` already answered. */
   resolved: ResolvedAppearance;
+  /**
+   * A mode control to float at the pad's head (the global page passes its
+   * icon-only light/dark/auto). A SLOT, not a built-in: appearance and canvas
+   * are scoped independently, so which mode control belongs near this pad —
+   * or whether one does at all — is the mounting page's call. Configure's
+   * page keeps mode on its own overridable row and passes nothing.
+   */
+  mode?: React.ReactNode;
 }) {
   /**
    * The canvas an edit builds on: the running preview when there is one, the
@@ -1125,91 +892,82 @@ export function CanvasEditor({
   const preview = useThemeStore((state) => state.preview);
   const live = preview ?? canvas;
 
-  const report = React.useMemo(() => canvasContrastReport(live, resolved), [live, resolved]);
-  const eased = React.useMemo(() => easedVibrancy(live, resolved), [live, resolved]);
-  const vibrancyChip = React.useMemo(
-    () => effectiveStopHexes(live, resolved)[live.primaryIndex],
-    [live, resolved],
-  );
-
   return (
     <>
       {/*
-       * The pad SITS BESIDE its controls rather than above them.
+       * THE ARC ARRANGEMENT, symmetric. The pad is the whole subject and
+       * everything hangs off it: the mode choice floats at its head, −/+
+       * float at its foot (they add and remove the orbs right above them),
+       * and the two unit values stand as VERTICAL wave faders flanking the
+       * picture they tune — vibrancy on the left, grain on the right — so
+       * the block fills its measure evenly instead of leaving a dead row
+       * under the pad. The swatch pager runs beneath, chevrons tight against
+       * the swatches, with the primary's one hex field at the row's end.
        *
-       * It is a 16:10 picture of the window, so `w-full` made it as wide as the
-       * pane — which on the workbench measure is a 1,200px slab of gradient
-       * dominating a settings page, with the controls that operate it pushed
-       * off the bottom of the screen. Capped, it is a swatch you can take in at
-       * a glance with everything that changes it in the same glance.
-       *
-       * `flex-wrap`, not a breakpoint: on a narrow window the controls simply
-       * wrap under the pad, which is the stacked layout this replaced.
-       * Responsiveness is the whitespace (docs/DESIGN.md).
+       * Each fader COLUMN (track plus the glyph at its foot) and the pad are
+       * the same height by construction — {@link PAD_WIDTH} is derived from
+       * `SLIDER_SQUIGGLE_WIDTH + FADER_FOOT` at the pad's own 16:10 — so the
+       * three columns read as one instrument and nothing rises past the
+       * section rule above.
        */}
-      <div className="flex max-w-[46rem] flex-wrap items-start gap-x-6 gap-y-4 pb-2">
-        <div className="w-full max-w-[20rem] shrink-0 grow-0">
-          <GradientPad
-            canvas={live}
-            resolved={resolved}
-            onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
-            onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
+      <div className="mx-auto flex w-full max-w-[40rem] flex-col gap-3 pt-2 pb-2">
+        {/* `items-start`, so the pad's top edge and both waves' tops sit on
+            one line — the icons at the faders' feet hang just below the pad,
+            mixer-style, without pushing the tracks out of register. */}
+        <div className="flex items-start justify-center gap-4">
+          <WaveSlider
+            id="canvas-vibrancy"
+            label="Vibrancy"
+            icon={DropHalfIcon}
+            value={live.vibrancy}
+            onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
+            onSettle={settle}
+          />
+
+          <div className="relative shrink-0" style={{ width: PAD_WIDTH }}>
+            <GradientPad
+              canvas={live}
+              resolved={resolved}
+              onMove={(index, x, y) => edit((current) => moveStop(current, index, x, y))}
+              onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
+              onSettle={settle}
+            />
+            {/* Overlays are SIBLINGS of the pad, absolutely placed, so the
+                pad's own group semantics stay a group of colour stops. */}
+            {mode ? (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2">
+                <PadChip>{mode}</PadChip>
+              </div>
+            ) : null}
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2">
+              <StopCountControls
+                canvas={live}
+                onAdd={() => commit(addStop)}
+                onRemove={() => commit(removeStop)}
+              />
+            </div>
+          </div>
+
+          <WaveSlider
+            label="Grain"
+            icon={DotsNineIcon}
+            value={live.grain}
+            onInput={(grain) => edit((current) => ({ ...current, grain }))}
             onSettle={settle}
           />
         </div>
 
-        <div className="flex min-w-[18rem] flex-1 flex-col gap-3">
-          <StopRow
-            canvas={live}
-            resolved={resolved}
-            onPromote={(index) => commit((current) => withPrimaryIndex(current, index))}
-            onAdd={() => commit(addStop)}
-            onRemove={() => commit(removeStop)}
-          />
+        {/* Centred at the pad's own width, so the pager's left edge sits
+            under the pad's — not under a fader. */}
+        <div className="mx-auto w-full" style={{ maxWidth: PAD_WIDTH }}>
           <PrimaryColourRow
             hex={canvas.stops[canvas.primaryIndex].hex}
             onPick={(next) => commit((current) => withPrimaryHex(current, next))}
             onPreview={(next) => edit((current) => withPrimaryHex(current, next))}
             onAbandon={abandon}
           />
-
-          <EditorRow label="Vibrancy" htmlFor="canvas-vibrancy">
-            <UnitSlider
-              id="canvas-vibrancy"
-              label="Vibrancy"
-              value={live.vibrancy}
-              chip={
-                <span
-                  aria-hidden
-                  className="size-6 shrink-0 rounded-md ring-1 ring-black/10"
-                  style={{ background: vibrancyChip }}
-                />
-              }
-              onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
-              onSettle={settle}
-            />
-          </EditorRow>
-
-          {/* No `htmlFor`: the dial is a `div[role="slider"]`, which a label
-              cannot be bound to. It carries its own `aria-label` instead. */}
-          <EditorRow label="Grain">
-            <GrainDial
-              value={live.grain}
-              onInput={(grain) => edit((current) => ({ ...current, grain }))}
-              onSettle={settle}
-            />
-            <span className="w-9 text-right text-ui text-muted-foreground tabular-nums">
-              {percentLabel(live.grain)}
-            </span>
-          </EditorRow>
         </div>
       </div>
-
-      <ContrastAlert
-        report={report}
-        eased={eased}
-        onEase={(vibrancy) => commit((current) => ({ ...current, vibrancy }))}
-      />
     </>
   );
 }

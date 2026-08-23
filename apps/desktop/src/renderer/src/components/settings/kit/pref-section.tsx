@@ -56,7 +56,10 @@ export function PrefSection({
           the rows as direct children of this `<section>`, THIS header is the
           first child, `first:` matched nothing, and every section drew the
           header's rule and the first row's rule eight pixels apart. */}
-      <div className="mb-2 flex items-start justify-between gap-4 border-b border-border/50 pb-2">
+      {/* `items-center`, not `items-start`: an action can be taller than the
+          title line (the provider list parks a search field here), and
+          top-aligning it left the field visibly off the title's axis. */}
+      <div className="mb-2 flex items-center justify-between gap-4 border-b border-border/50 pb-2">
         <div className="flex min-w-0 items-center gap-2">
           {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
           <h2 data-slot="pref-section-title" className="min-w-0 truncate text-sm font-semibold">

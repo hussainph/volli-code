@@ -29,8 +29,8 @@ export function PrefRow({
   hint?: React.ReactNode;
   /**
    * Prose under the label. **Reserved for trust boundaries** — where the app
-   * takes an irreversible action, which is CLAUDE.md's own carve-out. Two uses
-   * on both surfaces combined, both about automatic deletion. If you are
+   * takes an irreversible action, which is CLAUDE.md's own carve-out. One use
+   * on both surfaces combined (retention's automatic deletion). If you are
    * reaching for this to explain a control, you want `hint`.
    */
   description?: string;

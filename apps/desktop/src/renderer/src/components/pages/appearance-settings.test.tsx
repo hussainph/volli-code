@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { AppearanceSettings, CanvasShadowedNote } from "./appearance-settings";
+import { AppearanceSettings } from "./appearance-settings";
 
 describe("Settings → Appearance", () => {
   it("mounts the canvas editor in the App theme slot the placeholder held open", () => {
@@ -27,24 +27,22 @@ describe("Settings → Appearance", () => {
     expect(html).not.toContain('data-testid="canvas-stop-orb-1"');
   });
 
-  it("pins the shadow pill to the ruled word — Project override, never Workspace", () => {
-    // CONTEXT.md's VC-57 ruling: "project" is the one user-facing word for a
-    // rail entry, and this pill is where "workspace" kept sneaking back in.
-    // The note renders in the page only while a project override shadows the
-    // global canvas — state a static render cannot install (it reads the
-    // store's INITIAL state) — so the exported note is rendered directly.
-    const html = renderToStaticMarkup(<CanvasShadowedNote />);
+  it("carries no shadow pill — divergence is Configure's to say, not this page's", () => {
+    // The "Project override" note was a status pill nothing here could act
+    // on, and the owner called it off. The project's own Configure page says
+    // the divergence once, with the revert beside it.
+    const html = renderToStaticMarkup(<AppearanceSettings />);
 
-    expect(html).toContain('data-testid="appearance-canvas-shadowed"');
-    expect(html).toContain("Project override");
-    expect(html).not.toContain("Workspace");
+    expect(html).not.toContain('data-testid="appearance-canvas-shadowed"');
+    expect(html).not.toContain("Project override");
   });
 
-  it("puts light/dark/auto with the canvas, above it, in one App theme section", () => {
+  it("floats light/dark/auto on the canvas pad, in one App theme section", () => {
     // They are one subject to anyone changing how the app looks, so the separate
-    // "Light & dark" section is gone. What the split protected still holds: the
-    // canvas does not name a mode, so the control is a sibling of the editor
-    // rather than a child — see AppThemeSection.
+    // "Light & dark" section is gone and the mode rides the pad itself (the Arc
+    // arrangement). What the old split protected still holds: the canvas does
+    // not name a mode, so the editor takes the control as a slot this page
+    // fills — see AppThemeSection.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
     expect(html).not.toContain("Light &amp; dark");
@@ -53,17 +51,20 @@ describe("Settings → Appearance", () => {
     expect(html.indexOf('data-testid="appearance-mode"')).toBeGreaterThan(
       html.indexOf("App theme"),
     );
-    // Above the canvas it is seen in, not below it.
+    // On the pad — between the two faders that flank it.
+    expect(html.indexOf('data-testid="appearance-mode"')).toBeGreaterThan(
+      html.indexOf('aria-label="Vibrancy"'),
+    );
     expect(html.indexOf('data-testid="appearance-mode"')).toBeLessThan(
-      html.indexOf('data-testid="canvas-grain-dial"'),
+      html.indexOf('aria-label="Grain"'),
     );
   });
 
-  it("carries no contrast instrumentation on the shipped canvas", () => {
-    // The per-floor Lc readout was tuning instrumentation and came out. The
-    // shipped canvas strands nothing, so the page shows controls and no
-    // contrast surface at all — the alert is reserved for a canvas the user
-    // authors into genuinely unreachable copy.
+  it("carries no contrast instrumentation at all", () => {
+    // The per-floor Lc readout was tuning instrumentation, and the standing
+    // stranded-floor alert followed it out at the owner's call: a canvas is an
+    // aesthetic choice, and a persistent warning about an outcome the user
+    // chose is the surface arguing with them. Controls only.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
     expect(html).not.toContain('data-testid="canvas-contrast-readout"');

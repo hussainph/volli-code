@@ -379,8 +379,9 @@ async function openProjectAppearance(page) {
     .getByRole("button", { name: "Appearance", exact: true })
     .click();
   // Present in every state of the pane, and only once this project's scope has
-  // hydrated (it renders a loading note with a Retry button until then).
-  await page.getByTestId("project-appearance-canvas-mode").waitFor();
+  // hydrated (it renders a loading note with a Retry button until then). The
+  // mode chip floats on the always-mounted editor pad post-VC-111.
+  await page.getByTestId("project-appearance-mode").waitFor();
 }
 
 /** One segmented control's button for `choice` (`data-choice` on the segment). */
@@ -390,15 +391,12 @@ const segment = (page, testId, choice) =>
 /**
  * The per-project canvas override, post-VC-111.
  *
- * The Inherit/Custom segmented pair is gone from every scopeable row. Touching
- * the control IS the override — choosing a value was always the act of
- * overriding — and the only remaining signal is a revert button that exists on
- * exactly the rows that have diverged. So "custom" is a click on the row's
- * control, "inherit" is a click on the revert, and "is it overridden" is
- * whether the revert is there at all.
+ * The Inherit/Custom segmented pair is gone, and so is the "Give this project
+ * its own" gate that briefly replaced it. The editor mounts on the project's
+ * EFFECTIVE canvas; the FIRST EDIT is what creates the override (the commit
+ * writes the project row), "inherit" is a click on the revert, and "is it
+ * overridden" is whether the revert row is there at all.
  */
-const canvasOverrideControl = (page) => page.getByTestId("project-appearance-canvas-mode");
-
 const canvasRevert = (page) =>
   page
     .getByTestId("project-appearance-canvas-row")
@@ -448,51 +446,13 @@ async function setSlider(page, label, value) {
   }, value);
 }
 
-/** The fine and coarse arrow steps, mirroring `UNIT_STEP` / `UNIT_STEP_COARSE`. */
-const DIAL_STEP = 0.01;
-const DIAL_STEP_COARSE = 0.05;
-/** Comfortably more presses than 0→1 at the fine step; a guard, never a budget. */
-const DIAL_MAX_PRESSES = 140;
-
 /**
- * Sets the editor's ROTARY 0–1 control (Grain) and settles it.
+ * Authors a canvas through the REAL editor: a preset swatch and both faders.
  *
- * Grain is not an `<input type="range">` and deliberately never was — it is a
- * `div[role="slider"]` whose face carries the grain texture at its current
- * amount, driven by pointer BEARING (see `GrainDial`). So `setSlider` above
- * cannot reach it: there is no `value` property to set and no `input` event to
- * fire, and pointing at it would mean computing an angle to land on a number.
- *
- * Arrow keys are the honest way in. `unitStepForKey` answers both axes at a
- * fine step and a coarse one with Shift, so this walks the value in whichever
- * step closes the remaining distance and reads `aria-valuenow` back between
- * presses rather than counting on arithmetic — the dial's own readout is what a
- * user would check, and it is rounded to the same two decimals the assertions
- * are written in. Each `keyup` is its own commit (`onKeyUp={onSettle}`), so
- * unlike the track there is nothing left to settle at the end.
- */
-async function setDial(page, label, value) {
-  const dial = page.getByRole("slider", { name: label, exact: true });
-  await dial.scrollIntoViewIfNeeded();
-  await dial.focus();
-  const target = Number(value);
-  for (let press = 0; press < DIAL_MAX_PRESSES; press += 1) {
-    const now = Number(await dial.getAttribute("aria-valuenow"));
-    const gap = target - now;
-    if (Math.abs(gap) < DIAL_STEP / 2) return;
-    const coarse = Math.abs(gap) >= DIAL_STEP_COARSE;
-    await page.keyboard.press(`${coarse ? "Shift+" : ""}${gap > 0 ? "ArrowRight" : "ArrowLeft"}`);
-  }
-  throw new Error(`${label} never reached ${value}`);
-}
-
-/**
- * Authors a canvas through the REAL editor: a preset swatch, the track and the dial.
- *
- * Each control has its own commit contract and all three are exercised, because
- * they fail independently — a swatch is one click and one write, the track
- * previews on every `input` and writes once on release, the dial writes per
- * arrow press.
+ * Grain is a native range now too — the rotary dial retired when the owner
+ * traded it for two matching vertical wave faders flanking the pad — so both
+ * unit values go through `setSlider`: previews on every `input`, one write on
+ * settle.
  */
 async function authorCanvas(page, { hex, vibrancy, grain }) {
   await page.getByRole("button", { name: hex, exact: true }).first().click();
@@ -502,7 +462,7 @@ async function authorCanvas(page, { hex, vibrancy, grain }) {
   });
 
   await setSlider(page, "Vibrancy", vibrancy);
-  await setDial(page, "Grain", grain);
+  await setSlider(page, "Grain", grain);
   await waitUntil("both controls to persist", async () => {
     const stored = await storedGlobalCanvas(page);
     return (
@@ -1188,7 +1148,6 @@ cursor-style = block
     throw new Error(`seeded projects did not boot: ${JSON.stringify(Object.keys(byName))}`);
   }
 
-  const globalCanvasToken = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
   const globalBackground = (await readAppliedTokens(page, ["--background"]))["--background"];
 
   await attempt(16, "two seeded workspaces both start out inheriting", async () => {
@@ -1209,15 +1168,11 @@ cursor-style = block
   await attempt(17, "Configure → Appearance overrides ONE workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
     await openProjectAppearance(page);
-    // Custom opens on whatever the workspace is ALREADY wearing — the app-wide
-    // canvas — so the switch alone must not change a pixel. Only the edit after
-    // it may.
-    await canvasOverrideControl(page).click();
-    const pinned = await waitUntil("the workspace row to take a canvas", async () => {
-      const stored = await storedTheme(page);
-      return stored.projects[projectAId]?.canvas ?? null;
-    });
-    const unchanged = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
+    // No Custom gate: the editor is already mounted on the EFFECTIVE canvas,
+    // and merely opening the pane must store nothing — only the edit below
+    // creates the override.
+    const before = await storedTheme(page);
+    const untouchedOnOpen = (before.projects[projectAId]?.canvas ?? null) === null;
 
     await page.getByRole("button", { name: WORKSPACE_HEX, exact: true }).first().click();
     projectBackground = await waitUntil(
@@ -1232,14 +1187,13 @@ cursor-style = block
     const stored = await storedTheme(page);
     return {
       ok:
-        JSON.stringify(pinned) === JSON.stringify(beforeRelaunch.stored.canvas) &&
-        unchanged === globalCanvasToken &&
+        untouchedOnOpen &&
         stored.projects[projectAId]?.canvas?.stops[0]?.hex === WORKSPACE_HEX &&
         // The other workspace was never touched.
         stored.projects[projectBId]?.canvas === null &&
         // …and neither was the global row.
         JSON.stringify(stored.canvas) === JSON.stringify(beforeRelaunch.stored.canvas),
-      detail: `pinnedOnCustom=${unchanged === globalCanvasToken} A=${JSON.stringify(stored.projects[projectAId])} B=${JSON.stringify(stored.projects[projectBId])}`,
+      detail: `untouchedOnOpen=${untouchedOnOpen} A=${JSON.stringify(stored.projects[projectAId])} B=${JSON.stringify(stored.projects[projectBId])}`,
     };
   });
 

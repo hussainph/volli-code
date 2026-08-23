@@ -8,7 +8,6 @@
  * What remains is saying, on the Configure side, that a row has diverged — and
  * that is one control, not a vocabulary.
  */
-import * as React from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 
 import { Button } from "@renderer/components/ui/button";
@@ -70,37 +69,9 @@ export function OverrideControl({
   );
 }
 
-/**
- * The Settings-side counterpart: which projects have diverged from this row.
- *
- * Takes the projects, not a count, so it can name them and open each. A
- * hand-maintained "3 projects override this" is a number that goes stale and
- * cannot be clicked.
- */
-export function OverrideNote({
-  projects,
-  onOpen,
-}: {
-  projects: readonly { id: string; name: string }[];
-  onOpen: (projectId: string) => void;
-}) {
-  if (projects.length === 0) return null;
-  return (
-    <p className="flex flex-wrap items-center justify-end gap-1 text-ui text-muted-foreground">
-      <span>Overridden in</span>
-      {projects.map((project, index) => (
-        <React.Fragment key={project.id}>
-          <Button
-            size="xs"
-            variant="ghost"
-            className="h-auto px-1 py-0 underline underline-offset-2"
-            onClick={() => onOpen(project.id)}
-          >
-            {project.name}
-          </Button>
-          {index < projects.length - 1 ? <span aria-hidden>·</span> : null}
-        </React.Fragment>
-      ))}
-    </p>
-  );
-}
+// There was a Settings-side counterpart here — `OverrideNote`, listing which
+// projects had diverged from a row. The owner cut the Settings-side signal
+// (precedence is published once, in a section's `(i)`, and the divergence
+// lives with its revert on the project's own Configure page), which left the
+// component with zero callers; it is gone rather than exported speculatively.
+// Git history has it if a per-row "overridden in …" ever earns its place.

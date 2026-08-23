@@ -27,7 +27,7 @@ export interface PrefCategory {
   label: string;
   icon: PhosphorIcon;
   /**
-   * Extra search terms. Hand-maintained, and guarded: `vc111-settings-search`
+   * Extra search terms. Hand-maintained, and guarded: `settings-search-smoke.mjs`
    * walks every row label on both surfaces and fails if one is unreachable
    * from rail search. Keep it green when you add rows.
    */
@@ -199,9 +199,32 @@ export function PrefShell({
             the one column that tells two skills apart. Wider measure, same
             gutter, same whitespace-not-breakpoints rule (docs/DESIGN.md). */}
           <WorkbenchColumn className={cn("pb-4", current?.fill && "flex h-full flex-col")}>
-            <PageHeader variant="reading" title={current?.label ?? ""} />
-            <div className={cn("flex flex-col gap-6", current?.fill && "min-h-0 flex-1")}>
-              {current?.content}
+            {/* FORM PANES GET A MEASURE; table panes get the width.
+
+              A `fill` pane is one table, and every extra pixel goes to its
+              description column — uncapped on purpose. Every other pane is a
+              form, and a form with no measure degrades with the window: a
+              `PrefRow` justifies label and control to its two edges, so on a
+              wide window the Mode switch sat ~2,000px from the word "Mode"
+              with a card of dead space between them. 56rem is the widest the
+              row grammar stays a row — label and control in one glance — and
+              it is generous next to the settings surfaces this one is judged
+              against (Linear and macOS System Settings both cap near 42rem).
+
+              CENTRED, like both of those, and the page title rides INSIDE the
+              measure so it starts where the cards start. Left-anchored, the
+              cap piled all the leftover width into one strip on the right,
+              which read as a mistake rather than a margin; split into two
+              margins it reads as a page. */}
+            <div
+              className={cn(
+                current?.fill ? "flex min-h-0 flex-1 flex-col" : "mx-auto w-full max-w-4xl",
+              )}
+            >
+              <PageHeader variant="reading" title={current?.label ?? ""} />
+              <div className={cn("flex flex-col gap-6", current?.fill && "min-h-0 flex-1")}>
+                {current?.content}
+              </div>
             </div>
           </WorkbenchColumn>
         </div>

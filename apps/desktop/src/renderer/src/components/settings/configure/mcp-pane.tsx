@@ -61,7 +61,7 @@ export function McpPane() {
           rows="fill"
           empty="No MCP servers yet."
           columns={[
-            { key: "name", header: "Server", cell: (server) => <Cell>{server.name}</Cell> },
+            { key: "name", header: "Server", cell: (server) => <Cell strong>{server.name}</Cell> },
             {
               key: "tools",
               header: "Tools",
