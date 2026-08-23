@@ -86,6 +86,27 @@ export function orderedAccounts(
 }
 
 /**
+ * The two halves of the accounts list: what already works, and what does not.
+ *
+ * Sorting reachable providers to the top was not enough on its own. Pi ships
+ * forty and a profile has credentials for two or three, so the boundary landed
+ * somewhere around row three with nothing to mark it — the eye had to notice
+ * that a row stopped saying it was connected. A heading per half says it
+ * outright, and lets the long half carry its own search without burying the
+ * short one that people came to check.
+ */
+export function partitionAccounts(providers: readonly ModelAccessProvider[]): {
+  connected: readonly ModelAccessProvider[];
+  available: readonly ModelAccessProvider[];
+} {
+  const ordered = orderedAccounts(providers);
+  return {
+    connected: ordered.filter((provider) => reachability(provider) === 0),
+    available: ordered.filter((provider) => reachability(provider) !== 0),
+  };
+}
+
+/**
  * 0 for a provider this profile can reach, 1 for one it cannot.
  *
  * Two ways to be reachable, and both count: a credential stored here, or a

@@ -65,6 +65,10 @@
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
  *
+ * `defaultExternalAppId` — a chosen external app, or explicit `null` for Ask
+ * every time. It is app-wide chrome too; a successful Launch Services listing
+ * resolves an app removed since the choice was saved back to asking.
+ *
  * `terminalFocusTarget` — the terminal tab temporarily owning the app canvas,
  * whether a ticket owns it or the project does. It is deliberately session-only:
  * live PTYs do not survive relaunch, and entering a new app lifetime with its
@@ -84,6 +88,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
+import { isKnownExternalAppId } from "../../../external-app-ids";
+import type { ExternalApp, ExternalAppId } from "../../../ipc/contract";
 import {
   DEFAULT_EMPTY_VISUAL,
   sanitizeEmptyVisual,
@@ -116,6 +122,11 @@ export const RAIL_MAX_WIDTH = 560;
 export type DiffPresentation = "inline" | "side-by-side";
 
 const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
+
+/** A chosen external app, or the explicit preference to ask on every open. */
+export type DefaultExternalAppId = ExternalAppId | null;
+
+const DEFAULT_EXTERNAL_APP_ID: DefaultExternalAppId = null;
 
 /** Identity of the terminal tab temporarily owning the app canvas. */
 export interface TerminalFocusTarget {
@@ -202,6 +213,15 @@ function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
     : DEFAULT_DIFF_PRESENTATION;
 }
 
+/**
+ * A persisted preference may only name an app this build knows how to launch.
+ * A later successful Launch Services listing reconciles an uninstalled known
+ * app through `reconcileDefaultExternalApp` below.
+ */
+function sanitizeDefaultExternalAppId(appId: unknown): DefaultExternalAppId {
+  return isKnownExternalAppId(appId) ? appId : DEFAULT_EXTERNAL_APP_ID;
+}
+
 interface UiState {
   sidebarWidth: number;
   /** Ticket-detail right rail width; resizable via its grip, persisted app-wide. */
@@ -251,11 +271,22 @@ interface UiState {
   homeEmptyVisual: EmptyVisual;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
+  /** Chosen external app, or explicit Ask every time. Persisted app-wide. */
+  defaultExternalAppId: DefaultExternalAppId;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   setSidebarWidth(width: number): void;
   setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
+  /**
+   * Sets zoom to one rung of {@link UI_SCALE_STEPS}, snapping anything else.
+   *
+   * The snap is not politeness: `uiScale` is applied verbatim as CSS `zoom`,
+   * so an off-ladder value is an untested layout and a corrupt one (`0`, NaN)
+   * renders the entire app below the chrome band invisible — with the
+   * zoom-reset menu item unreachable by mouse.
+   */
+  setUiScale(scale: number): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean, category?: string, signInProviderId?: string): void;
   /**
@@ -278,6 +309,13 @@ interface UiState {
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
   setDiffPresentation(presentation: DiffPresentation): void;
+  setDefaultExternalAppId(appId: DefaultExternalAppId): void;
+  /**
+   * Reconcile the persisted choice against a successful Launch Services list.
+   * A failed listing says nothing about what is installed, so callers only use
+   * this after an `{ ok: true }` result.
+   */
+  reconcileDefaultExternalApp(apps: readonly ExternalApp[]): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -312,6 +350,7 @@ type PersistedUiState = Pick<
   | "homeRailMode"
   | "homeEmptyVisual"
   | "diffPresentation"
+  | "defaultExternalAppId"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
@@ -344,10 +383,12 @@ export function createUiStore(storage?: StateStorage) {
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
+        defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
         terminalFocusTarget: null,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
+        setUiScale: (scale) => set({ uiScale: sanitizeUiScale(scale) }),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
         setSettingsOpen: (open, category, signInProviderId) =>
           set({
@@ -367,6 +408,14 @@ export function createUiStore(storage?: StateStorage) {
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
+        setDefaultExternalAppId: (appId) => set({ defaultExternalAppId: appId }),
+        reconcileDefaultExternalApp: (apps) =>
+          set((state) =>
+            state.defaultExternalAppId !== null &&
+            !apps.some((app) => app.id === state.defaultExternalAppId)
+              ? { defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID }
+              : {},
+          ),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -396,6 +445,7 @@ export function createUiStore(storage?: StateStorage) {
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
           diffPresentation: state.diffPresentation,
+          defaultExternalAppId: state.defaultExternalAppId,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -433,6 +483,7 @@ export function createUiStore(storage?: StateStorage) {
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
+            defaultExternalAppId: sanitizeDefaultExternalAppId(stored.defaultExternalAppId),
           };
         },
       },

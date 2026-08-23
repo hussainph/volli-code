@@ -5,6 +5,8 @@
  * Ported behavior-for-behavior from the Swift original.
  */
 
+import { REASONING_LEVELS, type ModelSelection } from "./agent-runtime";
+import type { SkillModes } from "./skill";
 import type { Appearance, Canvas } from "./theme/canvas/types";
 import type { ProjectThemeOverride } from "./theme/project-override";
 
@@ -47,6 +49,25 @@ export interface Project {
    * gradient and overriding the mode are independent things to want.
    */
   themeAppearance?: Appearance | null;
+  /**
+   * How much of itself each skill offers this project (migration 023,
+   * VC-111) — see {@link SkillMode}. Holds only DEPARTURES from each skill's
+   * own frontmatter default, so an empty map means "every skill as its author
+   * intended", which is exactly what an absent column means.
+   */
+  skillModes?: SkillModes;
+  /**
+   * This project's harness for new Sessions, or `null` to inherit the app-wide
+   * default ({@link DEFAULT_HARNESS_ID}). Not constrained to {@link HarnessId}:
+   * harnesses are user-registrable, so the legal set is a table at runtime.
+   */
+  sessionHarness?: string | null;
+  /**
+   * This project's model for new Sessions, or `null` to inherit Model Access's
+   * app-wide per-purpose default. Scoped separately from {@link sessionHarness}
+   * for migration 014's reason: overriding one must not clear the other.
+   */
+  sessionModel?: ModelSelection | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */
@@ -161,4 +182,21 @@ export const PROJECT_COLORS = [
 export function projectColor(colorIndex: number): string {
   const index = Math.abs(Math.trunc(colorIndex)) % PROJECT_COLORS.length;
   return PROJECT_COLORS[index]!;
+}
+
+/**
+ * A stored `session_model` payload as a {@link ModelSelection}, or `null` for
+ * anything that is not one. Same degrade-don't-throw stance as
+ * {@link parseSkillModes}; a project whose column is nonsense inherits the
+ * app-wide default, which is both survivable and visible.
+ */
+export function parseSessionModel(value: unknown): ModelSelection | null {
+  if (typeof value !== "object" || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  const { providerId, modelId, reasoningLevel } = candidate;
+  if (typeof providerId !== "string" || providerId.length === 0) return null;
+  if (typeof modelId !== "string" || modelId.length === 0) return null;
+  const level = REASONING_LEVELS.find((known) => known === reasoningLevel);
+  if (level === undefined) return null;
+  return { providerId, modelId, reasoningLevel: level };
 }

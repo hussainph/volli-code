@@ -8,13 +8,6 @@ import { AppearanceModeChoice, CanvasEditor } from "./canvas-editor";
 
 const GLOBAL: ThemeScope = { kind: "global" };
 
-/** A saturated magenta in light — the one input that strands a declared floor. */
-const STRANDING: Canvas = {
-  ...DEFAULT_CANVAS,
-  stops: [{ hex: "#e068d8", x: 0.5, y: 0.5 }],
-  vibrancy: 1,
-};
-
 const THREE_STOPS: Canvas = {
   ...DEFAULT_CANVAS,
   stops: [
@@ -81,108 +74,81 @@ describe("CanvasEditor", () => {
     expect(render(DEFAULT_CANVAS, "dark")).toContain('value="#e8652a"');
   });
 
-  it("shows vibrancy and grain as their stored fractions", () => {
+  it("reports vibrancy and grain to the reader, and paints them for the eye", () => {
+    // No visible percentages (the Arc arrangement): each fader's wave stand
+    // IS its readout. The values still reach assistive tech through the
+    // native inputs' own attributes.
     const html = render(DEFAULT_CANVAS, "dark");
 
     expect(html).toContain('aria-label="Vibrancy"');
     expect(html).toContain('value="0.6"');
-    expect(html).toContain("60%");
     expect(html).toContain('aria-label="Grain"');
-    expect(html).toContain("15%");
+    expect(html).toContain('value="0.15"');
+    expect(html).not.toContain("60%");
+    expect(html).not.toContain("15%");
   });
 
-  it("gives grain a dial and vibrancy a track, because they are not the same control", () => {
-    // A rushed port flattened both into `<input type="range">`. Vibrancy has a
-    // position along a line and grain does not — it has an amount of texture,
-    // which only a face can show.
+  it("stands vibrancy and grain as two matching faders, and the dial is gone", () => {
+    // The owner traded the rotary grain dial for the symmetry of two vertical
+    // wave faders flanking the pad. Two native ranges: click-to-jump, the
+    // keyboard and the focus ring come with the platform's own control.
     const html = render(DEFAULT_CANVAS, "dark");
 
-    expect(html).toContain('data-testid="canvas-grain-dial"');
-    expect(html).toContain('role="slider"');
-    expect(html).toContain('aria-valuenow="0.15"');
-    // Exactly one native range, and it is vibrancy's.
-    expect(html.match(/type="range"/g)).toHaveLength(1);
+    expect(html.match(/type="range"/g)).toHaveLength(2);
+    expect(html).not.toContain('data-testid="canvas-grain-dial"');
   });
 
-  it("puts the grain itself on the dial's face, which is the reason it is a dial", () => {
-    // A value this subtle cannot be read off a number or a thumb position, so
-    // the knob shows the texture it is setting — on a mid-grey backdrop, the one
-    // surface that carries both black noise and a white notch in either mode.
+  it("wears the grain on the pad, which inherited the dial face's readout job", () => {
+    // A value this subtle cannot be read off a thumb position, so the texture
+    // shows on the picture being tuned: the pad is a minimap of the window,
+    // and the window wears grain too.
     const textured = render(DEFAULT_CANVAS, "dark");
     const none = render({ ...DEFAULT_CANVAS, grain: 0 }, "dark");
 
-    expect(textured).toContain("#8a8a8a");
     expect(textured).toContain("url(&quot;data:image/svg+xml");
-    expect(none).toContain("#8a8a8a");
     expect(none).not.toContain("url(&quot;data:image/svg+xml");
   });
 
-  it("keeps the dial operable without a pointer", () => {
+  it("carries no visible copy — the controls are the explanation", () => {
+    // The Arc arrangement: no row labels, no percentages, no hex chips. What
+    // each control is lives in its aria-label; what it is SET TO lives in
+    // its own drawing (orb colours, wave stand, knob face).
     const html = render(DEFAULT_CANVAS, "dark");
 
-    expect(html).toContain('tabindex="0"');
-    expect(html).toContain('aria-valuemin="0"');
-    expect(html).toContain('aria-valuemax="1"');
-  });
-
-  it("says nothing at all about contrast while nothing is wrong", () => {
-    // The always-on readout of every floor's measured Lc was instrumentation,
-    // and it came out. On a canvas with nothing stranded the editor is controls
-    // only — no heading, no numbers, no alarm.
-    for (const resolved of ["light", "dark"] as const) {
-      const html = render(DEFAULT_CANVAS, resolved);
-
-      expect(html).not.toContain('data-testid="canvas-contrast-readout"');
-      expect(html).not.toContain('data-testid="canvas-contrast-stranded"');
-      expect(html).not.toContain("Body copy");
-      expect(html).not.toContain("Lc ");
+    for (const word of [">Colours<", ">Primary<", ">Vibrancy<", ">Grain<"]) {
+      expect(html).not.toContain(word);
     }
+    expect(html).not.toContain("canvas-stop-chip");
   });
 
-  it("names what is unreachable, and says nothing else", () => {
-    // The state the whole report exists for: the engine clamps an impossible
-    // floor to the best its surface allows and says nothing, so this is the only
-    // surface in the app that can tell anyone.
-    const html = render(STRANDING, "light");
+  it("floats the page's mode control at the pad's head when one is passed", () => {
+    // A SLOT, not a built-in: appearance and canvas are scoped independently,
+    // so Configure keeps mode on its own overridable row and passes nothing.
+    const withMode = renderToStaticMarkup(
+      <CanvasEditor
+        scope={GLOBAL}
+        canvas={DEFAULT_CANVAS}
+        resolved="dark"
+        mode={<span data-testid="mode-slot" />}
+      />,
+    );
+    const without = render(DEFAULT_CANVAS, "dark");
 
-    expect(html).toContain('data-testid="canvas-contrast-stranded"');
-    expect(html).toContain("Sidebar nav can&#x27;t reach its contrast floor");
+    expect(withMode).toContain('data-testid="mode-slot"');
+    expect(without).not.toContain('data-testid="mode-slot"');
   });
 
-  // A blocked state earns one line and one action (AGENTS.md, UI copy). The
-  // reason is a property of colour space rather than of anything the user can
-  // act on — so it belongs in the module comment, which is where it lives.
-  it("does not lecture: no token names, no solver arithmetic, no colour-space essay", () => {
-    const html = render(STRANDING, "light");
-    const alert = html.slice(html.indexOf('data-testid="canvas-contrast-stranded"'));
+  it("never lectures about contrast — the canvas is the user's own call", () => {
+    // The stranded-floor alert came out at the owner's call: it was a
+    // persistent warning about an outcome the user chose. Even the canvas
+    // that used to trip it renders controls only.
+    const stranding = {
+      ...DEFAULT_CANVAS,
+      stops: [{ hex: "#e068d8", x: 0.5, y: 0.5 }],
+      vibrancy: 1,
+    };
 
-    for (const lecture of ["--sidebar", "asks for Lc", "colour space", "Nav rows and section"]) {
-      expect(alert).not.toContain(lecture);
-    }
-  });
-
-  it("raises no alarm over a hairline ceiling, only over what is truly stranded", () => {
-    // Body copy is also at its ceiling on this canvas, by a third of an Lc —
-    // finer than the hex it is emitted as, and the shipped canvas crosses that
-    // same hairline as vibrancy moves. Capped is not stranded: the alert names
-    // the sidebar and stays silent about the rest.
-    const html = render(STRANDING, "light");
-    const alert = html.slice(html.indexOf('data-testid="canvas-contrast-stranded"'));
-
-    expect(alert).toContain("Sidebar nav");
-    expect(alert).not.toContain("Body copy");
-    expect(html).not.toContain("at this canvas&#x27;s ceiling");
-  });
-
-  it("offers the vibrancy that recovers it, as a slider position", () => {
-    const html = render(STRANDING, "light");
-
-    expect(html).toContain('data-testid="canvas-contrast-ease"');
-    expect(html).toContain("Ease vibrancy to");
-  });
-
-  it("raises no alarm for the same canvas in dark, where the ladder has room", () => {
-    expect(render(STRANDING, "dark")).not.toContain('data-testid="canvas-contrast-stranded"');
+    expect(render(stranding, "light")).not.toContain("contrast");
   });
 });
 

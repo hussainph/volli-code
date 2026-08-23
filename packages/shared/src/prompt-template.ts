@@ -52,6 +52,11 @@ export interface PromptTemplate {
   readonly description: string;
   /** The prompt itself: the file body, frontmatter stripped. */
   readonly content: string;
+  /**
+   * The tier that supplied this command after a merge. Optional so Pi's
+   * grammar can still receive its native three-field structural shape.
+   */
+  readonly source?: "project" | "personal";
 }
 
 /** Longest description a body's first line may supply before it is elided. */
@@ -59,6 +64,30 @@ const DERIVED_DESCRIPTION_LIMIT = 60;
 
 /** The `/name` character class — what a command name may contain. */
 const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
+
+/**
+ * The names Volli will CREATE a template file for — a strict subset of the
+ * names it can read and invoke.
+ *
+ * Two rules meet here, and the narrower one wins:
+ *
+ *  - **It has to be invokable whole.** {@link findCommandInvocations} reads a
+ *    name up to the first character outside {@link COMMAND_NAME_CHAR}, so a
+ *    file called `ship it.md` is reachable only as `/ship` — a command whose
+ *    own name cannot summon it.
+ *  - **It has to be a safe flat filename**, because the basename IS the
+ *    invocation. That excludes `:`, which the `/` grammar happily allows and
+ *    macOS does not: HFS+ and APFS store it but Finder renders it as `/`, so
+ *    the file a user sees is not the file they made. It also excludes `.` and
+ *    `..`, and anything with a separator in it.
+ *
+ * Reading stays deliberately more permissive than writing. A template someone
+ * hand-authored with a `:` in it still loads and still runs — this rule governs
+ * only what the app is willing to author on their behalf.
+ */
+export function isWritablePromptTemplateName(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
 
 /**
  * Parse an argument string using simple shell-style single and double quotes.
@@ -174,8 +203,10 @@ export function mergePromptTemplates(input: {
   global: readonly PromptTemplate[];
 }): readonly PromptTemplate[] {
   const byName = new Map<string, PromptTemplate>();
-  for (const template of input.global) byName.set(template.name, template);
-  for (const template of input.project) byName.set(template.name, template);
+  for (const template of input.global)
+    byName.set(template.name, { ...template, source: "personal" });
+  for (const template of input.project)
+    byName.set(template.name, { ...template, source: "project" });
   return [...byName.values()].toSorted((a, b) => a.name.localeCompare(b.name));
 }
 

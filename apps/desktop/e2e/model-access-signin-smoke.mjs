@@ -69,12 +69,20 @@ async function storedProviders() {
   }
 }
 
-/** Settings → Agent, scoped through the nav landmark: "Agent" is a common word here. */
+/**
+ * Settings → Models, scoped through the nav landmark because these words are
+ * common on this surface.
+ *
+ * The category was "Model Access" and before that "Agent"; VC-111 renamed it
+ * to Models and grouped it under Services. `resolveSettingsCategory` keeps the
+ * old KEY working for the chat blocker's deep link, but the rail LABEL is what
+ * this clicks, so it follows the rename.
+ */
 async function openAgentSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).first().click();
   await page
     .getByRole("navigation", { name: "Settings categories" })
-    .getByRole("button", { name: "Agent", exact: true })
+    .getByRole("button", { name: "Models", exact: true })
     .click();
   await page.getByTestId(`account-${PROVIDER_ID}`).waitFor();
 }

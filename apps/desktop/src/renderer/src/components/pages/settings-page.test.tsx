@@ -1,110 +1,118 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseTtlDaysInput, SettingsPage } from "./settings-page";
+import { resolveSettingsCategory } from "@renderer/components/settings/settings-groups";
+import { SettingsPage } from "./settings-page";
 
+/**
+ * These render under `renderToStaticMarkup`, where there is no `window` and no
+ * preload bridge and effects never run — so what they assert is each pane's
+ * RESTING shape: what it draws before it has been told anything. That is the
+ * honest thing to pin, and it is also the state most likely to regress, since
+ * it is the one nobody looks at while developing.
+ */
 describe("SettingsPage (app-wide)", () => {
-  it("lists the app-wide categories in the shell rail", () => {
+  it("groups the rail rather than listing nine categories flat", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
-    expect(html).toContain("General");
-    expect(html).toContain("Appearance");
-    expect(html).toContain("Harness Runtimes");
-    // The CLI install is silent and background (VC-52), so its host-level
-    // detection lives app-wide; the pane may also read the selected project's
-    // Git configuration without becoming a project setting.
-    expect(html).toContain("CLI");
-    // Orphan cleanup is app-wide (the sweep walks every project), so it lives
-    // here rather than on the per-project Configure page.
-    expect(html).toContain("Worktrees");
-    // Bring-your-own web search (VC-31), beside Model Access rather than under
-    // Harness Runtimes: it is an outside account, not a runtime.
-    expect(html).toContain("Web");
+    // The group labels carry the relationship — see settings-groups.tsx.
+    expect(html).toContain("Preferences");
+    expect(html).toContain("Services");
+    expect(html).toContain("System");
   });
 
-  it("opens the web pane on its one control, with nothing configured", () => {
-    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="web" />);
-
-    // The resting shape before the bridge answers — effects never run under
-    // renderToStaticMarkup, so this is the pane's honest loading state rather
-    // than a claim about a setting it has not read yet.
-    expect(html).toContain("Web search");
-    expect(html).toContain("Loading…");
-    // And no key field, because a pane that has read nothing knows of no
-    // provider that needs one.
-    expect(html).not.toContain("API key");
-  });
-
-  // The pane's data arrives over the preload bridge in an effect, which never
-  // runs under renderToStaticMarkup — so what this asserts is the resting
-  // shape: both sections exist, detection opens in its checking state, and
-  // doctor has honestly not run rather than pretending a result.
-  it("can open directly on the CLI detection pane", () => {
-    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="cli" />);
-
-    expect(html).toContain("Command-line tool");
-    expect(html).toContain("Checking…");
-    expect(html).toContain("Doctor");
-    expect(html).toContain("Run Doctor");
-    expect(html).toContain("Not run yet.");
-  });
-
-  // Its app-wide scope is structural (it lives here, not on Configure) rather
-  // than something the copy has to state — see the base-branch test below.
-  it("shows the global retention window in the default General category", () => {
+  it("lists every app-wide category", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
-    expect(html).toContain("Done worktree retention");
-    expect(html).toContain('id="done-ttl-days"');
-    // VC-113: the number now governs a deletion, so the row states what the
-    // deletion takes and what it leaves — the question a retention setting has
-    // to answer before anyone will trust it.
-    expect(html).toContain("keeps the branch, its commits, and the ticket");
+    for (const category of [
+      "General",
+      "Appearance",
+      "Notifications",
+      "Models",
+      "Web Search",
+      "Integrations",
+      "Storage",
+      "Updates",
+      "About",
+    ]) {
+      expect(html).toContain(category);
+    }
   });
 
-  it("no longer hosts the project-scoped base branch field (moved to Configure)", () => {
+  it("has retired the categories that had nothing to change", () => {
+    const html = renderToStaticMarkup(<SettingsPage />);
+
+    // "Harness Runtimes" was a category whose pane held one read-only command
+    // string; the inventory is a section of About now, and the per-project
+    // CHOICE is on Configure. "CLI" is likewise folded into About.
+    expect(html).not.toContain("Harness Runtimes");
+    expect(html).not.toContain("Model Access");
+  });
+
+  it("keeps the project-scoped fields off this surface", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
     expect(html).not.toContain("Default base branch");
+    expect(html).not.toContain("Setup command");
   });
 
-  it("can open directly on Harness Runtimes for a blocked chat", () => {
-    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="harness" />);
+  it("opens Storage on the retention window, with its trust-boundary line", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="storage" />);
+
+    expect(html).toContain("Keep Done worktrees for");
+    expect(html).toContain('id="done-ttl-days"');
+    // VC-113: the number governs an automatic deletion, so the row states what
+    // the deletion takes and what survives it. This is the sanctioned
+    // exception to the copy rule and must not become a hint.
+    expect(html).toContain("keeps the branch, its commits, and the ticket");
+  });
+
+  it("opens Web Search in its loading state, offering no key it has not read", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="web" />);
+
+    expect(html).toContain("Web search");
+    expect(html).toContain("Loading…");
+    expect(html).not.toContain("API key");
+  });
+
+  it("keeps the file-opening preference visible while app detection loads", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="integrations" />);
+
+    // "Ask every time" is a real value, never a blank Select while the list
+    // that supplies app options is still resolving.
+    expect(html).toContain("Open files in");
+    expect(html).toContain("Ask every time");
+    expect(html).toContain('id="open-files-in"');
+    expect(html).toContain("Loading…");
+  });
+
+  it("marks the opened category in the rail", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="updates" />);
 
     expect(html).toContain('aria-current="page"');
-    expect(html).toContain("Harness Runtimes");
-    expect(html).not.toContain("Archive Done tickets after");
+    expect(html).toContain("Current version");
   });
 
-  // The built-in half of the harness list is compiled in, so the category has
-  // something to show before any preload call — which is also the only thing
-  // keeping this suite renderable, since it runs with no `window` at all.
-  it("selects a harness and details it without a preload bridge", () => {
-    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="harness" />);
+  it("says plainly that a designed-but-unplumbed pane does not work yet", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="notifications" />);
 
-    expect(html).toContain("Claude Code");
-    expect(html).toContain("OpenCode");
-    // The first harness is detailed by default: its identity card, not a blank.
-    expect(html).toContain("Command");
-    expect(html).toContain("Built-in");
+    // The rule from kit/unavailable.tsx: the notice comes FIRST and in words.
+    // Someone who reads one thing must read the one that stops them waiting.
+    expect(html).toContain("aren&#x27;t available yet");
+    expect(html).toContain("System Settings");
   });
 });
 
-describe("parseTtlDaysInput", () => {
-  it("accepts a whole number of days at or above the 1-day minimum", () => {
-    expect(parseTtlDaysInput("14")).toBe(14);
-    expect(parseTtlDaysInput("1")).toBe(1);
-    expect(parseTtlDaysInput("  30 ")).toBe(30);
+describe("resolveSettingsCategory", () => {
+  it("maps the retired model-access key onto Models", () => {
+    // `chat-plane.tsx` deep-links here to open a provider sign-in and still
+    // sends the old key. Without the alias, that link opens General and the
+    // sign-in never starts.
+    expect(resolveSettingsCategory("model-access")).toBe("models");
   });
 
-  it("floors a fractional entry to whole days via parseInt", () => {
-    expect(parseTtlDaysInput("7.9")).toBe(7);
-  });
-
-  it("rejects zero, negatives, blanks, and non-numeric input", () => {
-    expect(parseTtlDaysInput("0")).toBeNull();
-    expect(parseTtlDaysInput("-3")).toBeNull();
-    expect(parseTtlDaysInput("")).toBeNull();
-    expect(parseTtlDaysInput("abc")).toBeNull();
+  it("passes a current key through, and leaves absence absent", () => {
+    expect(resolveSettingsCategory("storage")).toBe("storage");
+    expect(resolveSettingsCategory(undefined)).toBeUndefined();
   });
 });

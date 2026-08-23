@@ -89,15 +89,26 @@ describe("runDoctorChecks — resolution", () => {
     expect(find(runDoctorChecks(observation(), facts()), "resolves-claude").status).toBe("ok");
   });
 
-  // Configuration can be perfect while this is wrong — that is the whole point.
-  it("fails when the name reaches the user's own install instead", () => {
+  // A harness resolving to the user's OWN install is not a fault. Volli's
+  // wrapper is how Volli observes events, but a person who installed `claude`
+  // themselves and expects `claude` to run it is getting what they asked for —
+  // and doctor telling them to repair a working machine is doctor being wrong.
+  it("passes, naming the binary, when the name reaches the user's own install", () => {
     const check = find(
       runDoctorChecks(observation({ resolved: { claude: "/Users/x/.local/bin/claude" } }), facts()),
       "resolves-claude",
     );
-    expect(check.status).toBe("fail");
+    expect(check.status).toBe("ok");
     expect(check.detail).toContain("/Users/x/.local/bin/claude");
-    expect(check.detail).toContain("reports no events");
+  });
+
+  it("offers no remedy for it, because there is nothing to repair", () => {
+    const check = find(
+      runDoctorChecks(observation({ resolved: { claude: "/Users/x/.local/bin/claude" } }), facts()),
+      "resolves-claude",
+    );
+    expect(check.remedy).toBeUndefined();
+    expect(check.detail).not.toContain("reports no events");
   });
 
   it("warns rather than failing when the command resolves nowhere", () => {

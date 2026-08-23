@@ -18,9 +18,14 @@ import {
 } from "./ipc-descriptors";
 
 describe("UPDATE_IPC descriptor table", () => {
-  // Every update request is argument-less: the state is main's to own and the
-  // commands carry no caller data, so each guard only refuses stray payloads.
-  for (const channel of UPDATE_CHANNELS) {
+  /**
+   * The release-channel WRITE is the one update request that carries caller
+   * data (VC-111). Everything else on this surface is argument-less — the
+   * state is main's to own — so the loop below still holds for the rest.
+   */
+  const CHANNELS_WITH_ARGS = new Set<string>(["volli:update-channel-set"]);
+
+  for (const channel of UPDATE_CHANNELS.filter((c) => !CHANNELS_WITH_ARGS.has(c))) {
     describe(`${channel} (no-arg request)`, () => {
       const { guard, invalidError } = UPDATE_IPC[channel];
 
@@ -50,7 +55,28 @@ describe("UPDATE_IPC descriptor table", () => {
         "volli:update-check",
         "volli:update-install",
         "volli:update-live-work",
+        "volli:update-channel-get",
+        "volli:update-channel-set",
       ]);
+    });
+  });
+
+  describe("volli:update-channel-set", () => {
+    const { guard, invalidError } = UPDATE_IPC["volli:update-channel-set"];
+
+    it("accepts exactly the two release lines", () => {
+      expect(guard(["stable"])).toBe(true);
+      expect(guard(["canary"])).toBe(true);
+    });
+
+    it("rejects any other line, and a missing one", () => {
+      expect(guard(["nightly"])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ channel: "canary" }])).toBe(false);
+    });
+
+    it("names the release channel in its refusal", () => {
+      expect(invalidError).toBe("Invalid release channel");
     });
   });
 });
@@ -65,6 +91,30 @@ describe("DATA_IPC descriptor table", () => {
 
     it("rejects stray arguments", () => {
       expect(guard(["junk"])).toBe(false);
+    });
+  });
+
+  describe("volli:database", () => {
+    const { guard, invalidError } = DATA_IPC["volli:database"];
+
+    it("accepts a size read with no renderer-supplied path", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("accepts only the main-owned reveal and export actions", () => {
+      expect(guard(["reveal"])).toBe(true);
+      expect(guard(["export"])).toBe(true);
+    });
+
+    it("rejects renderer paths, an unknown action, and a wrong arity", () => {
+      expect(guard(["/Users/me/anything"])).toBe(false);
+      expect(guard([{ path: "/Users/me/anything" }])).toBe(false);
+      expect(guard(["delete"])).toBe(false);
+      expect(guard(["reveal", "extra"])).toBe(false);
+    });
+
+    it("names the database request in its refusal", () => {
+      expect(invalidError).toBe("Invalid database request");
     });
   });
 
@@ -136,6 +186,67 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid project");
+    });
+  });
+
+  describe("volli:project-skill-modes", () => {
+    const { guard } = DATA_IPC["volli:project-skill-modes"];
+
+    it("accepts an empty map — the shape that clears every rule", () => {
+      expect(guard([{ id: "p1", modes: {} }])).toBe(true);
+    });
+
+    it("accepts the two storable modes", () => {
+      expect(guard([{ id: "p1", modes: { tdd: "manual", mintlify: "off" } }])).toBe(true);
+    });
+
+    it("rejects a mode outside the vocabulary", () => {
+      expect(guard([{ id: "p1", modes: { tdd: "sideways" } }])).toBe(false);
+      // `auto` is the absence of a rule, so it is never on the wire.
+      expect(guard([{ id: "p1", modes: { tdd: "auto" } }])).toBe(false);
+    });
+
+    it("rejects a slug the `/name` grammar cannot spell", () => {
+      expect(guard([{ id: "p1", modes: { "not a slug": "off" } }])).toBe(false);
+    });
+
+    it("rejects a missing id, non-object map, or wrong arity", () => {
+      expect(guard([{ modes: {} }])).toBe(false);
+      expect(guard([{ id: "p1", modes: null }])).toBe(false);
+      expect(guard([{ id: "p1", modes: ["tdd"] }])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+  });
+
+  describe("volli:project-session-defaults", () => {
+    const { guard } = DATA_IPC["volli:project-session-defaults"];
+    const model = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
+
+    it("accepts both fields null — the shape that clears both overrides", () => {
+      expect(guard([{ id: "p1", harness: null, model: null }])).toBe(true);
+    });
+
+    it("accepts a harness and a full model selection", () => {
+      expect(guard([{ id: "p1", harness: "codex", model }])).toBe(true);
+    });
+
+    it("rejects a model missing a field or carrying an unknown reasoning level", () => {
+      expect(guard([{ id: "p1", harness: null, model: { providerId: "a", modelId: "b" } }])).toBe(
+        false,
+      );
+      expect(
+        guard([{ id: "p1", harness: null, model: { ...model, reasoningLevel: "extreme" } }]),
+      ).toBe(false);
+    });
+
+    it("rejects a non-string harness", () => {
+      expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
+    });
+
+    it("rejects a missing id, non-record payload, or wrong arity", () => {
+      expect(guard([{ harness: null, model: null }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
     });
   });
 
@@ -1449,9 +1560,10 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 53 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(53);
+    it("covers all 56 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(56);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
       expect(DATA_CHANNELS).toContain("volli:blob-list");
@@ -1698,11 +1810,54 @@ describe("FILE_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:prompt-template-create", () => {
+    const { guard, invalidError } = FILE_IPC["volli:prompt-template-create"];
+    const valid = {
+      projectId: "p1",
+      scope: "project",
+      name: "review",
+      description: "Review a file",
+      body: "Review $1.",
+    };
+
+    it("accepts each writable scope", () => {
+      expect(guard([valid])).toBe(true);
+      expect(guard([{ ...valid, scope: "personal" }])).toBe(true);
+    });
+
+    it("rejects a non-record payload or wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("rejects every invalid command field", () => {
+      expect(guard([{ ...valid, projectId: 1 }])).toBe(false);
+      expect(guard([{ ...valid, scope: "shared" }])).toBe(false);
+      expect(guard([{ ...valid, name: 1 }])).toBe(false);
+      expect(guard([{ ...valid, name: "../escape" }])).toBe(false);
+      expect(guard([{ ...valid, description: 1 }])).toBe(false);
+      expect(guard([{ ...valid, body: 1 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid command");
+    });
+  });
+
   describe("volli:prompt-templates", () => {
     const { guard, invalidError } = FILE_IPC["volli:prompt-templates"];
 
     it("accepts a valid payload", () => {
       expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("accepts the Skills pane's unruled read", () => {
+      expect(guard([{ projectId: "p1", ruled: false }])).toBe(true);
+      expect(guard([{ projectId: "p1", ruled: true }])).toBe(true);
+    });
+
+    it("rejects a non-boolean ruled flag", () => {
+      expect(guard([{ projectId: "p1", ruled: "no" }])).toBe(false);
     });
 
     it("rejects a non-object payload", () => {
@@ -1728,8 +1883,8 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 14 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(14);
+    it("covers all 15 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(15);
       expect(FILE_CHANNELS).toContain("volli:prompt-templates");
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");

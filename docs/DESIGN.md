@@ -16,17 +16,24 @@ filling every pixel (the Linear lesson — maximal width reads as noise, not as 
 Every surface declares which tier it is; the tiers may not be mixed ad hoc.
 
 - **Tier A — reading surfaces.** Prose-like content someone reads or writes: the Ticket Body tab
-  (title, description, activity, composer), the Settings and Configure panes, empty states. These center on
+  (title, description, activity, composer), empty states. These center on
   the canonical measure via `<ContentColumn>`; surrounding whitespace is the point.
 - **Tier B — workbench surfaces.** Content that genuinely earns width: the kanban board, list
-  view, artifacts viewer, terminals. These stay fluid edge-to-edge but align their horizontal edges
+  view, artifacts viewer, terminals, and the Settings and Configure panes. These stay fluid edge-to-edge but align their horizontal edges
   to the page gutter so all surfaces share the same left/right rhythm.
+
+  Settings and Configure are Tier B via `<WorkbenchColumn>` — still a centered column, but capped
+  at `--container-workbench` rather than the reading measure. They read like preference forms, yet
+  their tables carry a name AND a description AND provenance, and at 45rem the description
+  truncated to a few words — the one column that tells two skills apart. Capped rather than fully
+  fluid because an unbounded row parks a switch a foot from the label it answers to.
 
 ## Layout tokens (`globals.css` `@theme`)
 
 | Token | Value | Utility | Meaning |
 |---|---|---|---|
 | `--container-content` | `45rem` (720px) | `max-w-content` | The canonical reading measure. Chosen over Linear's ~660px for code-heavy ticket markdown. |
+| `--container-workbench` | `80rem` (1280px) | `max-w-workbench` | The Tier B ceiling, for surfaces that are columns but carry tables (Settings, Configure). |
 | `--spacing-gutter` | `1.5rem` (24px) | `px-gutter` etc. | The unified page-edge padding every surface aligns to. |
 
 ## Spacing — five steps
@@ -66,6 +73,8 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 ## Layout primitives (`components/layout/`)
 
 - **`<ContentColumn>`** — the Tier A measure column. Tier B surfaces must not wrap in it.
+- **`<WorkbenchColumn>`** — the same column at the Tier B ceiling (`--container-workbench`), for a
+  surface that needs width for tables but would look adrift edge-to-edge. Settings and Configure.
 - **`<PageHeader>`** — the page-level header, and the only one: `title` (always the page's `h1`),
   optional `description`, optional right-parked `actions`, and `children` for controls that share
   the title's row and wrap with it. `py-4`, wrap-friendly, gaps `4`/`2`. One axis, `variant`,

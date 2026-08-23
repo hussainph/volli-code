@@ -17,7 +17,7 @@ describe("the wave's geometry", () => {
     // has to sit at 2×amplitude — the constant the path bakes in. Pin it via
     // the first segment's control coordinate.
     const path = sliderSquigglePath(24, SLIDER_SQUIGGLE_WAVELENGTH, SLIDER_SQUIGGLE_AMPLITUDE);
-    expect(path).toBe("M 0 0 Q 8 10 16 0 T 32 0");
+    expect(path).toBe("M 0 0 Q 18 10 36 0");
   });
 
   it("runs to the half-wave boundary at or past the width, never short of it", () => {
@@ -37,7 +37,7 @@ describe("the wave's geometry", () => {
     expect(sliderSquigglePath(SLIDER_SQUIGGLE_WIDTH, 0, 2)).toBe("");
   });
 
-  it("lays ~5.5 cycles across the fader, not the pill's ~15", () => {
+  it("lays a handful of relaxed cycles across the fader, not the pill's ~15", () => {
     // The regression the redesign exists to prevent: inheriting the effort
     // pill's 12px wavelength put a crest every 6px on a 176px track, which
     // read as noise rather than as a wave.

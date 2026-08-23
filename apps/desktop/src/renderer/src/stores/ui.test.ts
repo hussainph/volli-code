@@ -164,6 +164,68 @@ describe("diffPresentation", () => {
   });
 });
 
+describe("defaultExternalAppId", () => {
+  it("round-trips a chosen app id", () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+
+    store.getState().setDefaultExternalAppId("vscode");
+
+    expect(createUiStore(storage).getState().defaultExternalAppId).toBe("vscode");
+  });
+
+  it("persists Ask every time as an explicit choice", () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().setDefaultExternalAppId("vscode");
+
+    store.getState().setDefaultExternalAppId(null);
+    store
+      .getState()
+      .reconcileDefaultExternalApp([{ id: "vscode", label: "VS Code", kind: "editor" }]);
+
+    const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state).toHaveProperty("defaultExternalAppId", null);
+    expect(createUiStore(storage).getState().defaultExternalAppId).toBeNull();
+  });
+
+  it("keeps a default app that Launch Services still finds", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setDefaultExternalAppId("vscode");
+
+    store
+      .getState()
+      .reconcileDefaultExternalApp([{ id: "vscode", label: "VS Code", kind: "editor" }]);
+
+    expect(store.getState().defaultExternalAppId).toBe("vscode");
+  });
+
+  it("resolves an app no longer installed to Ask every time", () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().setDefaultExternalAppId("vscode");
+
+    store
+      .getState()
+      .reconcileDefaultExternalApp([{ id: "cursor", label: "Cursor", kind: "editor" }]);
+
+    expect(store.getState().defaultExternalAppId).toBeNull();
+    expect(JSON.parse(storage.getItem("volli:ui")!).state.defaultExternalAppId).toBeNull();
+  });
+
+  it.each(["obsolete-editor", true, { id: "vscode" }])(
+    "sanitizes corrupt persisted values to Ask every time",
+    (defaultExternalAppId) => {
+      const storage = createMemoryStorage();
+      storage.setItem("volli:ui", JSON.stringify({ state: { defaultExternalAppId }, version: 1 }));
+
+      expect(createUiStore(storage).getState().defaultExternalAppId).toBeNull();
+    },
+  );
+});
+
 describe("setSettingsOpen", () => {
   it("toggles the app-wide Settings overlay", () => {
     const store = createUiStore(createMemoryStorage());
@@ -358,6 +420,7 @@ describe("persistence", () => {
       homeRailMode: "sessions",
       homeEmptyVisual: "board",
       diffPresentation: "side-by-side",
+      defaultExternalAppId: null,
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
     // The New-ticket composer's terminal harness left with the terminal kickoff
@@ -662,6 +725,27 @@ describe("rehydration sanitization (corrupt JSON)", () => {
 
     const store = createUiStore(storage);
     expect(store.getState().sidebarWidth).toBe(SIDEBAR_DEFAULT_WIDTH);
+    expect(store.getState().uiScale).toBe(1);
+  });
+});
+
+describe("setUiScale", () => {
+  it("takes a rung from the ladder", () => {
+    const store = createUiStore();
+    store.getState().setUiScale(1.25);
+    expect(store.getState().uiScale).toBe(1.25);
+  });
+
+  it("snaps a value that is not a rung", () => {
+    // `uiScale` is applied verbatim as CSS `zoom` on the content row, so an
+    // off-ladder value is an untested layout — and a corrupt one (0, NaN)
+    // renders the whole app below the chrome band invisible, with the
+    // zoom-reset menu item unreachable by mouse.
+    const store = createUiStore();
+    store.getState().setUiScale(1.13);
+    expect(store.getState().uiScale).toBe(1.1);
+
+    store.getState().setUiScale(Number.NaN);
     expect(store.getState().uiScale).toBe(1);
   });
 });

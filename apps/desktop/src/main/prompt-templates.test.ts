@@ -7,6 +7,7 @@ import {
   loadPromptTemplates,
   parsePromptTemplateFile,
   readPromptTemplateDir,
+  writePromptTemplate,
 } from "./prompt-templates";
 
 const tempDirs: string[] = [];
@@ -220,6 +221,10 @@ describe("loadPromptTemplates", () => {
     expect(result.ok).toBe(true);
     expect(result.ok && result.templates.map((entry) => entry.name)).toEqual(["review", "ship"]);
     expect(result.ok && result.templates[0]?.content).toBe("project body");
+    expect(result.ok && result.templates.map((entry) => entry.source)).toEqual([
+      "project",
+      "personal",
+    ]);
   });
 
   it("is an empty list when neither directory exists", async () => {
@@ -257,5 +262,155 @@ describe("loadPromptTemplates", () => {
     } finally {
       chmodSync(globalCommandsDir, 0o700);
     }
+  });
+});
+
+describe("writePromptTemplate", () => {
+  it("writes a file the reader offers back as a command", async () => {
+    const dir = makeCommandsDir();
+
+    const written = await writePromptTemplate({
+      dir,
+      name: "ship",
+      description: "Open a PR",
+      body: "Open a PR against main.",
+    });
+
+    expect(written).toEqual({ ok: true, path: join(dir, "ship.md") });
+    const read = await readPromptTemplateDir(dir);
+    expect(read).toEqual({
+      ok: true,
+      templates: [{ name: "ship", description: "Open a PR", content: "Open a PR against main." }],
+    });
+  });
+
+  it("refuses a name already on disk rather than overwriting the prompt in it", async () => {
+    const dir = makeCommandsDir({ "ship.md": "The prompt someone tuned by hand." });
+
+    const written = await writePromptTemplate({
+      dir,
+      name: "ship",
+      description: "Open a PR",
+      body: "Something else entirely.",
+    });
+
+    expect(written.ok).toBe(false);
+    // The file on disk is untouched — the whole point of refusing.
+    const read = await readPromptTemplateDir(dir);
+    expect(read).toEqual({
+      ok: true,
+      templates: [
+        {
+          name: "ship",
+          description: "The prompt someone tuned by hand.",
+          content: "The prompt someone tuned by hand.",
+        },
+      ],
+    });
+  });
+
+  it("surfaces an unexpected filesystem failure", async () => {
+    const dir = makeCommandsDir();
+    chmodSync(dir, 0o500);
+    try {
+      const written = await writePromptTemplate({
+        dir,
+        name: "ship",
+        description: "Open a PR",
+        body: "Go.",
+      });
+      expect(written.ok).toBe(false);
+      expect(written.ok === false && written.error).not.toContain('called "ship" already exists');
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  it("refuses a name that would escape the commands directory", async () => {
+    const dir = makeCommandsDir();
+
+    expect(
+      await writePromptTemplate({ dir, name: "../escape", description: "", body: "hi" }),
+    ).toEqual({
+      ok: false,
+      error: "Use letters, numbers, dashes and underscores — the name becomes the filename.",
+    });
+  });
+
+  it("surfaces an unexpected filesystem error", async () => {
+    const result = await writePromptTemplate({
+      dir: "",
+      name: "ship",
+      description: "",
+      body: "Go.",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).not.toContain("already exists");
+  });
+
+  it("refuses an empty prompt — a command with no body invokes nothing", async () => {
+    const dir = makeCommandsDir();
+
+    expect(await writePromptTemplate({ dir, name: "ship", description: "x", body: "   " })).toEqual(
+      {
+        ok: false,
+        error: "A command needs a prompt.",
+      },
+    );
+  });
+
+  it("escapes a description that would otherwise break its own frontmatter block", async () => {
+    const dir = makeCommandsDir();
+
+    await writePromptTemplate({
+      dir,
+      name: "ship",
+      description: "Ship: fast, and\nmind the newline",
+      body: "Go.",
+    });
+
+    const read = await readPromptTemplateDir(dir);
+    expect(read).toEqual({
+      ok: true,
+      templates: [
+        { name: "ship", description: "Ship: fast, and\nmind the newline", content: "Go." },
+      ],
+    });
+  });
+
+  it("creates the commands directory when the project has never had one", async () => {
+    const dir = missingDir();
+
+    expect(
+      (await writePromptTemplate({ dir, name: "ship", description: "", body: "Go." })).ok,
+    ).toBe(true);
+    const read = await readPromptTemplateDir(dir);
+    expect(read.ok && read.templates.map((t) => t.name)).toEqual(["ship"]);
+  });
+
+  /**
+   * The reader trims the body only on its frontmatter branch
+   * (`parsePromptTemplateFile` slices past the closing fence and trims); with
+   * no fence it hands back the file verbatim, trailing newline included. That
+   * is Pi's grammar, pinned by `prompt-template-parity.test.ts`, so the writer
+   * bends around it rather than the reverse.
+   *
+   * Pinned because it is invisible until someone compares two commands: the
+   * SAME prompt stores one way with a description and another way without.
+   * Harmless in a prompt — and a trap for anyone who later asserts equality
+   * between what was typed and what was stored.
+   */
+  it("round-trips the prompt exactly when a description fences it, and with the file's own newline when nothing does", async () => {
+    const described = makeCommandsDir();
+    const bare = makeCommandsDir();
+
+    await writePromptTemplate({ dir: described, name: "a", description: "d", body: "Go." });
+    await writePromptTemplate({ dir: bare, name: "a", description: "", body: "Go." });
+
+    const withFence = await readPromptTemplateDir(described);
+    const withoutFence = await readPromptTemplateDir(bare);
+    expect(withFence.ok && withFence.templates[0]?.content).toBe("Go.");
+    expect(withoutFence.ok && withoutFence.templates[0]?.content).toBe("Go.\n");
   });
 });

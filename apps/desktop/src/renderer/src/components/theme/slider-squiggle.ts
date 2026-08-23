@@ -14,24 +14,32 @@
  * click-to-jump and the keyboard and the focus ring all stay), and the editor
  * draws the groove itself — the whole wave in the unfilled ink, the filled
  * share over it clipped at the seam, and a capsule thumb centred on that same
- * seam. Numbers re-derived for a 176px fader rather than inherited from a 28px
- * pill: ~5.5 cycles instead of ~15, a 5px peak instead of 2px inside a 4px
- * stripe.
+ * seam. Numbers re-derived for the fader's own length rather than inherited
+ * from a 28px pill: ~6 relaxed cycles instead of ~15, a 5px peak instead of
+ * 2px inside a 4px stripe.
  *
  * The arithmetic is pure so the coverage gate can hold it at 100%.
  */
 
-/** One full wave, in px — ~5.5 cycles across the fader. */
-export const SLIDER_SQUIGGLE_WAVELENGTH = 32;
+/** One full wave, in px — a handful of relaxed cycles across the fader (Arc's cadence). */
+export const SLIDER_SQUIGGLE_WAVELENGTH = 72;
 
 /** The wave's peak, in px from its centreline, at full vibrancy. */
 export const SLIDER_SQUIGGLE_AMPLITUDE = 5;
 
 /**
- * The fader's width — `w-44` on the input, the one place its geometry is
- * authored — which lets the path be baked once per render instead of measured.
+ * The fader's LENGTH. THE ONE PLACE its geometry is authored: the editor sets
+ * the control's long axis from this constant (never a `w-*` class beside it,
+ * which is how the seam math and the rendered box once drifted apart), which
+ * lets the path be baked once per render instead of measured.
+ *
+ * The faders stand VERTICALLY, flanking the canvas pad, and each carries a
+ * glyph at its foot — so the TRACK is the pad's height minus that foot
+ * (`FADER_FOOT` in the editor, 22px), never the full pad height. Sized to
+ * the pad's height directly, the track shoved its own foot out of the column
+ * and rose past the section rule above it.
  */
-export const SLIDER_SQUIGGLE_WIDTH = 176;
+export const SLIDER_SQUIGGLE_WIDTH = 318;
 
 /**
  * The capsule thumb's width, which is also its travel inset at either end.

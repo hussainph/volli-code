@@ -31,7 +31,7 @@ import type {
   WebAccessSettingsView,
 } from "../../../../ipc/contract";
 import { webAccessPanel } from "@renderer/components/pages/web-access-model";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
@@ -127,14 +127,14 @@ export function WebAccessSettings() {
 
   if (state.status === "loading") {
     return (
-      <SettingsSection title="Web search" icon={GlobeIcon}>
+      <PrefSection title="Web search" icon={GlobeIcon}>
         <p className={EMPTY_INLINE}>Loading…</p>
-      </SettingsSection>
+      </PrefSection>
     );
   }
   if (state.status === "error") {
     return (
-      <SettingsSection title="Web search" icon={GlobeIcon}>
+      <PrefSection title="Web search" icon={GlobeIcon}>
         <Notice
           announce
           tone="error"
@@ -147,7 +147,7 @@ export function WebAccessSettings() {
             </Button>
           }
         />
-      </SettingsSection>
+      </PrefSection>
     );
   }
 
@@ -169,8 +169,8 @@ export function WebAccessSettings() {
   };
 
   return (
-    <SettingsSection title="Web search" icon={GlobeIcon}>
-      <SettingsRow label="Provider">
+    <PrefSection title="Web search" icon={GlobeIcon}>
+      <PrefRow label="Provider">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 text-ui text-muted-foreground">
             <StatusDot state={panel.active ? "ready" : "idle"} />
@@ -185,10 +185,10 @@ export function WebAccessSettings() {
             onChange={chooseProvider}
           />
         </div>
-      </SettingsRow>
+      </PrefRow>
 
       {panel.showsEndpoint ? (
-        <SettingsRow label="Instance" htmlFor="web-access-endpoint" align="start">
+        <PrefRow label="Instance" htmlFor="web-access-endpoint" align="start">
           <div className="flex w-80 flex-col items-end gap-2">
             <Input
               id="web-access-endpoint"
@@ -210,11 +210,11 @@ export function WebAccessSettings() {
               Save instance
             </Button>
           </div>
-        </SettingsRow>
+        </PrefRow>
       ) : null}
 
       {panel.showsKey ? (
-        <SettingsRow label="API key" htmlFor="web-access-key" align="start">
+        <PrefRow label="API key" htmlFor="web-access-key" align="start">
           <div className="flex w-80 flex-col items-end gap-2">
             <Input
               id="web-access-key"
@@ -264,7 +264,7 @@ export function WebAccessSettings() {
               </Button>
             </div>
           </div>
-        </SettingsRow>
+        </PrefRow>
       ) : null}
 
       {fieldError === null ? null : (
@@ -273,6 +273,6 @@ export function WebAccessSettings() {
       {panel.notice === null || fieldError !== null ? null : (
         <Notice tone="neutral" title={panel.notice} />
       )}
-    </SettingsSection>
+    </PrefSection>
   );
 }

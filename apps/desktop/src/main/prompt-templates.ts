@@ -25,9 +25,10 @@
  */
 import { promises as fsp, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   errorMessage,
+  isWritablePromptTemplateName,
   mergePromptTemplates,
   promptTemplateDescription,
   type PromptTemplate,
@@ -160,6 +161,60 @@ export async function loadPromptTemplates(input: {
     ok: true,
     templates: mergePromptTemplates({ project: project.templates, global: global.templates }),
   };
+}
+
+/**
+ * Creates one `.md` template — the write half of this module, and the only
+ * one. Volli authors commands; it never rewrites them, because the file is the
+ * interface and an app that edits a hand-tuned prompt behind your back is the
+ * thing `.volli/commands/` exists to avoid.
+ *
+ * It refuses rather than clobbers. A name already on disk is the one failure a
+ * caller can actually do something about (pick another name), and silently
+ * overwriting a prompt someone wrote is unrecoverable — there is no undo for a
+ * file. The reader merges project over personal, so the SAME name legitimately
+ * exists in the other tier; the collision checked here is only within `dir`.
+ *
+ * The description rides YAML frontmatter rather than being left to the body's
+ * first line, because a body whose first line is a heading or a bare imperative
+ * would otherwise become the picker's description. `stringifyYaml` quotes and
+ * escapes it, so a description containing `:` or a newline cannot break out of
+ * the block it is in.
+ */
+export async function writePromptTemplate(input: {
+  dir: string;
+  name: string;
+  description: string;
+  body: string;
+}): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  if (!isWritablePromptTemplateName(input.name)) {
+    return {
+      ok: false,
+      error: "Use letters, numbers, dashes and underscores — the name becomes the filename.",
+    };
+  }
+  const body = input.body.trim();
+  if (body.length === 0) return { ok: false, error: "A command needs a prompt." };
+
+  const path = join(input.dir, `${input.name}.md`);
+  const description = input.description.trim();
+  const frontmatter =
+    description.length === 0
+      ? ""
+      : `${FRONTMATTER_FENCE}\n${stringifyYaml({ description })}${FRONTMATTER_FENCE}\n`;
+
+  try {
+    await fsp.mkdir(input.dir, { recursive: true });
+    // `wx` is the collision check AND the write, in one syscall. Checking
+    // existence first and then writing is a race that loses somebody's file.
+    await fsp.writeFile(path, `${frontmatter}${body}\n`, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === "EEXIST") {
+      return { ok: false, error: `A command called "${input.name}" already exists here.` };
+    }
+    return { ok: false, error: errorMessage(error) };
+  }
+  return { ok: true, path };
 }
 
 /** ENOENT/ENOTDIR — the directory is absent, which this surface treats as empty. */

@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { UpdateUiState, VolliIpcChannel } from "../ipc/contract";
+import type { UpdateChannel, UpdateUiState, VolliIpcChannel } from "../ipc/contract";
 
 const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
@@ -147,6 +147,37 @@ describe("registerUpdateIpcHandlers", () => {
       openAgentSessions: 1,
       unsavedDrafts: ["notes.md"],
     });
+  });
+
+  it("reports an unavailable release channel honestly", () => {
+    const fixture = makeFixture();
+    registerUpdateIpcHandlers(fixture.deps);
+
+    expect(invoke("volli:update-channel-get")).toEqual({
+      ok: false,
+      error: "The release channel isn't readable right now.",
+    });
+    expect(invoke("volli:update-channel-set", "canary")).toEqual({
+      ok: false,
+      error: "The release channel isn't writable right now.",
+    });
+  });
+
+  it("reads and saves the configured release channel", () => {
+    const fixture = makeFixture();
+    let current: UpdateChannel = "stable";
+    fixture.deps.channel = {
+      read: () => current,
+      write: (next) => {
+        current = next;
+        return current;
+      },
+    };
+    registerUpdateIpcHandlers(fixture.deps);
+
+    expect(invoke("volli:update-channel-get")).toEqual({ ok: true, channel: "stable" });
+    expect(invoke("volli:update-channel-set", "canary")).toEqual({ ok: true, channel: "canary" });
+    expect(current).toBe("canary");
   });
 
   it("rejects stray arguments through the shared guard envelope", () => {

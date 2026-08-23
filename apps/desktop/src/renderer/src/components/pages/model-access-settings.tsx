@@ -41,7 +41,13 @@ import {
 } from "@volli/shared";
 
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import {
+  Cell,
+  DataTable,
+  PrefRow,
+  PrefSection,
+  TableSearch,
+} from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
   Select,
@@ -59,24 +65,30 @@ import { useUiStore } from "@renderer/stores/ui";
 /**
  * The rows of the Default models section, in resolution order.
  *
- * `help` is the hover helper a row carries when its purpose is not obvious
- * from its two-word label (VC-81 asked for one on the utility row): what the
- * slot is FOR, so a person picking a model for it knows what the bill is for.
- * The tooltip is a helper, not a tutorial — one thought, one hover.
+ * `hint` is the `(i)` a row carries when its purpose is not obvious from its
+ * two-word label (VC-81 asked for one on the utility row): what the slot is
+ * FOR, so a person picking a model for it knows what the bill is for.
  *
- * The Utility helper also names what happens when the slot is empty. Leaving
- * it unset does not switch background work off; those calls fall to the model
- * each chat is already running under. That is a fallback a person can be
- * billed for, and CONTEXT.md's Model Access rule is that Volli never falls
- * back to another model SILENTLY — so this is where it is said out loud.
+ * The Utility hint also names what happens when the slot is EMPTY, and that
+ * half is not optional. Leaving it unset does not switch background work off;
+ * those calls fall to the model each chat is already running under. That is a
+ * fallback a person can be billed for, and CONTEXT.md's Model Access rule is
+ * that Volli never falls back to another model silently.
+ *
+ * Held to the hint budget — twelve words — which is what turned three lines of
+ * prose into one sentence without losing either fact.
  */
-const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string; help?: string }[] = [
+export const PURPOSE_ROWS: readonly {
+  purpose: ModelPurpose;
+  label: string;
+  hint?: string;
+}[] = [
   { purpose: "global", label: "Project chats" },
   { purpose: "ticket", label: "Ticket Sessions" },
   {
     purpose: "utility",
     label: "Utility",
-    help: "Background jobs: naming new chats, summarizing long conversations. Left unset, these run on the model the chat itself is using — an inexpensive model here keeps them cheap.",
+    hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
   },
 ];
 
@@ -198,11 +210,10 @@ export function ModelAccessSettings({
   }
 
   const offerable = offerableModels(models);
-  const groups = availableModelsByProvider(models, providers);
 
   return (
     <>
-      <SettingsSection
+      <PrefSection
         title="Default models"
         icon={CpuIcon}
         action={
@@ -221,12 +232,12 @@ export function ModelAccessSettings({
           </Button>
         }
       >
-        {PURPOSE_ROWS.map(({ purpose, label, help }) => (
+        {PURPOSE_ROWS.map(({ purpose, label, hint }) => (
           <DefaultModelRow
             key={purpose}
             purpose={purpose}
             label={label}
-            help={help}
+            hint={hint}
             selection={defaults[purpose]}
             models={models}
             offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
@@ -235,9 +246,9 @@ export function ModelAccessSettings({
             onSave={(selection) => void saveDefault(purpose, selection)}
           />
         ))}
-      </SettingsSection>
-      <SettingsSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
-        <SettingsRow label="Automatic compaction" testId="auto-compaction">
+      </PrefSection>
+      <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
+        <PrefRow label="Automatic compaction" testId="auto-compaction">
           <Switch
             aria-label="Compact a Session automatically before it fills its context window"
             checked={compaction.autoCompaction}
@@ -246,31 +257,15 @@ export function ModelAccessSettings({
               void saveCompaction({ ...compaction, autoCompaction })
             }
           />
-        </SettingsRow>
-      </SettingsSection>
-      {groups.length > 0 ? (
-        <SettingsSection title="Models" icon={EyeIcon}>
-          {groups.map((group) => (
-            <React.Fragment key={group.providerId}>
-              <p className="pt-2 pb-1 text-ui font-medium text-muted-foreground first:pt-1">
-                {group.providerLabel}
-              </p>
-              {group.models.map((model) => (
-                <SettingsRow
-                  key={`${model.providerId}/${model.modelId}`}
-                  label={model.label}
-                  testId={`visibility-${model.providerId}-${model.modelId}`}
-                >
-                  <Switch
-                    aria-label={`Show ${model.label} in pickers`}
-                    checked={!isModelHidden(hidden, model)}
-                    onCheckedChange={(visible) => void saveVisibility(model, visible)}
-                  />
-                </SettingsRow>
-              ))}
-            </React.Fragment>
-          ))}
-        </SettingsSection>
+        </PrefRow>
+      </PrefSection>
+      {offerable.length > 0 ? (
+        <CatalogSection
+          offerable={offerable}
+          providers={providers}
+          hidden={hidden}
+          onSaveVisibility={(model, visible) => void saveVisibility(model, visible)}
+        />
       ) : null}
       <ModelAccessAccounts
         providers={providers}
@@ -283,6 +278,86 @@ export function ModelAccessSettings({
 }
 
 /**
+ * THE CATALOGUE AS A TABLE (VC-111), not a stack of rows grouped by a
+ * provider paragraph.
+ *
+ * A signed-in profile can offer a hundred models. As rows this was a section
+ * with no bottom: Accounts sat below it and was effectively unreachable, and
+ * the provider — half a model's identity, since the same name ships from
+ * several — was a heading you had to scroll back to rather than a value you
+ * could read across. As a table it caps at eight rows and scrolls inside its
+ * own box; provider becomes a column; the per-model control lines up in
+ * columns of their own.
+ *
+ * SEARCH LIVES ON THE HEADER RAIL, beside the title — the same place and the
+ * same w-56 field as "Available to connect" below it. It is the table's only
+ * control, so a toolbar row for it alone drew a lone right-floating field
+ * under an empty header rail. The query is owned HERE and handed down, which
+ * is also why this is its own component: keystrokes re-render this section,
+ * not the whole Models pane above it.
+ */
+function CatalogSection({
+  offerable,
+  providers,
+  hidden,
+  onSaveVisibility,
+}: {
+  offerable: readonly ModelAccessModel[];
+  providers: readonly ModelAccessProvider[];
+  hidden: readonly HiddenModelRef[];
+  onSaveVisibility(model: HiddenModelRef, visible: boolean): void;
+}) {
+  const [query, setQuery] = React.useState("");
+
+  return (
+    <PrefSection
+      title="Catalog"
+      icon={EyeIcon}
+      action={<TableSearch value={query} placeholder="Search models" onChange={setQuery} />}
+    >
+      <DataTable
+        label="Model catalog"
+        items={offerable}
+        keyOf={(model) => `${model.providerId}/${model.modelId}`}
+        rows={8}
+        search={(model) => `${model.label} ${providerLabelFor(providers, model.providerId)}`}
+        query={query}
+        placeholder="Search models"
+        empty="No models. Sign in to a provider below."
+        noResults="No models match."
+        columns={[
+          { key: "name", header: "Model", cell: (model) => <Cell strong>{model.label}</Cell> },
+          {
+            key: "provider",
+            header: "Provider",
+            width: "10rem",
+            cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
+          },
+          // The Reserve column that sat here was retired with per-model
+          // compaction reserves (VC-155) — a ladder of numbers nobody could
+          // pick by feel; every Session runs on the executor's own reserve.
+          {
+            key: "shown",
+            header: "Shown",
+            width: "4rem",
+            align: "end",
+            headerHidden: true,
+            cell: (model) => (
+              <Switch
+                aria-label={`Show ${model.label} by ${providerLabelFor(providers, model.providerId)} in pickers`}
+                data-testid={`visibility-${model.providerId}-${model.modelId}`}
+                checked={!isModelHidden(hidden, model)}
+                onCheckedChange={(visible) => onSaveVisibility(model, visible)}
+              />
+            ),
+          },
+        ]}
+      />
+    </PrefSection>
+  );
+}
+
+/**
  * One purpose's choice: the model, and the reasoning level beside it.
  *
  * A ticket/utility row carries "Project default" as an ordinary option rather
@@ -290,15 +365,15 @@ export function ModelAccessSettings({
  * nothing when the purpose inherits would read as unconfigured — which is the
  * one thing it is not.
  *
- * A row with a `help` string carries it as a hover helper beside the label —
- * rendered by {@link SettingsRow}, so every helper in Settings is the same
- * glyph in the same place, and the slot explains itself without a paragraph
- * under the control (CLAUDE.md's copy rule).
+ * A row with a `hint` carries it as the `(i)` beside its label — rendered by
+ * {@link PrefRow}, so every hint on both surfaces is the same glyph in the same
+ * place, and the slot explains itself without a paragraph under the control
+ * (CLAUDE.md's copy rule).
  */
 function DefaultModelRow({
   purpose,
   label,
-  help,
+  hint,
   selection,
   models,
   offerable,
@@ -308,7 +383,7 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
-  help?: string;
+  hint?: string;
   selection: ModelSelection | null;
   models: readonly ModelAccessModel[];
   offerable: readonly ModelAccessModel[];
@@ -330,9 +405,9 @@ function DefaultModelRow({
         : "";
 
   return (
-    <SettingsRow
+    <PrefRow
       label={label}
-      {...(help === undefined ? {} : { help })}
+      {...(hint === undefined ? {} : { hint })}
       testId={`default-model-${purpose}`}
     >
       <Select
@@ -383,7 +458,7 @@ function DefaultModelRow({
           ))}
         </SelectContent>
       </Select>
-    </SettingsRow>
+    </PrefRow>
   );
 }
 
@@ -486,6 +561,21 @@ export function modelOptionLabel(
 ): string {
   const provider = providers.find((candidate) => candidate.id === model.providerId);
   return `${model.label} · ${provider?.label ?? model.providerId}`;
+}
+
+/**
+ * A provider's display name, or its id when the catalogue does not name it.
+ *
+ * The provider is half a model's identity — eight providers ship a model called
+ * exactly "GPT-5.6 Luna" — so the Provider column exists to tell two identical
+ * rows apart, and falling back to the id keeps it able to do that even for a
+ * provider the profile has no metadata for.
+ */
+export function providerLabelFor(
+  providers: readonly ModelAccessProvider[],
+  providerId: string,
+): string {
+  return providers.find((provider) => provider.id === providerId)?.label ?? providerId;
 }
 
 function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): string {

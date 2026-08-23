@@ -30,6 +30,8 @@
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import * as React from "react";
 import type {
   ModelAccessProvider,
@@ -43,13 +45,14 @@ import {
   applySignInUpdate,
   deepLinkedAction,
   IDLE_SIGN_IN_VIEW,
-  orderedAccounts,
+  partitionAccounts,
   providerAccessLabel,
   retireAnsweredPrompt,
   type DeepLinkedAction,
   type SignInView,
 } from "@renderer/components/pages/model-access-accounts-model";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { Empty, PrefRow, PrefSection } from "@renderer/components/settings/kit";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -97,19 +100,94 @@ export function ModelAccessAccounts({
   /** A credential was stored or removed; the snapshot no longer describes the profile. */
   onChanged(): void | Promise<void>;
 }) {
+  const { connected, available } = partitionAccounts(providers);
+  const row = (provider: ModelAccessProvider) => (
+    <ProviderAccount
+      key={provider.id}
+      provider={provider}
+      onArrival={deepLinkedAction(provider, autoSignInProviderId)}
+      onRecover={onRecover}
+      onChanged={onChanged}
+    />
+  );
+
   if (providers.length === 0) return null;
   return (
-    <SettingsSection title="Accounts">
-      {orderedAccounts(providers).map((provider) => (
-        <ProviderAccount
-          key={provider.id}
-          provider={provider}
-          onArrival={deepLinkedAction(provider, autoSignInProviderId)}
-          onRecover={onRecover}
-          onChanged={onChanged}
-        />
-      ))}
-    </SettingsSection>
+    <>
+      {/*
+       * TWO SECTIONS, not one sorted list. The question people bring here is
+       * "what am I signed in to" and the answer was three rows on top of
+       * thirty-seven they have never used, with nothing drawn between them.
+       *
+       * Provider names arrive from Pi's catalogue, not the app's own settings
+       * vocabulary, which is why the rail search does not index them and this
+       * half carries its own.
+       */}
+      <PrefSection title="Signed in" icon={CheckCircleIcon}>
+        <div data-slot="model-access-accounts">
+          {connected.length === 0 ? (
+            <Empty>Not signed in to any provider yet.</Empty>
+          ) : (
+            connected.map(row)
+          )}
+        </div>
+      </PrefSection>
+
+      {available.length > 0 ? <FilteredAccounts providers={available} row={row} /> : null}
+    </>
+  );
+}
+
+/**
+ * The long half, with a filter over it.
+ *
+ * Thirty-odd providers is past what anyone scans, and a reader here is almost
+ * always looking for ONE name they already know. Filtering by label beats
+ * scrolling for it. The field is hidden below a handful of rows, where it
+ * would cost a control to save no scrolling at all.
+ */
+function FilteredAccounts({
+  providers,
+  row,
+}: {
+  providers: readonly ModelAccessProvider[];
+  row: (provider: ModelAccessProvider) => React.ReactNode;
+}) {
+  const [query, setQuery] = React.useState("");
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? providers.filter((provider) => provider.label.toLowerCase().includes(needle))
+    : providers;
+
+  return (
+    <PrefSection
+      title="Available to connect"
+      icon={PlugsIcon}
+      // The field belongs on the header rail, not under it. Full-width below
+      // the rule it read as the first ROW of the list — a text input where the
+      // eye expects the first provider — and the section then owned two
+      // horizontal rules, its own and the field's box.
+      action={
+        providers.length > 8 ? (
+          <InputGroup className="w-56">
+            <InputGroupAddon>
+              <MagnifyingGlassIcon />
+            </InputGroupAddon>
+            <InputGroupInput
+              type="search"
+              value={query}
+              aria-label="Search providers"
+              placeholder="Search providers"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </InputGroup>
+        ) : undefined
+      }
+    >
+      <div data-slot="model-access-accounts-available">
+        {shown.length === 0 ? <Empty>No providers match.</Empty> : shown.map(row)}
+      </div>
+    </PrefSection>
   );
 }
 
@@ -244,7 +322,7 @@ function ProviderAccount({
 
   return (
     <>
-      <SettingsRow label={provider.label} testId={`account-${provider.id}`}>
+      <PrefRow label={provider.label} testId={`account-${provider.id}`}>
         <span className="text-ui text-muted-foreground">{providerAccessLabel(provider)}</span>
         {session !== null ? (
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
@@ -266,7 +344,7 @@ function ProviderAccount({
             />
           </>
         )}
-      </SettingsRow>
+      </PrefRow>
       {session !== null || view.failure !== null ? (
         <SignInPanel
           view={view}
