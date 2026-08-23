@@ -195,9 +195,9 @@ _Avoid_: dangerous tier, middle tier
 The byte-identical leading portion of a model request that a provider reuses
 between requests. One changed byte invalidates everything after it; where the
 provider orders the tool array before the system prompt, a tool change
-invalidates the prompt too. Within a Session, the Agent Tool Surface and system prompt therefore never
-change after start — a state change is modeled as a tool call or a message,
-never as a re-composed prompt. The sanitized tool names and order are durable
+invalidates the prompt too. Within a Session, the Agent Tool Surface and system
+prompt therefore never change after start — a state change is modeled as a tool
+call or a message, never as a re-composed prompt. The sanitized tool names and order are durable
 Session input; reattachment rebinds that exact surface or fails without sending
 a different one. Credentials are never part of the durable shape.
 _Avoid_: cache hit (one outcome of a stable prefix), prompt cache (the provider feature)
