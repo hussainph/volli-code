@@ -29,6 +29,7 @@ import {
   isValidBranchName,
   parseHarnessId,
   REASONING_LEVELS,
+  REQUIRABLE_SESSION_ENV_TOOLS,
   resolveAgentContext,
   resolveDefaultModel,
   runDoctorChecks,
@@ -54,6 +55,7 @@ import type {
   ReasoningLevel,
   SessionActivityState,
   SessionProjection,
+  RequirableSessionEnvTool,
   SessionRecord,
   SessionEnvRepair,
   SessionEnvReport,
@@ -230,8 +232,8 @@ export interface AgentCommandServiceOptions {
   modelAccessTimeoutMs?: number;
   /**
    * The `env` block `volli identify` reports (VC-94): the session's resolved
-   * PATH, its provenance, the contract tools resolved against it, and
-   * whether the workspace's dependencies are installed. Injected because
+   * PATH, its provenance, the measured tools resolved against it and the
+   * subset this project implies, and whether its dependencies are installed. Injected because
    * main is the only process that knows HOW the PATH came to be — it ran the
    * boot probe and owns the adoption outcome — and absent (tests) means
    * identify answers without an env block rather than inventing one.
@@ -916,6 +918,23 @@ function observedText(value: unknown): Observed<string> {
   return value === null ? null : undefined;
 }
 
+/**
+ * The tools the caller says its workspace implies (VC-157). Unknown names and
+ * malformed shapes are dropped rather than refused, for the same reason a
+ * malformed observed value is: this is the command that must still work when
+ * the `volli` that called and the main that answered disagree about the wire.
+ * What is dropped costs a fault, never a report — an empty list means nothing
+ * here can fail, which is the safe direction for a disagreement to fall.
+ *
+ * Filtered against the REQUIRABLE census, not the measured one, so `gh` is
+ * dropped here as well as at the producer: "no project implies gh" holds for
+ * a payload this main did not compute, including one from an older `volli`.
+ */
+function observedRequiredTools(value: unknown): readonly RequirableSessionEnvTool[] {
+  if (!Array.isArray(value)) return [];
+  return REQUIRABLE_SESSION_ENV_TOOLS.filter((tool) => value.includes(tool));
+}
+
 function parseDoctorObservation(request: AgentRequest): DoctorObservation | null {
   const pathEntries = request.args["pathEntries"];
   const resolved = request.args["resolved"];
@@ -934,6 +953,7 @@ function parseDoctorObservation(request: AgentRequest): DoctorObservation | null
       ]),
     ),
     volliPath: observedText(request.args["volliPath"]),
+    requiredTools: observedRequiredTools(request.args["requiredTools"]),
   };
 }
 

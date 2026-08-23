@@ -844,7 +844,8 @@ const IDENTIFY_SPEC: CommandSpec = {
   summary: "Resolve and print the active project, ticket, session, and session environment.",
   example: "volli identify",
   notes: [
-    "The env block reports the session PATH, how it was adopted, where each contract tool (git, gh, node, pnpm) resolves, and whether workspace dependencies are installed — read it before running tools to probe for them.",
+    "The env block reports the session PATH, how it was adopted, where each measured tool (git, gh, node, npm, pnpm, yarn, bun) resolves, and whether workspace dependencies are installed — read it before probing for tools.",
+    "env.requiredTools names what THIS project implies: git for a repository, node and the lockfile's package manager for a JS workspace. A `-` tool not listed there is one nothing here runs, not a fault.",
     "env.provenance is the boot adoption; env.interactiveProvenance is the later pass that picks up what your shell's interactive startup files export (nvm, bun, rbenv, pyenv, mise). `pending` there means that pass has not landed yet.",
   ],
   options: {

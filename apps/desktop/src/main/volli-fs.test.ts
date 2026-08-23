@@ -273,6 +273,24 @@ describe("buildFileIndex", () => {
     expect(paths.some((p) => p.startsWith("node_modules/"))).toBe(false);
     expect(paths.some((p) => p.startsWith(".git/"))).toBe(false);
   });
+
+  it("skips another ecosystem's dependency tree in that walk too, not just node_modules", async () => {
+    // This walk runs precisely when `git ls-files` could NOT answer, so nothing
+    // else keeps a Python `.venv` or a Rust `target` from eating the 20k cap
+    // and burying the files a person would actually `@`-reference (VC-160).
+    const project = makeTempProjectDir(); // NOT a git repo → git ls-files fails
+    await writeFile(join(project, "main.py"), "print()", "utf8");
+    for (const pruned of [".venv/lib/pkg", "__pycache__", ".tox/py312", "target/debug", "vendor"]) {
+      await mkdir(join(project, pruned), { recursive: true });
+      await writeFile(join(project, pruned, "generated"), "x", "utf8");
+    }
+
+    const { files } = await buildFileIndex(project);
+    const paths = files.map((f) => f.relPath);
+
+    expect(paths).toContain("main.py");
+    expect(paths.some((p) => p.includes("generated"))).toBe(false);
+  });
 });
 
 // ---- readFile ----------------------------------------------------------------
@@ -1310,6 +1328,11 @@ describe("directory watch channels", () => {
     watchCalls[0]?.cb("change", ".git");
     watchCalls[0]?.cb("rename", ".git/index.lock");
     watchCalls[0]?.cb("change", "node_modules/.package-lock.json");
+    // Same reasoning, same flood, other ecosystems (VC-160): a `pip install`
+    // populating `.venv`, a `cargo build` writing `target`, `go mod vendor`.
+    watchCalls[0]?.cb("change", ".venv/lib/python3.12/site-packages/pkg.py");
+    watchCalls[0]?.cb("change", "target/debug/build.rs");
+    watchCalls[0]?.cb("change", "vendor/github.com/pkg/go.mod");
     vi.advanceTimersByTime(250);
     expect(webContents.send).not.toHaveBeenCalled();
 
@@ -1318,10 +1341,15 @@ describe("directory watch channels", () => {
     vi.advanceTimersByTime(250);
     expect(webContents.send).toHaveBeenCalledTimes(1);
 
+    // True of every widened name, for the same reason.
+    watchCalls[0]?.cb("rename", ".venv");
+    vi.advanceTimersByTime(250);
+    expect(webContents.send).toHaveBeenCalledTimes(2);
+
     // A null filename is unfilterable, so it still broadcasts conservatively.
     watchCalls[0]?.cb("rename", null);
     vi.advanceTimersByTime(250);
-    expect(webContents.send).toHaveBeenCalledTimes(2);
+    expect(webContents.send).toHaveBeenCalledTimes(3);
   });
 
   it("rejects '.' as a spelling of the root — the empty string is the only one", async () => {

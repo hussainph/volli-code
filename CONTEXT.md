@@ -105,10 +105,11 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. Only the threshold is policy: an app-wide
-switch decides whether a Session compacts before it is asked to, and a model may
-be given its own reserve. Switching the threshold off never withholds the
-recovery an overflow triggers.
+and each one is a Session Event. Only the threshold is policy: one app-wide
+switch decides whether a Session compacts before it is asked to, and every
+Session runs on the executor's own reserve (per-model reserves retired,
+VC-155). Switching the threshold off never withholds the recovery an overflow
+triggers.
 _Avoid_: truncation, trimming history, pruning the transcript
 
 **Agent Runtime**:
@@ -137,13 +138,81 @@ resting state: an app with no configured provider gives its Sessions no
 web tool at all, rather than a tool that refuses when called. A provider
 endpoint is a person's own configuration and is judged by its own admission
 policy when saved and again on every request; a URL the model supplies is not,
-and faces the stricter public-web policy every time. The credential owner
-encrypts a bring-your-own key through the OS keychain, refuses to hold one when
-the keychain cannot encrypt, and never exposes it to the renderer, prompt,
-transcript, or Session ledger — the renderer may learn only whether a key
+and faces the stricter public-web policy every time. The credential owner keeps a
+bring-your-own key in the profile's own user-only store — the trade Pi's
+`auth.json` already makes, rather than the OS keychain, whose per-binary prompts
+cost more than they bought — and never exposes it to the renderer, prompt,
+transcript, or Session ledger. The renderer may learn only whether a key
 exists. What a search returns is third-party text, references rather than
 contents, and reading one of them is a new decision judged from scratch.
 _Avoid_: web search setting, browsing, internet permission
+
+**Agent CLI**:
+The bash-composable `volli` verb surface a Session's shell (or a person's
+terminal) reaches through the local agent socket. It is the discovery surface
+and the low-risk coordination surface: reads, plus writes that are visible,
+attributable, and reversible. It attributes its caller and cannot authenticate
+one — any process running as the user can reach it — so a verb whose misuse
+cannot be tolerated from an arbitrary such process does not belong here.
+_Avoid_: agent surface (alone), planning CLI
+
+**Agent Tool Surface**:
+The named, schema'd tools a Session's Role bundle offers inside the Agent
+Runtime. A tool call is bound to the Session that made it and never crosses the
+agent socket, so availability itself is enforcement: what a Role was not handed
+cannot be called.
+_Avoid_: Pi tools (as product vocabulary)
+
+**Client Surface**:
+A host API a Volli client — the desktop renderer, a future mobile or cloud
+client — speaks for the humans driving the product. Clients talk to hosts,
+never to databases, and no client is an agent.
+_Avoid_: renderer API, app surface
+
+**External Agent Surface**:
+A future boundary (for example an MCP server) exposing Volli operations to
+agents Volli does not host. A foreign agent has no Session Role and no
+Volli-attached identity, so this surface carries its own admission policy and
+never re-exposes a Role bundle as-is.
+_Avoid_: MCP surface (as a synonym for the Agent Tool Surface)
+
+**Verb Registry**:
+The single enumerable declaration of every agent-facing verb: its name, what it
+does, and which surfaces project it. Each surface exposes a projection of the
+registry; no surface owns verbs of its own.
+_Avoid_: command list, tool list (when meaning the declaration rather than one
+surface's projection)
+
+**Verb Tier**:
+The governance class a verb's access modes imply, never a stored field. Read
+tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
+session actor, judged by per-actor policy. Control tier: named tool only,
+Role-bundled, absent from the agent socket. No verb needs a higher tier than
+the ambient authority its effect already lies within.
+_Avoid_: dangerous tier, middle tier
+
+**Cache Prefix**:
+The byte-identical leading portion of a model request that a provider reuses
+between requests. One changed byte invalidates everything after it; where the
+provider orders the tool array before the system prompt, a tool change
+invalidates the prompt too. Within a Session, the tool bundle and system prompt
+therefore never change after start — a state change is modeled as a tool call or
+a message, never as a re-composed prompt.
+_Avoid_: cache hit (one outcome of a stable prefix), prompt cache (the provider feature)
+
+**Context Assembly**:
+The composition of one model request: system prompt, tool array, and message
+history, ordered stable-first. Assembly is cache-stable when every byte that
+varies per session or per turn — workspace path, date, ticket state — is
+delivered as late as possible, in message content rather than prompt bytes.
+Volli's assembly is deterministic: same spec, same string.
+_Avoid_: prompt building, context window (the model's capacity, not the request)
+
+**Turn Reminder**:
+Volatile fact delivered as content in a message at the turn that needs it,
+instead of bytes in the system prompt: the date, the working directory, live
+ticket state. The Runtime Brief is the first and largest one.
+_Avoid_: system reminder (a provider's wrapper, not Volli's), dynamic prompt section
 
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the

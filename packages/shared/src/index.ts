@@ -33,6 +33,7 @@ export * from "./tag-color";
 export * from "./label";
 export * from "./legacy-import";
 export * from "./fs-entries";
+export * from "./walk-prune";
 export * from "./errors";
 export * from "./terminal";
 export * from "./ghostty-config";

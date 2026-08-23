@@ -17,35 +17,13 @@ vi.mock("electron", () => ({
 }));
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
-import {
-  BRAVE_SEARCH_KEY_SECRET,
-  EXA_SEARCH_KEY_SECRET,
-  WebCredentialStore,
-  type SecretCipher,
-} from "./credential";
+import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
 import { WebAccessSettings } from "./settings";
 import { registerWebAccessIpcHandlers } from "./ipc";
-
-class FakeCipher implements SecretCipher {
-  available = true;
-
-  isEncryptionAvailable(): boolean {
-    return this.available;
-  }
-
-  encryptString(plainText: string): Buffer {
-    return Buffer.from(`v1:${Buffer.from(plainText, "utf8").toString("base64")}`, "utf8");
-  }
-
-  decryptString(encrypted: Buffer): string {
-    return Buffer.from(encrypted.toString("utf8").slice("v1:".length), "base64").toString("utf8");
-  }
-}
 
 const KEY = "BSA-super-secret-brave-key-42";
 
 let ctx: TestDb;
-let cipher: FakeCipher;
 let settings: WebAccessSettings;
 
 /** Dispatch one request the way `ipcMain.handle` would, sender included. */
@@ -58,12 +36,11 @@ async function invoke(channel: VolliIpcChannel, ...args: unknown[]): Promise<unk
 beforeEach(() => {
   handlers.clear();
   ctx = openTestDb();
-  cipher = new FakeCipher();
   settings = new WebAccessSettings({
     db: ctx.db,
     credentials: {
-      brave: new WebCredentialStore({ db: ctx.db, cipher, secretName: BRAVE_SEARCH_KEY_SECRET }),
-      exa: new WebCredentialStore({ db: ctx.db, cipher, secretName: EXA_SEARCH_KEY_SECRET }),
+      brave: new WebCredentialStore({ db: ctx.db, secretName: BRAVE_SEARCH_KEY_SECRET }),
+      exa: new WebCredentialStore({ db: ctx.db, secretName: EXA_SEARCH_KEY_SECRET }),
     },
   });
   registerWebAccessIpcHandlers(settings);
@@ -81,7 +58,6 @@ describe("the Web Access door", () => {
         provider: "off",
         searxngUrl: null,
         keys: { brave: "absent", exa: "absent" },
-        encryptionAvailable: true,
       },
     });
   });
@@ -133,14 +109,12 @@ describe("the Web Access door", () => {
     });
   });
 
-  it("says plainly that a key cannot be stored on a machine that cannot encrypt", async () => {
-    cipher.available = false;
-
-    const result = (await invoke("volli:web-access-set-key", "brave", KEY)) as Result;
+  it("turns a refusal into a sentence, and one that does not quote the paste", async () => {
+    const result = (await invoke("volli:web-access-set-key", "brave", "   ")) as Result;
 
     expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ error: expect.stringMatching(/keychain/i) });
-    expect(result.ok === false && result.error).not.toContain(KEY);
+    expect(result).toMatchObject({ error: expect.stringMatching(/no key/i) });
+    expect(((await invoke("volli:web-access-get")) as WebAccessResult).ok).toBe(true);
   });
 
   it("refuses arguments that are not the ones the channel takes", async () => {

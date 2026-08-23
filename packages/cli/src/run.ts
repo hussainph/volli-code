@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 
-import { errorMessage, SESSION_ENV_TOOLS, workspaceDependenciesStatus } from "@volli/shared";
+import {
+  errorMessage,
+  memoizedPathExists,
+  requiredSessionEnvTools,
+  SESSION_ENV_TOOLS,
+  workspaceDependenciesStatus,
+} from "@volli/shared";
 import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
 
 import { AgentClientError } from "./client";
@@ -37,8 +43,8 @@ function clientError(error: unknown): AgentError {
  * The degraded `identify` that answers without main. The CLI process lives in
  * the session environment, so the env block it reports is measured, not
  * synthesized — the same tool resolutions the doctor observation carries,
- * extracted here so the census is one list in one place. BOTH provenance
- * fields stay `null`: only main knows what its two adoption passes did, and a
+ * extracted here so the measured census is one list in one place. BOTH
+ * provenance fields stay `null`: only main knows what its two adoption passes did, and a
  * CLI claiming either would be the plausible wrong answer this whole feature
  * exists to remove. `null` is not `pending` — one says nobody could ask, the
  * other says the app asked and has not finished.
@@ -60,6 +66,9 @@ async function writeDegradedIdentify(
     const resolved = observedResolved[tool];
     tools[tool] = typeof resolved === "string" ? resolved : null;
   }
+  // Both workspace questions below walk the same ancestors; one memo makes
+  // that one stat per path and one consistent moment.
+  const pathExists = memoizedPathExists(dependencies.pathExists ?? existsSync);
   dependencies.stdout(
     renderCliSuccess(
       "identify",
@@ -75,16 +84,36 @@ async function writeDegradedIdentify(
           provenance: null,
           interactiveProvenance: null,
           tools,
-          dependencies: workspaceDependenciesStatus(
-            dependencies.cwd,
-            dependencies.pathExists ?? existsSync,
-          ),
+          // Which of them this workspace actually implies — a disk question,
+          // so the degraded block answers it as confidently as main does.
+          requiredTools: requiredSessionEnvTools(dependencies.cwd, pathExists),
+          dependencies: workspaceDependenciesStatus(dependencies.cwd, pathExists),
         },
         degraded: true,
       },
       { json },
     ),
   );
+}
+
+/**
+ * The doctor observation, plus the one fact about the environment under test
+ * that is not on `PATH`: which tools this workspace implies (VC-157). It
+ * belongs on the caller's side of the doctor split for the same reason every
+ * other measurement does — this process stands in the directory being audited,
+ * and main reconstructing a workspace it cannot see is exactly the confident
+ * wrong answer the command exists to avoid.
+ */
+async function doctorObservation(
+  dependencies: RunCliDependencies,
+): Promise<Record<string, unknown>> {
+  return {
+    ...(await dependencies.observe()),
+    requiredTools: requiredSessionEnvTools(
+      dependencies.cwd,
+      memoizedPathExists(dependencies.pathExists ?? existsSync),
+    ),
+  };
 }
 
 /** The same arguments with the repair dropped — a re-check must not repair again. */
@@ -162,7 +191,7 @@ export async function runCli(
     // which main has no way to observe and must not reconstruct.
     const args =
       command === "doctor"
-        ? { ...invocation.args, ...(await dependencies.observe()) }
+        ? { ...invocation.args, ...(await doctorObservation(dependencies)) }
         : invocation.args;
     const request: AgentRequest = {
       v: 1,
@@ -196,7 +225,7 @@ export async function runCli(
       const pathRepair = (first.data as { pathRepair?: unknown }).pathRepair;
       const rechecked = await dependencies.request(socketPath, {
         ...request,
-        args: { ...omitFix(invocation.args), ...(await dependencies.observe()) },
+        args: { ...omitFix(invocation.args), ...(await doctorObservation(dependencies)) },
       });
       response = rechecked.ok
         ? {

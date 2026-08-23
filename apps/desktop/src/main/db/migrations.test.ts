@@ -1129,9 +1129,72 @@ describe("migrate — 019 to 020 upgrade path (web access)", () => {
     migrate(db, dbPath);
 
     // `app_state` is handed to the renderer wholesale on bootstrap and is
-    // writable by it; `secrets` is neither, which is the whole reason it exists.
+    // writable by it; `secrets` is neither, which is the whole reason it exists
+    // — and, since migration 023 put the key itself in `value`, the whole of
+    // what protects it.
     expect(tableExists(db, "secrets")).toBe(true);
-    expect(columnNames(db, "secrets")).toEqual(["name", "ciphertext", "updated_at"]);
+    expect(columnNames(db, "secrets")).toEqual(["name", "value", "updated_at"]);
+    db.close();
+  });
+});
+
+/** A v22 database holding what a profile with a keychain-stored Exa key held. */
+function buildV22DbWithACiphertext(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((m) => m.version <= 22)) {
+    db.exec(migration.sql);
+  }
+  db.pragma("user_version = 22");
+  db.prepare("INSERT INTO secrets (name, ciphertext, updated_at) VALUES (?, ?, ?)").run(
+    "web-access.exa.api-key",
+    Buffer.from("v10-not-actually-openable-here", "utf8"),
+    1700,
+  );
+  db.prepare(
+    "INSERT INTO web_access_settings (id, provider, searxng_url, updated_at) VALUES (1, 'exa', NULL, 1700)",
+  ).run();
+  return db;
+}
+
+describe("migrate — 022 to 023 upgrade path (search keys leave the keychain)", () => {
+  it("parks the old ciphertext instead of dropping or reinterpreting it", () => {
+    const dbPath = tempDbPath();
+    const db = buildV22DbWithACiphertext(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    // Only `safeStorage` can open these bytes, so SQL cannot carry them across.
+    // They wait for the one runtime pass that can (`web/legacy-safe-storage.ts`)
+    // rather than being dropped here or re-read as if they were a key.
+    expect(db.prepare("SELECT name, ciphertext FROM legacy_safe_storage_secrets").all()).toEqual([
+      {
+        name: "web-access.exa.api-key",
+        ciphertext: Buffer.from("v10-not-actually-openable-here", "utf8"),
+      },
+    ]);
+    // And the profile is left with no key rather than an unreadable one — until
+    // that pass runs, this is a Settings page asking for a re-paste.
+    expect(db.prepare("SELECT COUNT(*) AS n FROM secrets").get()).toEqual({ n: 0 });
+    // The provider choice is untouched: a key is a separate fact from which
+    // provider was picked.
+    expect(db.prepare("SELECT provider FROM web_access_settings WHERE id = 1").get()).toEqual({
+      provider: "exa",
+    });
+    db.close();
+  });
+
+  it("leaves a profile that never stored a key with two empty tables", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT COUNT(*) AS n FROM legacy_safe_storage_secrets").get()).toEqual({
+      n: 0,
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM secrets").get()).toEqual({ n: 0 });
     db.close();
   });
 });

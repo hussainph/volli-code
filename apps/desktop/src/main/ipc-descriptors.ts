@@ -953,7 +953,10 @@ export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> }
   },
   "volli:cli-doctor": {
     guard: (args): args is IpcArgs<"volli:cli-doctor"> =>
-      args.length === 1 && isRecord(args[0]) && typeof args[0]["fix"] === "boolean",
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["fix"] === "boolean" &&
+      (args[0]["cwd"] === undefined || typeof args[0]["cwd"] === "string"),
     invalidError: "Invalid doctor request",
   },
 };

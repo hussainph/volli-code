@@ -108,7 +108,26 @@ export function mapPiActivity(
       ? { ...base, state, error: failureText(output, descriptor.outcome?.summary ?? null) }
       : base;
   } catch {
-    return genericObservation(turnId);
+    return genericObservation(turnId, fallbackStateOf(event));
+  }
+}
+
+/**
+ * The state a fallback observation for this event may carry.
+ *
+ * Only end-event activities are persisted as recovery markers, and the marker
+ * validator accepts only `completed` and `failed` — a generic fallback that
+ * kept `progress` for an end event would be written and then refused on every
+ * read-back. The probe re-reads the type under its own try because the event
+ * is untrusted; an unreadable one stays `progress`, which is never persisted.
+ */
+function fallbackStateOf(event: unknown): RuntimeActivityObservation["state"] {
+  try {
+    return stringOf(readField(recordOf(event), "type")) === "tool_execution_end"
+      ? "completed"
+      : "progress";
+  } catch {
+    return "progress";
   }
 }
 
@@ -120,12 +139,15 @@ function turnIdOf(context: PiActivityContext): string {
   }
 }
 
-function genericObservation(turnId: string): RuntimeActivityObservation {
+function genericObservation(
+  turnId: string,
+  state: RuntimeActivityObservation["state"] = "progress",
+): RuntimeActivityObservation {
   return {
     kind: "activity",
     turnId,
     activityId: "unknown",
-    state: "progress",
+    state,
     descriptor: {
       kind: "other",
       nativeToolName: "unknown",

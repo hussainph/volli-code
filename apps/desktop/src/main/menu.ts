@@ -36,7 +36,9 @@ function sendZoom(cmd: UiZoomCommand): void {
  */
 async function handleExportDatabase(dbHandle: DbHandle): Promise<void> {
   if (!dbHandle.ok) {
-    dialog.showErrorBox("Export Failed", `The database is unavailable: ${dbHandle.error}`);
+    // Already a complete sentence naming the failure (db-open-failure.ts's
+    // CONTRACT); the box's own title supplies the "export" half.
+    dialog.showErrorBox("Export Failed", dbHandle.error);
     return;
   }
   const now = new Date();

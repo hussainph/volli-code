@@ -19,7 +19,13 @@ describe("buildSessionEnvReport", () => {
             path,
           ),
         ),
-      pathExists: (path) => ["/work/volli/package.json", "/work/volli/node_modules"].includes(path),
+      pathExists: (path) =>
+        [
+          "/work/volli/package.json",
+          "/work/volli/node_modules",
+          "/work/volli/pnpm-lock.yaml",
+          "/work/volli/.git",
+        ].includes(path),
     });
 
     expect(report).toEqual({
@@ -32,10 +38,46 @@ describe("buildSessionEnvReport", () => {
         git: null,
         gh: "/opt/homebrew/bin/gh",
         node: "/opt/homebrew/bin/node",
+        npm: null,
         pnpm: "/opt/homebrew/bin/pnpm",
+        yarn: null,
+        bun: null,
       },
+      // The workspace's own implication: a git checkout with a pnpm
+      // lockfile. `gh` is measured beside these and required by none, so its
+      // presence or absence is a report rather than a fault (VC-157).
+      requiredTools: ["git", "node", "pnpm"],
       dependencies: "installed",
     });
+  });
+
+  // The report is scoped to a project or to nothing at all; a host-wide read
+  // has no workspace to imply a tool, so it implies none.
+  it("requires nothing when a host-wide read has no workspace in scope", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/usr/bin",
+      provenance: "already-complete",
+      interactiveProvenance: "already-complete",
+      isExecutable: async () => false,
+      pathExists: () => {
+        throw new Error("a host-wide read must not inspect an arbitrary workspace");
+      },
+    });
+
+    expect(report.requiredTools).toEqual([]);
+  });
+
+  it("requires only git of a repository with no JavaScript manifest", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/usr/bin",
+      provenance: "adopted",
+      interactiveProvenance: "adopted",
+      cwd: "/work/py",
+      isExecutable: async () => false,
+      pathExists: (path) => path === "/work/py/.git",
+    });
+
+    expect(report.requiredTools).toEqual(["git"]);
   });
 
   it("passes the provenance through untouched — it is main's boot fact, not a re-measurement", async () => {
