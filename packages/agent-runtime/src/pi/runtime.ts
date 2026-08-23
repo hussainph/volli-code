@@ -32,8 +32,6 @@ import {
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
-  isUsableCompactionReserve,
-  modelCompactionReserve,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
@@ -163,8 +161,8 @@ export interface PiRuntimeHostOptions {
    * a switch that does not work.
    *
    * Absent, this runs {@link DEFAULT_COMPACTION_POLICY}: automatic compaction
-   * on, no model limited, which is the behaviour of every caller that has never
-   * heard of this option.
+   * on, which is the behaviour of every caller that has never heard of this
+   * option.
    */
   compactionPolicy?: () => CompactionPolicy;
 }
@@ -295,6 +293,12 @@ function durableMessage(message: AgentMessage): AgentMessage {
  * model can actually look at (VC-50). They persist into Pi's recovery sidecar
  * with the message, which is exactly why attaching is bounded by a per-image
  * ceiling AND a per-session budget upstream — see `docs/plans/attachments.md`.
+ *
+ * The shapes below are read back by {@link isPersistedUserContent}, which has
+ * to recognize every one of them: the two functions are one decision written
+ * twice, and the first time they disagreed every later branch read threw
+ * (VC-155). Change one, change the other — `persistObservation`'s assert is
+ * what catches you if you don't, at the write rather than a month later.
  */
 function queuedUserMessage(text: string, images: readonly RuntimeImageInput[] = []): UserMessage {
   if (images.length === 0) {
@@ -371,13 +375,49 @@ type AcceptedCommandMarker = AcceptedMessageCommandMarker | AcceptedRetryCommand
 
 type RecoverableMarker = RecoverableObservation | AcceptedCommandMarker;
 
+/**
+ * One marker read back, or nothing when there is nothing here to read.
+ *
+ * Nothing covers two cases on purpose, and the second is the whole point.
+ * A custom entry somebody else wrote is not ours; and a marker of OURS that no
+ * longer validates is quarantined — skipped, not thrown on.
+ *
+ * **Why an unreadable marker must not be fatal.** This function runs over every
+ * custom entry on the branch, and the branch is re-read at the head of every
+ * single message ({@link compactBeforeTurn}). So a throw here is not one bad
+ * read: it is a Session that reports a failed threshold compaction after every
+ * message its user sends, never compacts again, and can never be reopened —
+ * permanently, because the marker is durable. That is the VC-155 failure, and
+ * enumerating the shapes that caused it fixes those instances while leaving the
+ * mechanism: the NEXT writer bug mints another class of bricked Session.
+ * Quarantine fixes the mechanism. What it costs is one ledger fact — an
+ * activity that will not be replayed into the transcript, an attention state
+ * not restored — against a Session that works.
+ *
+ * **Except a command marker, which stays fatal.** Dropping one does not cost a
+ * fact about what the Session showed; it changes what the Session DID. An
+ * accepted `message.submit` that recovery cannot see is a message never
+ * delivered as far as the conversation is concerned and an unreceipted command
+ * as far as `reconcile` is concerned, so the caller sends it again — a
+ * duplicate turn nobody asked for, from a Session that looks healthy. Losing
+ * that quietly is worse than refusing to open, so it is refused. A marker too
+ * corrupt to name its own kind cannot be proven to be one of these, and is
+ * quarantined with the rest rather than bricking a Session on the input we
+ * understand least.
+ *
+ * Skips are counted and surfaced by the caller — see `unreadableMarkerCount`.
+ */
 function recoveredObservation(
   entry: CustomEntry,
 ): (RecoverableMarker & { occurredAt: number; recoveryCursor: string }) | null {
   if (entry.customType !== VOLLI_OBSERVATION_MARKER) return null;
   const data = entry.data;
-  if (!isRecord(data)) throw new Error("Pi recovery marker is malformed.");
-  if (!isRecoverableObservation(data)) throw new Error("Pi recovery marker is malformed.");
+  if (!isRecoverableObservation(data)) {
+    if (isRecord(data) && data["kind"] === "command-accepted") {
+      throw new Error("Pi recovery marker is malformed.");
+    }
+    return null;
+  }
   return {
     ...(data as unknown as RecoverableMarker),
     occurredAt: entry.timestamp,
@@ -385,7 +425,8 @@ function recoveredObservation(
   };
 }
 
-function isRecoverableObservation(value: Record<string, unknown>): boolean {
+function isRecoverableObservation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
   switch (value["kind"]) {
     case "turn":
       return (
@@ -447,10 +488,31 @@ function isPersistedUserMessage(value: unknown): value is UserMessage {
   return (
     isRecord(value) &&
     value["role"] === "user" &&
-    typeof value["content"] === "string" &&
+    isPersistedUserContent(value["content"]) &&
     typeof value["timestamp"] === "number" &&
     Number.isFinite(value["timestamp"])
   );
+}
+
+/**
+ * Both shapes {@link queuedUserMessage} writes: the plain string every
+ * text-only message persists as, and the block array an attached image widens
+ * it to (VC-50). The array arm accepts exactly the two block types that
+ * function produces — this validator's job is to recognize the runtime's own
+ * writes, and the first shape it refused (an image message) poisoned every
+ * later branch read with "Pi recovery marker is malformed" (VC-155).
+ */
+function isPersistedUserContent(value: unknown): value is UserMessage["content"] {
+  if (typeof value === "string") return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every((block: unknown) => {
+    if (!isRecord(block)) return false;
+    if (block["type"] === "text") return typeof block["text"] === "string";
+    if (block["type"] === "image") {
+      return typeof block["data"] === "string" && typeof block["mimeType"] === "string";
+    }
+    return false;
+  });
 }
 
 function assertUniqueAcceptedCommands(markers: readonly RecoverableMarker[]): void {
@@ -667,13 +729,26 @@ async function attachSession(
     const recoveredEntries = inputRecovery
       ? await sidecar.findEntriesOnBranch({ order: "oldestFirst" })
       : [];
-    const recoveredMarkers = recoveredEntries
-      .filter((entry): entry is CustomEntry => entry.type === "custom")
+    const customEntries = recoveredEntries.filter(
+      (entry): entry is CustomEntry => entry.type === "custom",
+    );
+    const recoveredMarkers = customEntries
       .map(recoveredObservation)
       .filter(
         (observation): observation is NonNullable<ReturnType<typeof recoveredObservation>> =>
           observation !== null,
       );
+    /**
+     * Markers of ours that {@link recoveredObservation} quarantined.
+     *
+     * Counted here rather than plumbed out of the reader, because the reader is
+     * the sync hot path every branch read runs through and has nowhere to
+     * report to. Every entry of our own custom type that did not come back as a
+     * marker was skipped, which is the same arithmetic without the plumbing.
+     */
+    const unreadableMarkerCount =
+      customEntries.filter((entry) => entry.customType === VOLLI_OBSERVATION_MARKER).length -
+      recoveredMarkers.length;
     const recoveredObservations = recoveredMarkers.filter(
       (
         marker,
@@ -751,6 +826,23 @@ async function attachSession(
     }
     const persistObservation = async <T extends RecoverableMarker>(observation: T): Promise<T> => {
       const durable = JSON.parse(JSON.stringify(observation)) as T;
+      // Refused at the write, not discovered at the read — with the same
+      // predicate recovery applies, so writer and validator cannot drift. A
+      // marker recovery would reject is worthless the moment it is written
+      // (VC-155).
+      //
+      // This is an assert, not a handled case: nothing this runtime constructs
+      // can trip it, which is what `fallbackStateOf` and `usageOf` are for, and
+      // it exists to catch the write that stops being true of that sentence. It
+      // is not silent if it ever does fire. Pi awaits its event listeners from
+      // inside `runWithLifecycle`'s executor, so a throw here is caught by
+      // `handleRunFailure` and re-emitted as an errored assistant message,
+      // which this runtime classifies into a `RuntimeFailure` and surfaces as a
+      // failed turn carrying this sentence.
+      /* v8 ignore next 3 -- an assert: no write this runtime constructs can reach it. */
+      if (!isRecoverableObservation(durable)) {
+        throw new Error("Pi observation marker would not survive recovery; refusing to write it.");
+      }
       const markerId = await sidecar.appendCustomEntry(VOLLI_OBSERVATION_MARKER, durable);
       const marker = await sidecar.getEntry(markerId);
       /* v8 ignore next -- appendCustomEntry promises the entry it just returned. */
@@ -770,6 +862,20 @@ async function attachSession(
           "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld.",
       });
       activeAttentionReasons.add("partial-turn");
+    }
+    // Said once, at the only moment there is anything to say it about. The
+    // Session is fine — that is the point of quarantining these — but a marker
+    // this attachment could not read is a fact its transcript is now missing,
+    // and dropping that without a word is the swallowed error this codebase
+    // does not allow itself.
+    if (unreadableMarkerCount > 0) {
+      await persistObservation({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: `Skipped ${unreadableMarkerCount} unreadable Pi recovery ${unreadableMarkerCount === 1 ? "marker" : "markers"}; this Session's history may be missing activity or attention it once recorded.`,
+      });
+      activeAttentionReasons.add("runtime-failure");
     }
     for (const recoveredTurnId of openTurnIds) {
       await persistObservation({
@@ -1115,11 +1221,11 @@ async function attachSession(
      * right now.
      *
      * Read per call for {@link summarizationModel}'s reason: a Session outlives
-     * a settings change. Everything the policy does lands on Pi's own
-     * `CompactionSettings` rather than beside it — the global switch IS
-     * `enabled`, which `shouldCompact` reads, and a per-model limit IS
-     * `reserveTokens`, which the threshold arithmetic subtracts. Neither is a
-     * second condition wrapped around Pi's rule.
+     * a settings change. The policy lands on Pi's own `CompactionSettings`
+     * rather than beside it — the global switch IS `enabled`, which
+     * `shouldCompact` reads — not a second condition wrapped around Pi's rule.
+     * The reserve is always the executor's own default: per-model reserve
+     * budgets were retired with the policy that carried them (VC-155).
      *
      * **What switching automatic compaction off does to the overflow path:
      * nothing.** `enabled` is read by `shouldCompact` and by nothing else in
@@ -1131,30 +1237,11 @@ async function attachSession(
      * is being rescued from a dead end. A test pins it, so a future Pi that
      * taught `prepareCompaction` about `enabled` would fail loudly here rather
      * than quietly stop recovering overflowed Sessions.
-     *
-     * A per-model reserve the model's own window cannot hold is ignored rather
-     * than clamped: it is refused at the point it would be saved, so reading one
-     * back means the row has gone stale against a catalog whose window changed,
-     * and a stale row costs itself — the Session runs on the executor's own
-     * reserve, exactly as if the row were not there.
      */
-    const compactionSettings = (): CompactionSettings => {
-      const policy = host.compactionPolicy();
-      const configured = modelCompactionReserve(policy.modelLimits, {
-        providerId: agent.state.model.provider,
-        modelId: agent.state.model.id,
-      });
-      const contextWindow = contextWindowOf(agent.state.model);
-      const usable =
-        configured !== undefined &&
-        contextWindow !== undefined &&
-        isUsableCompactionReserve(configured, contextWindow);
-      return {
-        ...DEFAULT_COMPACTION_SETTINGS,
-        enabled: policy.autoCompaction,
-        ...(usable ? { reserveTokens: configured } : {}),
-      };
-    };
+    const compactionSettings = (): CompactionSettings => ({
+      ...DEFAULT_COMPACTION_SETTINGS,
+      enabled: host.compactionPolicy().autoCompaction,
+    });
 
     /** The durable branch, read as a conversation. Costs the whole history. */
     const conversationBranch = async (): Promise<Entry[]> =>

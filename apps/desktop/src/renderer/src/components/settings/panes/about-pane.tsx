@@ -91,7 +91,12 @@ export function AboutPane() {
   const runDoctor = React.useCallback(async () => {
     setDoctorState("loading");
     try {
-      const result = await window.api.cli.doctor({ fix: false });
+      // The same project scope the status read uses: which tool absences are
+      // faults is a fact about a directory (VC-157), and the probe judges it
+      // from its own cwd.
+      const result = await window.api.cli.doctor(
+        projectCwd === undefined ? { fix: false } : { fix: false, cwd: projectCwd },
+      );
       if (!result.ok) {
         setDoctorState("unavailable");
         toastError(`Doctor couldn't run: ${result.error}`);
@@ -103,7 +108,7 @@ export function AboutPane() {
       setDoctorState("unavailable");
       toastError(`Doctor couldn't run: ${errorMessage(error)}`);
     }
-  }, []);
+  }, [projectCwd]);
 
   React.useEffect(() => {
     void runDoctor();
@@ -176,7 +181,11 @@ export function AboutPane() {
     setFixing(true);
     setDoctorState("loading");
     try {
-      const result = await window.api.cli.doctor({ fix: true });
+      // Project-scoped like `runDoctor` — the repair re-probe must judge the
+      // same directory the fault list was measured in (VC-157).
+      const result = await window.api.cli.doctor(
+        projectCwd === undefined ? { fix: true } : { fix: true, cwd: projectCwd },
+      );
       if (!result.ok) {
         setDoctorState("unavailable");
         toastError(`Couldn't repair this install: ${result.error}`);
@@ -191,7 +200,7 @@ export function AboutPane() {
     } finally {
       setFixing(false);
     }
-  }, [load]);
+  }, [load, projectCwd]);
 
   return (
     <HealthPanel

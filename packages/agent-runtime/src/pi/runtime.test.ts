@@ -337,6 +337,21 @@ function compactions(observations: RuntimeObservation[]): CompactionObservation[
 }
 
 /**
+ * Whether an unreadable marker of this shape stops a Session from opening.
+ *
+ * Only a command marker does. Its loss changes what the Session DID rather than
+ * what it showed — an acceptance recovery cannot see is a command `reconcile`
+ * re-delivers — so it is refused, where every other kind is quarantined.
+ */
+function refusesToOpen(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as { kind?: unknown }).kind === "command-accepted"
+  );
+}
+
+/**
  * A message long enough to fill Pi's recent-token budget on its own.
  *
  * `keepRecentTokens` is 20,000 and Pi estimates four characters to the token,
@@ -2612,7 +2627,7 @@ describe("startSession", () => {
     await reopened.close();
   });
 
-  it("rejects structurally malformed recovery markers without deleting the sidecar", async () => {
+  it("quarantines a structurally malformed marker, and refuses only a command one (VC-155)", async () => {
     const attachment = fixture();
     const firstRuntime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -2774,6 +2789,33 @@ describe("startSession", () => {
         turnId: "turn-1",
         message: { role: "user", content: "accepted", timestamp: Date.now() },
       },
+      // Content shapes no runtime write produces. The valid array shape — an
+      // image message's blocks — is pinned by the VC-155 recovery test; these
+      // pin that widening the validator did not open it to arbitrary payloads.
+      ...[
+        1,
+        [],
+        [null],
+        [{ type: "text", text: 1 }],
+        [{ type: "image", data: 1, mimeType: "image/png" }],
+        [{ type: "image", data: "aGVsbG8=", mimeType: 1 }],
+        [{ type: "document", data: "aGVsbG8=" }],
+      ].map((content) => ({
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content, timestamp: Date.now() },
+      })),
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: "now" },
+      },
       // A reason no executor writes, and a token count nothing could have
       // counted — the durable ledger reads those as integers, so a marker
       // accepted here would recover into a Session that cannot be read.
@@ -2813,18 +2855,34 @@ describe("startSession", () => {
         data,
       };
       writeFileSync(recovery.sessionFilePath, `${header}\n${JSON.stringify(malformed)}\n`);
-      try {
-        const unexpected = await secondRuntime.startSession({
-          ...attachment.spec,
-          recovery,
-        });
-        await unexpected.close();
-        throw new Error(`Malformed marker case ${index} was accepted.`);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("was accepted")) throw error;
-        expect(error).toEqual(
-          expect.objectContaining({ message: "Pi recovery marker is malformed." }),
+      if (refusesToOpen(data)) {
+        try {
+          const unexpected = await secondRuntime.startSession({
+            ...attachment.spec,
+            recovery,
+          });
+          await unexpected.close();
+          throw new Error(`Malformed marker case ${index} was accepted.`);
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("was accepted")) throw error;
+          expect(error).toEqual(
+            expect.objectContaining({ message: "Pi recovery marker is malformed." }),
+          );
+        }
+      } else {
+        // Opens, because bricking a Session forever over one unreadable
+        // observation is the VC-155 failure. The skip is said out loud.
+        const handle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+        const replay = await handle.reconcile(null);
+        expect([...replay.observations]).toContainEqual(
+          expect.objectContaining({
+            kind: "attention",
+            state: "raised",
+            reason: "runtime-failure",
+            message: expect.stringContaining("Skipped 1 unreadable Pi recovery marker"),
+          }),
         );
+        await handle.close();
       }
       expect(existsSync(recovery.sessionFilePath)).toBe(true);
     }
@@ -4186,6 +4244,185 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
+  it("does not report a failed compaction after a message that carried an image (VC-155)", async () => {
+    // The durable acceptance marker for an image message holds block-array
+    // content, and the marker validator once refused that shape outright. The
+    // branch read at the head of every later delivery then threw "Pi recovery
+    // marker is malformed" — filed as a failed threshold compaction after
+    // EVERY message the Session sent from then on, and the threshold path
+    // itself never ran again.
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("a login form"), settles("second answer")])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("what is this?", "queue", "command-1", [
+      { data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+    await expect(handle.submitUserMessage("and now?", "queue", "command-2")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    // No compaction was due and none may be reported — least of all a failure.
+    expect(compactions(attachment.observations)).toEqual([]);
+    const recovery = handle.recovery;
+    await handle.close();
+
+    // And the marker holding the image survives recovery: the same validator
+    // guards reattachment, so a shape it refused was also a Session that could
+    // never be reopened.
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after"))])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("still here?");
+    // The recovered context still holds the image message, blocks and all.
+    expect(calls[0]?.messages).toContain("aGVsbG8=");
+    const replayed = await secondHandle.reconcile(null);
+    expect(replayed.receipts).toEqual([
+      expect.objectContaining({ commandId: "command-1" }),
+      expect.objectContaining({ commandId: "command-2" }),
+    ]);
+    await secondHandle.close();
+  });
+
+  it("reopens a Session an older version already poisoned (VC-155)", async () => {
+    // Widening the validator heals the image shape retroactively, because the
+    // marker was always fine and only the reader was wrong. These two are the
+    // other half of VC-155, and they are NOT healed that way: they are markers
+    // older versions genuinely wrote wrong, and they still sit in the sidecars
+    // of everyone who hit them. Fixing the writers stops new ones; it does
+    // nothing for a Session already carrying one, which kept reporting a failed
+    // threshold compaction after every message and could never be reopened.
+    // So the read quarantines what it cannot parse instead of throwing.
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+
+    const poisoned = [
+      {
+        // A model with no cost table multiplied through to a NaN total, and
+        // JSON persists NaN as null — which `optionalFiniteNumber` refuses.
+        kind: "message-settled",
+        turnId: "turn-1",
+        message: {
+          entryId: "entry-1",
+          role: "assistant",
+          text: "settled",
+          usage: { inputTokens: 1, outputTokens: 2, costUsd: null },
+        },
+      },
+      {
+        // What the generic fallback wrote for a hostile `tool_execution_end`
+        // before `fallbackStateOf`: an end-event activity left at "progress",
+        // which the marker validator accepts only as completed or failed.
+        kind: "activity",
+        turnId: "turn-1",
+        activityId: "unknown",
+        state: "progress",
+        descriptor: {
+          kind: "other",
+          nativeToolName: "unknown",
+          subject: { label: "unknown", path: null, lineRange: null },
+          outcome: null,
+          startedAt: null,
+          endedAt: null,
+        },
+        input: null,
+        output: null,
+      },
+    ];
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${[
+        header,
+        ...poisoned.map((data, index) =>
+          JSON.stringify({
+            kind: "entry",
+            lane: "main",
+            type: "custom",
+            id: `poisoned-marker-${index}`,
+            parentId: index === 0 ? null : `poisoned-marker-${index - 1}`,
+            seq: index + 1,
+            timestamp: Date.now(),
+            customType: "volli.observation.v1",
+            data,
+          }),
+        ),
+      ].join("\n")}\n`,
+    );
+
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("still here"))])),
+    });
+    const handle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await handle.submitUserMessage("does this still work?");
+
+    // The turn ran, and the head of it no longer files a failed compaction.
+    expect(calls).toHaveLength(1);
+    expect(compactions(attachment.observations)).toEqual([]);
+    // Both skips are counted, and said once rather than swallowed.
+    expect([...(await handle.reconcile(null)).observations]).toContainEqual(
+      expect.objectContaining({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: expect.stringContaining("Skipped 2 unreadable Pi recovery markers"),
+      }),
+    );
+    await handle.close();
+  });
+
+  it("still compacts at the threshold after an image message (VC-155)", async () => {
+    // The poisoned-marker failure above was also what disabled automatic
+    // compaction: the branch read threw before the threshold was ever asked,
+    // so Sessions grew past their window and reported errors instead of
+    // compacting. This pins the whole journey — image message, window filled,
+    // threshold compaction succeeds.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("a login form")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("what is this?", "queue", "command-1", [
+      { data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+
+    expect(calls).toHaveLength(4);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ kind: "compaction", state: "compacted", reason: "threshold" }),
+    ]);
+    const turn = calls[3]?.messages ?? "";
+    expect(turn).toContain("compacted into the following summary");
+    expect(turn).toContain("carry on");
+    await handle.close();
+  });
+
   it("does not resurrect the elided history when the Session is recovered", async () => {
     const attachment = fixture();
     const firstCalls: ProviderCall[] = [];
@@ -4671,14 +4908,8 @@ describe("recovering a turn that overflowed the window", () => {
 describe("the compaction policy a Session is run under", () => {
   /** Over Pi's own reserve against the faux catalog's 128k window. */
   const OVER_RESERVE = 200_000;
-  /**
-   * Under Pi's threshold (128,000 − 16,384) and over a 32,768-token one
-   * (128,000 − 32,768). What a bigger reserve is for: this conversation
-   * compacts only because the model was told to keep more room free.
-   */
+  /** Under Pi's threshold (128,000 − 16,384): the executor's reserve holds it. */
   const BETWEEN_RESERVES = 100_000;
-
-  const LIMIT = { providerId: PROVIDER_ID, modelId: MODEL_ID };
 
   /** Two turns, the second measured at `occupied`, then a third message. */
   function reaching(occupied: number, calls: ProviderCall[]): StreamFn {
@@ -4719,21 +4950,21 @@ describe("the compaction policy a Session is run under", () => {
   }
 
   it("leaves a Session compacting at the executor's own reserve when nothing is configured", async () => {
-    // The baseline both halves of the next test are measured against: three
-    // turns, three calls, no summary — this occupancy is under Pi's threshold.
+    // Three turns, three calls, no summary — this occupancy is under Pi's
+    // threshold, and the executor's own reserve is the only one there is:
+    // per-model reserve budgets were retired with VC-155.
     const { calls, compacted } = await driveTo(BETWEEN_RESERVES, undefined);
     expect(calls).toHaveLength(3);
     expect(compacted).toEqual([]);
   });
 
-  it("compacts earlier for a model told to keep more room free", async () => {
-    const { calls, compacted, observations } = await driveTo(BETWEEN_RESERVES, () => ({
+  it("announces the summary it buys while a threshold compaction is pending", async () => {
+    const { calls, compacted, observations } = await driveTo(OVER_RESERVE, () => ({
       autoCompaction: true,
-      modelLimits: [{ ...LIMIT, reserveTokens: 32_768 }],
     }));
 
-    // The same conversation as above, and the same measurement — only the
-    // reserve differs, and a fourth call is the summary it now buys.
+    // A fourth call is the summary the threshold buys, and the transient
+    // progress marker is what explains the wait to the person inside it.
     expect(calls).toHaveLength(4);
     expect(compacted).toEqual([
       expect.objectContaining({ state: "compacted", reason: "threshold" }),
@@ -4744,40 +4975,11 @@ describe("the compaction policy a Session is run under", () => {
     expect(calls[3]?.messages).toContain("compacted into the following summary");
   });
 
-  it("limits only the model it names", async () => {
-    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
-      autoCompaction: true,
-      modelLimits: [
-        { providerId: PROVIDER_ID, modelId: "some-other-model", reserveTokens: 32_768 },
-      ],
-    }));
-
-    expect(calls).toHaveLength(3);
-    expect(compacted).toEqual([]);
-  });
-
-  it("ignores a reserve the model's own window cannot hold", async () => {
-    // The row a shrunken catalog window leaves behind — refused where it would
-    // be saved, so reading one back means it has gone stale. Ignored rather
-    // than honoured, because honouring it puts the threshold at or below zero:
-    // this Session would compact after its very first reply, and pay for a
-    // summary each time. It runs on the executor's own reserve instead, which
-    // this occupancy does not reach.
-    const { calls, compacted } = await driveTo(BETWEEN_RESERVES, () => ({
-      autoCompaction: true,
-      modelLimits: [{ ...LIMIT, reserveTokens: 128_000 }],
-    }));
-
-    expect(calls).toHaveLength(3);
-    expect(compacted).toEqual([]);
-  });
-
   it("does not compact on its own when automatic compaction is switched off", async () => {
     // Measured well over the reserve, and nothing happens: the switch is Pi's
     // own `enabled`, which its threshold rule reads.
     const { calls, compacted } = await driveTo(OVER_RESERVE, () => ({
       autoCompaction: false,
-      modelLimits: [],
     }));
 
     expect(calls).toHaveLength(3);
@@ -4799,7 +5001,7 @@ describe("the compaction policy a Session is run under", () => {
           recording(calls, settles("fourth answer")),
         ]),
       ),
-      compactionPolicy: () => ({ autoCompaction, modelLimits: [] }),
+      compactionPolicy: () => ({ autoCompaction }),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -4832,7 +5034,7 @@ describe("the compaction policy a Session is run under", () => {
           recording(calls, settles("recovered answer")),
         ]),
       ),
-      compactionPolicy: () => ({ autoCompaction: false, modelLimits: [] }),
+      compactionPolicy: () => ({ autoCompaction: false }),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -5067,7 +5269,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized anyway"))),
-      compactionPolicy: () => ({ autoCompaction: false, modelLimits: [] }),
+      compactionPolicy: () => ({ autoCompaction: false }),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -5243,7 +5445,7 @@ describe("compacting because somebody asked", () => {
       ),
       compactionPolicy: () => {
         if (!policyReadable) throw new Error("the policy store is unreadable");
-        return { autoCompaction: true, modelLimits: [] };
+        return { autoCompaction: true };
       },
     });
     const handle = await runtime.startSession(attachment.spec);

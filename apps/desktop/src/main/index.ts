@@ -7,7 +7,6 @@ import {
   net,
   Notification,
   protocol,
-  safeStorage,
   session,
   shell,
 } from "electron";
@@ -28,6 +27,7 @@ import {
   globalSkillsDir,
   projectSkillsDir,
   draftAttachmentHashes,
+  memoizedPathExists,
   resolveDefaultModel,
   resolveShell,
   skillPromptResource,
@@ -75,6 +75,7 @@ import {
   EXA_SEARCH_KEY_SECRET,
   WebCredentialStore,
 } from "./web/credential";
+import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
@@ -86,7 +87,6 @@ import {
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
-  assertCompactionLimitsUsable,
   assertDefaultModelAvailable,
   readCompactionPolicy,
   readHiddenModels,
@@ -674,7 +674,10 @@ app.whenReady().then(async () => {
    * onboarding. `null` means the caller has no project root — it must not turn
    * main's own cwd into a pretend workspace dependency answer.
    */
-  const readSessionEnvironment = async (cwd: string | null) => {
+  const readSessionEnvironment = async (
+    cwd: string | null,
+    pathExists?: (path: string) => boolean,
+  ) => {
     const outcome = await loginPathBootstrap.apply();
     const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
     const report = await buildSessionEnvReport({
@@ -686,6 +689,9 @@ app.whenReady().then(async () => {
       // A host-wide read has no project dependency fact to infer from main's
       // own cwd, so the report leaves that one field unmeasured.
       cwd: cwd ?? undefined,
+      // A caller with a further workspace question of its own passes its memo
+      // in, so the whole read stats each path once (Settings, below).
+      ...(pathExists === undefined ? {} : { pathExists }),
     });
     // `SessionEnvReport` also serves a standalone CLI fallback, where those
     // fields can be unknown. Main just ran both passes, so Settings can retain
@@ -703,21 +709,31 @@ app.whenReady().then(async () => {
   // catalog the runtime had no reason to re-read.
   const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
   // Web Access: the BYO search provider, and the one credential Volli stores
-  // itself. `safeStorage` is passed as the cipher rather than imported inside
-  // the owner, which is what keeps that owner (and everything it decides about
-  // refusing to store a key in the clear) testable outside Electron.
+  // itself. Before anything can read one, the keys that predate migration 023
+  // are carried out of `safeStorage` — the app's one remaining keychain call,
+  // and a no-op `SELECT` on every profile that has already made the trip. It
+  // runs here, ahead of the stores, so no Session and no Settings open can see
+  // a key half-moved. Counts only in the log: how many rows moved is not a fact
+  // about any key.
+  if (dbHandle.ok) {
+    const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
+    if (moved.carried + moved.dropped + moved.deferred > 0) {
+      console.info(
+        `[volli] web search keys out of the OS keychain: ${moved.carried} carried, ` +
+          `${moved.dropped} dropped, ${moved.deferred} left for a later launch`,
+      );
+    }
+  }
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
         credentials: {
           brave: new WebCredentialStore({
             db: dbHandle.db,
-            cipher: safeStorage,
             secretName: BRAVE_SEARCH_KEY_SECRET,
           }),
           exa: new WebCredentialStore({
             db: dbHandle.db,
-            cipher: safeStorage,
             secretName: EXA_SEARCH_KEY_SECRET,
           }),
         },
@@ -1025,18 +1041,8 @@ app.whenReady().then(async () => {
           readCompactionPolicy:
             sessionDb !== null ? () => readCompactionPolicy(sessionDb) : undefined,
           writeCompactionPolicy:
-            sessionDb !== null && piRuntimeHost !== null
-              ? async (policy) => {
-                  // Refused against the catalog before it is stored, like a
-                  // default model is: a reserve the model's own window cannot
-                  // hold would compact after every reply, and the only place
-                  // that is legible is the control that set it.
-                  if (policy.modelLimits.length > 0) {
-                    const access = await piRuntimeHost.inspectModelAccess({});
-                    assertCompactionLimitsUsable(access, policy.modelLimits);
-                  }
-                  return writeCompactionPolicy(sessionDb, policy, Date.now());
-                }
+            sessionDb !== null
+              ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
           createSession: sessions?.create,
           attachSession: sessions?.attach,
@@ -1938,10 +1944,17 @@ app.whenReady().then(async () => {
           // installs the scoped workspace, judged by its lockfile. Computed
           // here so `volli identify`'s env block keeps the exact field set
           // the contract published.
-          sessionEnvironment: async (cwd) => ({
-            ...(await readSessionEnvironment(cwd)),
-            installCommand: cwd === null ? null : workspaceInstallCommand(cwd, existsSync),
-          }),
+          sessionEnvironment: async (cwd) => {
+            // The install command reads the same lockfile the requirements
+            // did, so both share one memo: the walk happens once, and the
+            // command a user is told to run cannot name a different manager
+            // than the tool they were told to have.
+            const pathExists = memoizedPathExists(existsSync);
+            return {
+              ...(await readSessionEnvironment(cwd, pathExists)),
+              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, pathExists),
+            };
+          },
           systemPathIssues: () => readSystemPathIssues(),
           credentialHelperIssues: (cwd) => readCredentialHelperIssues(cwd),
           wrapperCommands: () =>
@@ -1956,7 +1969,11 @@ app.whenReady().then(async () => {
         },
         input?.cwd ?? null,
       ),
-    doctor: () => probeCliDoctor({ shellFile: resolveShell(process.env).file }),
+    // The probe runs IN the scoped project: `volli doctor` judges which
+    // tools are required from its own cwd (VC-157), and main's cwd is `/`
+    // under launchd — which would imply no project and quietly pass a
+    // genuinely missing `git`.
+    doctor: (cwd) => probeCliDoctor({ shellFile: resolveShell(process.env).file, cwd }),
     repair: async () => {
       await repairSessionEnvironment();
     },
@@ -2052,8 +2069,9 @@ app.whenReady().then(async () => {
           // change, so this is never chatter.
           onSessionHarness: (notice) => broadcastSessionHarness(notice),
           // The `env` block `volli identify` prints (VC-94): the PATH main
-          // adopted, its latest non-interactive provenance, the contract tools
-          // resolved against it, and the workspace dependency state. It awaits
+          // adopted, its latest non-interactive provenance, the measured tools
+          // resolved against it (and which of them this workspace implies),
+          // and the workspace dependency state. It awaits
           // the one current pass — boot normally, a fresh pass after repair —
           // so the report never describes a PATH from before adoption finished
           // and is read at CALL time, never captured.

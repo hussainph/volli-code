@@ -52,6 +52,7 @@ import type {
   SESSION_RPC_IPC_CHANNEL,
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
+  RequirableSessionEnvTool,
   SessionEnvTool,
   SessionListingRow,
   SessionRpcIpcRequest,
@@ -807,8 +808,16 @@ export interface CliSessionPathStatus {
   provenance: SessionEnvProvenance;
   /** What the later interactive pass could establish, if it has landed. */
   interactiveProvenance: SessionEnvInteractiveProvenance;
-  /** Where each tool a Session contract requires resolves, or `null` when it does not. */
+  /** Where each measured Session tool resolves, or `null` when it does not. */
   tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /**
+   * The subset of {@link tools} the scoped project implies — a repository
+   * implies `git`, a JavaScript workspace implies its lockfile's manager and
+   * the runtime that manager needs (`@volli/shared`'s
+   * `requiredSessionEnvTools`). Only these absences are faults; empty when no
+   * project workspace was supplied.
+   */
+  requiredTools: readonly RequirableSessionEnvTool[];
   /** Project-scoped dependency state; `null` when no project workspace was supplied. */
   dependencies: WorkspaceDependenciesStatus;
   /**
@@ -865,6 +874,17 @@ export interface CliStatusInput {
 /** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
 export interface CliDoctorInput {
   fix: boolean;
+  /**
+   * The project root to run the probe IN, when one is in scope.
+   *
+   * Which tool absences are faults is a fact about a directory (VC-157), and
+   * `volli doctor` reads it from its own cwd. A probe spawned without this
+   * inherits main's cwd — `/` for an app launched from Finder — which implies
+   * no project and so can never fault a missing `git`. The pane would then
+   * contradict the banner that sent the user to it, which is the
+   * two-surfaces-disagree failure VC-94 was about.
+   */
+  cwd?: string;
 }
 
 /**
@@ -1104,15 +1124,15 @@ export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
 export type KeyedWebAccessProvider = "brave" | "exa";
 
 /**
- * What the renderer may know about a stored API key: that there is one, that
- * there is one this machine can no longer decrypt, or that there is none.
+ * What the renderer may know about a stored API key: that there is one, or that
+ * there is none.
  *
- * A state rather than the value, and there is no fourth member that carries one.
- * "Unreadable" is here because a profile copied to another machine, or a
- * keychain that stopped answering, is a real situation — and reporting it as
- * "absent" would tell a person to paste a key they already pasted.
+ * A state rather than the value, and there is no third member that carries one.
+ * There was a third member — "unreadable", for a key the OS keychain would no
+ * longer open — until the keys stopped being keychain material. A key the
+ * profile holds is a key it can read.
  */
-export type WebAccessKeyState = "absent" | "present" | "unreadable";
+export type WebAccessKeyState = "absent" | "present";
 
 /** The whole of what Settings is told about Web Access. */
 export interface WebAccessSettingsView {
@@ -1127,8 +1147,6 @@ export interface WebAccessSettingsView {
    * person switching back should not be asked to paste one they already gave.
    */
   keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
-  /** Whether this machine's OS keychain can encrypt at all right now. */
-  encryptionAvailable: boolean;
 }
 
 export type WebAccessResult = Result<{ settings: WebAccessSettingsView }>;

@@ -65,6 +65,39 @@ describe("probeCliDoctor", () => {
     expect(result).toMatchObject({ ok: true, summary: "1 failed of 2 checks." });
   });
 
+  // VC-157: `volli doctor` decides which tool absences are faults from its
+  // own cwd, so the probe has to STAND in the project the pane describes.
+  // Inheriting main's cwd (`/` under launchd) would imply no project at all
+  // and quietly pass a genuinely missing `git`.
+  it("runs the probe in the scoped project, so requirements are judged there", async () => {
+    const directories: (string | null)[] = [];
+
+    await probeCliDoctor({
+      shellFile: "/bin/zsh",
+      cwd: "/work/acme",
+      runShell: async (_file, _args, cwd) => {
+        directories.push(cwd);
+        return `__VOLLI_DOCTOR__${REPORT}`;
+      },
+    });
+
+    expect(directories).toEqual(["/work/acme"]);
+  });
+
+  it("passes no directory when no project is in scope", async () => {
+    const directories: (string | null)[] = [];
+
+    await probeCliDoctor({
+      shellFile: "/bin/zsh",
+      runShell: async (_file, _args, cwd) => {
+        directories.push(cwd);
+        return `__VOLLI_DOCTOR__${REPORT}`;
+      },
+    });
+
+    expect(directories).toEqual([null]);
+  });
+
   it("turns an unanswerable shell into the diagnosis it is, not a crash", async () => {
     const silent = await probeCliDoctor({
       shellFile: "/bin/zsh",

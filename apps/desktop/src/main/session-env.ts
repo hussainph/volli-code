@@ -20,7 +20,12 @@
 import { constants, existsSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 
-import { resolveSessionEnvTools, workspaceDependenciesStatus } from "@volli/shared";
+import {
+  memoizedPathExists,
+  requiredSessionEnvTools,
+  resolveSessionEnvTools,
+  workspaceDependenciesStatus,
+} from "@volli/shared";
 import type {
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
@@ -59,11 +64,19 @@ export interface SessionEnvReportDeps {
   cwd?: string;
   /** Test seam over the filesystem; defaults to the real one. */
   isExecutable?(path: string): Promise<boolean>;
+  /**
+   * Test seam over the filesystem; defaults to the real one. Memoized for the
+   * life of one report, so a seam counting calls sees each path asked once.
+   */
   pathExists?(path: string): boolean;
 }
 
 export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise<SessionEnvReport> {
   const pathEntries = deps.path.split(":").filter((entry) => entry.length > 0);
+  // The two workspace questions below walk the same ancestors over the same
+  // markers, so they share one memo: one stat per path, and two answers that
+  // cannot describe the workspace at two different moments.
+  const pathExists = memoizedPathExists(deps.pathExists ?? existsSync);
   return {
     path: deps.path,
     provenance: deps.provenance,
@@ -71,9 +84,10 @@ export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise
     tools: await resolveSessionEnvTools(pathEntries, {
       isExecutable: deps.isExecutable ?? executableAt,
     }),
-    dependencies:
-      deps.cwd === undefined
-        ? null
-        : workspaceDependenciesStatus(deps.cwd, deps.pathExists ?? existsSync),
+    // Which of those measurements is allowed to be a fault, decided by what
+    // the scoped workspace is (VC-157). A host-wide read has no project to
+    // imply anything, and requires nothing.
+    requiredTools: deps.cwd === undefined ? [] : requiredSessionEnvTools(deps.cwd, pathExists),
+    dependencies: deps.cwd === undefined ? null : workspaceDependenciesStatus(deps.cwd, pathExists),
   };
 }

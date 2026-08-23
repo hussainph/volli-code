@@ -35,9 +35,9 @@ export interface ModelAccessClient {
   /** The models the user toggled out of composers and pickers. */
   hiddenModels(): Promise<readonly HiddenModelRef[]>;
   setHiddenModels(hidden: readonly HiddenModelRef[]): Promise<readonly HiddenModelRef[]>;
-  /** The automatic-compaction switch and the per-model reserves under it. */
+  /** The automatic-compaction switch. */
   compactionPolicy(): Promise<CompactionPolicy>;
-  /** Saves the whole policy; rejects with the reason a reserve was refused. */
+  /** Saves the whole policy — the one global switch. */
   setCompactionPolicy(policy: CompactionPolicy): Promise<CompactionPolicy>;
   /**
    * Starts a sign-in and routes its updates to `onUpdate`.

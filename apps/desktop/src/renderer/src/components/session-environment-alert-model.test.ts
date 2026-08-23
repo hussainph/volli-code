@@ -25,8 +25,14 @@ function status(
           git: "/usr/bin/git",
           gh: "/opt/homebrew/bin/gh",
           node: "/opt/homebrew/bin/node",
+          npm: "/opt/homebrew/bin/npm",
           pnpm: "/opt/homebrew/bin/pnpm",
+          yarn: null,
+          bun: null,
         },
+        // A git checkout with a pnpm lockfile — the shape the fixed census
+        // used to assume of every project on earth (VC-157).
+        requiredTools: ["git", "node", "pnpm"],
         dependencies: null,
         installCommand: null,
         ...overrides,
@@ -66,7 +72,15 @@ describe("sessionEnvironmentAlert", () => {
 
   it("shows every missing project requirement as soon as a project is selected", () => {
     const measured = status("adopted", "already-complete", {
-      tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: "/opt/homebrew/bin/pnpm" },
+      tools: {
+        git: null,
+        gh: "/opt/homebrew/bin/gh",
+        node: null,
+        npm: "/opt/homebrew/bin/npm",
+        pnpm: "/opt/homebrew/bin/pnpm",
+        yarn: null,
+        bun: null,
+      },
       dependencies: "absent",
       installCommand: "pnpm install",
     });
@@ -74,7 +88,7 @@ describe("sessionEnvironmentAlert", () => {
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toEqual({
       title: "Sessions aren't ready for Acme",
       detail:
-        "Missing from the Session PATH: gh, node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions. Dependencies are not installed. Run pnpm install before starting a Session.",
+        "Missing from the Session PATH: git, node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions. Dependencies are not installed. Run pnpm install before starting a Session.",
     });
   });
 
@@ -106,16 +120,100 @@ describe("sessionEnvironmentAlert", () => {
     const measured = status("adopted", "already-complete", {
       tools: {
         git: "/usr/bin/git",
-        gh: null,
-        node: "/opt/homebrew/bin/node",
+        gh: "/opt/homebrew/bin/gh",
+        node: null,
+        npm: "/opt/homebrew/bin/npm",
         pnpm: "/opt/homebrew/bin/pnpm",
+        yarn: null,
+        bun: null,
       },
       dependencies: "installed",
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Missing from the Session PATH: gh. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions.",
+      "Missing from the Session PATH: node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions.",
     );
+  });
+
+  // VC-157's whole point: the alert speaks about the tools THIS project
+  // implies, and a measurement nothing asked for is not a fault.
+  describe("only the project's own requirements", () => {
+    it("says nothing about a missing gh, which no project requires", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          git: "/usr/bin/git",
+          gh: null,
+          node: "/opt/homebrew/bin/node",
+          npm: "/opt/homebrew/bin/npm",
+          pnpm: "/opt/homebrew/bin/pnpm",
+          yarn: null,
+          bun: null,
+        },
+        dependencies: "installed",
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toBeNull();
+    });
+
+    it("says nothing about pnpm for a yarn workspace", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          git: "/usr/bin/git",
+          gh: null,
+          node: "/opt/homebrew/bin/node",
+          npm: null,
+          pnpm: null,
+          yarn: "/opt/homebrew/bin/yarn",
+          bun: null,
+        },
+        requiredTools: ["git", "node", "yarn"],
+        dependencies: "installed",
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toBeNull();
+    });
+
+    // The reported case: a Python repo on a host with no gh and no JS
+    // toolchain wore a permanent red banner for tools it never runs.
+    it("is silent for a repo with no JavaScript manifest and no gh installed", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          git: "/usr/bin/git",
+          gh: null,
+          node: null,
+          npm: null,
+          pnpm: null,
+          yarn: null,
+          bun: null,
+        },
+        requiredTools: ["git"],
+        dependencies: null,
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Harbor" })).toBeNull();
+    });
+
+    // Reporting is not alarming, but a JS workspace genuinely without node
+    // still is: the ticket keeps this one loud.
+    it("still warns when a JavaScript workspace is missing node itself", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          git: "/usr/bin/git",
+          gh: null,
+          node: null,
+          npm: null,
+          pnpm: null,
+          yarn: "/opt/homebrew/bin/yarn",
+          bun: null,
+        },
+        requiredTools: ["git", "node", "yarn"],
+        dependencies: "installed",
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
+        "Missing from the Session PATH: node. If they are installed, run volli doctor --fix to re-run PATH adoption for new Sessions.",
+      );
+    });
   });
 
   it("is quiet about a ready project, and about readiness with no project in scope", () => {
@@ -138,8 +236,11 @@ describe("sessionEnvironmentAlert", () => {
       tools: {
         git: "/usr/bin/git",
         gh: null,
-        node: "/opt/homebrew/bin/node",
+        node: null,
+        npm: "/opt/homebrew/bin/npm",
         pnpm: "/opt/homebrew/bin/pnpm",
+        yarn: null,
+        bun: null,
       },
       dependencies: "absent",
       installCommand: "pnpm install",
@@ -148,7 +249,7 @@ describe("sessionEnvironmentAlert", () => {
     const alert = sessionEnvironmentAlert(measured, { name: "Acme" });
     expect(alert).toEqual({
       title: "Sessions couldn't read your login PATH",
-      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT} Missing from the Session PATH: gh. Dependencies are not installed. Run pnpm install before starting a Session.`,
+      detail: `Sessions are using the app's inherited PATH. Commands available in your terminal may not run here. ${REPAIR_HINT} Missing from the Session PATH: node. Dependencies are not installed. Run pnpm install before starting a Session.`,
     });
     expect(alert?.detail.match(/volli doctor --fix/g)).toHaveLength(1);
   });

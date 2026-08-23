@@ -153,7 +153,6 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "openai",
             "codex",
             "compaction",
-            "reserve",
             "reasoning",
             "sign in",
             "account",

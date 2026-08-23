@@ -17,12 +17,22 @@ function status(overrides: Partial<CliToolStatus> = {}): CliToolStatus {
         path: "/volli/bin:/usr/bin:/Users/ada/.local/bin",
         provenance: "adopted",
         interactiveProvenance: "already-complete",
+        // The full VC-157 census — every name a session's PATH is looked up
+        // for; the package managers this fixture's project never uses are
+        // measured as absent, not omitted.
         tools: {
           git: "/usr/bin/git",
           gh: "/opt/homebrew/bin/gh",
           node: "/opt/homebrew/bin/node",
+          npm: null,
           pnpm: "/opt/homebrew/bin/pnpm",
+          yarn: null,
+          bun: null,
         },
+        // Only the faultable subset (VC-157): git always, node+pnpm because
+        // this fixture's workspace is a pnpm one — never gh, which is
+        // classified at the moment a PR action runs.
+        requiredTools: ["git", "node", "pnpm"],
         dependencies: null,
         installCommand: null,
       },

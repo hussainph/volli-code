@@ -9,13 +9,14 @@
  * default until an explicit choice is made — the "Project default" option is
  * that inheritance stated as a value, never a silent substitution.
  *
- * A model's compaction reserve sits on the model's own row rather than in a
- * section of its own, because it is a second thing configured about the same
- * model and a second list of every model would be the same forty rows twice.
- * The switch above it is not per-model and so is not on a model row.
+ * Compaction is one switch, not a per-model surface. Per-model reserve
+ * budgets used to sit on every model row and were retired (VC-155): a reserve
+ * is a number nobody can pick by feel, and the executor defaults it sensibly.
+ * The one question a person can actually answer — whether a Session may
+ * interrupt them to make room — is the one control left.
  *
  * Every control saves on change. A Save button earned its place when there was
- * one selection to compose; three purposes and two controls per model would
+ * one selection to compose; three purposes and a control per model would
  * make this pane a form, and a picker whose choice does not hold is a picker
  * lying about what is configured.
  */
@@ -25,12 +26,9 @@ import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import * as React from "react";
 import {
-  compactionReserveChoices,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isModelHidden,
-  modelCompactionReserve,
-  withModelCompactionReserve,
   withModelVisibility,
   type CompactionPolicy,
   type HiddenModelRef,
@@ -96,9 +94,6 @@ export const PURPOSE_ROWS: readonly {
 
 /** The Select value that says "no explicit choice — resolve the project default". */
 const INHERIT_VALUE = "__project-default__";
-
-/** The reserve Select's value for a model carrying no explicit limit of its own. */
-const DEFAULT_RESERVE_VALUE = "__default-reserve__";
 
 export function ModelAccessSettings({
   autoSignInProviderId,
@@ -184,9 +179,8 @@ export function ModelAccessSettings({
   }
 
   /**
-   * The switch and every reserve write the one policy blob, so they share one
-   * save — optimistic and rolled back, for the switch's sake above all: a
-   * toggle that waits a round trip to move reads as a switch that did not take.
+   * Optimistic and rolled back: a toggle that waits a round trip to move
+   * reads as a switch that did not take.
    *
    * Nothing here tells a running Session. The runtime reads this policy off the
    * database at the moment it next considers compacting, so a Session already
@@ -270,9 +264,6 @@ export function ModelAccessSettings({
           offerable={offerable}
           providers={providers}
           hidden={hidden}
-          compaction={compaction}
-          loading={loading}
-          onSaveCompaction={(next) => void saveCompaction(next)}
           onSaveVisibility={(model, visible) => void saveVisibility(model, visible)}
         />
       ) : null}
@@ -295,7 +286,7 @@ export function ModelAccessSettings({
  * the provider — half a model's identity, since the same name ships from
  * several — was a heading you had to scroll back to rather than a value you
  * could read across. As a table it caps at eight rows and scrolls inside its
- * own box; provider becomes a column; the two per-model controls line up in
+ * own box; provider becomes a column; the per-model control lines up in
  * columns of their own.
  *
  * SEARCH LIVES ON THE HEADER RAIL, beside the title — the same place and the
@@ -309,17 +300,11 @@ function CatalogSection({
   offerable,
   providers,
   hidden,
-  compaction,
-  loading,
-  onSaveCompaction,
   onSaveVisibility,
 }: {
   offerable: readonly ModelAccessModel[];
   providers: readonly ModelAccessProvider[];
   hidden: readonly HiddenModelRef[];
-  compaction: CompactionPolicy;
-  loading: boolean;
-  onSaveCompaction(next: CompactionPolicy): void;
   onSaveVisibility(model: HiddenModelRef, visible: boolean): void;
 }) {
   const [query, setQuery] = React.useState("");
@@ -348,28 +333,9 @@ function CatalogSection({
             width: "10rem",
             cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
           },
-          {
-            key: "reserve",
-            header: "Reserve",
-            width: "9rem",
-            cell: (model) => (
-              <CompactionReserveSelect
-                model={model}
-                policy={compaction}
-                disabled={loading}
-                onSave={(reserveTokens) =>
-                  onSaveCompaction({
-                    ...compaction,
-                    modelLimits: withModelCompactionReserve(
-                      compaction.modelLimits,
-                      model,
-                      reserveTokens,
-                    ),
-                  })
-                }
-              />
-            ),
-          },
+          // The Reserve column that sat here was retired with per-model
+          // compaction reserves (VC-155) — a ladder of numbers nobody could
+          // pick by feel; every Session runs on the executor's own reserve.
           {
             key: "shown",
             header: "Shown",
@@ -494,79 +460,6 @@ function DefaultModelRow({
       </Select>
     </PrefRow>
   );
-}
-
-/**
- * One model's compaction reserve — how much of its window it aims to leave free.
- *
- * The picker cannot mint a reserve the window will not hold, which is the first
- * half of making that unsavable; main refuses one against the catalog anyway,
- * because a picker is not a boundary. A model whose catalog reports no usable
- * window has nothing to choose from and shows no control at all: there is no
- * window to measure a threshold against, so a limit on it could never do
- * anything, and an inert control is worse than none.
- *
- * "Default reserve" is the executor's own, carried as an ordinary option rather
- * than a blank for the reason "Project default" is above — unset is a real,
- * resolvable value, not an unconfigured one.
- *
- * Not disabled when the switch above is off, though it looks like it should be:
- * a reserve also sizes the summary, and the compaction an overflow forces
- * happens whether or not a Session compacts on its own.
- */
-function CompactionReserveSelect({
-  model,
-  policy,
-  disabled,
-  onSave,
-}: {
-  model: ModelAccessModel;
-  policy: CompactionPolicy;
-  disabled: boolean;
-  onSave(reserveTokens: number | null): void;
-}) {
-  const configured = modelCompactionReserve(policy.modelLimits, model);
-  const choices = compactionReserveChoices(model.contextWindow, configured);
-  if (choices.length === 0) return null;
-  return (
-    <Select
-      value={
-        configured !== undefined && choices.includes(configured)
-          ? String(configured)
-          : DEFAULT_RESERVE_VALUE
-      }
-      disabled={disabled}
-      onValueChange={(value) =>
-        onSave(value === DEFAULT_RESERVE_VALUE ? null : Number.parseInt(value, 10))
-      }
-    >
-      <SelectTrigger
-        className="w-40"
-        aria-label={`Compaction reserve for ${model.label}`}
-        data-testid={`compaction-reserve-${model.providerId}-${model.modelId}`}
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={DEFAULT_RESERVE_VALUE}>Default reserve</SelectItem>
-        {choices.map((reserve) => (
-          <SelectItem key={reserve} value={String(reserve)}>
-            {compactionReserveLabel(reserve)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-/**
- * `32K reserve` — the unit spelled out because the trigger sits beside a model
- * name, where a bare "32K" could as easily be the window as the room kept free.
- * Rounded to the binary step it almost always is; an off-ladder value stored by
- * some other version rounds rather than printing four decimals of a kibibyte.
- */
-export function compactionReserveLabel(reserveTokens: number): string {
-  return `${Math.round(reserveTokens / 1024)}K reserve`;
 }
 
 function modelFor(

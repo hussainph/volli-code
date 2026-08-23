@@ -240,15 +240,6 @@ a:focus-visible {
   margin: 0 auto;
 }
 
-.hero-preview-label {
-  width: 100%;
-  max-width: 1280px;
-  margin: 14px auto 0;
-  color: var(--quiet);
-  font-size: 12px;
-  letter-spacing: 0.01em;
-}
-
 .footer-brand img {
   display: block;
   border-radius: 22%;
@@ -556,6 +547,10 @@ footer {
   padding: 0 0 56px;
   align-items: center;
   justify-content: space-between;
+  /* Seven links plus the wordmark do not fit one row below ~900px. Without the
+     wrap the nav simply ran off the page and collided with the wordmark. */
+  flex-wrap: wrap;
+  gap: 0 32px;
   border-top: 1px solid #202020;
 }
 
@@ -573,7 +568,10 @@ footer {
 footer nav {
   display: flex;
   padding-top: 28px;
-  gap: 26px;
+  flex-wrap: wrap;
+  /* No row gap: the links already carry a 44px line box, so a second row is
+     spaced by the tap target itself. */
+  gap: 0 26px;
 }
 
 footer nav a {
@@ -953,18 +951,21 @@ footer nav a:hover {
   }
 
   .site-header {
-    padding: 14px 20px 0;
+    /* Stacked, so the wordmark needs room to breathe above the row of routes
+       rather than the 4px it had — and the top padding should read as a margin,
+       not as the page starting flush against the notch. */
+    padding: 20px 20px 0;
     align-items: flex-start;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
   }
 
   .site-header nav {
-    gap: 18px;
+    gap: 0 18px;
   }
 
   .hero {
-    padding: 26px 20px 0;
+    padding: 20px 20px 0;
   }
 
   .hero-headline {
@@ -1040,10 +1041,15 @@ footer nav a:hover {
     width: calc(100% - 40px);
     padding-bottom: 32px;
     align-items: flex-start;
+    /* Side by side, the wordmark and a seven-link nav overlapped. Stacked, the
+       nav wraps into rows under it. */
+    flex-direction: column;
+    gap: 0;
   }
 
   footer nav {
-    gap: 18px;
+    padding-top: 10px;
+    gap: 0 18px;
   }
 }
 

@@ -15,13 +15,15 @@
  * the caller reports what it actually sees from inside the environment under
  * test, and the derivation below has no way to substitute an assumption for it.
  *
- * The contract tool checks (git, gh, node, pnpm) follow the same rule: the
- * question is not "is the tool installed" — it cannot be answered from here —
- * but "can a session run it", which is the outcome every agent's first
- * commands depend on (VC-94).
+ * The tool checks follow the same rule: the question is not "is the tool
+ * installed" — it cannot be answered from here — but "can a session run it",
+ * which is the outcome every agent's first commands depend on (VC-94). Which
+ * tools that outcome MATTERS for is the caller's project's answer, not this
+ * module's (VC-157): every measured tool is reported, and only the ones the
+ * caller's workspace implies can fail.
  */
 import { SESSION_ENV_TOOLS } from "./session-env";
-import type { SessionEnvTool } from "./session-env";
+import type { RequirableSessionEnvTool, SessionEnvTool } from "./session-env";
 import type { WrapperRefusal } from "./harness/wrapper";
 
 /** How much a finding matters. `warn` is a degraded but working install. */
@@ -65,6 +67,20 @@ export interface DoctorObservation {
   zdotDir: Observed<string>;
   /** Where each harness command resolves for the caller, by command name. */
   resolved: Readonly<Record<string, Observed<string>>>;
+  /**
+   * The tools the caller's own workspace implies
+   * (`requiredSessionEnvTools`) — a repository implies `git`, a JavaScript
+   * workspace implies `node` and the manager its lockfile names, and nothing
+   * implies `gh`. Only these can be reported as failures; every other
+   * measurement is still reported, as a measurement.
+   *
+   * Empty is a real answer — a folder that is no repository and no package
+   * workspace requires nothing — and it is also what a caller that named no
+   * requirements gets. Both mean the same thing here: with nothing known to
+   * be needed, an absence has no consequence to name, and alarming anyway is
+   * the bias VC-157 removed.
+   */
+  requiredTools: readonly RequirableSessionEnvTool[];
   /** Where `volli` itself resolves for the caller. */
   volliPath: Observed<string>;
 }
@@ -182,27 +198,47 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
 }
 
 /**
- * The remedy per contract tool, naming the real cause instead of a generic
- * install hint. The measured failure this command exists to catch is not
- * "the tool is not installed" but "the session PATH is not the login PATH" —
- * so every remedy names both causes and the discriminator that tells them
- * apart: `volli identify`, which prints the adopted PATH and its provenance.
+ * The remedy per tool, reached only where a project required that tool, and
+ * naming the real cause instead of a generic install hint. The measured
+ * failure this command exists to catch is not "the tool is not installed" but
+ * "the session PATH is not the login PATH" — so every remedy names both
+ * causes and the discriminator that tells them apart: `volli identify`, which
+ * prints the adopted PATH and its provenance.
  */
-const TOOL_REMEDIES: Record<SessionEnvTool, string> = {
+const TOOL_REMEDIES: Record<RequirableSessionEnvTool, string> = {
   git: "macOS ships git with the Xcode Command Line Tools — run `xcode-select --install`. If git is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
-  gh: "Install the GitHub CLI (`brew install gh`). If gh is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
   node: "Install Node (`brew install node`). If node is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
+  npm: "npm ships with Node (`brew install node`). If npm is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
   pnpm: "Enable it with `corepack enable pnpm` (or `brew install pnpm`). If pnpm is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
+  yarn: "Enable it with `corepack enable yarn` (or `brew install yarn`). If yarn is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
+  bun: "Install Bun (`brew install oven-sh/bun/bun`). If bun is installed but missing here, the session PATH is not your login PATH: run `volli doctor --fix` to re-run adoption for new Sessions, then `volli identify` shows what it adopted.",
 };
 
 /**
- * Whether a session can run each contract tool. These are the outcomes every
- * agent's first commands depend on, and the exact shape of VC-94's failure:
- * `git` answered from `/usr/bin` while `gh` was missing, so the session
- * looked operational — it could commit — yet could not open or merge a PR,
- * and nothing said why. The same {@link Observed} discipline as every other
- * check applies: `null` is a measured absence and a failure, `undefined` is
- * a caller that never looked, and a warn must say which of the two it is.
+ * What a tool nothing asked for has to say for itself, beyond "nobody asked".
+ * `gh` is the one worth a sentence: its absence used to be a launch-wide
+ * fault, and a reader who remembers that deserves to know where the answer
+ * moved rather than to conclude the check was simply dropped.
+ *
+ * Sentences only — the joining is {@link toolChecks}'s job, so a note added
+ * later cannot break the spacing by forgetting a leading space.
+ */
+const UNREQUIRED_TOOL_NOTES: Partial<Record<SessionEnvTool, string>> = {
+  gh: "Volli reports gh's absence when a PR action actually needs it.",
+};
+
+/**
+ * Whether a session can run the tools THIS project needs. Missing `git` in a
+ * repository is VC-94's failure — a session that looked operational and could
+ * not do the one thing it was asked to do — while missing `pnpm` in a yarn
+ * workspace is a fact about a tool nobody will type (VC-157). So requirement
+ * decides the status and the measurement is reported either way.
+ *
+ * The same {@link Observed} discipline as every other check applies to the
+ * required ones: `null` is a measured absence and a failure, `undefined` is a
+ * caller that never looked, and a warn must say which of the two it is. An
+ * unrequired tool has no failure to grade, so it reports what was seen and
+ * stops there.
  */
 function toolChecks(observation: DoctorObservation): DoctorCheck[] {
   return SESSION_ENV_TOOLS.map((tool) => {
@@ -210,13 +246,30 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
     const title = `\`${tool}\` is available to sessions`;
     const actual = observation.resolved[tool];
     if (typeof actual === "string") return ok(id, title, actual);
+    // `find` rather than `includes`: it narrows the name to a requirable one,
+    // which is what lets the remedy table be indexed without a cast — and the
+    // table has no `gh` entry to reach, because nothing can require it.
+    const required = observation.requiredTools.find((candidate) => candidate === tool);
+    if (required === undefined) {
+      const seen =
+        actual === null
+          ? `\`${tool}\` resolves to nothing on this PATH`
+          : `no resolution was reported for \`${tool}\``;
+      return ok(
+        id,
+        `\`${tool}\` is not required by this project`,
+        [`${seen}, and nothing here asks for it.`, UNREQUIRED_TOOL_NOTES[tool]]
+          .filter((part) => part !== undefined)
+          .join(" "),
+      );
+    }
     if (actual === null) {
       return bad(
         id,
         title,
         "fail",
         `\`${tool}\` resolves to nothing on this PATH`,
-        TOOL_REMEDIES[tool],
+        TOOL_REMEDIES[required],
       );
     }
     return bad(

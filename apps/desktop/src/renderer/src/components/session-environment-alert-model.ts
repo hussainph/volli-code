@@ -1,4 +1,3 @@
-import { SESSION_ENV_TOOLS } from "@volli/shared";
 import type { CliToolStatus } from "../../../ipc/contract";
 
 /** The one launch-wide fault a Session user must hear without opening Settings. */
@@ -73,8 +72,13 @@ interface ProjectReadinessParts {
 }
 
 function readinessParts(status: Pick<CliToolStatus, "environment">): ProjectReadinessParts | null {
-  const { dependencies, tools, installCommand } = status.environment.session;
-  const missingTools = SESSION_ENV_TOOLS.filter((tool) => tools[tool] === null);
+  const { dependencies, tools, requiredTools, installCommand } = status.environment.session;
+  // Only what this project implies (VC-157): a Python repo is never short of
+  // `node`, a yarn workspace is never short of `pnpm`, and no project is
+  // short of `gh` before a PR action asks for it. The wider `tools` record
+  // stays measured and reported — in Settings and `volli identify` — without
+  // any of it becoming a fault here.
+  const missingTools = requiredTools.filter((tool) => tools[tool] === null);
   if (missingTools.length === 0 && dependencies !== "absent") return null;
 
   const toolsFact =
