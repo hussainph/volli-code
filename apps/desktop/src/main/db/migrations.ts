@@ -13,7 +13,18 @@ import type Database from "better-sqlite3";
 export interface Migration {
   version: number;
   name: string;
+  /**
+   * The migration as plain SQL — what the runner execs when no `apply`
+   * overrides it, and what a from-scratch test fixture may exec directly.
+   */
   sql: string;
+  /**
+   * Code, for the rare migration whose work must PROBE the schema it lands on
+   * before deciding what to run (024, the parallel-023 reconciler, is the
+   * only one). The runner calls this INSTEAD of `sql`; the surrounding
+   * transaction, the backup and the `user_version` bump stay the runner's.
+   */
+  apply?(db: Database.Database): void;
 }
 
 /**
@@ -745,14 +756,24 @@ ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
  * Migration 024: per-project agent configuration (VC-111) — the Configure
  * surface's own three columns.
  *
- * 024, not the 023 it was written as: VC-158's keychain migration landed on
- * main first with that number, and a canary install that already ran it sits
- * at `user_version = 23` — renumbering THEIRS would have skipped the web-key
- * move on every such install. A dev profile that ran this branch's build
- * before the merge holds the agent-config schema AT 23 instead; for that one
- * database this migration fails on the duplicate column and the pre-migration
- * backup is the recovery, which is the acceptable cost on the lineage that
- * never shipped.
+ * 024, not the 023 it was written as — and RECONCILING, because two lineages
+ * both wrote a migration 23 in parallel and both populations exist:
+ *
+ *  - **main lineage**: `user_version = 23` means VC-158's web-keys migration
+ *    ran; these three columns are missing.
+ *  - **branch lineage** (the VC-111 dogfood profile): `user_version = 23`
+ *    means THIS migration's DDL ran under its original number; the columns
+ *    exist, and the web-keys rebuild never happened — `secrets` still holds
+ *    `ciphertext` while every reader now expects `value`.
+ *
+ * A plain-SQL 024 picks one population and breaks the other — re-adding an
+ * existing column is the exact "duplicate column name: skill_modes" boot
+ * failure the dogfood profile hit. So this is the runner's one `apply`
+ * migration: it probes `table_info` and runs only what the database in front
+ * of it is missing — the column adds, the secrets rebuild, both, or (for a
+ * fully-reconciled copy) neither. Probing over renumbering because a probe
+ * answers the database's actual shape; a version number here answers only
+ * which branch wrote it.
  *
  * Columns rather than an `app_state` blob keyed by project id, which is what
  * Model Access does globally and what this nearly became. The deciding
@@ -958,8 +979,30 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 24,
     name: "projects agent config — the per-project skills, harness and model Configure writes",
     sql: MIGRATION_024_PROJECT_AGENT_CONFIG,
+    apply: applyMigration024ProjectAgentConfig,
   },
 ];
+
+/**
+ * Migration 024's reconciler — see the doc on
+ * {@link MIGRATION_024_PROJECT_AGENT_CONFIG} for why this one migration is
+ * code. Each half probes before it runs, so every lineage converges on the
+ * same schema and `user_version = 24` regardless of which parallel 23 a
+ * database ran first.
+ */
+function applyMigration024ProjectAgentConfig(db: Database.Database): void {
+  const projectColumns = db.pragma("table_info(projects)") as { name: string }[];
+  if (!projectColumns.some((column) => column.name === "skill_modes")) {
+    db.exec(MIGRATION_024_PROJECT_AGENT_CONFIG);
+  }
+  // The branch-lineage database sat at 23 without ever running the web-keys
+  // rebuild, and the runner will never offer it 23 again — so the rebuild
+  // rides here, gated on the schema fact it changes.
+  const secretsColumns = db.pragma("table_info(secrets)") as { name: string }[];
+  if (secretsColumns.some((column) => column.name === "ciphertext")) {
+    db.exec(MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN);
+  }
+}
 
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
 export function migrate(db: Database.Database, dbPath: string): void {
@@ -978,7 +1021,8 @@ export function migrate(db: Database.Database, dbPath: string): void {
 
   const applyPendingMigrations = db.transaction(() => {
     for (const migration of pending) {
-      db.exec(migration.sql);
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
       // Interpolated, not bound: PRAGMA statements don't accept `?`
       // parameters, and `migration.version` is an internal integer literal
       // from MIGRATIONS above, never renderer-supplied input.

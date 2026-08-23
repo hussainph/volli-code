@@ -1227,6 +1227,81 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     db.close();
   });
 
+  it("reconciles a branch-lineage database — agent columns at 23, web keys never ran", () => {
+    // The VC-111 dogfood profile: its original migration 23 was the
+    // agent-config DDL, so the columns exist, `user_version` says 23, and the
+    // web-keys rebuild never happened. A plain-SQL 024 re-added the column
+    // and killed the boot ("duplicate column name: skill_modes"); the
+    // reconciler must instead skip the DDL, carry the configured rules
+    // across, and run the rebuild this database is actually missing.
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((m) => m.version <= 22)) {
+      db.exec(migration.sql);
+    }
+    const agentConfig = MIGRATIONS.find((m) => m.version === 24);
+    if (agentConfig === undefined) throw new Error("migration 024 missing");
+    db.exec(agentConfig.sql);
+    db.pragma("user_version = 23");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(`UPDATE projects SET skill_modes = ? WHERE id = 'p1'`).run('{"tdd":"off"}');
+    db.prepare(`INSERT INTO secrets (name, ciphertext, updated_at) VALUES ('brave', ?, 5)`).run(
+      Buffer.from([1, 2, 3]),
+    );
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    // The configured rules survive — reconciliation must never cost data.
+    expect(db.prepare("SELECT skill_modes FROM projects WHERE id = 'p1'").get()).toEqual({
+      skill_modes: '{"tdd":"off"}',
+    });
+    // The web-keys rebuild ran: ciphertext rows moved to the legacy table and
+    // the live table is value-shaped and empty.
+    const secretsColumns = (db.pragma("table_info(secrets)") as { name: string }[]).map(
+      (column) => column.name,
+    );
+    expect(secretsColumns).toContain("value");
+    expect(secretsColumns).not.toContain("ciphertext");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM secrets").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT name, updated_at FROM legacy_safe_storage_secrets").all()).toEqual([
+      { name: "brave", updated_at: 5 },
+    ]);
+    db.close();
+  });
+
+  it("adds the columns to a main-lineage database already past the web-keys move", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((m) => m.version <= 23)) {
+      db.exec(migration.sql);
+    }
+    db.pragma("user_version = 23");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(
+      db
+        .prepare("SELECT skill_modes, session_harness, session_model FROM projects WHERE id = 'p1'")
+        .get(),
+    ).toEqual({ skill_modes: null, session_harness: null, session_model: null });
+    // Already value-shaped — the reconciler must not rebuild secrets again.
+    expect(
+      (db.pragma("table_info(secrets)") as { name: string }[]).map((column) => column.name),
+    ).toContain("value");
+    db.close();
+  });
+
   it("refuses a skill_modes or session_model value that is not JSON", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
