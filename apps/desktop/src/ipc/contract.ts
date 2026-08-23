@@ -55,6 +55,7 @@ import type {
   SessionRpcIpcResponse,
   SkillReference,
   TerminalBusyResult,
+  TerminalCommandResult,
   TerminalIoResult,
   Ticket,
   TicketComment,
@@ -780,9 +781,13 @@ export interface CliSessionPathStatus {
   /**
    * The command that installs the scoped workspace's dependencies, judged by
    * its lockfile (`@volli/shared`'s `workspaceInstallCommand`); `null` when
-   * no project workspace was supplied or none encloses it. Settings/alert
-   * vocabulary only — `volli identify`'s env block deliberately stays the
-   * exact field set the contract published.
+   * no project workspace was supplied or none encloses it. Settings and the
+   * dependency offer's vocabulary only — `volli identify`'s env block
+   * deliberately stays the exact field set the contract published.
+   *
+   * The offer RUNS this string (VC-156), which is the whole reason it must be
+   * measured rather than assumed: a button that pnpm-installs a yarn
+   * workspace is worse than no button.
    */
   installCommand: string | null;
 }
@@ -1186,6 +1191,15 @@ export interface VolliSystemIpcContract {
   };
   /** Foreground-process probe: is the session running something beyond its shell? */
   "volli:terminal-busy": { args: [sessionId: string]; result: TerminalBusyResult };
+  /**
+   * Types one Volli-offered command into a live session's shell and resolves
+   * when it finishes. Stays pending for as long as the command runs — an
+   * install is slow, and the point of the channel is the outcome (VC-156).
+   */
+  "volli:terminal-run": {
+    args: [sessionId: string, command: string];
+    result: TerminalCommandResult;
+  };
   /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
   "volli:ghostty-config-get": { args: []; result: GhosttyConfigResult };
 }

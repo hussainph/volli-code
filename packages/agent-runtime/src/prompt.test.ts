@@ -4,7 +4,7 @@ import {
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { composeFirstUserMessage, composeSystemPrompt } from "./prompt";
+import { composeFirstUserMessage, composeSystemPrompt, systemPromptSections } from "./prompt";
 
 function spec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntimeSpec {
   return {
@@ -242,6 +242,75 @@ describe("composeSystemPrompt", () => {
   it("is deterministic", () => {
     expect(composeSystemPrompt(spec())).toBe(composeSystemPrompt(spec()));
     expect(composeSystemPrompt(projectSpec())).toBe(composeSystemPrompt(projectSpec()));
+  });
+});
+
+// VC-156: the dependency fact goes to the party that can act on it. The banner
+// this replaces told a human to run an install the agent was standing right
+// next to, in red, about an ordinary fresh checkout.
+describe("composeSystemPrompt — the workspace environment layer", () => {
+  it("hands the agent the absent-dependency fact and the workspace's own install command", () => {
+    const prompt = composeSystemPrompt(
+      projectSpec({
+        workspaceEnvironment: { dependencies: "absent", installCommand: "pnpm install" },
+      }),
+    );
+
+    expect(prompt.slice(prompt.indexOf("# Workspace environment"))).toMatchInlineSnapshot(`
+      "# Workspace environment
+
+      The workspace has a package manifest and no installed dependencies. This is
+      an ordinary fresh checkout, not a fault, and nobody is waiting to be asked:
+      run \`pnpm install\` in the workspace before the first command that
+      needs them."
+    `);
+  });
+
+  // Never a hardcoded pnpm at a yarn workspace (the same lockfile rule the
+  // retired banner learned).
+  it("names the measured command rather than one package manager's", () => {
+    expect(
+      composeSystemPrompt(
+        spec({ workspaceEnvironment: { dependencies: "absent", installCommand: "yarn install" } }),
+      ),
+    ).toContain("run `yarn install` in the workspace");
+  });
+
+  it("says nothing about a workspace with nothing to do", () => {
+    for (const workspaceEnvironment of [
+      { dependencies: "installed", installCommand: "pnpm install" },
+      { dependencies: null, installCommand: null },
+      // Half a measurement: absent dependencies with no command to name. Better
+      // silent than "install them somehow".
+      { dependencies: "absent", installCommand: null },
+    ] as const) {
+      expect(composeSystemPrompt(spec({ workspaceEnvironment }))).not.toContain(
+        "# Workspace environment",
+      );
+    }
+    // Unmeasured is not "measured and fine", and composes the same prompt.
+    expect(composeSystemPrompt(spec())).not.toContain("# Workspace environment");
+  });
+
+  it("is a named section, so the baseline prices what the prompt actually sends", () => {
+    const sections = systemPromptSections({
+      role: "project",
+      workspacePath: "/code/harbor",
+      tools: { tools: ["read", "execute"] },
+      workspaceEnvironment: { dependencies: "absent", installCommand: "npm install" },
+      promptResources: [{ name: "skills index", text: "- a (SKILL.md)" }],
+    });
+
+    // Under the workspace it describes, above the supplied material.
+    expect(sections.map((section) => section.id)).toEqual([
+      "operating",
+      "role",
+      "authority",
+      "workspace",
+      "environment",
+      "resources-header",
+      "resource:skills index",
+    ]);
   });
 });
 

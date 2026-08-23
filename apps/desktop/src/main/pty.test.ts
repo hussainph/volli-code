@@ -6,6 +6,7 @@ import type {
   CreateTerminalSessionResult,
   Project,
   TerminalBusyResult,
+  TerminalCommandResult,
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../ipc/contract";
@@ -203,6 +204,13 @@ const invokeBusy = (sessionId: unknown) =>
     { sender: {} },
     sessionId,
   ) as TerminalBusyResult;
+
+const invokeRun = (sessionId: unknown, command: unknown) =>
+  (handlers.get("volli:terminal-run" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
+    { sender: {} },
+    sessionId,
+    command,
+  ) as Promise<TerminalCommandResult>;
 
 /** Casts a WebContents double to the real type for calls typed against it directly (not through IPC). */
 const asWebContents = (sender: WebContentsDouble) => sender as unknown as WebContents;
@@ -926,6 +934,86 @@ describe("volli:terminal-busy", () => {
     const { sessionId, pty } = await createSession();
     pty.process = "claude";
     expect(invokeBusy(sessionId)).toEqual({ ok: true, busy: true, process: "claude" });
+  });
+});
+
+// VC-156: the execution half of an offer. The user watches the install in a
+// real terminal; the surface that offered it learns when it finished.
+describe("volli:terminal-run", () => {
+  it("rejects a malformed or empty command", async () => {
+    const { sessionId } = await createSession();
+    await expect(invokeRun(42, "pnpm install")).resolves.toEqual({
+      ok: false,
+      error: "Invalid terminal command",
+    });
+    await expect(invokeRun(sessionId, "   ")).resolves.toEqual({
+      ok: false,
+      error: "Invalid terminal command",
+    });
+  });
+
+  it("refuses a session that is gone", async () => {
+    await expect(invokeRun("nope", "pnpm install")).resolves.toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+  });
+
+  it("types the sentinel-wrapped command and resolves with the exit code it printed", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const { sessionId, pty } = await createSession();
+
+    const run = invokeRun(sessionId, "pnpm install");
+    const [written] = pty.write.mock.calls.at(-1) as [string];
+    // The real wrapper, shell-aware, with the echoed `%d` that cannot
+    // false-match the scan it is about to be watched for.
+    expect(written).toBe("( pnpm install ); printf '\\n__VOLLI_SETUP_DONE:%d__\\n' $?\r");
+
+    // The echo of the command line goes past first and settles nothing.
+    pty.emitData(written);
+    pty.emitData("Progress: resolved 1, downloaded 1\n");
+    pty.emitData("\n__VOLLI_SETUP_DONE:0__\n");
+
+    await expect(run).resolves.toEqual({ ok: true, exitCode: 0 });
+  });
+
+  it("reports a failing install as a result, not as a transport failure", async () => {
+    const { sessionId, pty } = await createSession();
+    const run = invokeRun(sessionId, "pnpm install");
+    pty.emitData("ERR_PNPM_NO_LOCKFILE\n__VOLLI_SETUP_DONE:1__\n");
+
+    await expect(run).resolves.toEqual({ ok: true, exitCode: 1 });
+  });
+
+  it("never reports a shell that died mid-run as a completed one", async () => {
+    const { sessionId, pty } = await createSession();
+    const run = invokeRun(sessionId, "pnpm install");
+    pty.emitExit(0);
+
+    // Exit code 0 belongs to the SHELL; the install never printed a sentinel,
+    // so nothing finished and the offer must not withdraw itself.
+    await expect(run).resolves.toEqual({ ok: true, exitCode: null });
+  });
+
+  it("settles a run whose terminal was killed out from under it", async () => {
+    const { sessionId } = await createSession();
+    const run = invokeRun(sessionId, "pnpm install");
+    expect(invokeKill(sessionId)).toEqual({ ok: true });
+
+    await expect(run).resolves.toEqual({ ok: true, exitCode: null });
+  });
+
+  it("runs one Volli command per terminal at a time", async () => {
+    const { sessionId, pty } = await createSession();
+    const first = invokeRun(sessionId, "pnpm install");
+
+    await expect(invokeRun(sessionId, "pnpm install")).resolves.toEqual({
+      ok: false,
+      error: "This terminal is already running a command for Volli",
+    });
+
+    pty.emitData("\n__VOLLI_SETUP_DONE:0__\n");
+    await expect(first).resolves.toEqual({ ok: true, exitCode: 0 });
   });
 });
 

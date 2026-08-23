@@ -215,6 +215,18 @@ export interface WorkspaceUiState {
    * owns durable restoration of the whole strip.
    */
   homeTabHistory: readonly string[];
+  /**
+   * Whether this project's owner has waved off the uninstalled-dependencies
+   * offer (VC-156). Persisted, and that is the point: the notice it replaces
+   * kept its dismissal in component state keyed by the exact alert string, so
+   * it came back on every relaunch and on every wording change. "I know, leave
+   * me alone" is an answer, and an answer that has to be repeated is not one.
+   *
+   * Per project because the state is per workspace, and cleared with the
+   * project's whole record by {@link WorkspaceState.forget} — which is why it
+   * lives here rather than in a map of its own.
+   */
+  dependencyOfferDismissed: boolean;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
@@ -229,6 +241,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   projectFileViewStates: {},
   homeActiveTab: HOME_BOARD_TAB_ID,
   homeTabHistory: [],
+  dependencyOfferDismissed: false,
 };
 
 /**
@@ -367,6 +380,8 @@ interface WorkspaceState {
   /** Opens or closes one ticket's Previous-band group in the sidebar. */
   setSessionGroupExpanded(projectId: string, ticketId: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
+  /** Wave off this project's uninstalled-dependencies offer for good (VC-156). */
+  dismissDependencyOffer(projectId: string): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
   /**
    * Records which tab is in front on Home. A plain record and nothing else —
@@ -562,6 +577,7 @@ type PersistedWorkspaceUi = Pick<
   | "projectFiles"
   | "projectFileViewStates"
   | "homeActiveTab"
+  | "dependencyOfferDismissed"
 >;
 
 interface PersistedWorkspaceState {
@@ -745,6 +761,10 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     // the project's durable listing (`home-tabs.ts`) — a boot-time guess here
     // could only be the "not hydrated yet reads as gone" bug.
     homeActiveTab: sanitizeHomeActiveTab(persisted.homeActiveTab),
+    // Only an explicit `true` dismisses: anything else in the JSON — a missing
+    // key from a build before this existed, a corrupt value — means the offer
+    // stands, which is the recoverable side of the mistake.
+    dependencyOfferDismissed: persisted.dependencyOfferDismissed === true,
   };
 }
 
@@ -759,7 +779,8 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     Object.keys(ui.ticketDiffViewStates).length === 0 &&
     ui.projectFiles.tabs.length === 0 &&
     Object.keys(ui.projectFileViewStates).length === 0 &&
-    ui.homeActiveTab === DEFAULT_WORKSPACE_UI.homeActiveTab
+    ui.homeActiveTab === DEFAULT_WORKSPACE_UI.homeActiveTab &&
+    ui.dependencyOfferDismissed === DEFAULT_WORKSPACE_UI.dependencyOfferDismissed
   );
 }
 
@@ -850,6 +871,14 @@ export function createWorkspaceStore(storage?: StateStorage) {
 
         setBoardView(projectId, view) {
           set((state) => patchWorkspace(state, projectId, { boardView: view }));
+        },
+
+        dismissDependencyOffer(projectId) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            if (current.dependencyOfferDismissed) return state;
+            return patchWorkspace(state, projectId, { dependencyOfferDismissed: true });
+          });
         },
 
         setBoardSort(projectId, sort) {
@@ -1277,6 +1306,9 @@ export function createWorkspaceStore(storage?: StateStorage) {
                   // The Home tab that was in front — an id, never the Session
                   // behind it, which is recovered from its own durable record.
                   homeActiveTab: ui.homeActiveTab,
+                  // A standing answer, not a sitting's state: the offer this
+                  // dismisses would otherwise return on every relaunch.
+                  dependencyOfferDismissed: ui.dependencyOfferDismissed,
                 },
               ]),
           ),

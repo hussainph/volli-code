@@ -20,6 +20,7 @@ import type {
   RuntimeBrief,
   RuntimeSessionRole,
   RuntimeToolBundle,
+  RuntimeWorkspaceEnvironment,
   SessionRuntimeSpec,
 } from "@volli/shared";
 
@@ -174,6 +175,35 @@ function authorityLayer(
 }
 
 /**
+ * The one measured workspace fact worth prompt budget, said to the party that
+ * can act on it.
+ *
+ * A fresh checkout without its dependencies is a normal state, not a fault,
+ * and Volli is an agent app that can run the install itself — so the fact goes
+ * to the agent as a standing instruction instead of to the user as a warning
+ * (VC-156). Stated ONLY when there is something to do: `installed` and "no
+ * package workspace" both say nothing, because a prompt that reports healthy
+ * measurements teaches a model to skim the section that matters.
+ *
+ * A missing install command silences the layer too, rather than guessing one.
+ * `workspaceInstallCommand` already answers `npm install` for a bare manifest,
+ * so a null command alongside absent dependencies is a caller that measured
+ * only half the pair — and "install them somehow" is worse than not raising it.
+ */
+function environmentLayer(environment: RuntimeWorkspaceEnvironment | undefined): string | null {
+  if (environment === undefined) return null;
+  if (environment.dependencies !== "absent" || environment.installCommand === null) return null;
+  return [
+    "# Workspace environment",
+    "",
+    "The workspace has a package manifest and no installed dependencies. This is",
+    "an ordinary fresh checkout, not a fault, and nobody is waiting to be asked:",
+    `run \`${environment.installCommand}\` in the workspace before the first command that`,
+    "needs them.",
+  ].join("\n");
+}
+
+/**
  * What a RESOURCE section IS, said once before any appears. Without this the
  * delimiters carry all the meaning, and they carry none: a model handed an
  * unexplained block has to guess its standing. The guess this layer removes
@@ -203,12 +233,13 @@ export interface SystemPromptInput {
   workspacePath: string;
   authority?: AuthoritySnapshot | undefined;
   tools: RuntimeToolBundle;
+  workspaceEnvironment?: RuntimeWorkspaceEnvironment | undefined;
   promptResources?: readonly PromptResource[] | undefined;
 }
 
 /** One named layer of the assembled system prompt, in delivery order. */
 export interface SystemPromptSection {
-  /** Stable machine name: `operating`, `role`, `authority`, `workspace`, `resources-header`, `resource:<name>`. */
+  /** Stable machine name: `operating`, `role`, `authority`, `workspace`, `environment`, `resources-header`, `resource:<name>`. */
   id: string;
   text: string;
 }
@@ -227,6 +258,11 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
     { id: "authority", text: authorityLayer(input.role, input.authority, input.tools) },
     { id: "workspace", text: workspaceLayer(input.role, input.workspacePath) },
   ];
+  // Below the workspace layer because it is a fact ABOUT that workspace, and
+  // above the resources because it is Volli's own measurement rather than
+  // supplied material.
+  const environment = environmentLayer(input.workspaceEnvironment);
+  if (environment !== null) sections.push({ id: "environment", text: environment });
   if (resources.length > 0) sections.push({ id: "resources-header", text: RESOURCES_LAYER });
   for (const resource of resources) {
     // The one spelling of the delimiter, shared with the composer's `/skill`
@@ -243,6 +279,7 @@ export function composeSystemPrompt(spec: SessionRuntimeSpec): string {
     workspacePath: spec.workspacePath,
     authority: spec.authority,
     tools: spec.tools,
+    workspaceEnvironment: spec.workspaceEnvironment,
     promptResources: spec.promptResources,
   })
     .map((section) => section.text)

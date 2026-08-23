@@ -20,8 +20,13 @@
 import { constants, existsSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 
-import { resolveSessionEnvTools, workspaceDependenciesStatus } from "@volli/shared";
+import {
+  resolveSessionEnvTools,
+  workspaceDependenciesStatus,
+  workspaceInstallCommand,
+} from "@volli/shared";
 import type {
+  RuntimeWorkspaceEnvironment,
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
   SessionEnvReport,
@@ -42,6 +47,25 @@ export async function executableAt(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * The workspace half of the report, on its own, for the party that acts on it.
+ *
+ * A structured Session's prompt carries these two facts so its first turn can
+ * run the install itself (VC-156). Measured here rather than derived from a
+ * durable record because dependencies come and go under a checkout, and taken
+ * as a pair because naming the state without naming the command invites a
+ * guess — the same pairing `volli identify` and Settings already report.
+ */
+export function readWorkspaceEnvironment(
+  workspacePath: string,
+  pathExists: (path: string) => boolean = existsSync,
+): RuntimeWorkspaceEnvironment {
+  return {
+    dependencies: workspaceDependenciesStatus(workspacePath, pathExists),
+    installCommand: workspaceInstallCommand(workspacePath, pathExists),
+  };
 }
 
 export interface SessionEnvReportDeps {

@@ -13,6 +13,7 @@ import type {
   CreateTerminalSessionResult,
   HarnessId,
   TerminalBusyResult,
+  TerminalCommandResult,
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../../ipc/contract";
@@ -206,6 +207,23 @@ export function registerTerminalIpcHandlers(
         return { ok: false, error: "Invalid terminal write" };
       }
       return manager.write(sessionId, data);
+    },
+  );
+
+  // Long-lived by design: it resolves when the command finishes, which for an
+  // install is minutes. The renderer awaits one of these only for a run it
+  // offered and the user accepted (VC-156).
+  ipcMain.handle(
+    "volli:terminal-run" satisfies VolliIpcChannel,
+    (_event, sessionId: unknown, command: unknown): Promise<TerminalCommandResult> => {
+      if (typeof sessionId !== "string" || typeof command !== "string") {
+        return Promise.resolve({ ok: false, error: "Invalid terminal command" });
+      }
+      const trimmed = command.trim();
+      if (trimmed.length === 0) {
+        return Promise.resolve({ ok: false, error: "Invalid terminal command" });
+      }
+      return manager.runCommand(sessionId, trimmed);
     },
   );
 
