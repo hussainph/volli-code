@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { askChoice, askOffer, REASONING_LEVELS, type RuntimeAskRequest } from "./agent-runtime";
+import {
+  askChoice,
+  askOffer,
+  REASONING_LEVELS,
+  sessionToolIds,
+  type RuntimeAskRequest,
+} from "./agent-runtime";
+import { NON_CODING_TOOL_IDS } from "./authority";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -122,5 +129,66 @@ describe("askChoice", () => {
   it("reads option ids case-insensitively", () => {
     expect(askChoice(askRequest({ overridable: true }), ["REJECT"])).toBe("refuse");
     expect(askChoice(askRequest({ overridable: false }), ["Stop"])).toBe("stop");
+  });
+});
+
+/**
+ * Stands in for any wired port. Never called: what these tests read off a spec
+ * is whether a port is *there*, which is the whole of what decides membership.
+ */
+const port = async () => {
+  throw new Error("a tool port fixture is presence only, and is never invoked");
+};
+
+/**
+ * The one derivation of a Session's Agent Tool Surface.
+ *
+ * These are not tests of a list-builder. They are the tests that stand in for a
+ * deleted rule: `tool.not-bundled` used to refuse any name the Snapshot did not
+ * carry, and it was deletable only because the Snapshot's list and Pi's tool
+ * array cannot disagree. This function is that "cannot", so what it guarantees
+ * is pinned here rather than left to the runtime that consumes it.
+ */
+describe("sessionToolIds", () => {
+  it("names the bundle alone when no port is wired", () => {
+    expect(sessionToolIds({ tools: { tools: ["read", "execute"] } })).toEqual(["read", "execute"]);
+  });
+
+  it("names an interaction tool exactly when the port that answers it is wired", () => {
+    // Each port is independent of the others: web search discloses a query to a
+    // third party and web fetch does not, so a Session may hold either, both or
+    // neither.
+    expect(sessionToolIds({ tools: { tools: [] }, askUser: port })).toEqual(["ask_user"]);
+    expect(sessionToolIds({ tools: { tools: [] }, webFetch: port })).toEqual(["web_fetch"]);
+    expect(sessionToolIds({ tools: { tools: [] }, webSearch: port })).toEqual(["web_search"]);
+  });
+
+  it("puts the bundle first and the ports in vocabulary order, because the Cache Prefix is computed over it", () => {
+    // Declared in this order whatever order the spec's keys arrive in: a
+    // Session that reordered its own tool array between attachments would pay a
+    // full cache miss for a list that had not changed.
+    expect(
+      sessionToolIds({
+        webSearch: port,
+        askUser: port,
+        webFetch: port,
+        tools: { tools: ["write", "read"] },
+      }),
+    ).toEqual(["write", "read", "ask_user", "web_fetch", "web_search"]);
+  });
+
+  it("names every tool the vocabulary holds, so no name can be offered without being recorded", () => {
+    // The guarantee the deleted rule used to make, stated from the other side:
+    // a Snapshot built from this call cannot under-report the surface, whatever
+    // the surface holds.
+    const everything = sessionToolIds({
+      tools: { tools: ["read", "edit", "write", "execute"] },
+      askUser: port,
+      webFetch: port,
+      webSearch: port,
+    });
+
+    for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
+    expect(everything).toHaveLength(7);
   });
 });

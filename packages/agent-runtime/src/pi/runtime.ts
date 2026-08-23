@@ -70,7 +70,7 @@ import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
 import { piOwnedModelAccess } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { createAskUserTool, createPiTools, createWebFetchTool, createWebSearchTool } from "./tools";
+import { createSessionTools } from "./tools";
 import {
   attentionReasonFor,
   classifyAssistantMessage,
@@ -893,30 +893,31 @@ async function attachSession(
     // gets one that is fail-closed at its own `exec`.
     toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
     const ownedToolEnv = toolEnv;
-    const tools = createPiTools(spec.tools, ownedToolEnv);
-    // Offered only to a Session with somewhere to send the question, for the
-    // reason the gate below is built only for a Session with a policy: a tool
-    // that is absent cannot be called, where one wired to nothing would be
-    // called and then fail, and the model would learn that from the failure.
-    if (spec.askUser !== undefined) tools.push(createAskUserTool(spec.askUser, spec.signal));
-    // The same rule for the same reason. A Session handed no web boundary is
-    // handed no way to ask for one: the absent port is what makes the network
-    // unreachable from here, not a refusal the model would have to be told
-    // about after reaching for it.
-    if (spec.webFetch !== undefined) tools.push(createWebFetchTool(spec.webFetch, spec.signal));
-    // Independent of the fetch above, not paired with it. Searching and reading
-    // are different capabilities with different costs — a search discloses the
-    // query to a third party, a read does not — so a Session may be given
+    // The whole Agent Tool Surface, from the one list that names it.
+    //
+    // Each non-coding tool is offered only to a Session with the port that
+    // answers it, for the reason the gate below is built only for a Session with
+    // a policy: a tool that is absent cannot be called, where one wired to
+    // nothing would be called and then fail, and the model would learn that from
+    // the failure. A Session handed no web boundary is handed no way to ask for
+    // one — the absent port is what makes the network unreachable from here, not
+    // a refusal the model would have to be told about after reaching for it. Web
+    // search is independent of web fetch, not paired with it: a search discloses
+    // the query to a third party and a read does not, so a Session may be given
     // either, both or neither, and is offered exactly what it was given.
-    if (spec.webSearch !== undefined) tools.push(createWebSearchTool(spec.webSearch, spec.signal));
-    // Composed here, once, and never re-composed: the array is half of this
-    // Session's Cache Prefix (VC-164), and a provider that orders tools ahead
-    // of the system prompt throws the prompt away too when it changes. Every
-    // state transition a Session makes — a model change, a compaction, a
-    // reattach — is a tool call or a message, never a rebuilt bundle. Pinned
-    // off the provider request in `runtime.test.ts`, under "the Cache Prefix a
-    // Session sends", because that is the only place a bundle recomputed
-    // somewhere downstream would show up.
+    //
+    // Assembled behind `sessionToolBindings` rather than pushed one by one
+    // here, and the Snapshot's list is `sessionToolIds` over those same
+    // bindings: the array Pi resolves against and the list the Snapshot records
+    // cannot disagree, which is what let the pack drop its rule about tool
+    // identity (VC-3).
+    const tools = createSessionTools(spec, ownedToolEnv);
+    // Composed here, once per attachment: the array is half of the Session's
+    // Cache Prefix (VC-164), and a provider that orders tools ahead of the
+    // system prompt throws the prompt away too when it changes. Reattachment
+    // must therefore receive the same bindings, order and schemas that Session
+    // start froze. Pinned off provider requests through the desktop reattach
+    // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;

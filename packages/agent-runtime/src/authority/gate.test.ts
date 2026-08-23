@@ -88,16 +88,29 @@ describe("authorityVerdict", () => {
       cause: "path.outside-workspace",
       reason: `${join(real, "../SECRET.txt")} is outside the Session workspace ${real}; every read and write must stay inside it.`,
     });
-    const grepVerdict = authorityVerdict({
-      tool: "grep",
-      args: { pattern: "secret" },
-      authority: snapshot(),
-      workspacePath: raw,
-    });
-    expect(grepVerdict.outcome).toBe("deny");
-    expect(grepVerdict).toMatchObject({ cause: "tool.not-bundled" });
-    if (grepVerdict.outcome === "deny") {
-      expect(grepVerdict.reason).toContain('"grep" is not one of this Session\'s tools');
+  });
+
+  it("lets an interaction tool through the gate untouched, arguments and all", () => {
+    const { raw } = workspace();
+
+    // VC-3's guarantee, at the seam that would have broken it. The gate
+    // normalizes a name it has no mapping for into a call with no path, no
+    // command and no environment, and every rule in the pack then reads an
+    // empty list. Nothing here is special-cased for `ask_user`: it is allowed
+    // because there is nothing about it to refuse.
+    for (const tool of ["ask_user", "web_fetch", "web_search"]) {
+      expect(
+        authorityVerdict({
+          tool,
+          // Arguments no coding tool would survive: an absolute path outside the
+          // workspace, spelled as this tool's own field. A gate that guessed at
+          // an unmapped tool's arguments would refuse this; this one does not
+          // read them, because it does not know what they mean.
+          args: { question: "/etc/passwd", url: "/etc/passwd", query: "/etc/passwd" },
+          authority: snapshot(),
+          workspacePath: raw,
+        }),
+      ).toEqual({ outcome: "allow" });
     }
   });
 

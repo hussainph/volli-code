@@ -233,6 +233,38 @@ describe("the bounds on a document's shape", () => {
     expect(result.truncated).toBe(true);
   });
 
+  it(
+    "reaches the article behind a documentation sidebar of 2,500 links",
+    { timeout: 30_000 },
+    () => {
+      // The case that sets `maxElements`, pinned rather than asserted in prose.
+      // Chrome comes *before* the article, so the element budget is spent on
+      // the nav first and a tighter bound was measured dropping this page's
+      // article on the floor. 2,500 links against a 3,000 bound is the margin
+      // that decision left, so this is the fixture that would notice the bound
+      // being tightened.
+      //
+      // Deliberately the expensive shape it describes, which makes it the
+      // slowest test in the file: ~1s idle, and 3-5x that on a machine running
+      // the rest of the suite beside it. The explicit timeout is what stops a
+      // loaded CI box reading honest parse work as a hang (VC-142).
+      const nav = Array.from(
+        { length: 2500 },
+        (_, index) => `<a href="/section/${index}">section ${index}</a>`,
+      ).join(" ");
+      const sidebar =
+        `<!doctype html><html><head><title>Notes</title></head><body><nav>${nav}</nav>` +
+        `<main><article><h1>Notes</h1><p>Run the migration before the deploy, and run it exactly once.</p></article></main></body></html>`;
+
+      const result = extractReadableMarkdown(sidebar, "https://docs.example.com/sidebar");
+
+      expect(result.text).toContain("Run the migration before the deploy");
+      expect(result.truncated).toBe(false);
+      // The nav is what the budget had to survive, not what it returns.
+      expect(result.text).not.toContain("section 2499");
+    },
+  );
+
   it("counts a run of void and self-closing tags as the flat document it is", () => {
     // 300 `<br>` and `<img/>` in a row are 300 elements at one level, not a
     // tree 300 deep; a scanner that counted them as nesting would cut an

@@ -170,10 +170,33 @@ substitution, `xargs`, or `echo '…' | sh`; every `command.*` rule is bypassabl
 through any of them. As a layer beneath something that judges real-world impact
 that is fine. As the top of the stack it is not, and it currently is.
 
-`tool.not-bundled` is deleted. Pi resolves a tool by name and returns
-`Tool X not found` before `beforeToolCall` runs, and the snapshot's tool list
-and the registered tool list come from the same constant, so the rule cannot
-fire.
+`tool.not-bundled` **is deleted** — done in VC-3, ahead of the rest of this
+plan, because the rule was a day-one breakage for anything that wired a
+Snapshot. The pack is nine rules and `BUILTIN_RULE_PACK_HASH` moved from
+`d5e3dd88` to `dca89a93`.
+
+The reason given here was half true when it was written, and VC-3's first job
+was to make the other half true. Pi does resolve a tool by name and return
+`Tool X not found` before `beforeToolCall` runs — verified in
+`prepareToolCall`, which looks the tool up and returns early. But the snapshot's
+tool list and the registered tool list did **not** come from the same constant:
+they were two fields kept equal by whoever built the spec, and only a test
+fixture ever did. Worse, `AuthoritySnapshot.tools` was typed `CodingToolId[]`,
+so it could not name `ask_user`, `web_fetch` or `web_search` at all — the three
+tools a Session is actually offered beside the bundle. The rule would have
+refused every one of them on the first day a Snapshot existed.
+
+So the deletion rides one addition: `sessionToolBindings` / `sessionToolIds` in
+`@volli/shared` is the single derivation of a Session's Agent Tool Surface, and
+both the Pi tool array and the Snapshot's list are built from it. The rule then
+had no call left it could reach. Availability is the enforcement, which is what
+`CONTEXT.md` already says the Agent Tool Surface *is*.
+
+One consequence to carry forward: nothing in the pack now judges tool identity.
+A later per-call refusal over a tool the Session *does* hold — a revoked grant
+(VC-44), a Role-scoped control verb (VC-162), a foreign tool admitted through
+the External Agent Surface (VC-8) — is a different question and takes a new rule
+id, so the two stay countable apart in the denial ledger.
 
 ## Denial semantics
 
