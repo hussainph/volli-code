@@ -39,6 +39,12 @@ const SCRATCHES = [
   // Borrows Button/TabStrip/Tooltip and mounts its own Tooltip provider at the
   // root — the provider-shaped failure this check exists for (VC-55).
   "project-session-identity",
+  // `settings-redesign` was here. It shipped (VC-111), so the lab prototype and
+  // its private kit were deleted rather than left to rot into a second,
+  // divergent settings design system beside the real one in
+  // `components/settings/` — which is precisely the drift that kit's rule 9
+  // exists to prevent. Both surfaces are covered end to end now by
+  // `settings-search-smoke.mjs` and `canvas-theming-smoke.mjs`.
 ];
 
 /**

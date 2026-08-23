@@ -11,6 +11,7 @@ import {
   deepLinkedAction,
   IDLE_SIGN_IN_VIEW,
   orderedAccounts,
+  partitionAccounts,
   providerAccessLabel,
   retireAnsweredPrompt,
   type SignInView,
@@ -153,6 +154,38 @@ describe("ordering accounts by reachability", () => {
     const zed = provider({ id: "z", label: "Zed", state: "available" });
     const alpha = provider({ id: "a", label: "Alpha", state: "available" });
     expect(orderedAccounts([zed, alpha])).toEqual([alpha, zed]);
+  });
+});
+
+describe("partitionAccounts", () => {
+  const stored = provider({ id: "s", label: "Stored", hasStoredCredential: true });
+  const ambient = provider({ id: "v", label: "Ambient", state: "available" });
+  const cold = provider({ id: "c", label: "Cold" });
+
+  it("splits the reachable from the rest", () => {
+    const { connected, available } = partitionAccounts([cold, stored, ambient]);
+
+    expect(connected.map((p) => p.id)).toEqual(["v", "s"]);
+    expect(available.map((p) => p.id)).toEqual(["c"]);
+  });
+
+  it("counts a provider resolving its own credential as connected", () => {
+    // Ambient has nothing stored and nothing to sign out of, but it answers
+    // today. Filing it under "available to connect" would offer a sign-in for
+    // an account that already works.
+    expect(partitionAccounts([ambient]).connected).toHaveLength(1);
+    expect(partitionAccounts([ambient]).available).toHaveLength(0);
+  });
+
+  it("sorts each half alphabetically, since the tier no longer sorts them", () => {
+    const zed = provider({ id: "z", label: "Zed" });
+    const alpha = provider({ id: "a", label: "Alpha" });
+
+    expect(partitionAccounts([zed, alpha]).available.map((p) => p.label)).toEqual(["Alpha", "Zed"]);
+  });
+
+  it("hands back empty halves rather than throwing on an empty catalogue", () => {
+    expect(partitionAccounts([])).toEqual({ connected: [], available: [] });
   });
 
   it("does not mutate the array it was given", () => {

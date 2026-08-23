@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildSessionEnvReport, executableAt } from "./session-env";
+import { buildSessionEnvReport, executableAt, readWorkspaceEnvironment } from "./session-env";
 
 describe("buildSessionEnvReport", () => {
   it("reports the PATH, provenance, tool verdicts and dependency state together", async () => {
@@ -19,7 +19,13 @@ describe("buildSessionEnvReport", () => {
             path,
           ),
         ),
-      pathExists: (path) => ["/work/volli/package.json", "/work/volli/node_modules"].includes(path),
+      pathExists: (path) =>
+        [
+          "/work/volli/package.json",
+          "/work/volli/node_modules",
+          "/work/volli/pnpm-lock.yaml",
+          "/work/volli/.git",
+        ].includes(path),
     });
 
     expect(report).toEqual({
@@ -32,10 +38,46 @@ describe("buildSessionEnvReport", () => {
         git: null,
         gh: "/opt/homebrew/bin/gh",
         node: "/opt/homebrew/bin/node",
+        npm: null,
         pnpm: "/opt/homebrew/bin/pnpm",
+        yarn: null,
+        bun: null,
       },
+      // The workspace's own implication: a git checkout with a pnpm
+      // lockfile. `gh` is measured beside these and required by none, so its
+      // presence or absence is a report rather than a fault (VC-157).
+      requiredTools: ["git", "node", "pnpm"],
       dependencies: "installed",
     });
+  });
+
+  // The report is scoped to a project or to nothing at all; a host-wide read
+  // has no workspace to imply a tool, so it implies none.
+  it("requires nothing when a host-wide read has no workspace in scope", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/usr/bin",
+      provenance: "already-complete",
+      interactiveProvenance: "already-complete",
+      isExecutable: async () => false,
+      pathExists: () => {
+        throw new Error("a host-wide read must not inspect an arbitrary workspace");
+      },
+    });
+
+    expect(report.requiredTools).toEqual([]);
+  });
+
+  it("requires only git of a repository with no JavaScript manifest", async () => {
+    const report = await buildSessionEnvReport({
+      path: "/usr/bin",
+      provenance: "adopted",
+      interactiveProvenance: "adopted",
+      cwd: "/work/py",
+      isExecutable: async () => false,
+      pathExists: (path) => path === "/work/py/.git",
+    });
+
+    expect(report.requiredTools).toEqual(["git"]);
   });
 
   it("passes the provenance through untouched — it is main's boot fact, not a re-measurement", async () => {
@@ -110,6 +152,43 @@ describe("buildSessionEnvReport", () => {
     });
     expect(seen).not.toContain("");
     expect(seen).not.toContain("/git");
+  });
+});
+
+// The pair a structured Session's prompt carries (VC-156): the state and the
+// command that changes it, measured together so the agent never has to guess.
+describe("readWorkspaceEnvironment", () => {
+  it("names the absent state and the workspace's own install command together", () => {
+    expect(
+      readWorkspaceEnvironment("/work/harbor", (path) =>
+        ["/work/harbor/.git", "/work/harbor/package.json", "/work/harbor/yarn.lock"].includes(path),
+      ),
+    ).toEqual({ dependencies: "absent", installCommand: "yarn install" });
+  });
+
+  it("reports an installed workspace, and a directory that is no workspace at all", () => {
+    expect(
+      readWorkspaceEnvironment("/work/harbor", (path) =>
+        [
+          "/work/harbor/.git",
+          "/work/harbor/package.json",
+          "/work/harbor/pnpm-lock.yaml",
+          "/work/harbor/node_modules",
+        ].includes(path),
+      ),
+    ).toEqual({ dependencies: "installed", installCommand: "pnpm install" });
+
+    expect(readWorkspaceEnvironment("/work/notes", (path) => path === "/work/notes/.git")).toEqual({
+      dependencies: null,
+      installCommand: null,
+    });
+  });
+
+  it("reads the real filesystem when no seam is supplied", () => {
+    expect(readWorkspaceEnvironment("/definitely/not/a/workspace")).toEqual({
+      dependencies: null,
+      installCommand: null,
+    });
   });
 });
 

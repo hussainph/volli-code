@@ -12,7 +12,9 @@
  * So the field is empty on load whether or not a key is stored, what it says
  * beside it is whether one exists, and Remove is how you get rid of it. The
  * local `key` state is cleared the moment a save succeeds so the plaintext does
- * not sit in a React tree for the life of the window.
+ * not sit in a React tree for the life of the window. Where main puts the key it
+ * was handed — the profile's own store, no longer the OS keychain — is main's
+ * business, and this pane says only that there is one.
  *
  * A refused endpoint arrives here as the endpoint policy's own sentence, and is
  * shown in the row rather than toasted away: it is a correction to what the
@@ -29,7 +31,7 @@ import type {
   WebAccessSettingsView,
 } from "../../../../ipc/contract";
 import { webAccessPanel } from "@renderer/components/pages/web-access-model";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
@@ -54,8 +56,7 @@ const PROVIDER_LABEL: Readonly<Record<KeyedWebAccessProvider, string>> = {
 
 const KEY_STATE_LABEL = {
   absent: "Not set",
-  present: "Stored in your keychain",
-  unreadable: "Stored, but unreadable here",
+  present: "Saved on this Mac",
 } as const;
 
 type LoadState =
@@ -126,14 +127,14 @@ export function WebAccessSettings() {
 
   if (state.status === "loading") {
     return (
-      <SettingsSection title="Web search" icon={GlobeIcon}>
+      <PrefSection title="Web search" icon={GlobeIcon}>
         <p className={EMPTY_INLINE}>Loading…</p>
-      </SettingsSection>
+      </PrefSection>
     );
   }
   if (state.status === "error") {
     return (
-      <SettingsSection title="Web search" icon={GlobeIcon}>
+      <PrefSection title="Web search" icon={GlobeIcon}>
         <Notice
           announce
           tone="error"
@@ -146,7 +147,7 @@ export function WebAccessSettings() {
             </Button>
           }
         />
-      </SettingsSection>
+      </PrefSection>
     );
   }
 
@@ -168,8 +169,8 @@ export function WebAccessSettings() {
   };
 
   return (
-    <SettingsSection title="Web search" icon={GlobeIcon}>
-      <SettingsRow label="Provider">
+    <PrefSection title="Web search" icon={GlobeIcon}>
+      <PrefRow label="Provider">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 text-ui text-muted-foreground">
             <StatusDot state={panel.active ? "ready" : "idle"} />
@@ -184,10 +185,10 @@ export function WebAccessSettings() {
             onChange={chooseProvider}
           />
         </div>
-      </SettingsRow>
+      </PrefRow>
 
       {panel.showsEndpoint ? (
-        <SettingsRow label="Instance" htmlFor="web-access-endpoint" align="start">
+        <PrefRow label="Instance" htmlFor="web-access-endpoint" align="start">
           <div className="flex w-80 flex-col items-end gap-2">
             <Input
               id="web-access-endpoint"
@@ -209,11 +210,11 @@ export function WebAccessSettings() {
               Save instance
             </Button>
           </div>
-        </SettingsRow>
+        </PrefRow>
       ) : null}
 
       {panel.showsKey ? (
-        <SettingsRow label="API key" htmlFor="web-access-key" align="start">
+        <PrefRow label="API key" htmlFor="web-access-key" align="start">
           <div className="flex w-80 flex-col items-end gap-2">
             <Input
               id="web-access-key"
@@ -226,7 +227,7 @@ export function WebAccessSettings() {
               }
               spellCheck={false}
               autoComplete="off"
-              disabled={busy || panel.keyEntryDisabled}
+              disabled={busy}
               onChange={(event) => setKey(event.target.value)}
             />
             <div className="flex items-center gap-2">
@@ -249,10 +250,10 @@ export function WebAccessSettings() {
               <Button
                 size="xs"
                 variant="outline"
-                disabled={busy || panel.keyEntryDisabled || key.trim() === ""}
+                disabled={busy || key.trim() === ""}
                 onClick={() =>
-                  // Cleared on success: a plaintext key has no reason to sit in
-                  // a React tree once main has encrypted it.
+                  // Cleared on success: a key has no reason to sit in a React
+                  // tree once main has stored it.
                   void write(
                     () => window.api.webAccess.setKey(keyedProvider, key),
                     () => setKey(""),
@@ -263,15 +264,15 @@ export function WebAccessSettings() {
               </Button>
             </div>
           </div>
-        </SettingsRow>
+        </PrefRow>
       ) : null}
 
       {fieldError === null ? null : (
         <Notice announce tone="error" icon={WarningIcon} title={fieldError} />
       )}
       {panel.notice === null || fieldError !== null ? null : (
-        <Notice tone={panel.notice.tone} title={panel.notice.message} />
+        <Notice tone="neutral" title={panel.notice} />
       )}
-    </SettingsSection>
+    </PrefSection>
   );
 }

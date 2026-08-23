@@ -32,8 +32,12 @@ const STATUS: CliToolStatus = {
         git: "/usr/bin/git",
         gh: "/opt/homebrew/bin/gh",
         node: "/opt/homebrew/bin/node",
+        npm: "/opt/homebrew/bin/npm",
         pnpm: "/opt/homebrew/bin/pnpm",
+        yarn: null,
+        bun: null,
       },
+      requiredTools: [],
       dependencies: null,
       installCommand: null,
     },
@@ -60,7 +64,7 @@ function register(overrides: Partial<CliIpcDeps> = {}): { repairs: number; probe
   const counters = { repairs: 0, probes: 0 };
   registerCliIpcHandlers({
     status: async () => STATUS,
-    doctor: async () => {
+    doctor: async (_cwd) => {
       counters.probes += 1;
       return REPORT;
     },
@@ -95,6 +99,26 @@ describe("registerCliIpcHandlers", () => {
 
     await expect(invoke("volli:cli-doctor", { fix: false })).resolves.toEqual(REPORT);
     expect(counters).toEqual({ repairs: 0, probes: 1 });
+  });
+
+  // The probe judges requirements from the directory it runs in (VC-157), so
+  // the project scope has to reach it the same way the status read's does.
+  it("passes a project root to the doctor probe", async () => {
+    const doctor = vi.fn<CliIpcDeps["doctor"]>(async () => REPORT);
+    register({ doctor });
+
+    await expect(invoke("volli:cli-doctor", { fix: false, cwd: "/work/acme" })).resolves.toEqual(
+      REPORT,
+    );
+    expect(doctor).toHaveBeenCalledWith("/work/acme");
+  });
+
+  it("tells the probe there is no project rather than letting it inherit one", async () => {
+    const doctor = vi.fn<CliIpcDeps["doctor"]>(async () => REPORT);
+    register({ doctor });
+
+    await invoke("volli:cli-doctor", { fix: false });
+    expect(doctor).toHaveBeenCalledWith(null);
   });
 
   it("repairs BEFORE probing on fix, so the report describes the repaired world", async () => {

@@ -93,6 +93,7 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
+  type RuntimeWorkspaceEnvironment,
   type SessionInteractionOption,
   type SessionInteractionResolution,
   type SessionNativeDetail,
@@ -103,6 +104,7 @@ import {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
+import { readWorkspaceEnvironment } from "../session-env";
 import type { TurnAttachments } from "../turn-attachments";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
@@ -245,14 +247,14 @@ export interface PiAdapterOptions {
    *
    * It must not throw. This runs on the attach path, so a failure to work out
    * what web access amounts to would cost the Session its attachment rather
-   * than its web tools — an unreadable credential is a Session with no web,
-   * which is what `WebAccessSettings.resolve` answers instead of raising.
+   * than its web tools — a missing credential is a Session with no web, which
+   * is what `WebAccessSettings.resolve` answers instead of raising.
    */
   resolveWebPorts?: () => SessionWebPorts;
   /**
    * The compaction policy every Session is run under — the global automatic
-   * switch and the per-model reserves. Read per compaction rather than per
-   * attach: a Session outlives the settings change that retunes it.
+   * switch. Read per compaction rather than per attach: a Session outlives
+   * the settings change that retunes it.
    */
   compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
@@ -267,6 +269,16 @@ export interface PiAdapterOptions {
     message: UIMessageLike,
     owner: { sessionId: string; ticketId: string | null; workspacePath: string },
   ) => Promise<TurnAttachments>;
+  /**
+   * Measures the workspace's package state for the prompt's environment layer
+   * (VC-156). Defaults to the real filesystem read; injected in tests, which
+   * have no checkout to measure.
+   *
+   * Called at attach, per attachment, because that is when the answer is true:
+   * a checkout's `node_modules` appears the moment somebody runs the install,
+   * and the agent this fact is for is the one most likely to have run it.
+   */
+  readWorkspaceEnvironment?: (workspacePath: string) => RuntimeWorkspaceEnvironment;
   now?: () => number;
 }
 
@@ -378,6 +390,7 @@ function piNativeAdapter(
   runtime: AgentRuntime,
   now: () => number,
 ): NativeHarnessAdapter {
+  const measureWorkspaceEnvironment = options.readWorkspaceEnvironment ?? readWorkspaceEnvironment;
   return {
     id: PI_ADAPTER_ID,
     durableIdNamespace: PI_DURABLE_ID_NAMESPACE,
@@ -415,6 +428,10 @@ function piNativeAdapter(
         now,
         web: options.resolveWebPorts?.() ?? {},
         prepareTurnAttachments: options.prepareTurnAttachments,
+        // The directory the Session Engine prepared is the one to measure: a
+        // worktree ticket's isolated checkout has its own `node_modules`
+        // question, and the main checkout's answer is not it.
+        workspaceEnvironment: measureWorkspaceEnvironment(spec.directory),
       });
       try {
         binding.bind(await runtime.startSession(binding.runtimeSpec()));
@@ -491,6 +508,8 @@ interface PiBindingOptions {
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
+  /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
+  workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
 }
 
 class PiBinding implements BindingHandle {
@@ -501,6 +520,7 @@ class PiBinding implements BindingHandle {
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
+  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
@@ -529,6 +549,7 @@ class PiBinding implements BindingHandle {
     this.#now = options.now;
     this.#web = options.web;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
+    this.#workspaceEnvironment = options.workspaceEnvironment;
   }
 
   /**
@@ -575,6 +596,13 @@ class PiBinding implements BindingHandle {
       // replaces the policy this adapter used to pin and keeps the mechanism,
       // including the `ask` port still wired below.
       brief: { text: this.#context.brief },
+      // Spread, not assigned, for the same reason `promptResources` is: an
+      // unmeasured workspace must reach the prompt as an ABSENT field rather
+      // than one set to undefined, so "nobody measured" and "measured, nothing
+      // to say" stay the same silent prompt and neither poses as the other.
+      ...(this.#workspaceEnvironment === undefined
+        ? {}
+        : { workspaceEnvironment: this.#workspaceEnvironment }),
       // The seam `composeSystemPrompt` renders as delimited RESOURCE sections.
       // Omitted rather than empty when the Session named no skills, so a spec
       // with no resources is a spec with no resources field — same shape the

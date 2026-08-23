@@ -62,6 +62,21 @@ export type CreateTerminalSessionResult =
 export type TerminalIoResult = { ok: true } | { ok: false; error: string };
 
 /**
+ * Result of running one command in a live session's shell and waiting for it
+ * (`terminal-run`), which a surface that OFFERED to run something needs so it
+ * can report the outcome rather than leave the user watching scrollback.
+ *
+ * `ok` means the command ran to completion, whatever it exited with — a
+ * failing install is a result, not a transport failure, so `exitCode` carries
+ * it. `exitCode: null` is the honest third answer: the shell died before the
+ * command's completion marker printed, so nothing finished and no code exists
+ * to report. `ok: false` is reserved for never having started at all.
+ */
+export type TerminalCommandResult =
+  | { ok: true; exitCode: number | null }
+  | { ok: false; error: string };
+
+/**
  * Result of a foreground-process probe against a session (`terminal-busy`).
  * `busy` is true when the pty's foreground process differs from the shell it
  * was spawned with — a coding agent, a build, a nested REPL: anything a

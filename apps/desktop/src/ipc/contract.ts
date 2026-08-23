@@ -11,6 +11,8 @@
 // It lives in the app rather than in @volli/shared because a transport catalog
 // is knowledge of Electron, and that package is pure domain code.
 
+import type { ExternalAppId } from "../external-app-ids";
+
 import type {
   Appearance,
   ArchivedTicket,
@@ -39,6 +41,7 @@ import type {
   LegacyProject,
   ManifestError,
   ModelAccessSignInType,
+  ModelSelection,
   Project,
   ProjectThemeOverride,
   PromptTemplate,
@@ -49,12 +52,14 @@ import type {
   SESSION_RPC_IPC_CHANNEL,
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
+  RequirableSessionEnvTool,
   SessionEnvTool,
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
   SkillReference,
   TerminalBusyResult,
+  TerminalCommandResult,
   TerminalIoResult,
   Ticket,
   TicketComment,
@@ -86,6 +91,29 @@ export interface ProjectUpdateInput {
   baseBranch: string | null;
   /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
   setupCommand?: string | null;
+}
+
+/**
+ * One project's per-skill rules (VC-111, migration 023). The WHOLE map every
+ * time, not a delta: the surface holds every switch on screen at once, so a
+ * per-slug channel would turn one visible state into N writes that can land
+ * out of order and half-fail.
+ */
+export interface ProjectSkillModesInput {
+  id: string;
+  /** Slug → `"manual"` / `"off"`. Only departures; an empty map clears the column. */
+  modes: Record<string, string>;
+}
+
+/**
+ * One project's defaults for new Sessions (VC-111, migration 023). Both fields
+ * every time, `null` meaning inherit — see `updateProjectSessionDefaults` for
+ * why these two travel together where the theme pair does not.
+ */
+export interface ProjectSessionDefaultsInput {
+  id: string;
+  harness: string | null;
+  model: ModelSelection | null;
 }
 
 /** `{ projectId }` — shared by every project-scoped read (session list, worktree branches). */
@@ -341,16 +369,7 @@ export interface FilePathInput {
 }
 
 /** A known macOS app that can open a safely resolved Files target. */
-export type ExternalAppId =
-  | "vscode"
-  | "cursor"
-  | "zed"
-  | "xcode"
-  | "android-studio"
-  | "terminal"
-  | "iterm2"
-  | "ghostty"
-  | "warp";
+export type { ExternalAppId } from "../external-app-ids";
 
 export type ExternalAppKind = "editor" | "terminal";
 
@@ -410,12 +429,24 @@ export interface ArtifactCreateInput {
  */
 export interface VolliDataIpcContract {
   "volli:data-bootstrap": { args: []; result: BootstrapResult };
+  /** Main owns the database path; an omitted action reads its size. */
+  "volli:database": { args: [action?: DatabaseAction]; result: DatabaseResult };
   /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
   "volli:legacy-import": { args: [request: LegacyImportRequest]; result: LegacyImportResult };
 
   "volli:project-create": { args: [input: ProjectCreateInput]; result: ProjectCreateResult };
   /** Updates the project's pinned automation base branch and/or worktree setup command. */
   "volli:project-update": { args: [input: ProjectUpdateInput]; result: ProjectUpdateResult };
+  /** Replaces this project's per-skill rules wholesale (VC-111). */
+  "volli:project-skill-modes": {
+    args: [input: ProjectSkillModesInput];
+    result: ProjectUpdateResult;
+  };
+  /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+  "volli:project-session-defaults": {
+    args: [input: ProjectSessionDefaultsInput];
+    result: ProjectUpdateResult;
+  };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
   /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -587,6 +618,11 @@ export interface VolliFileIpcContract {
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
   /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
+  /** Creates one `<name>.md` prompt template, refusing rather than clobbering (VC-111). */
+  "volli:prompt-template-create": {
+    args: [input: PromptTemplateCreateInput];
+    result: PromptTemplateCreateResult;
+  };
   /** Reveals the resolved file in Finder. */
   "volli:file-reveal": { args: [input: FilePathInput]; result: Result };
   /** The currently installed allowlisted editor and terminal applications. */
@@ -764,16 +800,28 @@ export interface CliSessionPathStatus {
   provenance: SessionEnvProvenance;
   /** What the later interactive pass could establish, if it has landed. */
   interactiveProvenance: SessionEnvInteractiveProvenance;
-  /** Where each tool a Session contract requires resolves, or `null` when it does not. */
+  /** Where each measured Session tool resolves, or `null` when it does not. */
   tools: Readonly<Record<SessionEnvTool, string | null>>;
+  /**
+   * The subset of {@link tools} the scoped project implies — a repository
+   * implies `git`, a JavaScript workspace implies its lockfile's manager and
+   * the runtime that manager needs (`@volli/shared`'s
+   * `requiredSessionEnvTools`). Only these absences are faults; empty when no
+   * project workspace was supplied.
+   */
+  requiredTools: readonly RequirableSessionEnvTool[];
   /** Project-scoped dependency state; `null` when no project workspace was supplied. */
   dependencies: WorkspaceDependenciesStatus;
   /**
    * The command that installs the scoped workspace's dependencies, judged by
    * its lockfile (`@volli/shared`'s `workspaceInstallCommand`); `null` when
-   * no project workspace was supplied or none encloses it. Settings/alert
-   * vocabulary only — `volli identify`'s env block deliberately stays the
-   * exact field set the contract published.
+   * no project workspace was supplied or none encloses it. Settings and the
+   * dependency offer's vocabulary only — `volli identify`'s env block
+   * deliberately stays the exact field set the contract published.
+   *
+   * The offer RUNS this string (VC-156), which is the whole reason it must be
+   * measured rather than assumed: a button that pnpm-installs a yarn
+   * workspace is worse than no button.
    */
   installCommand: string | null;
 }
@@ -820,6 +868,17 @@ export interface CliStatusInput {
 /** `fix: true` runs main's idempotent repair (regenerate + reinstall) before the probe. */
 export interface CliDoctorInput {
   fix: boolean;
+  /**
+   * The project root to run the probe IN, when one is in scope.
+   *
+   * Which tool absences are faults is a fact about a directory (VC-157), and
+   * `volli doctor` reads it from its own cwd. A probe spawned without this
+   * inherits main's cwd — `/` for an app launched from Finder — which implies
+   * no project and so can never fault a missing `git`. The pane would then
+   * contradict the banner that sent the user to it, which is the
+   * two-surfaces-disagree failure VC-94 was about.
+   */
+  cwd?: string;
 }
 
 /**
@@ -1071,15 +1130,15 @@ export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
 export type KeyedWebAccessProvider = "brave" | "exa";
 
 /**
- * What the renderer may know about a stored API key: that there is one, that
- * there is one this machine can no longer decrypt, or that there is none.
+ * What the renderer may know about a stored API key: that there is one, or that
+ * there is none.
  *
- * A state rather than the value, and there is no fourth member that carries one.
- * "Unreadable" is here because a profile copied to another machine, or a
- * keychain that stopped answering, is a real situation — and reporting it as
- * "absent" would tell a person to paste a key they already pasted.
+ * A state rather than the value, and there is no third member that carries one.
+ * There was a third member — "unreadable", for a key the OS keychain would no
+ * longer open — until the keys stopped being keychain material. A key the
+ * profile holds is a key it can read.
  */
-export type WebAccessKeyState = "absent" | "present" | "unreadable";
+export type WebAccessKeyState = "absent" | "present";
 
 /** The whole of what Settings is told about Web Access. */
 export interface WebAccessSettingsView {
@@ -1094,8 +1153,6 @@ export interface WebAccessSettingsView {
    * person switching back should not be asked to paste one they already gave.
    */
   keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
-  /** Whether this machine's OS keychain can encrypt at all right now. */
-  encryptionAvailable: boolean;
 }
 
 export type WebAccessResult = Result<{ settings: WebAccessSettingsView }>;
@@ -1187,6 +1244,15 @@ export interface VolliSystemIpcContract {
   };
   /** Foreground-process probe: is the session running something beyond its shell? */
   "volli:terminal-busy": { args: [sessionId: string]; result: TerminalBusyResult };
+  /**
+   * Types one Volli-offered command into a live session's shell and resolves
+   * when it finishes. Stays pending for as long as the command runs — an
+   * install is slow, and the point of the channel is the outcome (VC-156).
+   */
+  "volli:terminal-run": {
+    args: [sessionId: string, command: string];
+    result: TerminalCommandResult;
+  };
   /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
   "volli:ghostty-config-get": { args: []; result: GhosttyConfigResult };
 }
@@ -1227,6 +1293,21 @@ export interface UpdateUiState {
 export type UpdateStateResult = Result<{ state: UpdateUiState }>;
 
 /**
+ * The release line an install follows. `stable` sees full releases only;
+ * `canary` also sees the prerelease-tagged builds electron-builder marks as
+ * GitHub pre-releases.
+ *
+ * One-way by construction, and that is a property of the underlying toggle
+ * rather than of this type: `canary` FORCES prereleases on, while `stable`
+ * leaves electron-updater's own per-install default in place. Forcing stable
+ * onto a canary install would strand it reading a `releases/latest` feed that
+ * 404s while only prereleases exist — see `main/auto-update.ts`.
+ */
+export type UpdateChannel = "stable" | "canary";
+
+export type UpdateChannelResult = Result<{ channel: UpdateChannel }>;
+
+/**
  * What the explicit-install dialog counts before it may promise a restart
  * (`volli:update-live-work`): the dialog is the ONE prompt on the install path
  * — the native gates behind it stand down — so it must carry the whole warning
@@ -1260,6 +1341,13 @@ export interface VolliUpdateIpcContract {
   "volli:update-install": { args: []; result: Result };
   /** The live work the install dialog must name before promising a restart. */
   "volli:update-live-work": { args: []; result: UpdateLiveWorkResult };
+  /** Which release line this install follows (VC-111) — replaces the hand-run `sqlite3` INSERT. */
+  "volli:update-channel-get": { args: []; result: UpdateChannelResult };
+  /** Moves this install between release lines; takes effect on the next check. */
+  "volli:update-channel-set": {
+    args: [channel: UpdateChannel];
+    result: UpdateChannelResult;
+  };
 }
 
 export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
@@ -1630,6 +1718,15 @@ export interface SessionActivityNotice {
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 
 /**
+ * The app-owned database actions. `undefined` reads its size; neither action
+ * accepts a renderer-supplied path.
+ */
+export type DatabaseAction = "reveal" | "export";
+
+/** The database's on-disk size, returned after a read or action. */
+export type DatabaseResult = Result<{ sizeBytes: number }>;
+
+/**
  * What one attach produced (VC-50). `relPath` is present when the file was
  * named live as an `@` ref; `blob` when bytes were stored. A repository image
  * carries both.
@@ -1755,9 +1852,37 @@ export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean 
 /** The installed subset of the allowlisted editor and terminal catalogue. */
 export type ExternalAppListResult = Result<{ apps: ExternalApp[] }>;
 
+/**
+ * A new `/command` (VC-111). `scope` picks which of the two directories the
+ * reader already merges it lands in — the same choice the Commands table's
+ * Source column reports back.
+ */
+export interface PromptTemplateCreateInput {
+  projectId: string;
+  scope: "project" | "personal";
+  name: string;
+  description: string;
+  body: string;
+}
+
+/**
+ * Where the template landed. The path is returned so the surface can offer to
+ * reveal the file it just made — the file, not this dialog, is the real
+ * interface to a command.
+ */
+export type PromptTemplateCreateResult = Result<{ path: string }>;
+
 /** The composer's `/` picker is project-scoped, exactly like the file index. */
 export interface PromptTemplateIndexInput {
   projectId: string;
+  /**
+   * Apply this project's skill rules (`skill_modes`) to the returned skills.
+   * The default, and what the composer wants: an `off` skill must not be
+   * offered. The Skills pane passes `false`, because it EDITS the rules and
+   * so must see every installed skill — under the ruled read, a skill set to
+   * `off` vanished from the one surface that could turn it back on.
+   */
+  ruled?: boolean;
 }
 
 /**

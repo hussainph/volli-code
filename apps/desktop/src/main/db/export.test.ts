@@ -211,6 +211,9 @@ describe("buildExportDocument — populated db", () => {
         themeSeed: null,
         themeCanvas: JSON.stringify(exportedCanvas),
         themeAppearance: "auto",
+        skillModes: null,
+        sessionHarness: null,
+        sessionModel: null,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.

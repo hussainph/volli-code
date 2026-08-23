@@ -11,6 +11,9 @@
 import {
   isAppearance,
   isHarnessTrustVerdict,
+  isSkillName,
+  isWritablePromptTemplateName,
+  REASONING_LEVELS,
   isHexColor,
   isProjectThemeOverride,
   isTicketPriority,
@@ -164,6 +167,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is [] => args.length === 0,
     invalidError: "Invalid request",
   },
+  "volli:database": {
+    guard: (args): args is IpcArgs<"volli:database"> =>
+      args.length === 0 || (args.length === 1 && (args[0] === "reveal" || args[0] === "export")),
+    invalidError: "Invalid database request",
+  },
   "volli:legacy-import": {
     guard: (args): args is IpcArgs<"volli:legacy-import"> => {
       if (args.length !== 1) return false;
@@ -187,6 +195,40 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       );
     },
     invalidError: "Invalid project",
+  },
+  "volli:project-skill-modes": {
+    guard: (args): args is IpcArgs<"volli:project-skill-modes"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["id"] !== "string") return false;
+      const modes = input["modes"];
+      if (!isRecord(modes)) return false;
+      // `auto` is deliberately NOT on the wire: it is the absence of a rule,
+      // and accepting it would let the renderer store a value that reads the
+      // same as no value (see `parseSkillModes`).
+      return Object.entries(modes).every(
+        ([slug, mode]) => isSkillName(slug) && (mode === "manual" || mode === "off"),
+      );
+    },
+    invalidError: "Invalid skill rules",
+  },
+  "volli:project-session-defaults": {
+    guard: (args): args is IpcArgs<"volli:project-session-defaults"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["id"] !== "string") return false;
+      const harness = input["harness"];
+      if (harness !== null && typeof harness !== "string") return false;
+      const model = input["model"];
+      if (model === null) return true;
+      return (
+        isRecord(model) &&
+        typeof model["providerId"] === "string" &&
+        typeof model["modelId"] === "string" &&
+        REASONING_LEVELS.some((level) => level === model["reasoningLevel"])
+      );
+    },
+    invalidError: "Invalid session defaults",
   },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
@@ -751,6 +793,25 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid request",
   },
+  "volli:prompt-template-create": {
+    guard: (args): args is IpcArgs<"volli:prompt-template-create"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["projectId"] === "string" &&
+        (input["scope"] === "project" || input["scope"] === "personal") &&
+        typeof input["name"] === "string" &&
+        // The narrow writable grammar, checked at the boundary as well as in
+        // the writer: the name becomes a filename, so this is the door where
+        // a traversal attempt has to stop.
+        isWritablePromptTemplateName(input["name"]) &&
+        typeof input["description"] === "string" &&
+        typeof input["body"] === "string"
+      );
+    },
+    invalidError: "Invalid command",
+  },
   "volli:file-reveal": {
     guard: (args): args is IpcArgs<"volli:file-reveal"> =>
       args.length === 1 && isFilePathInput(args[0]),
@@ -777,8 +838,11 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
     invalidError: "Invalid request",
   },
   "volli:prompt-templates": {
-    guard: (args): args is IpcArgs<"volli:prompt-templates"> =>
-      args.length === 1 && isProjectIdInput(args[0]),
+    guard: (args): args is IpcArgs<"volli:prompt-templates"> => {
+      if (args.length !== 1 || !isProjectIdInput(args[0])) return false;
+      const ruled = (args[0] as Record<string, unknown>)["ruled"];
+      return ruled === undefined || typeof ruled === "boolean";
+    },
     invalidError: "Invalid request",
   },
 };
@@ -953,7 +1017,10 @@ export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> }
   },
   "volli:cli-doctor": {
     guard: (args): args is IpcArgs<"volli:cli-doctor"> =>
-      args.length === 1 && isRecord(args[0]) && typeof args[0]["fix"] === "boolean",
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["fix"] === "boolean" &&
+      (args[0]["cwd"] === undefined || typeof args[0]["cwd"] === "string"),
     invalidError: "Invalid doctor request",
   },
   // The repair alone (VC-159): the launch banner's Fix now button, which takes
@@ -1088,6 +1155,15 @@ export const UPDATE_IPC: { readonly [C in UpdateIpcChannel]: IpcRequestDescripto
   "volli:update-live-work": {
     guard: (args): args is [] => args.length === 0,
     invalidError: "Invalid request",
+  },
+  "volli:update-channel-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:update-channel-set": {
+    guard: (args): args is IpcArgs<"volli:update-channel-set"> =>
+      args.length === 1 && (args[0] === "stable" || args[0] === "canary"),
+    invalidError: "Invalid release channel",
   },
 };
 

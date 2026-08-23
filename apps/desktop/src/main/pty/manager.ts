@@ -23,6 +23,7 @@ import type {
   SessionActivityState,
   SessionLaunchKind,
   TerminalBusyResult,
+  TerminalCommandResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalIoResult,
@@ -42,6 +43,8 @@ import { isInside } from "../worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
 import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
+import { createCommandRun } from "./command-run";
+import type { CommandRunOutcome } from "./command-run";
 import { ParkController } from "./park-controller";
 import {
   createDesktopSessionEngine,
@@ -140,14 +143,21 @@ interface Session {
   /** Consecutive CPU-quiet sweeps observed; parks at `quietSamplesRequired`. */
   quietCpuSamples: number;
   /**
-   * Non-null ONLY while a freshly-created worktree session runs its
-   * sentinel-gated setup command (worktree-support §6). The whole state machine
-   * — tail scanning, phase transitions, the `worktree_failed(setup)` event —
-   * lives in the worktree module's {@link createSetupRun} handle; this field is
-   * just the manager's grip on it: the pty `onData` handler feeds it output chunks and
-   * {@link create}'s onExit notifies it of a premature shell death. Cleared the
-   * instant the run settles (either outcome) — a non-zero exit leaves the
-   * terminal a live shell with the failure visible and never launches the harness.
+   * The sentinel-gated command this session is currently running for Volli
+   * rather than for the user, or `null`.
+   *
+   * Two occupants, one slot, because the manager's job is identical for both:
+   * feed the handle output chunks from `onData` and notify it of a premature
+   * shell death from `onExit`. A freshly-created worktree session's setup
+   * command is the first ({@link createSetupRun}, worktree-support §6), which
+   * owns tail scanning, that ticket's phase transitions and the
+   * `worktree_failed(setup)` event. An offered install is the second
+   * ({@link createCommandRun}, VC-156), which owns nothing durable and merely
+   * reports its outcome back to the surface that offered it.
+   *
+   * Cleared the instant the run settles (either outcome) — a non-zero exit
+   * leaves the terminal a live shell with the failure visible and never
+   * launches the harness.
    */
   setupRun: SetupRun | null;
   /** The durable terminal attachment, not Session-owned terminal state. */
@@ -198,6 +208,8 @@ function terminalDetailFor(
  */
 export class PtyManager {
   private readonly sessions = new Map<string, Session>();
+  /** Callers parked on {@link PtyManager.runCommand}, by the session running it. */
+  private readonly commandRuns = new Map<string, PromiseWithResolvers<CommandRunOutcome>>();
   /** One app-owned durable Session Engine; tests may lazily compose one around their test db. */
   private readonly sessionEngine: SessionEngine | null;
   /**
@@ -1061,6 +1073,56 @@ export class PtyManager {
     }
   }
 
+  /**
+   * Types `command` into a live session's shell and resolves when it finishes.
+   *
+   * The execution half of an offer (VC-156's "Run `pnpm install`"): the user
+   * watches it run in a real terminal they can interrupt, and the surface that
+   * offered it learns the outcome instead of guessing from a focus event. The
+   * sentinel wrapper is what makes "finished" observable at all — see
+   * {@link createCommandRun}.
+   *
+   * Refuses rather than queues when the session is already running one of
+   * these: the slot holds one run, and a second line typed into a shell that
+   * is mid-install would land in the install's own stdin.
+   */
+  async runCommand(sessionId: string, command: string): Promise<TerminalCommandResult> {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return { ok: false, error: "Unknown terminal session" };
+    if (session.setupRun !== null) {
+      return { ok: false, error: "This terminal is already running a command for Volli" };
+    }
+    const settled = Promise.withResolvers<CommandRunOutcome>();
+    // Held by session id as well as by the run, because a session can leave
+    // the map without its shell ever reporting an exit (a kill, a destroyed
+    // window). {@link forget} settles whatever is still waiting, so a caller
+    // awaiting an offer it made can never be left holding a promise nothing
+    // will ever resolve.
+    this.commandRuns.set(sessionId, settled);
+    const run = createCommandRun({
+      command,
+      // The shell the PTY was actually spawned with, which is all the wrapper
+      // needs (it matches on the basename): fish handed a POSIX subshell
+      // never prints a sentinel, and the run would hang forever.
+      shellPath: session.shellName,
+      settle: (outcome) => {
+        this.commandRuns.delete(sessionId);
+        settled.resolve(outcome);
+      },
+    });
+    session.setupRun = run;
+    // Through `write`, not `pty.write`: a parked session has to be woken
+    // before its shell can consume anything, and this command arrives long
+    // after the session was created.
+    const written = this.write(sessionId, `${run.commandLine}\r`);
+    if (!written.ok) {
+      session.setupRun = null;
+      this.commandRuns.delete(sessionId);
+      return written;
+    }
+    return { ok: true, exitCode: (await settled.promise).exitCode };
+  }
+
   resize(sessionId: string, cols: number, rows: number): TerminalIoResult {
     const session = this.sessions.get(sessionId);
     if (session === undefined) {
@@ -1111,6 +1173,16 @@ export class PtyManager {
    * along with its flush timer).
    */
   private forget(sessionId: string): void {
+    // Before the early return: a run can outlive the session that carried it
+    // only as an unresolved promise, and this is the last place anything knows
+    // the session is gone.
+    const waiting = this.commandRuns.get(sessionId);
+    if (waiting !== undefined) {
+      this.commandRuns.delete(sessionId);
+      // Not exit code 0: nothing completed, and a caller must not read a
+      // terminal that disappeared as an install that succeeded.
+      waiting.resolve({ exitCode: null });
+    }
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.output.dispose();

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   REQUIRED_NODE_RANGE,
+  dbOpenFailureLogLine,
   describeDbOpenFailure,
   isNativeModuleFailure,
 } from "./db-open-failure";
@@ -15,19 +16,37 @@ const ABI_MISMATCH =
   "This version of Node.js requires NODE_MODULE_VERSION 137.";
 
 describe("describeDbOpenFailure", () => {
-  it("names the Node incompatibility and the fix for an ABI-mismatched native module", () => {
-    const described = describeDbOpenFailure(new Error(ABI_MISMATCH));
+  it("names the Node incompatibility and the dev-loop fix in a development build", () => {
+    const described = describeDbOpenFailure(new Error(ABI_MISMATCH), { dev: true });
     expect(described).toContain(ABI_MISMATCH);
     expect(described).toContain("Node version incompatibility");
     expect(described).toContain(REQUIRED_NODE_RANGE);
     expect(described).toContain("pnpm install");
   });
 
+  it("tells a packaged-app user what they can actually do, in their own vocabulary", () => {
+    // The audience test (VC-160): a packaged user has no repo, no .nvmrc, no
+    // nvm and no pnpm, so every word of the dev remedy is advice about
+    // somebody else's machine — and the ABI numbers are not theirs to read.
+    const described = describeDbOpenFailure(new Error(ABI_MISMATCH));
+    expect(described).toContain("reopen Volli");
+    expect(described).toContain("reinstall");
+    for (const devVocabulary of [
+      "nvm",
+      "pnpm",
+      "NODE_MODULE_VERSION",
+      "better-sqlite3",
+      "node_modules",
+    ]) {
+      expect(described).not.toContain(devVocabulary);
+    }
+  });
+
   it("classifies a dlopen failure (the wrapped form Node 18+ throws) the same way", () => {
     const error = Object.assign(new Error(`ERR_DLOPEN_FAILED: ${ABI_MISMATCH}`), {
       code: "ERR_DLOPEN_FAILED",
     });
-    expect(describeDbOpenFailure(error)).toContain("Node version incompatibility");
+    expect(describeDbOpenFailure(error, { dev: true })).toContain("Node version incompatibility");
   });
 
   it("classifies a build that never happened — the module file simply missing", () => {
@@ -35,18 +54,70 @@ describe("describeDbOpenFailure", () => {
       new Error(
         "Cannot find module '/repo/node_modules/better-sqlite3/build/Release/better_sqlite3.node'",
       ),
+      { dev: true },
     );
     expect(described).toContain("Node version incompatibility");
   });
 
-  it("leaves a plain I/O failure untouched — no invented Node story for a permissions error", () => {
+  it("leaves a plain I/O failure's own words intact for either audience — no invented Node story", () => {
     const message = "SQLITE_CANTOPEN: unable to open database file";
-    expect(describeDbOpenFailure(new Error(message))).toBe(message);
+    for (const described of [
+      describeDbOpenFailure(new Error(message)),
+      describeDbOpenFailure(new Error(message), { dev: true }),
+    ]) {
+      expect(described).toContain(message);
+      expect(described).not.toContain("Node version incompatibility");
+      expect(described).not.toContain("pnpm install");
+    }
     expect(isNativeModuleFailure(message)).toBe(false);
   });
 
+  it("answers with a COMPLETE sentence, so no caller has to prefix one", () => {
+    // The regression this guards (VC-160 review): the user copy was written as a
+    // standalone paragraph while four call sites still glued "the local database
+    // failed to open:" in front of it, so the person read one fact three times.
+    // Every arm now names the failure itself, and no arm names it twice.
+    const arms = [
+      describeDbOpenFailure(new Error(ABI_MISMATCH)),
+      describeDbOpenFailure(new Error(ABI_MISMATCH), { dev: true }),
+      describeDbOpenFailure(new Error("SQLITE_CANTOPEN: unable to open database file")),
+    ];
+    for (const described of arms) {
+      expect(described).toMatch(/database|Volli/);
+      expect(described.match(/failed to open/g) ?? []).toHaveLength(
+        described.startsWith("The local database failed to open") ? 1 : 0,
+      );
+    }
+  });
+
   it("survives a non-Error throw", () => {
-    expect(describeDbOpenFailure("disk full")).toBe("disk full");
+    expect(describeDbOpenFailure("disk full")).toBe("The local database failed to open: disk full");
+    expect(dbOpenFailureLogLine("disk full")).toBe("disk full");
+  });
+});
+
+describe("dbOpenFailureLogLine", () => {
+  it("keeps the raw message and the dev-loop remedy, whatever the build", () => {
+    // The log is where a developer looks, including when diagnosing a packaged
+    // user's report of the plain-language message.
+    const logged = dbOpenFailureLogLine(new Error(ABI_MISMATCH));
+    expect(logged).toContain(ABI_MISMATCH);
+    expect(logged).toContain(".nvmrc");
+    expect(logged).toContain("pnpm install");
+  });
+
+  it("omits the frame its one call site's console prefix already prints", () => {
+    // `console.error("[volli] failed to open database:", line)` — repeating it
+    // in the payload is the same doubling the describe() contract forbids.
+    expect(dbOpenFailureLogLine(new Error(ABI_MISMATCH))).not.toContain(
+      "The local database failed to open",
+    );
+  });
+
+  it("passes a plain I/O failure through untouched", () => {
+    expect(dbOpenFailureLogLine(new Error("SQLITE_CANTOPEN: unable to open database file"))).toBe(
+      "SQLITE_CANTOPEN: unable to open database file",
+    );
   });
 });
 

@@ -20,8 +20,15 @@
 import { constants, existsSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 
-import { resolveSessionEnvTools, workspaceDependenciesStatus } from "@volli/shared";
+import {
+  memoizedPathExists,
+  requiredSessionEnvTools,
+  resolveSessionEnvTools,
+  workspaceDependenciesStatus,
+  workspaceInstallCommand,
+} from "@volli/shared";
 import type {
+  RuntimeWorkspaceEnvironment,
   SessionEnvInteractiveProvenance,
   SessionEnvProvenance,
   SessionEnvReport,
@@ -44,6 +51,25 @@ export async function executableAt(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * The workspace half of the report, on its own, for the party that acts on it.
+ *
+ * A structured Session's prompt carries these two facts so its first turn can
+ * run the install itself (VC-156). Measured here rather than derived from a
+ * durable record because dependencies come and go under a checkout, and taken
+ * as a pair because naming the state without naming the command invites a
+ * guess — the same pairing `volli identify` and Settings already report.
+ */
+export function readWorkspaceEnvironment(
+  workspacePath: string,
+  pathExists: (path: string) => boolean = existsSync,
+): RuntimeWorkspaceEnvironment {
+  return {
+    dependencies: workspaceDependenciesStatus(workspacePath, pathExists),
+    installCommand: workspaceInstallCommand(workspacePath, pathExists),
+  };
+}
+
 export interface SessionEnvReportDeps {
   /** The session's resolved PATH — post-adoption, bin dir first. */
   path: string;
@@ -59,11 +85,19 @@ export interface SessionEnvReportDeps {
   cwd?: string;
   /** Test seam over the filesystem; defaults to the real one. */
   isExecutable?(path: string): Promise<boolean>;
+  /**
+   * Test seam over the filesystem; defaults to the real one. Memoized for the
+   * life of one report, so a seam counting calls sees each path asked once.
+   */
   pathExists?(path: string): boolean;
 }
 
 export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise<SessionEnvReport> {
   const pathEntries = deps.path.split(":").filter((entry) => entry.length > 0);
+  // The two workspace questions below walk the same ancestors over the same
+  // markers, so they share one memo: one stat per path, and two answers that
+  // cannot describe the workspace at two different moments.
+  const pathExists = memoizedPathExists(deps.pathExists ?? existsSync);
   return {
     path: deps.path,
     provenance: deps.provenance,
@@ -71,9 +105,10 @@ export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise
     tools: await resolveSessionEnvTools(pathEntries, {
       isExecutable: deps.isExecutable ?? executableAt,
     }),
-    dependencies:
-      deps.cwd === undefined
-        ? null
-        : workspaceDependenciesStatus(deps.cwd, deps.pathExists ?? existsSync),
+    // Which of those measurements is allowed to be a fault, decided by what
+    // the scoped workspace is (VC-157). A host-wide read has no project to
+    // imply anything, and requires nothing.
+    requiredTools: deps.cwd === undefined ? [] : requiredSessionEnvTools(deps.cwd, pathExists),
+    dependencies: deps.cwd === undefined ? null : workspaceDependenciesStatus(deps.cwd, pathExists),
   };
 }

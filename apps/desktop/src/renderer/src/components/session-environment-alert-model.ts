@@ -1,4 +1,3 @@
-import { SESSION_ENV_TOOLS } from "@volli/shared";
 import type { CliToolStatus } from "../../../ipc/contract";
 
 /**
@@ -59,10 +58,17 @@ export interface ProjectEnvironmentScope {
   name: string;
 }
 
-/** The contract tools this Session PATH cannot resolve — the one place that is judged. */
+/**
+ * The required tools this Session PATH cannot resolve — the one place that is
+ * judged. Only what this project implies (VC-157): a Python repo is never
+ * short of `node`, a yarn workspace is never short of `pnpm`, and no project
+ * is short of `gh` before a PR action asks for it. The wider `tools` record
+ * stays measured and reported — in Settings and `volli identify` — without
+ * any of it becoming a fault here.
+ */
 function missingSessionTools(status: Pick<CliToolStatus, "environment">): string[] {
-  const { tools } = status.environment.session;
-  return SESSION_ENV_TOOLS.filter((tool) => tools[tool] === null);
+  const { tools, requiredTools } = status.environment.session;
+  return requiredTools.filter((tool) => tools[tool] === null);
 }
 
 /**
@@ -114,28 +120,20 @@ function loginPathFault(
 /**
  * The project readiness sentence: what was measured, plus the one step it
  * implies. `null` when the project has nothing missing.
+ *
+ * Missing PATH tools, and NOT missing dependencies (VC-156). A checkout
+ * without its `node_modules` is a normal state of the world, not a fault:
+ * the agent carries that fact in its own prompt (`RuntimeWorkspaceEnvironment`),
+ * with a neutral offer beside the project for whoever would rather run it
+ * themselves (`workspace-dependencies-offer.tsx`). What is left here is what
+ * the word "fault" still fits: a required tool the Session PATH cannot resolve.
  */
 function readinessDetail(status: Pick<CliToolStatus, "environment">): string | null {
-  const { dependencies, installCommand } = status.environment.session;
   const missingTools = missingSessionTools(status);
-  if (missingTools.length === 0 && dependencies !== "absent") return null;
-
-  const toolsFact =
-    missingTools.length > 0 ? `Missing from the Session PATH: ${missingTools.join(", ")}.` : null;
+  if (missingTools.length === 0) return null;
   // No CLI incantation: a first-run reader is pointed at the door that holds
   // the evidence and the repair button, not handed a command to type.
-  const toolsRemedy =
-    missingTools.length > 0
-      ? "If they are installed, open Settings → CLI to repair the Session PATH."
-      : null;
-  // The workspace's own install command, judged by its lockfile in main; a
-  // bare manifest belongs to npm. Never a hardcoded pnpm for a yarn workspace.
-  const dependenciesFact =
-    dependencies === "absent"
-      ? `Dependencies are not installed. Run ${installCommand ?? "npm install"} before starting a Session.`
-      : null;
-
-  return [toolsFact, toolsRemedy, dependenciesFact].filter((part) => part !== null).join(" ");
+  return `Missing from the Session PATH: ${missingTools.join(", ")}. If they are installed, open Settings → CLI to repair the Session PATH.`;
 }
 
 /**
@@ -152,11 +150,10 @@ export function projectEnvironmentReadiness(
   if (project === null) return null;
   const detail = readinessDetail(status);
   if (detail === null) return null;
-  const { dependencies } = status.environment.session;
   return {
     fault: null,
     // The measured facts, not the sentence built from them.
-    key: `readiness:${project.name}:${missingSessionTools(status).join(",")}:${dependencies ?? "unknown"}`,
+    key: `readiness:${project.name}:${missingSessionTools(status).join(",")}`,
     title: `Sessions aren't ready for ${project.name}`,
     detail,
   };

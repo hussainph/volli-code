@@ -46,11 +46,13 @@ export interface WebAccessProviderInput {
  * Why a Session is being offered no web, when it is.
  *
  * Named rather than boolean because every one of these reads differently to the
- * person who set it up: `off` is a choice, `no-key` is an unfinished setup, and
- * `unreadable-key` is a machine that stopped being able to open its own
- * keychain. None of them are a secret, so all of them are safe to log.
+ * person who set it up: `off` is a choice, `no-key` and `no-endpoint` are two
+ * halves of an unfinished one. None of them are a secret, so all of them are
+ * safe to log. There used to be a fourth, `unreadable-key`, for a keychain that
+ * would not open what Volli had stored; nothing can refuse a key now, so no
+ * Session has that to be told about.
  */
-export type WebAccessUnconfigured = "off" | "no-key" | "unreadable-key" | "no-endpoint";
+export type WebAccessUnconfigured = "off" | "no-key" | "no-endpoint";
 
 /**
  * The wiring's answer. The `brave` arm carries the plaintext key — this is the
@@ -111,9 +113,6 @@ export class WebAccessSettings {
       provider: readProvider(row.provider),
       searxngUrl: row.searxng_url,
       keys: { brave: this.#credentials.brave.state(), exa: this.#credentials.exa.state() },
-      // A property of the machine rather than of a provider, so either store
-      // answers it and both answer the same.
-      encryptionAvailable: this.#credentials.brave.encryptionAvailable(),
     };
   }
 
@@ -147,7 +146,7 @@ export class WebAccessSettings {
     return this.view();
   }
 
-  /** Store one provider's key. Refuses, loudly, rather than storing one in the clear. */
+  /** Store one provider's key. Refuses an empty paste rather than recording one. */
   saveKey(provider: KeyedWebAccessProvider, key: string): WebAccessSettingsView {
     this.#credentials[provider].save(key);
     return this.view();
@@ -167,30 +166,21 @@ export class WebAccessSettings {
    *
    * **This never throws, and that is load-bearing.** It runs on the attach
    * path, so a throw would not cost a Session its web tools — it would cost it
-   * the attachment. A key this machine cannot decrypt is a profile with no
-   * working search, which is a Session that starts without web tools and a
-   * Settings page that says why.
+   * the attachment. A profile with no key is a Session that starts without web
+   * tools and a Settings page that says why. Since the key stopped being
+   * keychain material there is nothing left here that could throw anyway; the
+   * rule is kept because it is a rule about this method's place in the attach
+   * path, not about what it happens to call today.
    */
   resolve(): ResolvedWebAccess {
     const row = this.#row();
     const provider = readProvider(row.provider);
     if (provider === "off") return { configured: false, reason: "off" };
     if (provider === "brave" || provider === "exa") {
-      const credentials = this.#credentials[provider];
-      const state = credentials.state();
-      if (state === "absent") return { configured: false, reason: "no-key" };
-      if (state === "unreadable") return { configured: false, reason: "unreadable-key" };
-      let apiKey: string | null;
-      try {
-        apiKey = credentials.read();
-      } catch {
-        // The keychain answered and the ciphertext still would not open: a
-        // profile restored from a backup, or an entry replaced underneath this
-        // one. `state()` cannot see that without decrypting, so this is where
-        // it is found out.
-        return { configured: false, reason: "unreadable-key" };
-      }
-      /* v8 ignore next -- `state()` already said a key is here and readable; this is the racing writer nobody has. */
+      // Read rather than asked about first: the plaintext is wanted either way,
+      // and a `state()` call ahead of it would only be the same lookup twice,
+      // with a window between them for the two answers to disagree.
+      const apiKey = this.#credentials[provider].read();
       if (apiKey === null) return { configured: false, reason: "no-key" };
       return { configured: true, provider, apiKey };
     }

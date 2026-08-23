@@ -7,11 +7,17 @@ import {
   type ProjectEnvironmentScope,
 } from "./session-environment-alert-model";
 
-const ALL_TOOLS_FOUND = {
+// A git checkout with a pnpm lockfile — requiredTools defaults to git, node,
+// pnpm below. yarn and bun are measured-but-absent, which no project here
+// requires, so their absence must never become a fault (VC-157).
+const DEFAULT_TOOLS = {
   git: "/usr/bin/git",
   gh: "/opt/homebrew/bin/gh",
   node: "/opt/homebrew/bin/node",
+  npm: "/opt/homebrew/bin/npm",
   pnpm: "/opt/homebrew/bin/pnpm",
+  yarn: null,
+  bun: null,
 };
 
 function status(
@@ -26,7 +32,8 @@ function status(
         path: "/volli/bin:/usr/bin:/opt/homebrew/bin",
         provenance,
         interactiveProvenance,
-        tools: { ...ALL_TOOLS_FOUND },
+        tools: { ...DEFAULT_TOOLS },
+        requiredTools: ["git", "node", "pnpm"],
         dependencies: null,
         installCommand: null,
         ...overrides,
@@ -62,7 +69,9 @@ describe("sessionEnvironmentMeasurement", () => {
   });
 
   it("says nothing when only one pass failed, however much is missing", () => {
-    const missingEverything = { tools: { git: null, gh: null, node: null, pnpm: null } };
+    const missingEverything = {
+      tools: { git: null, gh: null, node: null, npm: null, pnpm: null, yarn: null, bun: null },
+    };
     expect(topNotice(status("probe-failed", "adopted", missingEverything))).toBeNull();
     expect(topNotice(status("adopted", "probe-failed", missingEverything))).toBeNull();
     // `pending` is not a failure: the second pass runs after the first window
@@ -72,7 +81,7 @@ describe("sessionEnvironmentMeasurement", () => {
 
   it("raises one plainly-worded fault when both passes failed and commands are missing", () => {
     const measured = status("probe-failed", "probe-failed", {
-      tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: "/opt/homebrew/bin/pnpm" },
+      tools: { ...DEFAULT_TOOLS, node: null, pnpm: null },
     });
 
     expect(topNotice(measured)).toEqual({
@@ -80,17 +89,31 @@ describe("sessionEnvironmentMeasurement", () => {
       key: "login-path-unreadable",
       title: "Volli couldn't read your terminal's PATH",
       detail:
-        "Sessions can't find gh and node, so some commands may be missing. " +
+        "Sessions can't find node and pnpm, so some commands may be missing. " +
         "Fix now asks your terminal again — Sessions you start afterwards get the result.",
     });
   });
 
+  // The fault names what this project actually needs (VC-157): a missing `gh`
+  // is measured and reported in Settings, but no project requires it, so it
+  // can neither raise the fault nor pad its sentence.
+  it("judges the fault by required tools only, never the whole census", () => {
+    expect(
+      topNotice(status("probe-failed", "probe-failed", { tools: { ...DEFAULT_TOOLS, gh: null } })),
+    ).toBeNull();
+
+    const measured = status("probe-failed", "probe-failed", {
+      tools: { ...DEFAULT_TOOLS, gh: null, node: null },
+    });
+    expect(topNotice(measured)?.detail).toContain("Sessions can't find node,");
+  });
+
   it("names a single missing command without a list", () => {
     const measured = status("probe-failed", "probe-failed", {
-      tools: { ...ALL_TOOLS_FOUND, gh: null },
+      tools: { ...DEFAULT_TOOLS, node: null },
     });
 
-    expect(topNotice(measured)?.detail).toContain("Sessions can't find gh,");
+    expect(topNotice(measured)?.detail).toContain("Sessions can't find node,");
   });
 
   // The banner is somebody's first minute in the product. "Login-shell passes",
@@ -98,7 +121,7 @@ describe("sessionEnvironmentMeasurement", () => {
   // doctor vocabulary (VC-159, item 3).
   it("speaks no internal vocabulary and prescribes no CLI incantation", () => {
     const alert = topNotice(
-      status("probe-failed", "probe-failed", { tools: { ...ALL_TOOLS_FOUND, gh: null } }),
+      status("probe-failed", "probe-failed", { tools: { ...DEFAULT_TOOLS, node: null } }),
     );
     const copy = `${alert?.title} ${alert?.detail}`;
 
@@ -109,17 +132,17 @@ describe("sessionEnvironmentMeasurement", () => {
 
   it("shows every missing project requirement as soon as a project is selected", () => {
     const measured = status("adopted", "already-complete", {
-      tools: { git: "/usr/bin/git", gh: null, node: null, pnpm: "/opt/homebrew/bin/pnpm" },
+      tools: { ...DEFAULT_TOOLS, git: null, node: null },
       dependencies: "absent",
       installCommand: "pnpm install",
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toEqual({
       fault: null,
-      key: "readiness:Acme:gh,node:absent",
+      key: "readiness:Acme:git,node",
       title: "Sessions aren't ready for Acme",
       detail:
-        "Missing from the Session PATH: gh, node. If they are installed, open Settings → CLI to repair the Session PATH. Dependencies are not installed. Run pnpm install before starting a Session.",
+        "Missing from the Session PATH: git, node. If they are installed, open Settings → CLI to repair the Session PATH.",
     });
   });
 
@@ -127,65 +150,119 @@ describe("sessionEnvironmentMeasurement", () => {
   // notice somebody already put away — the defect the fault half of VC-159
   // fixed durably, and the reason this half no longer compares prose.
   it("keys a readiness notice on its facts, not on its sentence", () => {
-    const withGh = status("adopted", "already-complete", {
-      tools: { ...ALL_TOOLS_FOUND, gh: null },
-      dependencies: "installed",
+    const withNode = status("adopted", "already-complete", {
+      tools: { ...DEFAULT_TOOLS, node: null },
     });
-    const withGhAndNode = status("adopted", "already-complete", {
-      tools: { ...ALL_TOOLS_FOUND, gh: null, node: null },
-      dependencies: "installed",
+    const withNodeAndPnpm = status("adopted", "already-complete", {
+      tools: { ...DEFAULT_TOOLS, node: null, pnpm: null },
     });
 
-    const first = projectEnvironmentReadiness(withGh, { name: "Acme" });
-    expect(first?.key).toBe("readiness:Acme:gh:installed");
+    const first = projectEnvironmentReadiness(withNode, { name: "Acme" });
+    expect(first?.key).toBe("readiness:Acme:node");
     // Different project, different facts: neither shares a dismissal.
-    expect(projectEnvironmentReadiness(withGh, { name: "Other" })?.key).not.toBe(first?.key);
-    expect(projectEnvironmentReadiness(withGhAndNode, { name: "Acme" })?.key).not.toBe(first?.key);
-
-    // A folder whose dependency state was never established (no lockfile to
-    // judge) is its own key — not the same notice as one measured as installed.
-    const unknownDependencies = status("adopted", "already-complete", {
-      tools: { ...ALL_TOOLS_FOUND, gh: null },
-      dependencies: null,
-    });
-    expect(projectEnvironmentReadiness(unknownDependencies, { name: "Acme" })?.key).toBe(
-      "readiness:Acme:gh:unknown",
+    expect(projectEnvironmentReadiness(withNode, { name: "Other" })?.key).not.toBe(first?.key);
+    expect(projectEnvironmentReadiness(withNodeAndPnpm, { name: "Acme" })?.key).not.toBe(
+      first?.key,
     );
   });
 
-  // The command comes from the workspace's own lockfile: a yarn workspace must
-  // never be told to pnpm install (VC-94 review).
-  it("names the workspace's own install command, not a hardcoded one", () => {
+  // VC-156: a fresh checkout without node_modules is a normal state of the
+  // world, not a fault, and the red banner that called it one was the first
+  // thing a new project showed its owner. The fact now reaches the agent's
+  // prompt and a neutral offer beside the project; nothing reaches this alert.
+  it("says nothing at all about uninstalled dependencies", () => {
+    for (const installCommand of ["pnpm install", "yarn install", null]) {
+      const measured = status("adopted", "already-complete", {
+        dependencies: "absent",
+        installCommand,
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toBeNull();
+      expect(topNotice(measured, { name: "Acme" })).toBeNull();
+    }
+  });
+
+  it("reports missing tools whatever the workspace's dependency state is", () => {
     const measured = status("adopted", "already-complete", {
+      tools: { ...DEFAULT_TOOLS, node: null },
       dependencies: "absent",
-      installCommand: "yarn install",
+      installCommand: "pnpm install",
     });
 
     expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Dependencies are not installed. Run yarn install before starting a Session.",
+      "Missing from the Session PATH: node. If they are installed, open Settings → CLI to repair the Session PATH.",
     );
   });
 
-  it("falls back to npm install when no lockfile named a package manager", () => {
-    const measured = status("adopted", "already-complete", {
-      dependencies: "absent",
-      installCommand: null,
+  // VC-157's whole point: the alert speaks about the tools THIS project
+  // implies, and a measurement nothing asked for is not a fault.
+  describe("only the project's own requirements", () => {
+    it("says nothing about a missing gh, which no project requires", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: { ...DEFAULT_TOOLS, gh: null },
+        dependencies: "installed",
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toBeNull();
     });
 
-    expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Dependencies are not installed. Run npm install before starting a Session.",
-    );
-  });
+    it("says nothing about pnpm for a yarn workspace", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          ...DEFAULT_TOOLS,
+          gh: null,
+          npm: null,
+          pnpm: null,
+          yarn: "/opt/homebrew/bin/yarn",
+        },
+        requiredTools: ["git", "node", "yarn"],
+        dependencies: "installed",
+      });
 
-  it("reports missing tools without a dependency sentence when dependencies are fine", () => {
-    const measured = status("adopted", "already-complete", {
-      tools: { ...ALL_TOOLS_FOUND, gh: null },
-      dependencies: "installed",
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })).toBeNull();
     });
 
-    expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
-      "Missing from the Session PATH: gh. If they are installed, open Settings → CLI to repair the Session PATH.",
-    );
+    // The reported case: a Python repo on a host with no gh and no JS
+    // toolchain wore a permanent red banner for tools it never runs.
+    it("is silent for a repo with no JavaScript manifest and no gh installed", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          git: "/usr/bin/git",
+          gh: null,
+          node: null,
+          npm: null,
+          pnpm: null,
+          yarn: null,
+          bun: null,
+        },
+        requiredTools: ["git"],
+        dependencies: null,
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Harbor" })).toBeNull();
+    });
+
+    // Reporting is not alarming, but a JS workspace genuinely without node
+    // still is: the ticket keeps this one loud.
+    it("still warns when a JavaScript workspace is missing node itself", () => {
+      const measured = status("adopted", "already-complete", {
+        tools: {
+          git: "/usr/bin/git",
+          gh: null,
+          node: null,
+          npm: null,
+          pnpm: null,
+          yarn: "/opt/homebrew/bin/yarn",
+          bun: null,
+        },
+        requiredTools: ["git", "node", "yarn"],
+        dependencies: "installed",
+      });
+
+      expect(projectEnvironmentReadiness(measured, { name: "Acme" })?.detail).toBe(
+        "Missing from the Session PATH: node. If they are installed, open Settings → CLI to repair the Session PATH.",
+      );
+    });
   });
 
   it("is quiet about a ready project, and about readiness with no project in scope", () => {
@@ -200,27 +277,20 @@ describe("sessionEnvironmentMeasurement", () => {
   // diagnosis onto the first — it queues behind it.
   it("lets the app fault outrank the project's readiness rather than merging them", () => {
     const measured = status("probe-failed", "probe-failed", {
-      tools: { ...ALL_TOOLS_FOUND, gh: null },
-      dependencies: "absent",
-      installCommand: "pnpm install",
+      tools: { ...DEFAULT_TOOLS, node: null },
     });
 
     const alert = topNotice(measured, { name: "Acme" });
     expect(alert?.fault).toBe("login-path-unreadable");
-    expect(alert?.detail).not.toContain("pnpm install");
+    expect(alert?.detail).not.toContain("Missing from the Session PATH");
   });
 
   // Outranked is not the same as swallowed. The readiness notice is still
   // MEASURED and still second in line, so dismissing the fault reveals what the
-  // project is missing rather than burying a fact nobody dismissed — and no
-  // repair to the PATH would have installed those dependencies anyway.
+  // project is missing rather than burying a fact nobody dismissed.
   it("keeps the outranked readiness notice behind the fault instead of dropping it", () => {
     const measurement = sessionEnvironmentMeasurement(
-      status("probe-failed", "probe-failed", {
-        tools: { ...ALL_TOOLS_FOUND, gh: null },
-        dependencies: "absent",
-        installCommand: "pnpm install",
-      }),
+      status("probe-failed", "probe-failed", { tools: { ...DEFAULT_TOOLS, node: null } }),
       { name: "Acme" },
     );
 
@@ -228,7 +298,7 @@ describe("sessionEnvironmentMeasurement", () => {
       "login-path-unreadable",
       null,
     ]);
-    expect(measurement.notices[1]?.detail).toContain("pnpm install");
+    expect(measurement.notices[1]?.detail).toContain("Missing from the Session PATH: node");
   });
 
   // What the durable dismissals are reconciled against: every fault MEASURED,
@@ -237,7 +307,7 @@ describe("sessionEnvironmentMeasurement", () => {
   it("reports the faults it measured, and reports none on a healthy read", () => {
     expect(
       sessionEnvironmentMeasurement(
-        status("probe-failed", "probe-failed", { tools: { ...ALL_TOOLS_FOUND, gh: null } }),
+        status("probe-failed", "probe-failed", { tools: { ...DEFAULT_TOOLS, node: null } }),
       ).faults,
     ).toEqual(["login-path-unreadable"]);
 
@@ -250,15 +320,15 @@ describe("sessionEnvironmentMeasurement", () => {
 
   it("surfaces the project's own shortfall once no app fault is in the way", () => {
     const measured = status("adopted", "already-complete", {
-      dependencies: "absent",
-      installCommand: "pnpm install",
+      tools: { ...DEFAULT_TOOLS, node: null },
     });
 
     expect(topNotice(measured, { name: "Acme" })).toEqual({
       fault: null,
-      key: "readiness:Acme::absent",
+      key: "readiness:Acme:node",
       title: "Sessions aren't ready for Acme",
-      detail: "Dependencies are not installed. Run pnpm install before starting a Session.",
+      detail:
+        "Missing from the Session PATH: node. If they are installed, open Settings → CLI to repair the Session PATH.",
     });
   });
 });

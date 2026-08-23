@@ -1,46 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
-import {
-  BRAVE_SEARCH_KEY_SECRET,
-  EXA_SEARCH_KEY_SECRET,
-  WebCredentialStore,
-  type SecretCipher,
-} from "./credential";
+import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
 import { WebAccessSettings } from "./settings";
-
-class FakeCipher implements SecretCipher {
-  available = true;
-  decryptFailure: Error | null = null;
-
-  isEncryptionAvailable(): boolean {
-    return this.available;
-  }
-
-  encryptString(plainText: string): Buffer {
-    return Buffer.from(`v1:${Buffer.from(plainText, "utf8").toString("base64")}`, "utf8");
-  }
-
-  decryptString(encrypted: Buffer): string {
-    if (this.decryptFailure !== null) throw this.decryptFailure;
-    return Buffer.from(encrypted.toString("utf8").slice("v1:".length), "base64").toString("utf8");
-  }
-}
 
 const KEY = "BSA-super-secret-brave-key-42";
 
 let ctx: TestDb;
-let cipher: FakeCipher;
 let settings: WebAccessSettings;
 
 beforeEach(() => {
   ctx = openTestDb();
-  cipher = new FakeCipher();
   settings = new WebAccessSettings({
     db: ctx.db,
     credentials: {
-      brave: new WebCredentialStore({ db: ctx.db, cipher, secretName: BRAVE_SEARCH_KEY_SECRET }),
-      exa: new WebCredentialStore({ db: ctx.db, cipher, secretName: EXA_SEARCH_KEY_SECRET }),
+      brave: new WebCredentialStore({ db: ctx.db, secretName: BRAVE_SEARCH_KEY_SECRET }),
+      exa: new WebCredentialStore({ db: ctx.db, secretName: EXA_SEARCH_KEY_SECRET }),
     },
     now: () => 1_700_000_000_000,
   });
@@ -77,15 +52,6 @@ describe("WebAccessSettings — choosing Exa", () => {
     expect(settings.resolve()).toEqual({ configured: false, reason: "no-key" });
   });
 
-  it("withholds web when Exa's stored key cannot be read on this machine", () => {
-    settings.saveKey("exa", EXA_KEY);
-    settings.setProvider({ provider: "exa", searxngUrl: null });
-    cipher.available = false;
-
-    expect(settings.view().keys.exa).toBe("unreadable");
-    expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
-  });
-
   it("forgets one provider's key without touching the other's", () => {
     settings.saveKey("brave", KEY);
     settings.saveKey("exa", EXA_KEY);
@@ -102,7 +68,6 @@ describe("WebAccessSettings defaults", () => {
       provider: "off",
       searxngUrl: null,
       keys: { brave: "absent", exa: "absent" },
-      encryptionAvailable: true,
     });
   });
 
@@ -175,30 +140,18 @@ describe("WebAccessSettings — choosing Brave", () => {
     expect(settings.resolve()).toEqual({ configured: true, provider: "brave", apiKey: KEY });
   });
 
-  it("withholds web when the stored key cannot be read on this machine", () => {
+  it("costs a Session its web tools, never its attach, when the key is taken away under it", () => {
     settings.setProvider({ provider: "brave", searxngUrl: null });
     settings.saveKey("brave", KEY);
-    cipher.available = false;
-
-    expect(settings.view()).toMatchObject({
-      keys: { brave: "unreadable", exa: "absent" },
-      encryptionAvailable: false,
-    });
-    expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
-  });
-
-  it("costs a Session its web tools, never its attach, when the ciphertext will not open", () => {
-    settings.setProvider({ provider: "brave", searxngUrl: null });
-    settings.saveKey("brave", KEY);
-    // The keychain answers, and then fails to decrypt — a profile restored from
-    // a backup, or a keychain entry replaced out from under this one.
-    cipher.decryptFailure = new Error("decryption failed");
+    // Removed behind the settings owner's back — a second window's Remove, or a
+    // row deleted by hand while a Session is starting.
+    ctx.db.prepare("DELETE FROM secrets").run();
 
     // Resolving is on the attach path. A throw here would fail the whole
-    // attachment, so a Session with a broken key would be a Session that cannot
-    // start rather than one without web tools.
+    // attachment, so a Session with no key would be a Session that cannot start
+    // rather than one without web tools.
     expect(() => settings.resolve()).not.toThrow();
-    expect(settings.resolve()).toEqual({ configured: false, reason: "unreadable-key" });
+    expect(settings.resolve()).toEqual({ configured: false, reason: "no-key" });
   });
 
   it("forgets the key on request", () => {

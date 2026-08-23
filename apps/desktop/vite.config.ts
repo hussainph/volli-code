@@ -128,10 +128,17 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
         "src/components/pages/web-access-model.ts",
+        // The report mirrors the three data sets About already shows. Keeping
+        // it at full coverage makes a newly added status row hard to omit.
+        "src/components/settings/panes/about-report.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
         "src/components/session-environment-alert-model.ts",
+        // And what it OFFERS instead, for the state that turned out not to be
+        // a fault at all (VC-156): whether a workspace is offered an install,
+        // and which command that offer would run.
+        "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/edge-region.ts",

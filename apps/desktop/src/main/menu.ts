@@ -27,16 +27,18 @@ function sendZoom(cmd: UiZoomCommand): void {
 }
 
 /**
- * File > Export Database as JSON…: prompts for a save location, then writes
- * a full `buildExportDocument` dump there. A degraded db (open/migrate
- * failed at boot — the same `DbHandle` the data/artifact IPC handlers
- * degrade against) surfaces immediately rather than opening a dialog for a
- * write that can never happen. Every failure — a degraded db or a write
+ * File > Export Database as JSON… and Settings → Storage: prompts for a save
+ * location, then writes a full `buildExportDocument` dump there. A degraded db
+ * (open/migrate failed at boot — the same `DbHandle` the data/artifact IPC
+ * handlers degrade against) surfaces immediately rather than opening a dialog
+ * for a write that can never happen. Every failure — a degraded db or a write
  * error — goes through `dialog.showErrorBox`, never swallowed (CLAUDE.md).
  */
-async function handleExportDatabase(dbHandle: DbHandle): Promise<void> {
+export async function exportDatabase(dbHandle: DbHandle): Promise<void> {
   if (!dbHandle.ok) {
-    dialog.showErrorBox("Export Failed", `The database is unavailable: ${dbHandle.error}`);
+    // Already a complete sentence naming the failure (db-open-failure.ts's
+    // CONTRACT); the box's own title supplies the "export" half.
+    dialog.showErrorBox("Export Failed", dbHandle.error);
     return;
   }
   const now = new Date();
@@ -102,7 +104,7 @@ export function registerAppMenu(
         {
           label: "Export Database as JSON…",
           click: () => {
-            void handleExportDatabase(dbHandle);
+            void exportDatabase(dbHandle);
           },
         },
         { type: "separator" },

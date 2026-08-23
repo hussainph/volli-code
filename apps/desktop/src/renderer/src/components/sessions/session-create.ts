@@ -360,10 +360,14 @@ function abandonChat(sessionId: string): void {
  * permanent Board tab — so a fresh Session that recorded nothing would land
  * behind the board, and the chord would look like it had done nothing at all.
  */
-export async function startProjectTerminal(projectId: string): Promise<void> {
+export async function startProjectTerminal(projectId: string): Promise<string | null> {
   const sessionId = await createTerminalSession(projectScope(projectId));
-  if (sessionId === null) return;
+  if (sessionId === null) return null;
   useWorkspaceStore.getState().setHomeActiveTab(projectId, sessionId);
+  // Returned for the one caller that has something to say to the shell it just
+  // opened — the dependency offer types its install into it (VC-156). Every
+  // other caller ignores it, exactly as it did when this returned nothing.
+  return sessionId;
 }
 
 /**

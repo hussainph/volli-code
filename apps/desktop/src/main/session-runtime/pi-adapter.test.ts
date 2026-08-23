@@ -583,6 +583,24 @@ describe("Pi native adapter attach", () => {
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
   });
 
+  // VC-156: the party that can run the install is the one told about it.
+  it("measures the prepared workspace and carries its package state into the spec", async () => {
+    const measured: string[] = [];
+    const { runtime } = await attached({
+      readWorkspaceEnvironment: (workspacePath) => {
+        measured.push(workspacePath);
+        return { dependencies: "absent", installCommand: "pnpm install" };
+      },
+    });
+
+    // The prepared directory — the worktree, never the main checkout beside it.
+    expect(measured).toEqual(["/work/volli/.worktrees/VC-12"]);
+    expect(runtime.spec.workspaceEnvironment).toEqual({
+      dependencies: "absent",
+      installCommand: "pnpm install",
+    });
+  });
+
   it("fails a Session that lacks its runtime context", async () => {
     const { adapter, runtime } = composition({ resolveRuntimeContext: async () => null });
 

@@ -4,8 +4,21 @@
  * only tickets get one (`ticket_events`, migration 001).
  */
 import type Database from "better-sqlite3";
-import { isAppearance, isProjectThemeOverrideEmpty, parseCanvas } from "@volli/shared";
-import type { Appearance, Canvas, Project, ProjectThemeOverride } from "@volli/shared";
+import {
+  isAppearance,
+  isProjectThemeOverrideEmpty,
+  parseCanvas,
+  parseSessionModel,
+  parseSkillModes,
+} from "@volli/shared";
+import type {
+  Appearance,
+  Canvas,
+  ModelSelection,
+  Project,
+  ProjectThemeOverride,
+  SkillModes,
+} from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface ProjectRow {
@@ -23,6 +36,10 @@ interface ProjectRow {
   /** Migration 014 — the authored canvas as JSON, and the appearance; NULL = inherit. */
   theme_canvas: string | null;
   theme_appearance: string | null;
+  /** Migration 023 — this project's agent configuration; NULL = inherit on all three. */
+  skill_modes: string | null;
+  session_harness: string | null;
+  session_model: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -86,6 +103,21 @@ function mapCanvas(row: ProjectRow): Canvas | null {
   return parseCanvas(parsed);
 }
 
+/**
+ * A nullable JSON column as `unknown`, or `undefined` when it holds nothing
+ * readable. The column CHECKs already refuse non-JSON at the write, so this
+ * only catches a db edited around them — see {@link mapCanvas} on why that
+ * degrades instead of throwing.
+ */
+function parseJsonColumn(value: string | null): unknown {
+  if (value === null || value.length === 0) return undefined;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function mapProject(row: ProjectRow): Project {
   return {
     id: row.id,
@@ -99,6 +131,9 @@ function mapProject(row: ProjectRow): Project {
     // The CHECK on the column already limits this to the three words, so a
     // value that fails the guard means a db edited around it — inherit.
     themeAppearance: isAppearance(row.theme_appearance) ? row.theme_appearance : null,
+    skillModes: parseSkillModes(parseJsonColumn(row.skill_modes)),
+    sessionHarness: row.session_harness,
+    sessionModel: parseSessionModel(parseJsonColumn(row.session_model)),
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -246,6 +281,66 @@ export function updateProjectAppearance(
         SET theme_appearance = ?, row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
   ).run(appearance, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's per-skill rules (migration 023) and returns the
+ * authoritative row.
+ *
+ * An EMPTY map stores `NULL`, not `{}`. The column's whole vocabulary is "NULL
+ * means every skill as its author intended", and a project that put its last
+ * ruled skill back must read exactly like one that never ruled on anything —
+ * otherwise the two states are distinguishable in the db and identical
+ * everywhere above it, which is a difference waiting to be depended on by
+ * accident.
+ *
+ * Normalised on the way in by `parseSkillModes` rather than stored as handed
+ * over, for `updateProjectCanvas`'s reason: storing the caller's object by
+ * reference is how an unknown mode or an unspellable slug ends up in a column
+ * every reader then has to defend against.
+ */
+export function updateProjectSkillModes(
+  db: Database.Database,
+  id: string,
+  modes: SkillModes,
+  now: number,
+): Project | undefined {
+  const normalized = parseSkillModes(modes);
+  prepared(
+    db,
+    `UPDATE projects
+        SET skill_modes = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(Object.keys(normalized).length === 0 ? null : JSON.stringify(normalized), now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's harness and model for new Sessions (migration 023).
+ *
+ * ONE write for both, unlike the theme pair beside it, and the difference is
+ * worth stating: a canvas and an appearance are independently meaningful, so
+ * writing them together would make overriding one clear the other. A harness
+ * and a model are chosen together in one section by one person answering one
+ * question, and the caller always holds both — so a single write is what the
+ * surface actually does, and two would let a failure land half of it.
+ *
+ * `null` on either field clears it back to inheriting.
+ */
+export function updateProjectSessionDefaults(
+  db: Database.Database,
+  id: string,
+  defaults: { harness: string | null; model: ModelSelection | null },
+  now: number,
+): Project | undefined {
+  const model = defaults.model === null ? null : parseSessionModel(defaults.model);
+  prepared(
+    db,
+    `UPDATE projects
+        SET session_harness = ?, session_model = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(defaults.harness, model === null ? null : JSON.stringify(model), now, id);
   return getProjectById(db, id);
 }
 

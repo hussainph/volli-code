@@ -25,8 +25,10 @@ import { shell } from "electron";
 import type { WebContents } from "electron";
 import type Database from "better-sqlite3";
 import {
+  applySkillModes,
   artifactBaseName,
   classifyFileKind,
+  DEPENDENCY_AND_BUILD_DIRS,
   errorMessage,
   imageMimeType,
   isArtifactRelPath,
@@ -61,6 +63,8 @@ import type {
   FileReadResult,
   FileWriteInput,
   FileWriteResult,
+  PromptTemplateCreateInput,
+  PromptTemplateCreateResult,
   PromptTemplateIndexInput,
   PromptTemplateIndexResult,
   Result,
@@ -75,7 +79,7 @@ import type { TicketRow } from "./db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 import { isPathWithinRoots } from "./project-roots";
-import { loadPromptTemplates } from "./prompt-templates";
+import { loadPromptTemplates, writePromptTemplate } from "./prompt-templates";
 import { worktreesHome } from "./worktree-runtime";
 import { isInside } from "./worktree/paths";
 import { loadSkills } from "./skills";
@@ -90,8 +94,24 @@ const IMAGE_CAP_BYTES = 10 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 64 * 1024;
 /** File-index entry cap (~20k, decision on `truncated`). */
 const INDEX_CAP = 20_000;
-/** Directory names never descended into by the fallback walk (and the git list already excludes `.volli`). */
-const FALLBACK_SKIP_DIRS = new Set([".git", "node_modules", ".volli"]);
+/**
+ * Directory names never descended into by the fallback walk (and the git list
+ * already excludes `.volli`). Git's own metadata and Volli's own directory,
+ * plus the shared per-ecosystem dependency/build list the worktree copy walk
+ * prunes ({@link DEPENDENCY_AND_BUILD_DIRS}) — this walk is the one that runs
+ * when `git ls-files` could NOT answer, so nothing else is filtering a `.venv`
+ * or a `target` out of the 20k cap for it.
+ */
+const FALLBACK_SKIP_DIRS = new Set([".git", ".volli", ...DEPENDENCY_AND_BUILD_DIRS]);
+
+/**
+ * The same names as a watch-event prefix (`node_modules/`), for the one thing
+ * {@link DirWatchManager.matches} drops. Built once at module load rather than
+ * per event: the scan itself is still one pass over the list per event, but a
+ * watcher under an install fires thousands of times and there is no reason to
+ * re-allocate the same nine strings for each one.
+ */
+const DEPENDENCY_AND_BUILD_DIR_PREFIXES = DEPENDENCY_AND_BUILD_DIRS.map((name) => `${name}${sep}`);
 
 // ---- low-level fs helpers ----------------------------------------------------
 
@@ -1074,15 +1094,19 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
    * main-process + IPC waste, and the sidebar's root watch stays armed for the
    * whole life of the tree, including while Files is off screen.
    *
-   * `node_modules` is deliberately NOT excluded by name: it IS a visible row, so
-   * its creation/removal must still refresh the level. Only writes DEEPER inside
-   * it are dropped, which cannot change the listing either. A null filename
+   * A dependency or build directory ({@link DEPENDENCY_AND_BUILD_DIRS}) is
+   * deliberately NOT excluded by name: each IS a visible row, so its
+   * creation/removal must still refresh the level. Only writes DEEPER inside one
+   * are dropped, which cannot change the listing either — and those are exactly
+   * the events that arrive in floods (an install, a `cargo build`, a `.venv`
+   * being populated). Only `node_modules` was named here until VC-160, so a
+   * non-JS repo's flood was re-listed in full. A null filename
    * (coalesced/platform event) is unfilterable, so it broadcasts conservatively.
    */
   protected override matches(_sub: WatchSubscription, filename: string | null): boolean {
     if (filename === null) return true;
     if (filename === ".git" || filename.startsWith(`.git${sep}`)) return false;
-    return !filename.startsWith(`node_modules${sep}`);
+    return !DEPENDENCY_AND_BUILD_DIR_PREFIXES.some((prefix) => filename.startsWith(prefix));
   }
 
   protected override sendChanged(sub: WatchSubscription, final: boolean): void {
@@ -1396,24 +1420,57 @@ export function registerFileIpcHandlers(
     // the templates the project author wrote (see `projectCommandsDir`). The
     // three reads are independent, and any one tier that exists but cannot be
     // read is still an error the composer says out loud.
+    /**
+     * Creates one `/command` (VC-111). The scope picks which of the two
+     * directories the reader already merges it lands in — so a project command
+     * shadows a personal one of the same name exactly as it always has, and
+     * the collision this refuses is only WITHIN the chosen directory.
+     */
+    "volli:prompt-template-create": async (
+      input: PromptTemplateCreateInput,
+    ): Promise<PromptTemplateCreateResult> => {
+      const project = getProjectById(db, input.projectId);
+      if (!project) return { ok: false, error: "Unknown project" };
+      return writePromptTemplate({
+        dir:
+          input.scope === "project" ? projectCommandsDir(project.path) : options.globalCommandsDir,
+        name: input.name,
+        description: input.description,
+        body: input.body,
+      });
+    },
+
     "volli:prompt-templates": async (
       input: PromptTemplateIndexInput,
     ): Promise<PromptTemplateIndexResult> => {
-      const project = resolveProjectPath(db, input.projectId);
-      if (!project.ok) return project;
+      const project = getProjectById(db, input.projectId);
+      if (!project) return { ok: false, error: "Unknown project" };
       const [loaded, skills] = await Promise.all([
         loadPromptTemplates({
-          projectCommandsDir: projectCommandsDir(project.projectPath),
+          projectCommandsDir: projectCommandsDir(project.path),
           globalCommandsDir: options.globalCommandsDir,
         }),
         loadSkills({
-          projectSkillsDir: projectSkillsDir(project.projectPath),
+          projectSkillsDir: projectSkillsDir(project.path),
           globalSkillsDir: options.globalSkillsDir,
         }),
       ]);
       if (!loaded.ok) return loaded;
       if (!skills.ok) return skills;
-      return { ok: true, templates: [...loaded.templates], skills: [...skills.skills] };
+      // The picker offers what this project actually has. A `manual` skill IS
+      // still offered here — withholding it from the model's index is the
+      // whole point of that mode, and it stays typable by name; only `off`
+      // removes a row. The Skills pane asks for the UNRULED list instead
+      // (`ruled: false`): it edits the rules, so a skill set to `off` must
+      // stay on its screen to be turned back on.
+      return {
+        ok: true,
+        templates: [...loaded.templates],
+        skills:
+          input.ruled === false
+            ? [...skills.skills]
+            : [...applySkillModes(skills.skills, project.skillModes ?? {})],
+      };
     },
   };
 

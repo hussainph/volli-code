@@ -235,6 +235,58 @@ describe("setBoardView", () => {
   });
 });
 
+// VC-156: "Ignore" is an answer, and an answer that has to be repeated after
+// every relaunch is not one — which is exactly what the string-keyed,
+// component-state dismissal this replaces did.
+describe("dismissDependencyOffer", () => {
+  it("waves the offer off for one project and leaves its neighbours offering", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    expect(
+      store.getState().byProject["project-a"]?.dependencyOfferDismissed ??
+        DEFAULT_WORKSPACE_UI.dependencyOfferDismissed,
+    ).toBe(false);
+
+    store.getState().dismissDependencyOffer("project-a");
+
+    expect(store.getState().byProject["project-a"]?.dependencyOfferDismissed).toBe(true);
+    expect(store.getState().byProject["project-b"]?.dependencyOfferDismissed).toBeUndefined();
+  });
+
+  it("is a no-op once dismissed, so a second click notifies nobody", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().dismissDependencyOffer("project-a");
+
+    const before = store.getState().byProject;
+    store.getState().dismissDependencyOffer("project-a");
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("survives relaunch", () => {
+    const storage = createMemoryStorage();
+    createWorkspaceStore(storage).getState().dismissDependencyOffer("project-a");
+
+    expect(
+      createWorkspaceStore(storage).getState().byProject["project-a"]?.dependencyOfferDismissed,
+    ).toBe(true);
+  });
+
+  it("only an explicit true dismisses — anything else leaves the offer standing", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: { byProject: { "project-a": { dependencyOfferDismissed: "yes" } } },
+        version: 0,
+      }),
+    );
+
+    expect(
+      createWorkspaceStore(storage).getState().byProject["project-a"]?.dependencyOfferDismissed ??
+        DEFAULT_WORKSPACE_UI.dependencyOfferDismissed,
+    ).toBe(false);
+  });
+});
+
 describe("setBoardSort", () => {
   it("tracks the sort independently per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -1979,6 +2031,7 @@ describe("forget", () => {
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().previewHomeFile("project-a", "src/app.ts");
     store.getState().setProjectFileViewState("project-a", "src/app.ts", { cursor: 3 });
+    store.getState().dismissDependencyOffer("project-a");
     store.getState().forget("project-a");
 
     expect(store.getState().byProject["project-a"]).toBeUndefined();
@@ -1994,6 +2047,7 @@ describe("forget", () => {
       projectFileViewStates: {},
       homeActiveTab: HOME_BOARD_TAB_ID,
       homeTabHistory: [],
+      dependencyOfferDismissed: false,
     });
   });
 
@@ -2026,6 +2080,7 @@ describe("persistence", () => {
     expect(Object.keys(parsed.state.byProject["project-a"]!).toSorted()).toEqual([
       "boardSort",
       "boardView",
+      "dependencyOfferDismissed",
       "homeActiveTab",
       "openTicketId",
       "projectFileViewStates",

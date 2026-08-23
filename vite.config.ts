@@ -47,6 +47,14 @@ export default defineConfig({
       // Sequential dev-resource polling in scripts/wait-for-resources.mjs is
       // deliberate; Promise.all would defeat the interval backoff.
       "eslint/no-await-in-loop": "off",
+      // The settings `DataTable` describes each column with a `cell` render
+      // prop (`cell: (item) => <Cell>…</Cell>`). The rule's hazard is a
+      // component *mounted* from a prop — `<column.cell />` — which React
+      // remounts on every parent render, losing state. These are INVOKED as
+      // plain functions (`column.cell(item)`), so no element type is ever
+      // created from them and there is nothing to remount. `allowAsProps` is
+      // the option the rule ships for exactly this shape.
+      "react/no-unstable-nested-components": ["error", { allowAsProps: true }],
     },
   },
   staged: {

@@ -8,15 +8,18 @@
  *
  * `active` is the interesting one. It answers the question a person actually
  * has — "will my next Session be able to search?" — and it is deliberately not
- * "did I pick a provider": a Brave row with no key, or a key this machine's
- * keychain can no longer open, is a provider chosen and nothing configured.
- * Main's own `resolve()` reaches the same verdict from the same three facts,
- * and it is the one that decides; this exists so the page cannot claim
- * otherwise.
+ * "did I pick a provider": a Brave row with no key is a provider chosen and
+ * nothing configured. Main's own `resolve()` reaches the same verdict from the
+ * same facts, and it is the one that decides; this exists so the page cannot
+ * claim otherwise.
  *
- * The notices are the exception to "let controls talk" that `AGENTS.md` names:
- * a blocked state with one recovery action. Each of these is one sentence
- * saying what is missing, and there is no notice at all for the working case.
+ * The notice is the exception to "let controls talk" that `AGENTS.md` names: a
+ * blocked state with one recovery action. It is one sentence saying what is
+ * missing, and there is none at all for the working case. It carries no tone,
+ * because every state it can describe now is an unfinished setup rather than a
+ * fault — the error-toned ones were both about a keychain, and there is no
+ * keychain here any more. A refusal from main is still shown in the pane's own
+ * error notice; this is only ever "you have not finished yet".
  */
 import type {
   KeyedWebAccessProvider,
@@ -24,23 +27,16 @@ import type {
   WebAccessSettingsView,
 } from "../../../../ipc/contract";
 
-/** A blocked state and its one way out, or nothing to say. */
-export interface WebAccessNotice {
-  tone: "neutral" | "error";
-  message: string;
-}
-
 export interface WebAccessPanel {
   provider: WebAccessProvider;
   /** The SearXNG instance field: shown only for the provider that has one. */
   showsEndpoint: boolean;
   /** The Brave key field: shown only for the provider that needs one. */
   showsKey: boolean;
-  /** Whether a key can be entered at all, or this machine cannot hold one. */
-  keyEntryDisabled: boolean;
   /** Whether a Session starting now would actually be offered the web tools. */
   active: boolean;
-  notice: WebAccessNotice | null;
+  /** The one sentence naming what this setup is still missing, or nothing to say. */
+  notice: string | null;
 }
 
 /** What a person calls each keyed provider, and what its key is called there. */
@@ -60,16 +56,11 @@ export function webAccessPanel(view: WebAccessSettingsView): WebAccessPanel {
     provider: view.provider,
     showsEndpoint: view.provider === "searxng",
     showsKey: keyed,
-    keyEntryDisabled: !view.encryptionAvailable,
   };
   if (view.provider === "off") return { ...base, active: false, notice: null };
   if (view.provider === "searxng") {
     return view.searxngUrl === null
-      ? {
-          ...base,
-          active: false,
-          notice: { tone: "neutral", message: "Enter the address of your SearXNG instance." },
-        }
+      ? { ...base, active: false, notice: "Enter the address of your SearXNG instance." }
       : { ...base, active: true, notice: null };
   }
   // Everything past here is a keyed provider. Narrowed rather than assumed, so
@@ -77,33 +68,7 @@ export function webAccessPanel(view: WebAccessSettingsView): WebAccessPanel {
   // key messages below and be described with somebody else's name.
   /* v8 ignore next -- `off` and `searxng` both returned above; this is the arm no provider reaches. */
   if (!keyed) return { ...base, active: false, notice: null };
-  const key = view.keys[view.provider];
-  if (key === "unreadable") {
-    return {
-      ...base,
-      active: false,
-      notice: {
-        tone: "error",
-        message: "The stored API key could not be read on this machine. Enter it again.",
-      },
-    };
-  }
-  if (!view.encryptionAvailable) {
-    return {
-      ...base,
-      active: false,
-      notice: {
-        tone: "error",
-        message:
-          "This machine's keychain is unavailable, so Volli cannot store an API key. It will not keep one in the clear.",
-      },
-    };
-  }
-  return key === "present"
+  return view.keys[view.provider] === "present"
     ? { ...base, active: true, notice: null }
-    : {
-        ...base,
-        active: false,
-        notice: { tone: "neutral", message: `Enter your ${KEY_NAMES[view.provider]}.` },
-      };
+    : { ...base, active: false, notice: `Enter your ${KEY_NAMES[view.provider]}.` };
 }

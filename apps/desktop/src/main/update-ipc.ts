@@ -13,6 +13,7 @@
  */
 import { errorMessage } from "@volli/shared";
 
+import type { UpdateChannel } from "../ipc/contract";
 import type { AutoUpdateHandle } from "./auto-update";
 import { UPDATE_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
@@ -30,6 +31,17 @@ export interface UpdateIpcDeps {
   beginInstall(): void;
   /** Lowers it again (`abandonAcceptedUpdateInstall`) after a quitAndInstall that threw. */
   abandonInstall(): void;
+  /**
+   * The release-line setting (VC-111). Injected like everything else here, and
+   * OPTIONAL because these channels are registered outside the `dbHandle.ok`
+   * block — the same reason this whole module is not session-rpc. With no db
+   * there is nowhere to store a channel, so the surface reports the honest
+   * default and refuses the write rather than pretending it landed.
+   */
+  channel?: {
+    read(): UpdateChannel;
+    write(channel: UpdateChannel): UpdateChannel;
+  };
 }
 
 export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
@@ -75,5 +87,22 @@ export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
       openAgentSessions: await deps.openAgentTurns(),
       unsavedDrafts: [...deps.unsavedDrafts()],
     }),
+
+    "volli:update-channel-get": () =>
+      deps.channel === undefined
+        ? { ok: false as const, error: "The release channel isn't readable right now." }
+        : { ok: true as const, channel: deps.channel.read() },
+
+    /**
+     * The write's own doc (`writeUpdateChannel`) carries the effect story:
+     * entering canary widens the running updater immediately; leaving canary
+     * applies at the next launch on stable installs, and never forces a
+     * canary install off the prerelease feed. Nothing here re-runs a check —
+     * one fired mid-write would race the row it depends on.
+     */
+    "volli:update-channel-set": (channel: UpdateChannel) =>
+      deps.channel === undefined
+        ? { ok: false as const, error: "The release channel isn't writable right now." }
+        : { ok: true as const, channel: deps.channel.write(channel) },
   });
 }

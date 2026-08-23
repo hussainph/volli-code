@@ -8,7 +8,7 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { resolveAppearance } from "@volli/shared";
 import { getBuiltinTheme } from "restty";
 
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import {
   fallbackTerminalThemeLabel,
   revealPath,
@@ -89,15 +89,15 @@ export function AppearanceSettings() {
     <>
       <AppThemeSection />
 
-      <SettingsSection
+      <PrefSection
         title="Terminal"
         icon={TerminalWindowIcon}
-        description="Volli never edits your Ghostty config."
+        hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
       >
         <TerminalThemeRow row={rows.theme} />
         <FontFamilyRow row={rows["font-family"]} />
         <FontSizeRow row={rows["font-size"]} />
-        <SettingsRow label="Config files">
+        <PrefRow label="Config files">
           <Button
             variant="outline"
             size="sm"
@@ -114,8 +114,8 @@ export function AppearanceSettings() {
             <FileTextIcon />
             Volli overlay
           </Button>
-        </SettingsRow>
-      </SettingsSection>
+        </PrefRow>
+      </PrefSection>
     </>
   );
 }
@@ -136,54 +136,48 @@ const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
  * you are looking at while you edit may not be the one this section owns. The
  * note below says so instead of letting an edit look like it failed.
  *
- * The mode it renders the pad and the contrast alert at is the GLOBAL scope's
- * own resolution too — the same reason. A project pinned to light must not
- * make this section describe a light canvas the app-wide setting never asked for.
+ * The mode it renders the pad at is the GLOBAL scope's own resolution too —
+ * the same reason. A project pinned to light must not make this section
+ * describe a light canvas the app-wide setting never asked for.
  *
- * LIGHT/DARK SITS HERE, above the canvas, because to anyone changing how the app
- * looks they are one subject; two sections read as bureaucracy. What has not
- * changed is the thing that split was protecting: THE CANVAS DOES NOT NAME A
- * MODE. The per-mode dials exist precisely so one authored gradient renders
- * correctly in both, and a project may override the mode or the canvas alone.
- * So this control is a SIBLING of `CanvasEditor`, never a child of it — inside
- * the editor it would claim the canvas is per-mode, and it would ride the editor
- * onto the per-project page, where a global-only setting has no business being.
+ * LIGHT/DARK FLOATS ON THE PAD (the Arc arrangement): to anyone changing how
+ * the app looks, the mode and the canvas are one subject, and the pad is
+ * where that subject is looked at. What the old sibling-row split protected
+ * still holds — THE CANVAS DOES NOT NAME A MODE, and a project may override
+ * mode or canvas alone — which is why the editor takes the control as a SLOT
+ * (`mode`) this page fills, rather than owning one: Configure's page keeps
+ * its mode on an overridable row of its own and passes nothing.
  */
 function AppThemeSection() {
   const canvas = useThemeStore((state) => state.globalCanvas);
   const appearance = useThemeStore((state) => state.globalAppearance);
   const systemPrefersDark = useThemeStore((state) => state.systemPrefersDark);
-  const shadowed = useThemeStore((state) => (state.projectOverride?.canvas ?? null) !== null);
   const resolved = resolveAppearance(appearance, systemPrefersDark);
 
+  // No "Project override" pill when a project's canvas shadows this one — it
+  // was a status nothing here could act on, and the owner called it off. The
+  // precedence is published once instead, in the section's (i), and the
+  // project's own Configure page carries the divergence and its revert.
   return (
-    <SettingsSection title="App theme" icon={PaletteIcon}>
-      <SettingsRow label="Mode">
-        <AppearanceModeChoice
-          value={appearance}
-          testId="appearance-mode"
-          onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
-        />
-      </SettingsRow>
-      <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
-      {shadowed ? <CanvasShadowedNote /> : null}
-    </SettingsSection>
-  );
-}
-
-/**
- * The note {@link AppThemeSection} shows while a project's canvas shadows the
- * global one. Exported for its copy: "Project" is CONTEXT.md's one user-facing
- * word for a rail entry (the VC-57 ruling), this pill is where "Workspace"
- * kept sneaking back in, and the suite cannot install an override to make the
- * conditional render it (`renderToStaticMarkup` reads a store's INITIAL
- * state), so the note itself is the testable surface.
- */
-export function CanvasShadowedNote() {
-  return (
-    <p data-testid="appearance-canvas-shadowed" className="pt-2">
-      <ThemeOriginPill emphasized={false}>Project override</ThemeOriginPill>
-    </p>
+    <PrefSection
+      title="App theme"
+      icon={PaletteIcon}
+      hint={<>Your custom local project theme overrides global defaults.</>}
+    >
+      <CanvasEditor
+        scope={GLOBAL_SCOPE}
+        canvas={canvas}
+        resolved={resolved}
+        mode={
+          <AppearanceModeChoice
+            iconOnly
+            value={appearance}
+            testId="appearance-mode"
+            onChange={(next) => void useThemeStore.getState().setGlobalAppearance(next)}
+          />
+        }
+      />
+    </PrefSection>
   );
 }
 
@@ -257,7 +251,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   const resolved = useThemeStore(effectiveAppearance);
 
   return (
-    <SettingsRow label={row.label}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <ThemeComboBox
         ariaLabel="Terminal theme"
@@ -270,7 +264,7 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
         onEndPreview={endPreview}
         onSelect={(name) => writeOverlay({ theme: name })}
       />
-    </SettingsRow>
+    </PrefRow>
   );
 }
 
@@ -299,7 +293,7 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   }, [opened, families]);
 
   return (
-    <SettingsRow label={row.label}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <ThemeComboBox
         ariaLabel="Terminal font family"
@@ -322,7 +316,7 @@ function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
         }}
         onSelect={(family) => writeOverlay({ "font-family": family })}
       />
-    </SettingsRow>
+    </PrefRow>
   );
 }
 
@@ -376,7 +370,7 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
   };
 
   return (
-    <SettingsRow label={row.label}>
+    <PrefRow label={row.label}>
       <OriginBadge row={row} />
       <div className="flex items-center gap-1">
         <Button
@@ -399,6 +393,6 @@ function FontSizeRow({ row }: { row: TerminalSettingRow }) {
           <PlusIcon />
         </Button>
       </div>
-    </SettingsRow>
+    </PrefRow>
   );
 }

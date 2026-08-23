@@ -1,14 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { ModelAccessSettings } from "./model-access-settings";
+import { ModelAccessSettings, PURPOSE_ROWS } from "./model-access-settings";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 
 /**
  * The provider needs a client only for the pane's load effect, which
- * `renderToStaticMarkup` never runs — the rows and their hover helpers render
- * from initial state. The fake exists so the context is non-null.
+ * `renderToStaticMarkup` never runs — the rows and their hints render from
+ * initial state. The fake exists so the context is non-null.
  */
 function renderPane(): string {
   const client = {
@@ -32,46 +32,63 @@ function renderPane(): string {
 }
 
 describe("ModelAccessSettings", () => {
-  it("carries the utility purpose as a hover helper, not as prose", () => {
+  /**
+   * VC-111 moved this from a Tooltip whose `aria-label` carried the whole
+   * sentence to an `InfoHint` — a `(i)` that opens a disclosure. So the copy
+   * is no longer in the static markup: it is in a popover panel that mounts
+   * when opened, which is what a disclosure is.
+   *
+   * What is still assertable, and still the thing that matters, is that the
+   * hint EXISTS on the row that needs one, is a real focusable control, and
+   * carries a name that says what it explains.
+   */
+  it("carries the utility purpose as a hint, not as prose", () => {
     const html = renderPane();
+    const utilityRow = html.slice(html.indexOf('data-testid="default-model-utility"'));
 
-    // The helper is a tooltip trigger whose accessible name IS the purpose
-    // copy (VC-81: users can understand what the utility slot is for), sitting
-    // on the utility row only.
-    expect(html).toContain("naming new chats");
     expect(html).toContain('data-testid="default-model-utility"');
-    const utilityStart = html.indexOf('data-testid="default-model-utility"');
-    const utilityRow = html.slice(utilityStart);
-    expect(utilityRow).toContain("naming new chats");
-    expect(utilityRow).toContain('data-slot="tooltip-trigger"');
+    expect(utilityRow).toContain('aria-label="About Utility"');
+    // That it is not PROSE is enforced structurally rather than asserted here:
+    // `PrefSection` has no `description` prop at all, so the shape this
+    // replaced cannot be expressed. See kit/pref-section.tsx.
   });
 
-  it("says out loud what an empty utility slot falls back to", () => {
-    // CONTEXT.md's Model Access rule is that Volli never falls back to another
-    // model SILENTLY. Leaving this slot empty does not switch background work
-    // off — it runs on the chat's own model — so the row has to say so.
-    expect(renderPane()).toContain("Left unset");
-  });
-
-  it("gives the helper a real focusable control to hang its name on", () => {
+  it("gives the hint a real focusable control to hang its name on", () => {
     const html = renderPane();
-    const trigger = html.indexOf('data-slot="tooltip-trigger"');
+    const trigger = html.indexOf('aria-label="About Utility"');
+    const before = html.slice(0, trigger);
+
     // A <span tabIndex={0} aria-label> takes the tab stop but has no role to
     // be named by; a button is reachable AND announced.
-    expect(html.slice(0, trigger).lastIndexOf("<button")).toBeGreaterThan(
-      html.slice(0, trigger).lastIndexOf("<span"),
-    );
+    expect(before.lastIndexOf("<button")).toBeGreaterThan(before.lastIndexOf("<span"));
   });
 
-  it("leaves the other purpose rows without a helper", () => {
+  it("leaves the other purpose rows without a hint", () => {
     const html = renderPane();
-
-    const globalStart = html.indexOf('data-testid="default-model-global"');
     const globalRow = html.slice(
-      globalStart,
-      html.indexOf('data-testid="default-model-ticket"', globalStart),
+      html.indexOf('data-testid="default-model-global"'),
+      html.indexOf('data-testid="default-model-ticket"'),
     );
-    expect(globalRow).not.toContain("naming new chats");
-    expect(globalRow).not.toContain('data-slot="tooltip-trigger"');
+
+    expect(globalRow).not.toContain('aria-label="About');
+  });
+
+  it("keeps the utility fallback inside the hint copy", () => {
+    // CONTEXT.md's Model Access rule is that Volli never falls back to another
+    // model SILENTLY. Leaving this slot empty does not switch background work
+    // off — it runs on the chat's own model — so the hint has to say so, and
+    // shortening it to the twelve-word budget must not drop that half.
+    //
+    // Read off the real constant, not restated here: an expectation that
+    // recomputes the value the way the code does passes by construction.
+    // The panel is a disclosure and does not render until opened, so the
+    // markup cannot be the source.
+    const hint = PURPOSE_ROWS.find((row) => row.purpose === "utility")?.hint ?? "";
+
+    expect(hint).toContain("Unset");
+    expect(hint).toContain("chat's own model");
+    // The hint budget from kit/index.ts. A hint that grows back into a
+    // paragraph is the rule this redesign removed, re-broken.
+    expect(hint.split(/\s+/).length).toBeLessThanOrEqual(12);
   });
 });

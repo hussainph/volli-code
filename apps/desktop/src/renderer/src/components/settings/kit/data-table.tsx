@@ -1,0 +1,359 @@
+/**
+ * A bounded, scrollable, sticky-headed table — the one object this app did not
+ * already have. `grep` finds no other `<table>` in the renderer.
+ *
+ * WHY IT EXISTS. Models, Skills, Commands, MCP servers and Plugins are all
+ * *homogeneous collections with shared attributes*, and every one of them was
+ * drawn as an unbounded stack of two-line rows. Two things went wrong. The
+ * page grew without limit, so a catalogue of a hundred models buried every
+ * section under it and the rail's other categories became unreachable without
+ * a long scroll. And the shared attributes had nowhere to live but inside the
+ * row, which is what forced provenance into a repeated pill on every line.
+ *
+ * A table fixes both at once: `rows` caps the height so the *page* stays
+ * navigable while the *collection* scrolls in its own box, and a column turns
+ * a repeated pill into a quiet aligned word.
+ *
+ * A REAL `<table>`, because this is tabular data and the semantics are free —
+ * column headers announce with their cells, and `scope="col"` costs nothing.
+ * The sticky header is `position: sticky` on the `<th>`s, which works inside
+ * an `overflow-auto` ancestor with no JS.
+ *
+ * NOT VIRTUALIZED, on purpose. `MAX_SKILLS_PER_DIR` is 200 per directory and a
+ * project merges two of them, so ~400 rows is reachable today. `maxItems` caps
+ * what RENDERS and says what it withheld; search runs BEFORE the cap, so a
+ * withheld row is always still reachable by typing its name — which is what
+ * makes truncation safe rather than lossy. Past ~1,000 the answer is Virtuoso
+ * (not installed, deliberately), not a bigger cap and not pagination.
+ */
+import * as React from "react";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
+import { cn } from "@renderer/lib/utils";
+
+import { Empty } from "./async-section";
+import { CONTROL_W } from "./control-width";
+import { useRovingRows } from "./use-roving-rows";
+
+export interface Column<T> {
+  key: string;
+  header: string;
+  /**
+   * A CSS length or percentage — `8rem`, `40%`. **Not** a grid track.
+   *
+   * This once said `minmax(0,1fr)` and three columns passed it. React drops it
+   * as an invalid width, so the attribute reached the DOM empty and the column
+   * sized by `table-layout: fixed`'s remainder rule instead — it rendered
+   * correctly *by accident*, which is the worst way for an API to be wrong.
+   *
+   * Omit to take the remaining space; that is the same behaviour, now spelled.
+   * Two omitted columns split the remainder evenly. Use percentages for a ratio.
+   */
+  width?: string;
+  /**
+   * `end` is for NUMBERS and for hidden-header glyph columns — the two cases
+   * where right-alignment carries meaning (digits line up; actions hug the
+   * table's edge). A worded column of controls stays `start` like its
+   * neighbours: one right-aligned header in a row of left-aligned ones reads
+   * as a mistake, not as a convention.
+   */
+  align?: "start" | "end";
+  /** Header text is hidden but still read. For an actions or toggle column. */
+  headerHidden?: boolean;
+  cell: (item: T) => React.ReactNode;
+}
+
+export interface TableFilter {
+  label: string;
+  value: string;
+  /** Whether this selection has already narrowed `items` outside the table. */
+  isFiltering: boolean;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}
+
+/** Row height and header height, in px — the two numbers `rows` is measured in. */
+const ROW_H = 36;
+const HEAD_H = 32;
+
+export function DataTable<T>({
+  items,
+  keyOf,
+  columns,
+  search,
+  query,
+  placeholder = "Search",
+  filter,
+  bulk,
+  rows = 8,
+  maxItems = 500,
+  empty,
+  noResults = "Nothing matches.",
+  label,
+}: {
+  items: readonly T[];
+  keyOf: (item: T) => string;
+  columns: readonly Column<T>[];
+  /** The haystack. Omit for a table that isn't searchable. */
+  search?: (item: T) => string;
+  /**
+   * A CONTROLLED query, for a section that parks its {@link TableSearch} on
+   * the header rail instead. When set, the table draws no search field of its
+   * own — two fields filtering one table would fight — and the toolbar only
+   * renders if a filter or bulk control still needs the row. This exists for
+   * the table whose ONLY control is search: a toolbar row holding one lone
+   * field under an otherwise-empty header rail read as a dead row, when the
+   * header had exactly one action slot going spare.
+   */
+  query?: string;
+  placeholder?: string;
+  filter?: TableFilter;
+  /**
+   * A control that acts on MANY rows, rendered in the toolbar and handed
+   * exactly the rows currently listed.
+   *
+   * It takes `matched` rather than `items` because the search box lives in
+   * here. A bulk control fed the unfiltered set would read "apply to these
+   * four" while quietly changing four hundred — the table is the only thing
+   * that knows what "these" means, so it is the table that says.
+   */
+  bulk?: (matched: readonly T[]) => React.ReactNode;
+  /**
+   * How many rows before it scrolls, or `"fill"` to take the height the pane
+   * has left over.
+   *
+   * A number is right whenever something follows the table — the cap is what
+   * stops a hundred models burying the sections under them. `"fill"` is for a
+   * pane where the table IS the page (Skills, Commands, MCP, Plugins): capping
+   * at eight there just draws a short table against a tall empty column and
+   * makes people scroll a box that had room to show them the rows.
+   */
+  rows?: number | "fill";
+  /** How many rows may render at once. The rest are withheld, and said so. */
+  maxItems?: number;
+  empty: string;
+  noResults?: string;
+  /** The table's accessible name. */
+  label: string;
+}) {
+  const [ownQuery, setOwnQuery] = React.useState("");
+  const effectiveQuery = query ?? ownQuery;
+
+  const matched = React.useMemo(() => {
+    const needle = effectiveQuery.trim().toLowerCase();
+    if (!needle || !search) return items;
+    return items.filter((item) => search(item).toLowerCase().includes(needle));
+  }, [items, effectiveQuery, search]);
+
+  // Cap AFTER filtering, so narrowing the search always reaches a withheld row.
+  const shown = matched.length > maxItems ? matched.slice(0, maxItems) : matched;
+  const withheld = matched.length - shown.length;
+  const roving = useRovingRows(shown.length);
+
+  const fill = rows === "fill";
+  // The sticky header lives inside the same scroll box and would otherwise eat
+  // a row — `rows={8}` was showing seven.
+  const maxBodyHeight = fill ? undefined : rows * ROW_H + HEAD_H;
+
+  if (items.length === 0 && !filter?.isFiltering) return <Empty>{empty}</Empty>;
+
+  return (
+    <div className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}>
+      {(search && query === undefined) || filter || bulk ? (
+        // Search ANCHORS THE LEFT, scope controls sit right — the toolbar
+        // spans the table it governs, like the column row under it. It was
+        // briefly `justify-end`, which just moved the dead space to the left
+        // of the row. The field itself is the compact w-56 object the provider
+        // list carries on its header rail: one search grammar everywhere,
+        // never the full-width bar that read as the table's first row.
+        <div className="flex items-center justify-between gap-2">
+          {search && query === undefined ? (
+            <TableSearch value={ownQuery} placeholder={placeholder} onChange={setOwnQuery} />
+          ) : (
+            <span />
+          )}
+          <div className="flex items-center gap-2">
+            {/* ONE control replaces N pills. The provenance a reader wanted to
+                scan for is now something they can filter to. */}
+            {filter ? (
+              <Select value={filter.value} onValueChange={filter.onChange}>
+                <SelectTrigger size="sm" className={CONTROL_W.md} aria-label={filter.label}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {filter.options.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+            {bulk?.(matched)}
+          </div>
+        </div>
+      ) : null}
+
+      {/* NO FRAME. The section already is one; a bordered box here was the
+          second of three nested rounded rectangles and the reason the surface
+          read as boxes all the way down. The header hairline and the row
+          hairlines are the whole structure a table needs. */}
+      {/* In fill mode the floor matters: the toolbar and the section header
+          above this can leave almost nothing on a short window, and a scroll
+          box allowed to flex to zero shows a header and no rows at all. With a
+          floor it keeps three rows and the PAGE scrolls instead. */}
+      <div
+        className={cn("overflow-y-auto", fill && "min-h-0 flex-1")}
+        style={fill ? { minHeight: 3 * ROW_H + HEAD_H } : { maxHeight: maxBodyHeight }}
+      >
+        <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+          <caption className="sr-only">{label}</caption>
+          <colgroup>
+            {columns.map((column) => (
+              <col key={column.key} style={{ width: column.width }} />
+            ))}
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-card">
+            <tr>
+              {columns.map((column) => (
+                <th
+                  key={column.key}
+                  scope="col"
+                  className={cn(
+                    // `text-ui` in the mute, sentence case. The 11px uppercase
+                    // eyebrow belongs to a section, not a column — using it
+                    // here made eight rows of data look like a spreadsheet
+                    // embedded in a settings page.
+                    "h-8 border-b border-border/50 px-2 text-ui font-normal text-muted-foreground",
+                    column.align === "end" ? "text-right" : "text-left",
+                  )}
+                >
+                  <span className={column.headerHidden ? "sr-only" : undefined}>
+                    {column.header}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody ref={roving.bodyRef}>
+            {shown.map((item, index) => (
+              <tr
+                key={keyOf(item)}
+                // One tab stop for the whole table; arrows do the rest.
+                tabIndex={index === roving.active ? 0 : -1}
+                onKeyDown={(event) => roving.onKeyDown(event, index)}
+                // Clicking a row makes it the tab stop, so returning by Tab
+                // lands where the pointer left off rather than back at row 0.
+                onFocus={(event) => {
+                  if (event.target === event.currentTarget) roving.setActive(index);
+                }}
+                className="border-t border-border/50 outline-none first:border-t-0 hover:bg-accent/40 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-inset"
+              >
+                {columns.map((column) => (
+                  <td
+                    key={column.key}
+                    className={cn(
+                      "h-9 px-2 text-sm",
+                      column.align === "end" ? "text-right" : "text-left",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "flex min-w-0 items-center gap-2",
+                        column.align === "end" && "justify-end",
+                      )}
+                    >
+                      {column.cell(item)}
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {shown.length === 0 ? <Empty>{noResults}</Empty> : null}
+      </div>
+      {withheld > 0 ? (
+        <p className="text-ui text-muted-foreground">
+          Showing {shown.length} of {matched.length}. Search to narrow.
+        </p>
+      ) : null}
+      <p aria-live="polite" className="sr-only">
+        {effectiveQuery.trim() ? `${shown.length} of ${matched.length} shown` : ""}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The one search field a collection gets — compact, iconed, w-56.
+ *
+ * Rendered by the table's own toolbar normally; rendered by the SECTION, on
+ * its header rail beside the title, when search is the table's only control
+ * (pass the value back down through `DataTable`'s `query`). Either way it is
+ * this component, so the two positions can never drift apart in shape.
+ */
+export function TableSearch({
+  value,
+  placeholder = "Search",
+  onChange,
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <InputGroup className="w-56">
+      <InputGroupAddon>
+        <MagnifyingGlassIcon />
+      </InputGroupAddon>
+      <InputGroupInput
+        type="search"
+        value={value}
+        aria-label={placeholder}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </InputGroup>
+  );
+}
+
+/**
+ * A quiet, aligned word — what a repeated pill becomes inside a table.
+ *
+ * A string cell carries its own `title`, because a column narrow enough to be
+ * scannable is narrow enough to truncate, and a truncated value the reader
+ * cannot recover is worse than a wrapped one. This is the content itself on
+ * hover, not a tutorial tooltip.
+ */
+export function Cell({
+  children,
+  muted,
+  strong,
+}: {
+  children: React.ReactNode;
+  muted?: boolean;
+  /**
+   * The row's identity column — the one word a reader scans the table BY.
+   * One weight step, nothing else: at equal weight the name and its
+   * description read as one grey run and the eye has no landing point per row.
+   */
+  strong?: boolean;
+}) {
+  return (
+    <span
+      title={typeof children === "string" ? children : undefined}
+      className={cn("min-w-0 truncate", muted && "text-muted-foreground", strong && "font-medium")}
+    >
+      {children}
+    </span>
+  );
+}

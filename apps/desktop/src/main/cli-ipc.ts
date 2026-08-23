@@ -12,8 +12,12 @@ import { registerGuardedIpcHandlers } from "./ipc-registry";
 export interface CliIpcDeps {
   /** Measures the install fresh — `src/main/cli-status.ts`. */
   status(input?: CliStatusInput): Promise<CliToolStatus>;
-  /** Runs `volli doctor --json` through the user's login shell — `src/main/cli-doctor.ts`. */
-  doctor(): Promise<CliDoctorResult>;
+  /**
+   * Runs `volli doctor --json` through the user's login shell, standing in the
+   * scoped project so the probe judges requirements against the directory the
+   * pane is describing (`src/main/cli-doctor.ts`). `null` when none is in scope.
+   */
+  doctor(cwd: string | null): Promise<CliDoctorResult>;
   /**
    * Main's idempotent repair: regenerate the harness runtime, then re-run the
    * background install (link, skills, PATH block) — the same work boot does,
@@ -32,7 +36,7 @@ export function registerCliIpcHandlers(deps: CliIpcDeps): void {
       // Repair BEFORE the probe, so what gets reported is the world the repair
       // left behind — the same two-phase shape the CLI's own `--fix` keeps.
       if (input.fix) await deps.repair();
-      return deps.doctor();
+      return deps.doctor(input.cwd ?? null);
     },
     // The same repair, without the probe: the launch banner's Fix now button
     // re-measures with a plain status read afterwards, and must not spend the

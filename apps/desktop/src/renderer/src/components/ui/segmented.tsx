@@ -40,6 +40,7 @@ export function Segmented<Key extends string>({
   value,
   options,
   size = "sm",
+  iconOnly = false,
   disabled,
   className,
   onChange,
@@ -54,6 +55,14 @@ export function Segmented<Key extends string>({
    * primary choice and sits at chip height.
    */
   size?: "sm" | "default";
+  /**
+   * Draw only each option's icon; its label stays as the accessible name.
+   * For a segmented control floating ON a picture (the canvas pad's mode
+   * choice), where a word would be copy painted over the user's own gradient.
+   * Every option must carry an icon — an icon-only segment with no icon would
+   * be an unlabeled blank — so this is not the default and never will be.
+   */
+  iconOnly?: boolean;
   disabled?: boolean;
   className?: string;
   onChange(key: Key): void;
@@ -71,7 +80,7 @@ export function Segmented<Key extends string>({
         return (
           <Button
             key={option.key}
-            size={size}
+            size={iconOnly ? (size === "sm" ? "icon-sm" : "icon") : size}
             variant={active ? "secondary" : "ghost"}
             aria-pressed={active}
             data-choice={option.key}
@@ -81,7 +90,7 @@ export function Segmented<Key extends string>({
             }}
           >
             {Icon ? <Icon /> : null}
-            {option.label}
+            {iconOnly ? <span className="sr-only">{option.label}</span> : option.label}
           </Button>
         );
       })}

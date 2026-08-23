@@ -16,6 +16,7 @@
 
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
+import type { WorkspaceDependenciesStatus } from "./session-env";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import {
@@ -444,6 +445,31 @@ export interface RuntimeWebSearchResults {
   truncated: boolean;
 }
 
+/**
+ * What the workspace's own package state was when this attachment started —
+ * the two {@link SessionEnvReport} facts an agent can act on.
+ *
+ * Measured, never inferred, and measured at attach rather than carried on the
+ * durable Session: a checkout whose dependencies were absent yesterday may
+ * have them today, and a stale fact is worse than none. The prompt states it
+ * only when there is something to do about it, which is why {@link
+ * installCommand} travels beside {@link dependencies} — telling an agent that
+ * dependencies are missing without naming the workspace's own install command
+ * invites it to guess, and guessing `pnpm install` at a yarn workspace is the
+ * measured cost `workspaceInstallCommand` exists to remove.
+ *
+ * This is the fix for who was being told: the dependency fact used to reach a
+ * human, as a red pre-flight banner over a perfectly normal fresh checkout,
+ * while the one party that could run the install — the agent — could learn it
+ * only by thinking to run `volli identify` (VC-156).
+ */
+export interface RuntimeWorkspaceEnvironment {
+  /** Dependencies in the Session's workspace; `null` when it is no package workspace. */
+  dependencies: WorkspaceDependenciesStatus;
+  /** The lockfile-derived install command for that workspace, or `null` when there is none to name. */
+  installCommand: string | null;
+}
+
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
@@ -477,6 +503,13 @@ export interface SessionRuntimeSpec {
    */
   authority?: AuthoritySnapshot;
   brief: RuntimeBrief;
+  /**
+   * The workspace's measured package state, when whoever built this spec could
+   * measure it. Absent means unmeasured — never "measured and fine" — so a
+   * caller with no filesystem to ask (the prompt-baseline diagnostic, a test)
+   * composes the same prompt a healthy workspace does rather than a wrong one.
+   */
+  workspaceEnvironment?: RuntimeWorkspaceEnvironment;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
