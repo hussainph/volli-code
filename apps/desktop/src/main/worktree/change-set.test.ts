@@ -325,13 +325,21 @@ describe("changeSetSnapshot — conflicted / unrecognized status", () => {
 });
 
 describe("changeSetSnapshot — untracked", () => {
-  it("appends untracked paths from porcelain v2 with null counts", async () => {
+  it("counts a new text file as insertions without adding it to git's index", async () => {
     const path = "new file.txt";
     const { gitAsync, calls } = scriptedChangeSetGit({
       status: `? ${path}\0`,
     });
 
-    const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
+    const result = await changeSetSnapshot(
+      gitAsync,
+      { worktreePath: "/wt", baseBranch: "main" },
+      async (worktreePath, requestedPath) => {
+        expect(worktreePath).toBe("/wt");
+        expect(requestedPath).toBe(path);
+        return { insertions: 3, deletions: 0, binary: false };
+      },
+    );
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -339,13 +347,33 @@ describe("changeSetSnapshot — untracked", () => {
       {
         path,
         status: "untracked",
-        insertions: null,
-        deletions: null,
+        insertions: 3,
+        deletions: 0,
         binary: false,
       },
     ]);
+    expect(result.value.insertions).toBe(3);
+    expect(result.value.deletions).toBe(0);
     const statusCall = calls.find((c) => c.args[0] === "status");
     expect(statusCall?.args).toEqual(["status", "--porcelain=v2", "-z", "-uall"]);
+    expect(calls.filter((call) => call.args[0] === "diff")).toHaveLength(2);
+  });
+
+  it("keeps counts unknown when a racing untracked path cannot be read", async () => {
+    const { gitAsync } = scriptedChangeSetGit({ status: z("? vanished.txt") });
+
+    const result = await changeSetSnapshot(
+      gitAsync,
+      { worktreePath: "/wt", baseBranch: "main" },
+      async () => null,
+    );
+
+    expect(result.ok && result.value.files[0]).toMatchObject({
+      path: "vanished.txt",
+      insertions: null,
+      deletions: null,
+      binary: false,
+    });
   });
 });
 
@@ -596,6 +624,34 @@ describe("changeSetSnapshot — real git repository", () => {
     return dir;
   }
 
+  it("counts every line in a new text file without staging it", async () => {
+    const dir = makeRepo();
+    runRepoGit(dir, ["checkout", "-b", "ticket"]);
+    writeFileSync(join(dir, "new-file.ts"), "one\ntwo\nthree");
+
+    const result = await changeSetSnapshot(runGitCapturingAsync, {
+      worktreePath: dir,
+      baseBranch: "main",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.files).toEqual([
+      {
+        path: "new-file.ts",
+        status: "untracked",
+        insertions: 3,
+        deletions: 0,
+        binary: false,
+      },
+    ]);
+    expect(result.value.insertions).toBe(3);
+    expect(result.value.deletions).toBe(0);
+    expect(runRepoGit(dir, ["status", "--porcelain", "--", "new-file.ts"])).toBe(
+      "?? new-file.ts\n",
+    );
+  });
+
   it("composes committed, staged, unstaged, untracked, rename, delete, binary, and special paths", async () => {
     const dir = makeRepo();
 
@@ -647,10 +703,16 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(byPath.get("delete-me.ts")?.status).toBe("deleted");
     expect(byPath.get("docs/my notes 日本語.txt")).toMatchObject({
       status: "untracked",
+      insertions: 1,
+      deletions: 0,
+      binary: false,
+    });
+    expect(byPath.get("assets/logo.png")).toMatchObject({
+      status: "untracked",
       insertions: null,
       deletions: null,
+      binary: true,
     });
-    expect(byPath.get("assets/logo.png")?.status).toBe("untracked");
     expect(byPath.get("asset.bin")).toMatchObject({
       status: "added",
       binary: true,

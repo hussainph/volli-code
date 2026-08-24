@@ -93,8 +93,8 @@ export interface WorktreeIdentity {
  * shared. `insertions`/`deletions` are `null` for binary files — `git diff
  * --numstat` prints `-\t-` for them, and inventing a `0` would read as "no
  * change". `untracked` marks a file present only in `git status --porcelain`
- * (`??`), never in the numstat output, so the working-tree diff can list it with
- * null counts rather than dropping it.
+ * (`??`), never in numstat output. A direct working-tree diff lists it with
+ * unknown counts; the composed Change Set counts readable text against an empty file.
  */
 export interface DiffFileStat {
   path: string;
@@ -105,9 +105,9 @@ export interface DiffFileStat {
 
 /**
  * A worktree diff summary (Done-flow `diff.ts`): the per-file breakdown plus
- * repo-wide totals. `insertions`/`deletions` sum only the non-null (text) files
- * — binary and untracked entries carry null counts and never contribute to the
- * totals, so the totals stay honest line counts.
+ * repo-wide totals. `insertions`/`deletions` sum only files with known text
+ * counts. Binary files and paths that could not be read carry null counts and
+ * never contribute, so the totals stay honest line counts.
  */
 export interface DiffStat {
   files: DiffFileStat[];

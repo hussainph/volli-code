@@ -18,8 +18,9 @@ export type ChangeSetFileStatus =
   | "conflicted";
 /**
  * One path in a Change Set. `insertions`/`deletions` are `null` for binary
- * files (`git diff --numstat` prints `-\t-`) and typically for untracked files
- * (no base to count against). `previousPath` is set only for renames.
+ * files (`git diff --numstat` prints `-\t-`) or an untracked path that could not
+ * be read while the snapshot was assembled. Readable untracked text is counted
+ * as an addition against an empty file. `previousPath` is set only for renames.
  */
 export interface ChangeSetFile {
   path: string;
@@ -67,7 +68,7 @@ export interface ChangeSetSnapshot {
 /**
  * Projects a Change Set into the legacy {@link DiffStat} shape so the Details
  * Properties summary and the Changes rail cannot disagree (CONCEPT #47).
- * Binary and untracked entries keep null counts and never contribute to totals.
+ * Entries whose counts are unknown (principally binaries) never contribute to totals.
  */
 export function changeSetToDiffStat(snapshot: ChangeSetSnapshot): DiffStat {
   const files: DiffFileStat[] = snapshot.files.map((file) => ({
