@@ -25,8 +25,7 @@ import {
   type FlushScheduler,
 } from "@renderer/chat/client";
 import { getChatClient } from "@renderer/chat/registry";
-import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
-import { rejectedReceipt } from "@renderer/chat/wire";
+import { EMPTY_TRANSCRIPT, rejectedReceipt } from "@volli/session-presentation";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { toast } from "sonner";
 

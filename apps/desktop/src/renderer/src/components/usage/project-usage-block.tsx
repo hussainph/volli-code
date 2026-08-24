@@ -25,7 +25,7 @@ import type { SessionUsageSummary } from "@volli/shared";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { UsageBar } from "@renderer/components/usage/usage-bar";
-import { formatTokens } from "@renderer/chat/context-usage";
+import { formatTokens } from "@volli/session-presentation";
 import { cn } from "@renderer/lib/utils";
 import {
   formatCachedShare,

@@ -15,7 +15,7 @@ import type {
 import { COMPACTION_REASONS, parseRendererSessionEvent } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import type { ChatSessionFrame } from "@renderer/chat/transcript";
+import type { ChatSessionFrame } from "./transcript";
 
 export function chatSessionFrame(value: unknown): ChatSessionFrame | null {
   if (

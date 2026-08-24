@@ -45,6 +45,7 @@
     "@trpc/server": "^11.18.0",
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
+    "@volli/session-presentation": "workspace:*",
     "@volli/session-rpc": "workspace:*",
     "@volli/shared": "workspace:*",
     "ai": "^7.0.60",

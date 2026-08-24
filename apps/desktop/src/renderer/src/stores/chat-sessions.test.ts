@@ -13,7 +13,7 @@ import type {
   ChatStreamCursor,
 } from "@renderer/chat/client";
 import { getChatClient } from "@renderer/chat/registry";
-import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
+import { EMPTY_TRANSCRIPT } from "@volli/session-presentation";
 import { createChatSessionsStore } from "./chat-sessions";
 import { useUiStore } from "./ui";
 

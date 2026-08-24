@@ -26,9 +26,14 @@ import {
   type ChatSessionWrites,
 } from "@renderer/chat/client";
 import { disposeChatClient, getOrCreateChatClient } from "@renderer/chat/registry";
-import { enqueueMessage, removeQueued, type QueuedMessage } from "@renderer/chat/session-model";
-import { appendFrames, EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
-import { rejectedReceipt } from "@renderer/chat/wire";
+import {
+  appendFrames,
+  EMPTY_TRANSCRIPT,
+  enqueueMessage,
+  rejectedReceipt,
+  removeQueued,
+  type QueuedMessage,
+} from "@volli/session-presentation";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 

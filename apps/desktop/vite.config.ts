@@ -127,19 +127,13 @@ export default defineConfig(({ mode }) => ({
       // lifecycle bootstrap: excluded on purpose, never add ../main/**.
       include: [
         "src/stores/**",
-        "src/chat/activity.ts",
+        // The pure chat projection modules moved to @volli/session-presentation
+        // (VC-169) and took their gate entries with them — see that package's
+        // vite.config.ts. What stays here is the desktop-coupled remainder.
         "src/chat/client.ts",
-        "src/chat/compaction-boundary.ts",
-        "src/chat/composer-effort.ts",
         "src/chat/composer-picker.ts",
-        "src/chat/interaction.ts",
-        "src/chat/markdown-source.ts",
-        "src/chat/message-projection.ts",
         "src/chat/registry.ts",
         "src/chat/rename.ts",
-        "src/chat/session-model.ts",
-        "src/chat/transcript.ts",
-        "src/chat/wire.ts",
         "src/components/attachments/attachment-model.ts",
         // What the renderer does with the Run door's answer (VC-126): which
         // refusal opens Model Access, which toasts, and what success opens —

@@ -40,7 +40,7 @@ import {
   PromptInputCommandItem,
   PromptInputCommandList,
 } from "@renderer/components/ui/ai-elements/prompt-input";
-import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
+import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
 import type { ComposerPickerMode, ComposerPickerRow } from "@renderer/chat/composer-picker";
 import type { ComposerVerbName } from "@volli/shared";
 import { cn } from "@renderer/lib/utils";

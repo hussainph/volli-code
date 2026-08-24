@@ -45,8 +45,8 @@
 import type { CompactionReason } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { formatTokens } from "@renderer/chat/context-usage";
-import type { TranscriptCompaction } from "@renderer/chat/transcript";
+import { formatTokens } from "./context-usage";
+import type { TranscriptCompaction } from "./transcript";
 
 /**
  * What the transcript draws, in order: the turns it always drew, and the

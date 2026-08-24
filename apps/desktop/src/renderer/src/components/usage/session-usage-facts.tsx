@@ -26,7 +26,7 @@ import type * as React from "react";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
-import { formatTokens } from "@renderer/chat/context-usage";
+import { formatTokens } from "@volli/session-presentation";
 import { formatCachedShare, formatUsageCost, totalUsageTokens } from "@renderer/usage/usage-format";
 
 export function SessionUsageFacts({ summary }: { summary: SessionUsageSummary }) {

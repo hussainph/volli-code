@@ -55,7 +55,7 @@ import {
   type BundleRow,
   type SummarySegment,
   type SummaryTone,
-} from "@renderer/chat/activity";
+} from "@volli/session-presentation";
 import { Button } from "@renderer/components/ui/button";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";

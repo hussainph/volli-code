@@ -54,24 +54,23 @@ import { Message, MessageContent } from "@renderer/components/ui/ai-elements/mes
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
+  composerAnswerPrompt,
+  footInteraction,
   gatedToolCallId,
   gatedToolCallIds,
   groupTurns,
-  isAwaitingFirstOutput,
-  segmentTurn,
-  type ChatSegment,
-} from "@renderer/chat/activity";
-import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
-import { weaveCompactionBoundaries } from "@renderer/chat/compaction-boundary";
-import { sessionContextUsage } from "@renderer/chat/context-usage";
-import {
-  composerAnswerPrompt,
-  footInteraction,
   interactionForApproval,
+  isAwaitingFirstOutput,
   readInteractionResolutionMessage,
+  segmentTurn,
+  sessionContextUsage,
+  weaveCompactionBoundaries,
+  type ChatSegment,
+  type ComposerIntent,
   type InteractionSubmission,
-} from "@renderer/chat/interaction";
-import { type ComposerIntent, type QueuedMessage } from "@renderer/chat/session-model";
+  type QueuedMessage,
+} from "@volli/session-presentation";
+import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
 import {
   useSessionController,
   type ChatSessionsStore,

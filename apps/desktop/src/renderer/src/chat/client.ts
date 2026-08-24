@@ -28,21 +28,20 @@ import type {
   SessionStartResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-
-import { isUntitledChatSession, renameChatSession } from "@renderer/chat/rename";
-import { toastError } from "@renderer/lib/toast";
-import { nextRelease, type QueuedMessage } from "@renderer/chat/session-model";
-import {
-  movesProjection,
-  type ChatSessionFrame,
-  type ChatTranscriptState,
-} from "@renderer/chat/transcript";
 import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  movesProjection,
+  nextRelease,
   rejectedReceipt,
-} from "@renderer/chat/wire";
+  type ChatSessionFrame,
+  type ChatTranscriptState,
+  type QueuedMessage,
+} from "@volli/session-presentation";
+
+import { isUntitledChatSession, renameChatSession } from "@renderer/chat/rename";
+import { toastError } from "@renderer/lib/toast";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 /**

@@ -75,7 +75,7 @@ import {
   effortStopPercent,
   effortWashMix,
   readEffortPointer,
-} from "@renderer/chat/composer-effort";
+} from "@volli/session-presentation";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";

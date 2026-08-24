@@ -40,7 +40,7 @@ import {
   type SkillReference,
 } from "@volli/shared";
 
-import { formatTokens } from "@renderer/chat/context-usage";
+import { formatTokens } from "@volli/session-presentation";
 import {
   AsyncSection,
   CONTROL_W,

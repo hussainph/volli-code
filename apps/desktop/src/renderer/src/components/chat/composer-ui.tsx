@@ -72,13 +72,21 @@ import {
   type SkillReference,
 } from "@volli/shared";
 
-import { reclampEffort } from "@renderer/chat/composer-effort";
+import {
+  COMPOSER_STACK_SHELL,
+  composerIntent,
+  reclampEffort,
+  takeQueued,
+  unqueueLast,
+  type ComposerIntent,
+  type QueuedMessage,
+  type SessionContextUsage,
+  type TakenQueued,
+} from "@volli/session-presentation";
 import type { BlobLinkView } from "@volli/shared";
-import type { SessionContextUsage } from "@renderer/chat/context-usage";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
-import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
   applyPickerRow,
@@ -90,14 +98,6 @@ import {
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
-import {
-  composerIntent,
-  takeQueued,
-  unqueueLast,
-  type ComposerIntent,
-  type QueuedMessage,
-  type TakenQueued,
-} from "@renderer/chat/session-model";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";

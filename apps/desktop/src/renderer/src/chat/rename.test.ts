@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { type ChatSessionSlice } from "@renderer/chat/client";
-import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
+import { EMPTY_TRANSCRIPT } from "@volli/session-presentation";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 

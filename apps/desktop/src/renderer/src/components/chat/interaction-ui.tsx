@@ -91,6 +91,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import {
   askFieldOpen,
+  COMPOSER_STACK_SHELL,
   describeInteractionResolution,
   emptyInteractionDraft,
   interactionAdvance,
@@ -117,8 +118,7 @@ import {
   type InteractionQuestion,
   type InteractionStep,
   type InteractionSubmission,
-} from "@renderer/chat/interaction";
-import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
+} from "@volli/session-presentation";
 import { Button } from "@renderer/components/ui/button";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { cn } from "@renderer/lib/utils";

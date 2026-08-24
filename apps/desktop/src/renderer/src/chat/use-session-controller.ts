@@ -29,8 +29,11 @@ import {
   type ChatMessageDelivery,
   type MessageDelivery,
 } from "@renderer/chat/client";
-import type { QueuedMessage } from "@renderer/chat/session-model";
-import type { LiveTranscriptCompaction, TranscriptCompaction } from "@renderer/chat/transcript";
+import type {
+  LiveTranscriptCompaction,
+  QueuedMessage,
+  TranscriptCompaction,
+} from "@volli/session-presentation";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
 const NO_MESSAGES: readonly UIMessage[] = [];

@@ -22,7 +22,7 @@ import type { SessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { projectTranscriptMessages } from "@renderer/chat/message-projection";
+import { projectTranscriptMessages } from "./message-projection";
 
 import {
   appendFrames,
@@ -419,6 +419,20 @@ describe("live compaction", () => {
 
     // Nothing durable will ever retire this wait now, so the fold has to.
     expect(closed.liveCompaction).toBeNull();
+  });
+
+  it("drops the spinner on demand when the subscription that owned it is replaced", () => {
+    const started = appendFrames(EMPTY_TRANSCRIPT, [], [], [compactionProgress(1, "started")]);
+    expect(started.liveCompaction).not.toBeNull();
+
+    // A reconnect replaces the stream, and the old connection's wait is not
+    // recoverable state — no fresh baseline will ever carry a finish for it.
+    // The caller says so explicitly, with nothing else in the batch, and the
+    // clear must not repaint what the messages already said.
+    const replaced = appendFrames(started, [], [], [], true);
+    expect(replaced.liveCompaction).toBeNull();
+    expect(replaced.messages).toBe(started.messages);
+    expect(replaced.throughSequence).toBe(started.throughSequence);
   });
 
   it("ignores a finish that belongs to no wait it is holding", () => {
