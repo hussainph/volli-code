@@ -240,11 +240,11 @@ describe("ticket.await — bounded and withdrawn waits", () => {
   });
 });
 
-describe("ticket.await — refusals the model can act on", () => {
-  async function refusesWith(pending: Promise<RuntimeVerbResult>, text: string): Promise<void> {
-    expect((await pending).text).toContain(text);
-  }
+async function refusesWith(pending: Promise<RuntimeVerbResult>, text: string): Promise<void> {
+  expect((await pending).text).toContain(text);
+}
 
+describe("ticket.await — refusals the model can act on", () => {
   it("refuses an empty or missing tickets field", async () => {
     const h = harness();
     await refusesWith(h.call({}), "`tickets` must name at least one ticket");
