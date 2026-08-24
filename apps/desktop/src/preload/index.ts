@@ -53,6 +53,7 @@ import type {
   ArtifactCreateResult,
   BootstrapResult,
   AutomationCreateInput,
+  AutomationDeleteResult,
   AutomationIdInput,
   AutomationResult,
   AutomationRunInput,
@@ -691,7 +692,8 @@ const api = {
     update: (input: AutomationUpdateInput): Promise<AutomationResult> =>
       invoke("volli:automation-update", input),
     /** A record delete — Runs keep their history. */
-    delete: (input: AutomationIdInput): Promise<Result> => invoke("volli:automation-delete", input),
+    delete: (input: AutomationIdInput): Promise<AutomationDeleteResult> =>
+      invoke("volli:automation-delete", input),
     /** Runs an Automation by hand on a Ticket. */
     run: (input: AutomationRunInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run", input),

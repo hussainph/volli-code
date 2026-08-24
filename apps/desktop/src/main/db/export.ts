@@ -211,7 +211,7 @@ export interface ExportAppState {
 }
 
 /**
- * One `automations` row (migration 025). `runtime` rides as its STORED JSON
+ * One `automations` projection row (migration 026). `runtime` rides as its STORED JSON
  * string, unparsed — {@link ExportProject.themeCanvas}'s reason: a hand-edited
  * pin that no longer parses must not take the rescue document down with it.
  */
@@ -227,10 +227,12 @@ export interface ExportAutomation {
   updatedAt: number;
 }
 
-/** One `automation_runs` row (migration 025): the references plus the RESOLVED model columns. */
+/** One `automation_runs` projection row (migration 026): identity snapshot plus resolved model columns. */
 export interface ExportAutomationRun {
   id: string;
   automationId: string | null;
+  /** Bound Automation name snapshot, retained after record deletion. */
+  automationName: string | null;
   ticketId: string | null;
   sessionId: string;
   providerId: string;
@@ -455,6 +457,7 @@ function exportAutomations(db: Database.Database): ExportAutomation[] {
 interface AutomationRunRow {
   id: string;
   automation_id: string | null;
+  automation_name: string | null;
   ticket_id: string | null;
   session_id: string;
   provider_id: string;
@@ -471,6 +474,7 @@ function exportAutomationRuns(db: Database.Database): ExportAutomationRun[] {
   return rows.map((row) => ({
     id: row.id,
     automationId: row.automation_id,
+    automationName: row.automation_name,
     ticketId: row.ticket_id,
     sessionId: row.session_id,
     providerId: row.provider_id,

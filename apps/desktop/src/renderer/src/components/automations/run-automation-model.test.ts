@@ -10,12 +10,19 @@ describe("runAutomationAction", () => {
         run: {
           id: "run-1",
           automationId: "automation-1",
+          automationName: "Review",
           ticketId: "t1",
           sessionId: "session-1",
           model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
           createdAt: 1,
         },
         projectId: "p1",
+        receipt: {
+          id: "00000000-0000-4000-8000-000000000001",
+          commandId: "00000000-0000-4000-8000-000000000002",
+          status: "completed",
+          recordedAt: 1,
+        },
       }),
     ).toEqual({ kind: "open-session", sessionId: "session-1", projectId: "p1" });
   });

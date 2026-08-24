@@ -1008,6 +1008,18 @@ function isModelSelectionShape(value: unknown): boolean {
   );
 }
 
+/**
+ * Automation commands are durable retry identities, not an IPC-local counter.
+ * The renderer mints UUIDs, so a retry can carry the exact same intent through
+ * another host without deriving an id from this machine.
+ */
+function isAutomationCommandId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
 /** The editable fields every automation write carries, shape-checked once. */
 function isAutomationDraftShape(value: Record<string, unknown>): boolean {
   return (
@@ -1027,7 +1039,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-create"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      if (!isRecord(input)) return false;
+      if (!isRecord(input) || !isAutomationCommandId(input["commandId"])) return false;
       const projectId = input["projectId"];
       if (projectId !== null && typeof projectId !== "string") return false;
       return isAutomationDraftShape(input);
@@ -1038,20 +1050,30 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-update"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      if (!isRecord(input) || typeof input["automationId"] !== "string") return false;
+      if (
+        !isRecord(input) ||
+        !isAutomationCommandId(input["commandId"]) ||
+        typeof input["automationId"] !== "string"
+      ) {
+        return false;
+      }
       return isAutomationDraftShape(input);
     },
     invalidError: "Invalid automation",
   },
   "volli:automation-delete": {
     guard: (args): args is IpcArgs<"volli:automation-delete"> =>
-      args.length === 1 && isRecord(args[0]) && typeof args[0]["automationId"] === "string",
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string",
     invalidError: "Invalid automation delete request",
   },
   "volli:automation-run": {
     guard: (args): args is IpcArgs<"volli:automation-run"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["ticketId"] === "string",
     invalidError: "Invalid automation run request",

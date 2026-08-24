@@ -17,6 +17,7 @@ import type {
   Appearance,
   ArchivedTicket,
   Automation,
+  AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
   BlobLinkView,
@@ -1306,6 +1307,8 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
 
 /** What a create carries. `projectId: null` is global Ownership. */
 export interface AutomationCreateInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
   projectId: string | null;
   name: string;
   instructions: string;
@@ -1315,6 +1318,8 @@ export interface AutomationCreateInput {
 
 /** An update rewrites the editable fields; Ownership is identity and never moves. */
 export interface AutomationUpdateInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
   automationId: string;
   name: string;
   instructions: string;
@@ -1322,16 +1327,24 @@ export interface AutomationUpdateInput {
 }
 
 export interface AutomationIdInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
   automationId: string;
 }
 
 export interface AutomationRunInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
   automationId: string;
   ticketId: string;
 }
 
 export type AutomationsResult = Result<{ automations: Automation[] }>;
-export type AutomationResult = Result<{ automation: Automation }>;
+export type AutomationResult = Result<{
+  automation: Automation;
+  receipt: AutomationCommandReceipt;
+}>;
+export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
 
 /**
@@ -1341,10 +1354,15 @@ export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
  * here means "durable and addressable", never "attached and delivered".
  */
 export type AutomationRunStartResult =
-  | { ok: true; run: AutomationRun; projectId: string }
+  | { ok: true; run: AutomationRun; projectId: string; receipt: AutomationCommandReceipt }
   // `code` is absent only when the shared guard/throw envelope produced the
   // failure; every handler-authored refusal carries one.
-  | { ok: false; error: string; code?: AutomationRunRefusalCode };
+  | {
+      ok: false;
+      error: string;
+      code?: AutomationRunRefusalCode;
+      receipt?: AutomationCommandReceipt;
+    };
 
 /**
  * The Automations planning surface (VC-126): the record's CRUD plus the one
@@ -1359,8 +1377,8 @@ export interface VolliAutomationIpcContract {
   "volli:automation-create": { args: [input: AutomationCreateInput]; result: AutomationResult };
   /** Rewrites one Automation's editable fields, under the same validation as create. */
   "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
-  /** A record delete — Runs keep their history. */
-  "volli:automation-delete": { args: [input: AutomationIdInput]; result: Result };
+  /** A record delete — Runs retain their Automation id/name snapshot. */
+  "volli:automation-delete": { args: [input: AutomationIdInput]; result: AutomationDeleteResult };
   /** Runs an Automation by hand on a Ticket: one fresh chat Session, one Run row. */
   "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
   /** A Ticket's Runs, newest first. */

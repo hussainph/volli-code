@@ -2519,7 +2519,13 @@ describe("CLI_IPC descriptor table", () => {
 
 describe("AUTOMATION_IPC descriptor table", () => {
   const PIN = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" };
-  const DRAFT = { name: "Review", instructions: "/review go", runtime: null };
+  const COMMAND_ID = "00000000-0000-4000-8000-000000000001";
+  const DRAFT = {
+    commandId: COMMAND_ID,
+    name: "Review",
+    instructions: "/review go",
+    runtime: null,
+  };
 
   describe("volli:automation-list", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-list"];
@@ -2598,11 +2604,12 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("volli:automation-delete", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-delete"];
 
-    it("accepts an automationId record and refuses everything else", () => {
-      expect(guard([{ automationId: "a1" }])).toBe(true);
+    it("accepts a command id plus Automation id and refuses everything else", () => {
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1" }])).toBe(true);
       expect(guard([])).toBe(false);
       expect(guard([null])).toBe(false);
-      expect(guard([{ automationId: 7 }])).toBe(false);
+      expect(guard([{ commandId: "counter-1", automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, automationId: 7 }])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {
@@ -2613,10 +2620,11 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("volli:automation-run", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-run"];
 
-    it("requires both halves of the request — the Automation and the Ticket", () => {
-      expect(guard([{ automationId: "a1", ticketId: "t1" }])).toBe(true);
+    it("requires a UUID command plus both target halves — the Automation and the Ticket", () => {
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", ticketId: "t1" }])).toBe(true);
       expect(guard([{ automationId: "a1" }])).toBe(false);
-      expect(guard([{ ticketId: "t1" }])).toBe(false);
+      expect(guard([{ commandId: "counter-1", automationId: "a1", ticketId: "t1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, ticketId: "t1" }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });

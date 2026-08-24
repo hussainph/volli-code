@@ -57,7 +57,7 @@ describe("automations repo", () => {
     expect(getAutomation(ctx.db, automation.id)).toEqual(automation);
   });
 
-  it("round-trips a pinned Runtime as one selection, and reads a corrupted pin as inherit", () => {
+  it("round-trips a pinned Runtime as one selection, and keeps a corrupted pin distinct from inherit", () => {
     const { project } = seeded();
     const automation = createAutomation(
       ctx.db,
@@ -66,12 +66,15 @@ describe("automations repo", () => {
     );
     expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual(PIN);
 
-    // A hand-edited pin that is valid JSON but not a selection degrades to
-    // inherit rather than throwing the listing away.
+    // A hand-edited pin that is valid JSON but not a selection is not silently
+    // coerced to inherit: the caller can fail it closed and preserve its bytes.
     ctx.db
       .prepare("UPDATE automations SET runtime = ? WHERE id = ?")
       .run('{"providerId":"anthropic"}', automation.id);
-    expect(getAutomation(ctx.db, automation.id)?.runtime).toBeNull();
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({
+      kind: "invalid",
+      raw: { providerId: "anthropic" },
+    });
   });
 
   it("lists a project's own Automations before the global shelf, name-ordered", () => {
@@ -130,7 +133,7 @@ describe("automations repo", () => {
     ).toBeUndefined();
   });
 
-  it("deletes the record while its Runs keep their history", () => {
+  it("deletes the record while its Runs keep Automation id and name provenance", () => {
     const { project, ticket, session } = seeded();
     const automation = createAutomation(
       ctx.db,
@@ -145,7 +148,7 @@ describe("automations repo", () => {
 
     expect(deleteAutomation(ctx.db, automation.id)).toBe(true);
     expect(deleteAutomation(ctx.db, automation.id)).toBe(false);
-    expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([{ ...run, automationId: null }]);
+    expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([run]);
   });
 });
 
@@ -184,7 +187,7 @@ describe("automation runs repo", () => {
     expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([]);
   });
 
-  it("degrades an out-of-vocabulary stored reasoning level to medium instead of corrupting the row", () => {
+  it("preserves an out-of-vocabulary historical reasoning level exactly", () => {
     const { ticket, session } = seeded();
     const run = recordAutomationRun(
       ctx.db,
@@ -194,6 +197,6 @@ describe("automation runs repo", () => {
     ctx.db
       .prepare("UPDATE automation_runs SET reasoning_level = 'galactic' WHERE id = ?")
       .run(run.id);
-    expect(latestRunForTicket(ctx.db, ticket.id)?.model.reasoningLevel).toBe("medium");
+    expect(latestRunForTicket(ctx.db, ticket.id)?.model.reasoningLevel).toBe("galactic");
   });
 });

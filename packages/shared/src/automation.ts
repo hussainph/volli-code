@@ -23,6 +23,26 @@ import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 export type AutomationOwnership = "global" | "project";
 
 /**
+ * A stored Runtime that is not an inheriting SQL NULL and is not a valid
+ * current ModelSelection. This is a durable-corruption/future-version state,
+ * not another spelling of inherit: treating it as `null` silently changes the
+ * execution policy of a saved Automation. `raw` is preserved exactly so a
+ * repair/export path can report what the row actually said.
+ */
+export interface InvalidAutomationRuntime {
+  kind: "invalid";
+  raw: unknown;
+}
+
+/** The saved Runtime is inheritance, a valid pin, or an explicit invalid row. */
+export type AutomationRuntime = ModelSelection | InvalidAutomationRuntime | null;
+
+/** Whether a Runtime is the valid whole model-and-reasoning pin a Run may use. */
+export function isAutomationRuntimePin(runtime: AutomationRuntime): runtime is ModelSelection {
+  return runtime !== null && !("kind" in runtime);
+}
+
+/**
  * The saved record. `id` is a UUID — never a local counter, never anything
  * machine-derived (docs/BOUNDARIES.md standing rule 1): when the record moves
  * from local SQLite to an account, that is a database migration, not a format
@@ -48,7 +68,7 @@ export interface Automation {
    * level is a property of the model that offers it, so a type that could pin
    * one without the other could spell a pair that does not exist.
    */
-  runtime: ModelSelection | null;
+  runtime: AutomationRuntime;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -70,12 +90,12 @@ export function automationOwnership(
 export interface AutomationRun {
   id: string;
   /**
-   * The Automation that produced this Run. `null` survives two futures this
-   * schema admits from day one: an Unbound Run (VC-129's "Run once…", which
-   * names no Automation), and a Run whose Automation was since deleted —
-   * delete is a record delete, and history must not go with it.
+   * The Automation that produced this Run. A bound Run keeps this reference
+   * after that Automation is deleted; `null` is reserved for an Unbound Run.
    */
   automationId: string | null;
+  /** The bound Automation's name at launch, retained after record deletion. */
+  automationName: string | null;
   /**
    * The Ticket the Run was invoked on. Nullable for exactly the reason
    * `sessions.ticket_id` is: deleting a Ticket orphans the record rather than
@@ -88,9 +108,32 @@ export interface AutomationRun {
    * values, never the reference. Free at launch, impossible to reconstruct
    * later, and what makes the pin/inherit decision self-correcting.
    */
-  model: ModelSelection;
+  model: ResolvedAutomationModel;
   /** Epoch milliseconds. */
   createdAt: number;
+}
+
+/**
+ * The values a Run resolved at launch. Unlike a live `ModelSelection`,
+ * `reasoningLevel` remains a string: a later build that no longer recognizes a
+ * historical provider level must display the exact fact it recorded rather
+ * than rewriting it to a current default.
+ */
+export interface ResolvedAutomationModel {
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+}
+
+/** A durable acknowledgement that a command reached the Automation core. */
+export interface AutomationCommandReceipt {
+  /** UUID minted by the core, never a local counter. */
+  id: string;
+  /** UUID supplied by the caller and used to replay a retried command safely. */
+  commandId: string;
+  status: "accepted" | "completed" | "rejected";
+  /** Epoch milliseconds. */
+  recordedAt: number;
 }
 
 /**

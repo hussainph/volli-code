@@ -73,6 +73,7 @@ try {
 
   const created = await page.evaluate(async (projectId) => {
     const result = await window.api.automations.create({
+      commandId: crypto.randomUUID(),
       projectId,
       name: "  Review sweep  ",
       instructions: "/review the change set, then read @docs/DESIGN.md",
@@ -100,12 +101,14 @@ try {
     async () => {
       const refusals = await page.evaluate(async (projectId) => {
         const blank = await window.api.automations.create({
+          commandId: crypto.randomUUID(),
           projectId,
           name: "   ",
           instructions: "x",
           runtime: null,
         });
         const pin = await window.api.automations.create({
+          commandId: crypto.randomUUID(),
           projectId,
           name: "Pinned",
           instructions: "x",
@@ -131,6 +134,7 @@ try {
   await attempt(3, "a global Automation lists after the project's own", async () => {
     const names = await page.evaluate(async (projectId) => {
       const global = await window.api.automations.create({
+        commandId: crypto.randomUUID(),
         projectId: null,
         name: "A global one",
         instructions: "/tdd",
@@ -149,6 +153,7 @@ try {
   await attempt(4, "update rewrites the editable fields", async () => {
     const updated = await page.evaluate(async (automationId) => {
       const result = await window.api.automations.update({
+        commandId: crypto.randomUUID(),
         automationId,
         name: "Review sweep v2",
         instructions: "/review again",
@@ -165,7 +170,11 @@ try {
     async () => {
       const outcome = await page.evaluate(
         async ({ automationId, ticketId }) => {
-          const run = await window.api.automations.run({ automationId, ticketId });
+          const run = await window.api.automations.run({
+            commandId: crypto.randomUUID(),
+            automationId,
+            ticketId,
+          });
           const runs = await window.api.automations.runsForTicket({ ticketId });
           const sessions = await window.api.sessions.listForTicket({ ticketId });
           return {
@@ -190,7 +199,10 @@ try {
   await attempt(6, "delete is a record delete", async () => {
     const after = await page.evaluate(
       async ({ automationId, projectId }) => {
-        const deleted = await window.api.automations.delete({ automationId });
+        const deleted = await window.api.automations.delete({
+          commandId: crypto.randomUUID(),
+          automationId,
+        });
         const listed = await window.api.automations.list({ projectId });
         return {
           deleted: deleted.ok,

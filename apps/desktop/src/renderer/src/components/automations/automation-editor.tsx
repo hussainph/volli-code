@@ -73,6 +73,9 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
   const closeEditor = useAutomationsStore((state) => state.closeEditor);
   const save = useAutomationsStore((state) => state.save);
 
+  // This id survives an invoke failure while the dialog stays mounted, so the
+  // person's Retry repeats durable intent instead of creating a second record.
+  const [commandId] = React.useState(() => crypto.randomUUID());
   const [name, setName] = React.useState("");
   const [instructions, setInstructions] = React.useState("");
   const [ownership, setOwnership] = React.useState<OwnershipChoice>("project");
@@ -128,6 +131,7 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
     setSaving(true);
     try {
       const refusal = await save({
+        commandId,
         projectId: ownership === "project" ? projectId : null,
         name,
         instructions,

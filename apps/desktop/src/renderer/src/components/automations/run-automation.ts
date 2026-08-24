@@ -16,13 +16,28 @@ import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-re
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
+/** A click whose IPC reply was lost keeps its durable command id for Retry. */
+const pendingCommandIds = new Map<string, string>();
+
 export async function runAutomationOnTicket(input: {
   automationId: string;
   ticketId: string;
 }): Promise<void> {
+  const retryKey = `${input.automationId}\u0000${input.ticketId}`;
+  const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
+  pendingCommandIds.set(retryKey, commandId);
   let action: ReturnType<typeof runAutomationAction>;
   try {
-    action = runAutomationAction(await window.api.automations.run(input));
+    action = runAutomationAction(
+      await window.api.automations.run({
+        ...input,
+        // The command id is durable intent, not an Electron request counter.
+        commandId,
+      }),
+    );
+    // A typed response (success or refusal) reached the core, so a later
+    // deliberate run is new intent. Only a transport throw keeps the id.
+    pendingCommandIds.delete(retryKey);
   } catch (error) {
     toastError(`Couldn't run automation: ${errorMessage(error)}`);
     return;

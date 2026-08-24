@@ -415,6 +415,7 @@ describe("buildExportDocument — populated db", () => {
     expect(document.automationRuns).toMatchObject([
       {
         automationId: automation.id,
+        automationName: "Review",
         ticketId: liveTicket.id,
         sessionId: session.id,
         providerId: "anthropic",

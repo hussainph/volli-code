@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { expandCommandInvocation } from "@volli/shared";
 import type { ModelSelection, PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
+import { createAutomationEngine } from "./engine";
 import { createAutomationRunner } from "./run";
 import type { AutomationRunnerDeps } from "./run";
-import { createAutomation, listRunsForTicket } from "../db/automations-repo";
+import { SqliteAutomationLedger } from "./sqlite-ledger";
+import { getAutomation, listRunsForTicket, recordAutomationRun } from "../db/automations-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
@@ -17,8 +20,6 @@ let ctx: TestDb;
 afterEach(() => {
   ctx.cleanup();
 });
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const RESOLVED: ModelSelection = {
   providerId: "anthropic",
@@ -43,13 +44,20 @@ const SKILL: SkillReference = {
 
 interface Harness {
   runner: ReturnType<typeof createAutomationRunner>;
+  engine: ReturnType<typeof createAutomationEngine>;
   creates: SessionStartInput[];
   attaches: string[];
-  delivered: Array<{ sessionId: string; text: string; resources: readonly PromptResource[] }>;
-  events: Array<{ runId: string; projectId: string }>;
+  delivered: Array<{
+    sessionId: string;
+    commandId: string;
+    messageId: string;
+    text: string;
+    resources: readonly PromptResource[];
+  }>;
   logs: string[];
   projectId: string;
   ticketId: string;
+  attachState: "ready" | "needs-recovery";
 }
 
 function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
@@ -58,25 +66,50 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   insertProject(ctx.db, project);
   const ticket = testTicket(project.id);
   insertTicket(ctx.db, ticket);
+  // The fake Session facade below deliberately does not materialize Session
+  // rows. Production's Session engine does, and the migration suite proves the
+  // FK; tests of the Automation host only disable it around this fake edge.
+  ctx.db.pragma("foreign_keys = OFF");
 
+  const engine = createAutomationEngine({
+    ledger: new SqliteAutomationLedger(ctx.db),
+    now: () => 42_000,
+    nextId: randomUUID,
+  });
   const creates: SessionStartInput[] = [];
   const attaches: string[] = [];
   const delivered: Harness["delivered"] = [];
-  const events: Harness["events"] = [];
   const logs: string[] = [];
-  let minted = 0;
+  const sessionsByOperation = new Map<string, string>();
+  let nextSession = 0;
+  let attachState: Harness["attachState"] = "ready";
 
   const runner = createAutomationRunner({
-    db: ctx.db,
+    engine,
+    findAutomation: (automationId) => getAutomation(ctx.db, automationId),
+    findTicket: (ticketId) => {
+      const found = ticketId === ticket.id ? ticket : undefined;
+      return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
+    },
+    listRunsForTicket: (ticketId) => listRunsForTicket(ctx.db, ticketId),
     sessions: {
       create: async (input) => {
         creates.push(input);
-        minted += 1;
-        return { sessionId: `session-${minted}`, model: RESOLVED };
+        let sessionId = sessionsByOperation.get(input.operationId);
+        if (sessionId === undefined) {
+          sessionId = `session-${++nextSession}`;
+          sessionsByOperation.set(input.operationId, sessionId);
+        }
+        return { sessionId, model: RESOLVED };
       },
       attach: async (input) => {
         attaches.push(input.sessionId);
-        return { sessionId: input.sessionId, state: "ready", receipt: null, throughSequence: 0 };
+        return {
+          sessionId: input.sessionId,
+          state: attachState,
+          receipt: null,
+          throughSequence: 0,
+        };
       },
     },
     promptSupply: async () => ({ templates: [TEMPLATE], skills: [SKILL] }),
@@ -84,57 +117,58 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
       delivered.push(input);
     },
     readSessionActivity: async () => "idle",
-    now: () => 42_000,
-    onRunStarted: ({ run, projectId }) => events.push({ runId: run.id, projectId }),
     log: (message) => logs.push(message),
     ...overrides,
   });
-  // The session rows the fake facade "mints" never hit SQLite, so the run
-  // rows reference sessions the FK cannot see — disable enforcement for these
-  // tests only; the migration suite proves the constraints themselves.
-  ctx.db.pragma("foreign_keys = OFF");
 
   return {
     runner,
+    engine,
     creates,
     attaches,
     delivered,
-    events,
     logs,
     projectId: project.id,
     ticketId: ticket.id,
+    get attachState() {
+      return attachState;
+    },
+    set attachState(value) {
+      attachState = value;
+    },
   };
 }
 
-function savedAutomation(
-  projectId: string | null,
-  patch: Partial<Parameters<typeof createAutomation>[1]> = {},
+async function savedAutomation(
+  h: Harness,
+  patch: Partial<{ name: string; instructions: string; runtime: ModelSelection | null }> = {},
 ) {
-  return createAutomation(
-    ctx.db,
-    {
-      projectId,
-      name: "Two-opinion review",
-      instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
-      runtime: null,
-      ...patch,
-    },
-    1_000,
-  );
+  const created = await h.engine.create({
+    commandId: randomUUID(),
+    projectId: h.projectId,
+    name: "Two-opinion review",
+    instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+    runtime: null,
+    ...patch,
+  });
+  if (!created.ok) throw new Error(created.error);
+  return created.value;
 }
 
 describe("createAutomationRunner", () => {
-  it("opens exactly one fresh Session whose first message is the Instructions, and records the Run", async () => {
+  it("accepts one durable Run plan, mints exactly one fresh Session, and delivers the composer's expansion", async () => {
     const h = harness();
-    const automation = savedAutomation(h.projectId);
+    const automation = await savedAutomation(h);
 
-    const outcome = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      ticketId: h.ticketId,
+    });
     await h.runner.settled();
 
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error("refused");
-    // One fresh mint — never a wake — carrying the automation actor and the
-    // Automation's own name as the protected title.
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]).toMatchObject({
       projectId: h.projectId,
@@ -142,227 +176,232 @@ describe("createAutomationRunner", () => {
       title: "Two-opinion review",
       actor: { kind: "automation" },
     });
-    // Inherit passes NO override: the facade resolves the chain itself.
-    expect(h.creates[0].modelOverride).toBeUndefined();
-    // The Run row: UUID id, references, and the RESOLVED model.
-    expect(outcome.run.id).toMatch(UUID_PATTERN);
+    expect(h.creates[0]?.modelOverride).toBeUndefined();
     expect(outcome.run).toMatchObject({
       automationId: automation.id,
+      automationName: "Two-opinion review",
       ticketId: h.ticketId,
       sessionId: "session-1",
       model: RESOLVED,
-      createdAt: 42_000,
     });
+    expect(outcome.receipt.status).toBe("completed");
     expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([outcome.run]);
-    expect(h.events).toEqual([{ runId: outcome.run.id, projectId: h.projectId }]);
-    // The detached half attached the same Session and delivered the composer's
-    // own expansion: template spliced, /skill kept as typed with its body as a
-    // resource beside, @ref passing through as plain text.
+
+    const composer = expandCommandInvocation(automation.instructions, [TEMPLATE], [SKILL]);
     expect(h.attaches).toEqual(["session-1"]);
-    const composer = expandCommandInvocation(
-      "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
-      [TEMPLATE],
-      [SKILL],
-    );
     expect(h.delivered).toEqual([
-      { sessionId: "session-1", text: composer.text, resources: composer.resources },
+      expect.objectContaining({
+        sessionId: "session-1",
+        text: composer.text,
+        resources: composer.resources,
+      }),
     ]);
-    expect(h.delivered[0].text).toBe(
-      "Review this branch: src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
-    );
-    expect(h.delivered[0].resources.map((resource) => resource.name)).toEqual(["tdd"]);
+    expect(h.delivered[0]?.commandId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(h.delivered[0]?.messageId).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  it("passes a pinned Runtime whole — model and reasoning together — as the facade's override", async () => {
+  it("passes a pinned Runtime whole — model and reasoning together", async () => {
     const h = harness();
-    const automation = savedAutomation(h.projectId, {
+    const automation = await savedAutomation(h, {
       runtime: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "medium" },
     });
 
-    const outcome = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      ticketId: h.ticketId,
+    });
     await h.runner.settled();
 
     expect(outcome.ok).toBe(true);
-    expect(h.creates[0].modelOverride).toEqual({
+    expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "openai", modelId: "gpt-5" },
       reasoningLevel: "medium",
     });
   });
 
-  it("refuses an unknown Automation, an unknown Ticket, and another project's Automation", async () => {
+  it("persists the first-message intent before success and resumes it after a ready recovery attach", async () => {
     const h = harness();
-    const foreign = savedAutomation("some-other-project");
+    h.attachState = "needs-recovery";
+    const automation = await savedAutomation(h);
 
-    expect(await h.runner.run({ automationId: "missing", ticketId: h.ticketId })).toMatchObject({
-      ok: false,
-      code: "AUTOMATION_NOT_FOUND",
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      ticketId: h.ticketId,
     });
-    const automation = savedAutomation(h.projectId);
-    expect(await h.runner.run({ automationId: automation.id, ticketId: "missing" })).toMatchObject({
-      ok: false,
-      code: "TICKET_NOT_FOUND",
-    });
-    expect(await h.runner.run({ automationId: foreign.id, ticketId: h.ticketId })).toMatchObject({
-      ok: false,
-      code: "AUTOMATION_NOT_IN_PROJECT",
-    });
-    expect(h.creates).toHaveLength(0);
+    await h.runner.settled();
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.delivered).toEqual([]);
+    expect(
+      ctx.db
+        .prepare("SELECT delivered_at FROM automation_run_deliveries WHERE run_id = ?")
+        .get(outcome.run.id),
+    ).toEqual({ delivered_at: null });
+
+    // Restart recovery finds the completed Run's delivery intent even though
+    // there is no longer an accepted Run plan. It reattaches and uses the
+    // persisted ids, rather than re-expanding/re-minting.
+    h.attachState = "ready";
+    await h.runner.recover();
+    expect(h.delivered).toHaveLength(1);
+    expect(
+      ctx.db
+        .prepare("SELECT delivered_at FROM automation_run_deliveries WHERE run_id = ?")
+        .get(outcome.run.id),
+    ).toEqual({ delivered_at: 42_000 });
   });
 
-  it("holds one Run in flight per Ticket: the boot latch refuses a second start", async () => {
-    let releaseAttach!: () => void;
-    const attachGate = new Promise<void>((resolve) => {
-      releaseAttach = resolve;
+  it("recovers an accepted plan after a crash between Session mint and Run projection", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const accepted = await h.engine.acceptRun({
+      commandId: randomUUID(),
+      automation: { id: automation.id, name: automation.name, runtime: null },
+      projectId: h.projectId,
+      ticketId: h.ticketId,
+      text: "Persisted instructions",
+      resources: [],
     });
-    const h = harness({
-      sessions: {
-        create: async () => ({ sessionId: "session-slow", model: RESOLVED }),
-        attach: async (input) => {
-          await attachGate;
-          return { sessionId: input.sessionId, state: "ready", receipt: null, throughSequence: 0 };
-        },
-      },
-    });
-    const automation = savedAutomation(h.projectId);
+    expect(accepted.ok).toBe(true);
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
 
-    const first = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    expect(first.ok).toBe(true);
-    const second = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    expect(second).toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
+    await h.runner.recover();
 
-    releaseAttach();
-    await h.runner.settled();
-    // Once the boot settles and the last Run's Session reads idle, the Ticket
-    // is free again.
-    const third = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    expect(third.ok).toBe(true);
-    await h.runner.settled();
+    expect(h.creates).toHaveLength(1);
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toHaveLength(1);
+    expect(h.delivered).toEqual([
+      expect.objectContaining({ text: "Persisted instructions", resources: [] }),
+    ]);
   });
 
-  it("refuses while the latest Run's Session is working or waiting — plumbing facts, not declarations", async () => {
-    const activities: Array<"working" | "waiting" | "idle"> = ["working", "waiting", "idle"];
-    const h = harness({
-      readSessionActivity: async () => activities.shift() ?? "idle",
+  it("replays one command id while its Session is working, without a second Session or first turn", async () => {
+    let activity: "working" | "idle" = "idle";
+    const h = harness({ readSessionActivity: async () => activity });
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+
+    const first = await h.runner.run({
+      commandId,
+      automationId: automation.id,
+      ticketId: h.ticketId,
     });
-    const automation = savedAutomation(h.projectId);
-    const seeded = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    expect(seeded.ok).toBe(true);
+    await h.runner.settled();
+    // The plan, not today's editable record, owns a retry. Deleting the
+    // Automation after its Run started must not turn a lost IPC reply into an
+    // AUTOMATION_NOT_FOUND refusal or change its Instructions.
+    ctx.db.prepare("DELETE FROM automations WHERE id = ?").run(automation.id);
+    activity = "working";
+    const replay = await h.runner.run({
+      commandId,
+      automationId: automation.id,
+      ticketId: h.ticketId,
+    });
     await h.runner.settled();
 
-    // First re-run meets "working", second meets "waiting", third meets "idle".
-    expect(await h.runner.run({ automationId: automation.id, ticketId: h.ticketId })).toMatchObject(
-      { ok: false, code: "RUN_IN_FLIGHT" },
+    expect(first).toMatchObject({ ok: true });
+    expect(replay).toMatchObject({ ok: true });
+    expect(h.creates).toHaveLength(1);
+    expect(h.delivered).toHaveLength(1);
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toHaveLength(1);
+  });
+
+  it("checks every Run-owned Session and fails closed when a projection cannot be read", async () => {
+    const activities = new Map<string, "working" | "waiting" | "idle" | null>([
+      ["older", "working"],
+      ["newer", "idle"],
+    ]);
+    const h = harness({ readSessionActivity: async (id) => activities.get(id) ?? null });
+    const automation = await savedAutomation(h);
+    recordAutomationRun(
+      ctx.db,
+      { automationId: automation.id, ticketId: h.ticketId, sessionId: "older", model: RESOLVED },
+      1,
     );
-    expect(await h.runner.run({ automationId: automation.id, ticketId: h.ticketId })).toMatchObject(
-      { ok: false, code: "RUN_IN_FLIGHT" },
+    recordAutomationRun(
+      ctx.db,
+      { automationId: automation.id, ticketId: h.ticketId, sessionId: "newer", model: RESOLVED },
+      2,
     );
-    const allowed = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    expect(allowed.ok).toBe(true);
-    await h.runner.settled();
+
+    await expect(
+      h.runner.run({ commandId: randomUUID(), automationId: automation.id, ticketId: h.ticketId }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
+
+    activities.set("older", null);
+    await expect(
+      h.runner.run({ commandId: randomUUID(), automationId: automation.id, ticketId: h.ticketId }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
   });
 
-  it("maps the facade's refusals onto the existing error path — no silent fallback, no Run row", async () => {
-    const failures = [
-      new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", "Choose a default model."),
-      new StructuredSessionsError("MODEL_UNAVAILABLE", "Model openai/gpt-5 is not available."),
-      new StructuredSessionsError("MODEL_SELECTION_REJECTED", "Could not record."),
-      new Error("socket exploded"),
-    ];
+  it("does not reinterpret a corrupt stored Runtime as inheritance", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    ctx.db
+      .prepare("UPDATE automations SET runtime = ? WHERE id = ?")
+      .run('{"providerId":"anthropic"}', automation.id);
+
+    await expect(
+      h.runner.run({ commandId: randomUUID(), automationId: automation.id, ticketId: h.ticketId }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "RUN_FAILED",
+      error: expect.stringMatching(/Runtime is invalid/),
+    });
+    expect(h.creates).toEqual([]);
+  });
+
+  it("keeps a later-unavailable pin on the existing Session failure path and records no Run projection", async () => {
     const h = harness({
       sessions: {
         create: async () => {
-          throw failures.shift();
+          throw new StructuredSessionsError(
+            "MODEL_UNAVAILABLE",
+            "Model openai/gpt-5 is not available.",
+          );
         },
-        attach: async () => {
-          throw new Error("never reached");
-        },
-      },
-    });
-    const automation = savedAutomation(h.projectId);
-    const run = () => h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-
-    expect(await run()).toMatchObject({ ok: false, code: "MODEL_REQUIRED" });
-    expect(await run()).toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
-    expect(await run()).toMatchObject({ ok: false, code: "RUN_FAILED" });
-    expect(await run()).toMatchObject({ ok: false, code: "RUN_FAILED", error: "socket exploded" });
-    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
-    expect(h.events).toEqual([]);
-  });
-
-  it("holds the Instructions when the attach needs recovery — the Session's own Retry surface owns it", async () => {
-    const h = harness({
-      sessions: {
-        create: async () => ({ sessionId: "session-1", model: RESOLVED }),
-        attach: async (input) => ({
-          sessionId: input.sessionId,
-          state: "needs-recovery",
+        attach: async () => ({
+          sessionId: "never",
+          state: "ready",
           receipt: null,
           throughSequence: 0,
         }),
       },
     });
-    const automation = savedAutomation(h.projectId);
-
-    const outcome = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    await h.runner.settled();
-
-    // The Run and its Session exist durably; only the delivery waited.
-    expect(outcome.ok).toBe(true);
-    expect(h.delivered).toEqual([]);
-    expect(listRunsForTicket(ctx.db, h.ticketId)).toHaveLength(1);
-  });
-
-  it("logs a detached delivery failure instead of losing it silently", async () => {
-    const h = harness({
-      deliverInstructions: async () => {
-        throw new Error("runtime refused the turn");
-      },
+    const automation = await savedAutomation(h, {
+      runtime: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "medium" },
     });
-    const automation = savedAutomation(h.projectId);
 
-    const outcome = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-    await h.runner.settled();
-
-    expect(outcome.ok).toBe(true);
-    expect(h.logs.join("\n")).toMatch(/could not deliver its Instructions/);
-    expect(h.logs.join("\n")).toMatch(/runtime refused the turn/);
+    const commandId = randomUUID();
+    await expect(
+      h.runner.run({ commandId, automationId: automation.id, ticketId: h.ticketId }),
+    ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
+    // A lost response retries the same terminal receipt, not a generic
+    // RUN_IN_FLIGHT refusal and not another Session-create attempt.
+    await expect(
+      h.runner.run({ commandId, automationId: automation.id, ticketId: h.ticketId }),
+    ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
   });
 
-  it("sends Instructions exactly as typed when the prompt supply cannot be read", async () => {
+  it("keeps literal Instructions when the prompt supply cannot be read", async () => {
     const h = harness({
       promptSupply: async () => {
         throw new Error("directory unreadable");
       },
     });
-    const automation = savedAutomation(h.projectId);
+    const automation = await savedAutomation(h);
 
-    const outcome = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
+    await h.runner.run({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      ticketId: h.ticketId,
+    });
     await h.runner.settled();
 
-    expect(outcome.ok).toBe(true);
-    expect(h.delivered[0].text).toBe(
-      "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
-    );
-    expect(h.delivered[0].resources).toEqual([]);
+    expect(h.delivered[0]?.text).toBe(automation.instructions);
+    expect(h.delivered[0]?.resources).toEqual([]);
     expect(h.logs.join("\n")).toMatch(/prompt supply/);
-  });
-
-  it("falls back to console.error when no log seam is supplied", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const h = harness({
-        log: undefined,
-        promptSupply: async () => {
-          throw new Error("directory unreadable");
-        },
-      });
-      const automation = savedAutomation(h.projectId);
-      const outcome = await h.runner.run({ automationId: automation.id, ticketId: h.ticketId });
-      await h.runner.settled();
-      expect(outcome.ok).toBe(true);
-      expect(spy).toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
   });
 });

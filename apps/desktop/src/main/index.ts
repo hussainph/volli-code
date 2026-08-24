@@ -69,6 +69,7 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
@@ -105,7 +106,11 @@ import {
 import { loadSkills } from "./skills";
 import { loadPromptTemplates } from "./prompt-templates";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
+import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
+import type { AutomationRunner } from "./automations/run";
+import { createAutomationService } from "./automations/service";
+import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
   readCompactionPolicy,
@@ -991,6 +996,32 @@ app.whenReady().then(async () => {
         })
       : null;
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  // Automations own a transport-neutral command/event/projection core. Keep
+  // the runner mutable until below: Session RPC's attach door closes over it,
+  // so a human Retry can resume a durable first-message intent too.
+  const automationEngine =
+    sessionDb === null
+      ? null
+      : createAutomationEngine({
+          ledger: new SqliteAutomationLedger(sessionDb),
+          now: Date.now,
+          nextId: randomUUID,
+        });
+  const automationService =
+    sessionDb === null || automationEngine === null
+      ? null
+      : createAutomationService({
+          engine: automationEngine,
+          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
+          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
+          runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          ...(piRuntimeHost === null
+            ? {}
+            : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
+          onMutation: (change) => broadcastDataChanged(change),
+        });
+  let automationRunner: AutomationRunner | null = null;
   /**
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
@@ -1169,7 +1200,20 @@ app.whenReady().then(async () => {
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
           createSession: sessions?.create,
-          attachSession: sessions?.attach,
+          // Every renderer Retry rides this wrapper. A ready attachment is the
+          // recovery point for an Automation's durable first-message intent;
+          // the runner's fixed Session command id reconciles rather than
+          // duplicates if a crash happened after dispatch but before its mark.
+          attachSession:
+            sessions === null
+              ? undefined
+              : async (input) => {
+                  const attached = await sessions.attach(input);
+                  if (attached.state === "ready") {
+                    await automationRunner?.resumeDeliveryForSession(input.sessionId);
+                  }
+                  return attached;
+                },
         });
   /**
    * Model-call titling (VC-81): the one main-side hook both doors feed.
@@ -1523,17 +1567,17 @@ app.whenReady().then(async () => {
       },
     },
   );
-  // Automations (VC-112, tracer VC-126): the record's CRUD plus the one Run
-  // door. The runner exists only when the Session runtime does — the CRUD half
-  // is plain SQLite and stays available either way — and every dependency it
-  // is handed is the SAME seam the equivalent surface already rides: the
-  // Sessions facade for the fresh mint, the composer's own template/skill
-  // loaders for Instructions resolution, and the chat listing's projection for
-  // the single-flight activity read.
-  const automationRunner =
-    sessions !== null && sessionRuntime !== null && sessionDb !== null
+  // Automations (VC-112, tracer VC-126): the host half of the command ledger.
+  // CRUD remains available when Sessions are down; only a Run needs the
+  // Session facade. The renderer's Retry arrives through the RPC wrapper above
+  // and resumes this same runner's durable message intent.
+  automationRunner =
+    sessions !== null && sessionRuntime !== null && sessionDb !== null && automationEngine !== null
       ? createAutomationRunner({
-          db: sessionDb,
+          engine: automationEngine,
+          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          findTicket: (ticketId) => getTicket(sessionDb, ticketId),
+          listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           sessions,
           promptSupply: async (projectId) => {
             const project = getProjectById(sessionDb, projectId);
@@ -1557,43 +1601,40 @@ app.whenReady().then(async () => {
               skills: applySkillModes(skills.skills, project.skillModes ?? {}),
             };
           },
-          // The composer's own message shape: the text as typed (templates
-          // spliced), each `/skill` body riding beside as a typed resource part.
-          deliverInstructions: async ({ sessionId, text, resources }) => {
-            await sessionRuntime.command({
-              commandId: randomUUID(),
+          // The composer's message shape, with the Run's durable command/message
+          // ids rather than freshly minted ones. A crash after dispatch is then
+          // a Session-runtime replay, never a duplicate first turn.
+          deliverInstructions: ({ sessionId, commandId, messageId, text, resources }) =>
+            sessionRuntime.command({
+              commandId,
               sessionId,
               command: {
                 kind: "message.submit",
                 message: {
-                  id: randomUUID(),
+                  id: messageId,
                   role: "user",
                   parts: [{ type: "text", text }, ...resources.map(skillResourcePart)],
                 },
               },
-            });
-          },
+            }),
+          // Projection failures deliberately propagate: the runner fails the
+          // single-flight guard closed instead of treating unknown as idle.
           readSessionActivity: async (sessionId) => {
-            try {
-              const snapshot = await sessionRuntime.projection({ sessionId });
-              return chatSessionRecord(snapshot.projection).activity;
-            } catch {
-              // A Session the engine cannot project cannot be "in flight".
-              return null;
-            }
+            const snapshot = await sessionRuntime.projection({ sessionId });
+            return chatSessionRecord(snapshot.projection).activity;
           },
-          now: Date.now,
+          onRunStarted: ({ projectId, run }) =>
+            broadcastDataChanged({ projectId, ticketId: run.ticketId ?? undefined }),
         })
       : null;
+  if (automationRunner !== null) {
+    void automationRunner.recover().catch((error: unknown) => {
+      console.error(`[volli] automation recovery failed: ${errorMessage(error)}`);
+    });
+  }
   registerAutomationIpcHandlers(dbHandle, {
+    service: automationService,
     runner: automationRunner,
-    ...(piRuntimeHost !== null
-      ? { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }
-      : {}),
-    // Every committed mutation reaches the other windows the way every other
-    // planning mutation does; the scope is the best the surface knows.
-    onMutation: (change) => broadcastDataChanged(change),
-    now: Date.now,
   });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves

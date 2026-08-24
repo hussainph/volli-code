@@ -17,6 +17,11 @@ import { create } from "zustand";
 import { errorMessage, type Automation } from "@volli/shared";
 
 import type { AutomationCreateInput } from "../../../ipc/contract";
+
+type AutomationDraftInput = Omit<AutomationCreateInput, "commandId"> & {
+  /** Kept by a caller across a transport retry; generated here when omitted. */
+  commandId?: string;
+};
 import { toastError } from "@renderer/lib/toast";
 
 interface AutomationsState {
@@ -33,7 +38,7 @@ interface AutomationsState {
    * success (cache refreshed, dialog left to the caller to close), or the
    * refusal message for the dialog to show inline.
    */
-  save(input: AutomationCreateInput): Promise<string | null>;
+  save(input: AutomationDraftInput): Promise<string | null>;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
@@ -65,7 +70,14 @@ export function createAutomationsStore() {
 
     async save(input) {
       try {
-        const result = await window.api.automations.create(input);
+        const { commandId, ...draft } = input;
+        const result = await window.api.automations.create({
+          ...draft,
+          // The renderer owns the durable retry identity. A caller can hold
+          // this id across a transport retry; main never invents a host-local
+          // counter or machine-derived substitute.
+          commandId: commandId ?? crypto.randomUUID(),
+        });
         if (!result.ok) return result.error;
         // A global Automation is listable everywhere, but the only cached list
         // guaranteed on screen is the project the dialog was opened under —

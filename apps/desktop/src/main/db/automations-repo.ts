@@ -1,21 +1,27 @@
 /**
- * `automations` + `automation_runs` repo (migration 025): row↔domain mapping
- * for Automations V1's durable record (VC-112, tracer VC-126).
+ * Automation projections (migration 026): row↔domain mapping for
+ * Automations V1's durable record (VC-112, tracer VC-126).
  *
- * Ids are `randomUUID()` at the one place a row is minted — docs/BOUNDARIES.md
- * standing rule 1. `runtime` stores the pinned selection as one JSON blob and
- * reads through `parseSessionModel`'s degrade-don't-throw stance: a hand-edited
- * pin that no longer parses reads as inherit, which is survivable and visible,
- * where a throw would take every listing down with it.
+ * Product writes now enter through the Automation command ledger. This module
+ * remains the projection reader (and supplies narrowly-scoped write helpers to
+ * that ledger), so IPC and renderer-facing services never mutate/query SQLite
+ * directly.
  *
- * A Run row stores the resolved provider/model/reasoning as flat columns —
- * never the reference — so the record still answers "what ran" after models
- * churn or the Automation is edited or deleted.
+ * A stored invalid Runtime is deliberately not coerced to inheritance: SQL
+ * NULL is inherit, while a malformed/future payload remains an explicit
+ * `InvalidAutomationRuntime`. Run reasoning is likewise preserved verbatim —
+ * historical evidence is not rewritten to today's vocabulary.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { parseSessionModel, REASONING_LEVELS } from "@volli/shared";
-import type { Automation, AutomationRun, ModelSelection } from "@volli/shared";
+import { parseSessionModel } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationRuntime,
+  ModelSelection,
+  ResolvedAutomationModel,
+} from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface AutomationRow {
@@ -32,6 +38,7 @@ interface AutomationRow {
 interface AutomationRunRow {
   id: string;
   automation_id: string | null;
+  automation_name: string | null;
   ticket_id: string | null;
   session_id: string;
   provider_id: string;
@@ -40,13 +47,20 @@ interface AutomationRunRow {
   created_at: number;
 }
 
-function parseJsonColumn(value: string | null): unknown {
-  if (value === null) return null;
+function parseJsonColumn(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
   } catch {
-    return null;
+    // A legacy/hand-edited row may predate the JSON CHECK. Preserve the exact
+    // bytes as the invalid value rather than turning a pin into inheritance.
+    return value;
   }
+}
+
+function parseAutomationRuntime(value: string | null): AutomationRuntime {
+  if (value === null) return null;
+  const raw = parseJsonColumn(value);
+  return parseSessionModel(raw) ?? { kind: "invalid", raw };
 }
 
 function mapAutomation(row: AutomationRow): Automation {
@@ -55,7 +69,7 @@ function mapAutomation(row: AutomationRow): Automation {
     projectId: row.project_id,
     name: row.name,
     instructions: row.instructions,
-    runtime: parseSessionModel(parseJsonColumn(row.runtime)),
+    runtime: parseAutomationRuntime(row.runtime),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -65,15 +79,15 @@ function mapRun(row: AutomationRunRow): AutomationRun {
   return {
     id: row.id,
     automationId: row.automation_id,
+    automationName: row.automation_name,
     ticketId: row.ticket_id,
     sessionId: row.session_id,
     model: {
       providerId: row.provider_id,
       modelId: row.model_id,
-      // The column CHECK only refuses the empty string; the vocabulary is
-      // Volli's. A row written by a wider future scale still reads, degraded
-      // to "medium" rather than corrupting the whole listing.
-      reasoningLevel: REASONING_LEVELS.find((level) => level === row.reasoning_level) ?? "medium",
+      // This is immutable evidence. A current build may not understand a
+      // provider's historical level, but it must never invent "medium".
+      reasoningLevel: row.reasoning_level,
     },
     createdAt: row.created_at,
   };
@@ -154,7 +168,7 @@ export function updateAutomation(
   return getAutomation(db, id);
 }
 
-/** A record delete (VC-112, "One-time work"): runs keep their history via `ON DELETE SET NULL`. */
+/** A record delete (VC-112, "One-time work"): Run projections retain their Automation id/name snapshot. */
 export function deleteAutomation(db: Database.Database, id: string): boolean {
   return prepared(db, "DELETE FROM automations WHERE id = ?").run(id).changes > 0;
 }
@@ -162,10 +176,12 @@ export function deleteAutomation(db: Database.Database, id: string): boolean {
 export interface AutomationRunWrite {
   /** `null` is an Unbound Run (VC-129) — admitted by the schema from day one. */
   automationId: string | null;
+  /** Snapshot at launch; omitted only by legacy test/support callers. */
+  automationName?: string | null;
   ticketId: string;
   sessionId: string;
   /** The RESOLVED selection the Session was born with, never the reference. */
-  model: ModelSelection;
+  model: ResolvedAutomationModel;
 }
 
 export function recordAutomationRun(
@@ -174,13 +190,21 @@ export function recordAutomationRun(
   now: number,
 ): AutomationRun {
   const id = randomUUID();
+  const automationName =
+    input.automationId === null
+      ? null
+      : (input.automationName ??
+        getAutomation(db, input.automationId)?.name ??
+        "Deleted Automation");
   prepared(
     db,
-    `INSERT INTO automation_runs (id, automation_id, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO automation_runs
+      (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.automationId,
+    automationName,
     input.ticketId,
     input.sessionId,
     input.model.providerId,
@@ -191,11 +215,21 @@ export function recordAutomationRun(
   return {
     id,
     automationId: input.automationId,
+    automationName,
     ticketId: input.ticketId,
     sessionId: input.sessionId,
     model: input.model,
     createdAt: now,
   };
+}
+
+/** One Run projection by durable id. */
+export function getAutomationRun(db: Database.Database, id: string): AutomationRun | undefined {
+  const row = prepared<[string], AutomationRunRow>(
+    db,
+    "SELECT * FROM automation_runs WHERE id = ?",
+  ).get(id);
+  return row === undefined ? undefined : mapRun(row);
 }
 
 /** This Ticket's Runs, newest first — the rail's history and the palette's context. */
@@ -207,7 +241,7 @@ export function listRunsForTicket(db: Database.Database, ticketId: string): Auto
   return rows.map(mapRun);
 }
 
-/** The newest Run on a Ticket, or undefined — the single-flight guard's durable half. */
+/** The newest Run on a Ticket, or undefined — retained for older read-only callers. */
 export function latestRunForTicket(
   db: Database.Database,
   ticketId: string,
