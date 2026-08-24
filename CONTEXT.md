@@ -423,6 +423,30 @@ One append-only planner-history record of something that happened to a Ticket
 planner-level consequences only; executor conversation facts live in the
 Session Event ledger. A Ticket Event may cite a Session as provenance.
 
+**Ticket Signal**:
+A typed verdict on a Ticket — a fixed kind (validate, implement, review,
+merge, human-gate, budget), a verdict (pass, fail, blocked), and optional
+prose detail — recorded as a `signaled` Ticket Event by an authenticated
+Session actor (VC-85). Signals carry state; comments carry prose. A signal
+never moves the board: Deliberate moves and Run Outcomes own movement.
+_Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
+
+**Ticket Wake**:
+One committed Ticket Event, fanned out in-process after its transaction
+commits (`ticket-wake.ts`). The wake bus is main's canonical post-commit
+stream: every mutation door feeds it, and the await tool parks on it. A wake
+is never a source of truth — the durable event it reports already is.
+_Avoid_: notification, broadcast (that is the window fan-out)
+
+**Await**:
+The control-tier wait: a Session's `ticket_await` tool call parks its turn
+until a watched Ticket signals, is commented on, or moves — then wakes with
+that one event (VC-85). Runtime-native like `ask_user`: no bash sleeps, no
+polling, and never a CLI verb, because a CLI verb must never wait. What may
+be awaited is per-actor policy data (`awaitable`); chaining each wake's
+`occurredAt` into the next call's `sinceMs` makes the watch window continuous.
+_Avoid_: watch verb, `volli ticket wait`, polling loop
+
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
