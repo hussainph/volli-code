@@ -140,6 +140,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // The two deltas from VC-92's target, named above.
   "ticket.archive": "coordination",
   "session.start": "coordination",
+  // The first verb born on VC-92's target assignment directly: tool-only,
+  // Role-gated, never on the socket (VC-85). No delta to grow out of.
+  "ticket.await": "control",
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
@@ -388,9 +391,13 @@ describe("the registry table", () => {
     }
   });
 
-  it("hides only the two involuntary verbs from the reference", () => {
+  it("hides the two involuntary verbs and the tool-only await from the reference", () => {
     const unlisted = VERB_REGISTRY.filter((entry) => !entry.listed).map((entry) => entry.key);
-    expect(unlisted).toEqual(["session.harness", "hook"]);
+    // `ticket.await` is unlisted for a different reason than the involuntary
+    // pair: it has no cli access mode at all, so a reference line would teach
+    // an invocation the socket refuses. Its discovery surface is the tool
+    // schema itself.
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {

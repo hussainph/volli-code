@@ -25,6 +25,14 @@ export const TICKET_EVENT_KINDS = [
   // Comments live in `ticket_comments` (`ticket-comment.ts`); this fact only
   // makes one discoverable from planner history without duplicating it.
   "commented",
+  // A typed verdict signal (VC-85): the structured replacement for the
+  // `VERDICT:` first-line comment convention. Signals carry state and comments
+  // carry prose; a signal never moves the board — deliberate moves and Run
+  // Outcomes own movement. The signal row lives in `ticket_signals` (slice B's
+  // table, mirroring how comments pair with `commented`); the payload here
+  // carries the whole typed fact so planner history and the await tool
+  // (`ticket.await`, VC-85 slice D) can read it without a join.
+  "signaled",
   // Worktree identity (ticket-detail-mvp #14 vision anchor): settable now,
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
@@ -126,6 +134,12 @@ export type TicketEventPayload =
   | { kind: "archived" }
   | { kind: "unarchived" }
   | { kind: "commented"; commentId: string }
+  | {
+      kind: "signaled";
+      signalKind: TicketSignalKind;
+      verdict: TicketSignalVerdict;
+      detail: string | null;
+    }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
   /** The ticket's worktree scoping flipped (isolated worktree ↔ Main checkout) before any worktree existed. */
   | { kind: "worktree_scope_changed"; from: boolean; to: boolean }
@@ -208,6 +222,37 @@ export function trimWorktreeFailureStderr(stderr: string): string {
   return stderr.length <= MAX_WORKTREE_FAILURE_STDERR
     ? stderr
     : stderr.slice(stderr.length - MAX_WORKTREE_FAILURE_STDERR);
+}
+
+/**
+ * The fixed signal vocabulary (VC-85). Fixed rather than project-defined
+ * because fixed kinds are what make signals queryable, and what rule packs and
+ * the Tier-3 classifier can one day judge by identity. `budget` is the kind a
+ * tripped cost cap rides (VC-87's contract); the rest are the stage gates the
+ * rc-0.1.0 pass spelled by convention.
+ */
+export const TICKET_SIGNAL_KINDS = [
+  "validate",
+  "implement",
+  "review",
+  "merge",
+  "human-gate",
+  "budget",
+] as const;
+
+export type TicketSignalKind = (typeof TICKET_SIGNAL_KINDS)[number];
+
+export function isTicketSignalKind(value: unknown): value is TicketSignalKind {
+  return typeof value === "string" && (TICKET_SIGNAL_KINDS as readonly string[]).includes(value);
+}
+
+/** What a signal says about its stage: it passed, it failed, or a person is needed. */
+export const TICKET_SIGNAL_VERDICTS = ["pass", "fail", "blocked"] as const;
+
+export type TicketSignalVerdict = (typeof TICKET_SIGNAL_VERDICTS)[number];
+
+export function isTicketSignalVerdict(value: unknown): value is TicketSignalVerdict {
+  return typeof value === "string" && (TICKET_SIGNAL_VERDICTS as readonly string[]).includes(value);
 }
 
 export type TicketEventActorKind = "user" | "session" | "automation";

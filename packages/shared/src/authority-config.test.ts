@@ -12,6 +12,7 @@ import {
   resolveAuthorityPolicy,
   validateAuthorityPolicyOverride,
 } from "./authority-config";
+import { TICKET_AWAIT_KINDS } from "./ticket-await";
 
 describe("DEFAULT_AUTHORITY_POLICY", () => {
   it("observes rather than enforces, which is VC-44's recorded day-one posture", () => {
@@ -44,10 +45,10 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
     expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("session.done");
   });
 
-  it("awaits nothing anywhere, because VC-85 has not defined anything to await", () => {
-    for (const kind of AUTHORITY_ACTOR_KINDS) {
-      expect(DEFAULT_AUTHORITY_POLICY.actors[kind].awaitable).toEqual([]);
-    }
+  it("lets the user and a Session await the whole vocabulary, and an unauthenticated caller nothing (VC-85)", () => {
+    expect(DEFAULT_AUTHORITY_POLICY.actors.user.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
+    expect(DEFAULT_AUTHORITY_POLICY.actors.session.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
+    expect(DEFAULT_AUTHORITY_POLICY.actors.unauthenticated.awaitable).toEqual([]);
   });
 
   it("names a policy for every actor kind, so no caller falls through the table", () => {
@@ -155,7 +156,7 @@ describe("additive inheritance", () => {
     const resolved = resolveAuthorityPolicy({
       actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "ticket.signal"] } },
     });
-    expect(resolved.actors.session.awaitable).toEqual(["ticket.signal"]);
+    expect(resolved.actors.session.awaitable).toEqual([...TICKET_AWAIT_KINDS, "ticket.signal"]);
   });
 });
 

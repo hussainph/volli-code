@@ -184,6 +184,7 @@ export type VerbToolField = {
   readonly required?: boolean;
 } & (
   | { readonly type: "string" }
+  | { readonly type: "number" }
   | { readonly type: "enum"; readonly values: readonly string[] }
   | { readonly type: "object"; readonly fields: readonly VerbToolField[] }
 );
@@ -345,20 +346,29 @@ export const VERB_REGISTRY = [
     referenceOrder: 3,
     group: "Read",
     summary: "Show one ticket with recent events and comments.",
-    example: "volli ticket show VC-12 --comments 5",
+    example: "volli ticket show VC-12 --comments-only",
+    notes: [
+      "Latest signal per kind is always printed: signals carry state, comments carry prose.",
+      "Either count takes 0, which drops that section entirely — a poll costs what it reads.",
+    ],
     positionalId: "required",
     options: [
       {
         name: "--events",
         kind: "value",
         placeholder: "<n>",
-        help: "How many recent events to include.",
+        help: "How many recent events to include; 0 for none.",
       },
       {
         name: "--comments",
         kind: "value",
         placeholder: "<n>",
-        help: "How many recent comments to include.",
+        help: "How many recent comments to include; 0 for none.",
+      },
+      {
+        name: "--comments-only",
+        kind: "flag",
+        help: "Drop the event log — sugar for --events 0.",
       },
     ],
   },
@@ -1295,6 +1305,69 @@ export const VERB_REGISTRY = [
     example: "volli help ticket create",
     notes: [`Topics: ${HELP_TOPIC_NAMES.join(", ")}.`],
     extraUsage: "[<command> | <topic>]",
+    options: [],
+  },
+  {
+    // The watch/wake tool (VC-85), appended so no frozen surface shifts. The
+    // first tool-only entry: no cli access mode, because a CLI verb must never
+    // wait — a blocking socket request is the `gh pr checks --watch` wedge that
+    // killed two merge sessions, and the socket's own 10-second request timeout
+    // enforces the same rule mechanically. Blocking belongs where the runtime
+    // can suspend the turn and wake it, which is the Agent Tool Surface.
+    key: "ticket.await",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "ticket.await" },
+    listed: false,
+    group: "Session",
+    summary: "Block until a watched ticket signals, is commented on, or moves.",
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+      ],
+      nonEffects: [
+        "No ticket changes: nothing is written, nothing moves, and no other Session is contacted.",
+        "Waiting costs no model turns; the Session is suspended until it wakes.",
+      ],
+    },
+    tool: {
+      name: "ticket_await",
+      // Written for the model, and mostly about when to stop doing something
+      // else: an orchestrator that cannot wait polls, and a poll is a full
+      // turn re-sending the whole conversation. The last two lines carry what
+      // the schema cannot: that the alternative patterns are the failure modes
+      // this tool exists to end, and that project policy — not the tool —
+      // decides what may be awaited.
+      description: [
+        "Wait until one of the named tickets receives a verdict signal, a new comment, or a board move, then wake with that event.",
+        "Use it after delegating work: it replaces polling in a loop and sleeping in bash, both of which waste turns or wedge the session.",
+        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
+        "What may be awaited is project policy; a refusal names what the policy allows.",
+      ].join(" "),
+      input: [
+        {
+          name: "tickets",
+          type: "string",
+          required: true,
+          description:
+            "One or more ticket display ids in this project, separated by spaces or commas, for example 'VC-12 VC-14'.",
+        },
+        {
+          name: "for",
+          type: "enum",
+          values: ["signal", "comment", "status", "any"],
+          description:
+            "What wakes the wait: a verdict signal, a comment, a board move, or any of the three. Defaults to any.",
+        },
+        {
+          name: "timeoutSeconds",
+          type: "number",
+          description:
+            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+        },
+      ],
+    },
     options: [],
   },
 ] as const satisfies readonly VerbEntry[];

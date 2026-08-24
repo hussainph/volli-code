@@ -62,24 +62,30 @@ import type { VerbToolKey } from "./verb-registry";
  * The verbs each Role holds with no grant (VC-162).
  *
  * `project` carries the agent-control family, because orchestrating work is
- * what a Project Session is for. `ticket` carries execution verbs — of which
- * there are none yet, and the empty list is the honest statement rather than a
- * placeholder: `session.stop`/`session.send` are VC-86's, merge submission is
- * VC-89's, and credential-adjacent git is VC-45's. `subagent` stays empty until
- * VC-9 defines what a Subagent Session is.
+ * what a Project Session is for. `ticket` carries execution verbs — none of
+ * the agent-control family: `session.stop`/`session.send` are VC-86's, merge
+ * submission is VC-89's, and credential-adjacent git is VC-45's. `subagent`
+ * stays empty until VC-9 defines what a Subagent Session is.
  *
- * An empty `ticket` bundle is not a gap in this ticket; it is the property this
- * ticket exists to make true. A Ticket Session's tool array holds no
- * agent-control tool, so an injected instruction telling it to start ten
- * Sessions has nothing to call.
+ * A `ticket` bundle without agent-control verbs is not a gap in this ticket;
+ * it is the property this ticket exists to make true. A Ticket Session's tool
+ * array holds no agent-control tool, so an injected instruction telling it to
+ * start ten Sessions has nothing to call.
+ *
+ * `ticket.await` sits in BOTH working bundles, by VC-92's ruling on VC-85:
+ * blocking is a runtime property, not a privilege, so an executor waiting on
+ * its own gate is as legitimate as an orchestrator waiting on a fleet. What a
+ * given Session may await is per-actor policy data
+ * (`AuthorityActorPolicy.awaitable`), judged at call time — bundle membership
+ * is deliberately not the control.
  *
  * Declared as a total map over {@link SessionRole} so adding a Role is a bundle
  * decision made at the compiler rather than a silent empty default — the same
  * discipline the registry's tier table holds for adding a verb.
  */
 const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> = Object.freeze({
-  project: Object.freeze(["session.start"]) as readonly VerbToolKey[],
-  ticket: Object.freeze([]) as readonly VerbToolKey[],
+  project: Object.freeze(["session.start", "ticket.await"]) as readonly VerbToolKey[],
+  ticket: Object.freeze(["ticket.await"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
 });
 

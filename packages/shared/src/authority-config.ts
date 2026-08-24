@@ -35,6 +35,7 @@
  */
 
 import type { AuthorityFallback } from "./authority";
+import { TICKET_AWAIT_KINDS } from "./ticket-await";
 
 /**
  * What the deterministic rule pack does to a Session, as a per-project posture.
@@ -224,9 +225,12 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
  * rather than by this table, so their entry is permissive and is here to be
  * a complete table rather than a live restriction.
  *
- * `awaitable` is empty everywhere because VC-85 has not landed: there is nothing
- * to wait on yet, and a default naming await kinds that do not exist would be a
- * guess written down as policy.
+ * `awaitable` names the whole await vocabulary for the user and for
+ * authenticated Sessions (VC-85): waiting is not itself an act of authority —
+ * VC-92 ruled blocking a runtime property, not a privilege — so the default
+ * withholds nothing and a project that wants a narrower list writes one. The
+ * unauthenticated caller keeps the empty list for the reason its whole row is
+ * empty: it holds no tool surface, so there is nothing the list could admit.
  */
 export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
   enforcement: "observe",
@@ -239,12 +243,12 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
     user: Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
       peek: "project",
-      awaitable: Object.freeze([]),
+      awaitable: Object.freeze([...TICKET_AWAIT_KINDS]),
     }),
     session: Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
       peek: "own",
-      awaitable: Object.freeze([]),
+      awaitable: Object.freeze([...TICKET_AWAIT_KINDS]),
     }),
     unauthenticated: Object.freeze({
       coordinationVerbs: Object.freeze([]),

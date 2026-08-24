@@ -24,11 +24,12 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
   it("gives a Project Session the agent-control family and a Ticket Session none", () => {
-    expect(roleVerbBundle("project")).toEqual(["session.start"]);
-    // The property this ticket exists to make true, asserted as emptiness
+    expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await"]);
+    // The property this ticket exists to make true, asserted as absence
     // rather than described. An injected instruction telling a Ticket Session
-    // to start ten Sessions has nothing to call.
-    expect(roleVerbBundle("ticket")).toEqual([]);
+    // to start ten Sessions has nothing to call. `ticket.await` is not of the
+    // agent-control family — waiting controls nobody (VC-85/VC-92).
+    expect(roleVerbBundle("ticket")).toEqual(["ticket.await"]);
     // VC-9 defines this one; until then an empty bundle is the honest answer.
     expect(roleVerbBundle("subagent")).toEqual([]);
   });
@@ -53,13 +54,17 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_fetch",
       "web_search",
       "session.start",
+      "ticket.await",
     ]);
   });
 
   it("puts a Ticket Session in a room with no agent-control tool in it", () => {
     const surface = resolveAgentToolSurface(capabilities({ role: "ticket" }));
     expect(surface).not.toContain("session.start");
-    expect(verbToolsOf(surface)).toEqual([]);
+    // The await tool is deliberately in this room too (VC-92's ruling on
+    // VC-85): blocking is a runtime property, not a privilege, and what may
+    // be awaited is policy data judged at call time.
+    expect(verbToolsOf(surface)).toEqual(["ticket.await"]);
     // Its capability half is untouched: Role scopes the verbs, not the tools a
     // Session needs to do the work it was given.
     expect(surface).toEqual([
@@ -70,6 +75,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "ask_user",
       "web_fetch",
       "web_search",
+      "ticket.await",
     ]);
   });
 
@@ -80,7 +86,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       resolveAgentToolSurface(
         capabilities({ capabilities: { coding: EVERY_CODING, interaction: ["ask_user"] } }),
       ),
-    ).toEqual(["read", "edit", "write", "execute", "ask_user", "session.start"]);
+    ).toEqual(["read", "edit", "write", "execute", "ask_user", "session.start", "ticket.await"]);
   });
 
   it("orders interaction tools by the vocabulary, not by the caller's array", () => {
@@ -93,7 +99,16 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
           capabilities: { coding: EVERY_CODING, interaction: ["web_search", "ask_user"] },
         }),
       ),
-    ).toEqual(["read", "edit", "write", "execute", "ask_user", "web_search", "session.start"]);
+    ).toEqual([
+      "read",
+      "edit",
+      "write",
+      "execute",
+      "ask_user",
+      "web_search",
+      "session.start",
+      "ticket.await",
+    ]);
   });
 });
 
