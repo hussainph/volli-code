@@ -20,7 +20,7 @@ What exists now:
 | `SessionProjection.usage` | `projectSession` |
 | Capture at `message_end`, compaction, utility | `packages/agent-runtime/src/pi/{runtime,compaction,transcript}.ts` |
 | `usage` observation, marker, translation | `@volli/shared`, `packages/session-engine/src/observation-translation.ts` |
-| `session_usage` table and indexes | migration 025 |
+| `session_usage` table and indexes | migration 026 (renumbered from 025 when VC-44's authority policy store reached main first) |
 | Projection write, indexed read, rebuild | `apps/desktop/src/main/session-control/sqlite-ledger.ts` |
 | `SessionEngine.reportUsage` | `packages/session-engine/src/session-engine.ts` |
 

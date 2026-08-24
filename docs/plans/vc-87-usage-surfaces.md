@@ -273,6 +273,25 @@ Session's rollup, its Ticket's and its project's at once, and the Ticket card
 aggregates a roster that can grow while it is on screen, so it cannot know every
 id that could affect it.
 
+### Verified in the running app
+
+Against a copy of a real 379-Session profile, with the projection seeded:
+
+- `volli:usage-report` round-trips; the guard refuses a bad scope arm and a NaN
+  bound with `Invalid usage query` rather than reaching SQLite.
+- The Ticket card renders `~$0.34 · 1 session · 724k tokens · 48% cached`, and
+  its popover the four token classes, the cached share and the by-session
+  breakdown.
+- The Settings switch defaults on, persists across a full relaunch, and the
+  card leaves and returns with it — no restart.
+
+**A note for anyone who ran this branch before the merge:** `session_usage` was
+migration 025 until VC-44's authority policy store reached main first. Any
+profile that applied the old 025 sits at `user_version = 25` and will fail the
+new 026 with `table session_usage already exists`. Nothing shipped on that
+numbering, so no real profile is affected — but a scratch database from an
+earlier build of this branch has to be discarded rather than migrated.
+
 ### Open
 
 - **The window selector does not persist.** It is a question someone asks, not a
