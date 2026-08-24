@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 
-import { automationDraftProblem, automationOwnership, automationPinProblem } from "./automation";
+import {
+  automationDraftProblem,
+  automationOwnership,
+  automationPinProblem,
+  isAutomationRuntimePin,
+} from "./automation";
 
 const PIN: ModelSelection = {
   providerId: "anthropic",
@@ -31,6 +36,16 @@ describe("automationOwnership", () => {
   it("reads a null projectId as global and a set one as project", () => {
     expect(automationOwnership({ projectId: null })).toBe("global");
     expect(automationOwnership({ projectId: "p1" })).toBe("project");
+  });
+});
+
+describe("isAutomationRuntimePin", () => {
+  it("distinguishes a complete pin from inherit and an invalid stored Runtime", () => {
+    expect(isAutomationRuntimePin(PIN)).toBe(true);
+    expect(isAutomationRuntimePin(null)).toBe(false);
+    expect(isAutomationRuntimePin({ kind: "invalid", raw: { providerId: "anthropic" } })).toBe(
+      false,
+    );
   });
 });
 
