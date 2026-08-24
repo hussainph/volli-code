@@ -113,6 +113,16 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "transcript",
             "peek",
             "auto mode",
+            // The row labels, so rail search finds the page from what is on
+            // it — `settings-search-smoke.mjs` walks every visible label and
+            // holds this list to that contract.
+            "rule enforcement",
+            "who judges the rest",
+            "ask me after",
+            "or after, in total",
+            "you can read",
+            "an authenticated session can read",
+            "an unauthenticated caller can read",
           ],
           content: <AuthorityPane project={project} />,
         },

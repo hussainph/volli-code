@@ -131,9 +131,11 @@ export interface ProjectAuthorityPolicyInput {
  *
  * Distinct from `ProjectUpdateResult` because this is the one project write a
  * person can get WRONG rather than merely unlucky: `error` carries the summary
- * and `errors` the per-field detail the pane renders inline. Every reason at
- * once — fixing one field to be told about the next is the interaction this
- * avoids.
+ * and `errors` the per-field detail, so any caller that can show per-field
+ * refusals may. Every reason at once — fixing one field to be told about the
+ * next is the interaction this avoids. (The Authority pane itself routes
+ * through `writeThrough`, which toasts the summary; its controls are all
+ * constrained, so it cannot produce the document `errors` describes.)
  */
 export type ProjectAuthorityPolicyResult =
   | { ok: true; project: Project }

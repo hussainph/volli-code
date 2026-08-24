@@ -421,6 +421,24 @@ describe("validateAuthorityPolicyOverride", () => {
     expect(result.errors).toHaveLength(3);
   });
 
+  it("refuses a non-object where a document is expected, naming the slot", () => {
+    // The shapes the parse half answers `{}` for, given to the half that can
+    // say WHERE the document stopped being one. A nested slot that is not an
+    // object is the write-side failure a hand-edited column would hit first.
+    expect(validateAuthorityPolicyOverride({ fallback: "often" })).toEqual({
+      ok: false,
+      errors: ["fallback must be an object."],
+    });
+    expect(validateAuthorityPolicyOverride({ actors: "everyone" })).toEqual({
+      ok: false,
+      errors: ["actors must be an object."],
+    });
+    expect(validateAuthorityPolicyOverride({ actors: { session: "all" } })).toEqual({
+      ok: false,
+      errors: ["actors.session must be an object."],
+    });
+  });
+
   it("refuses anything that is not an object at all", () => {
     for (const bad of [null, [], "enforce", 3]) {
       expect(validateAuthorityPolicyOverride(bad)).toEqual({
