@@ -39,6 +39,7 @@ import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 
 /**
  * Where a verb is projected. `cli` is the Agent CLI (the local agent socket),
@@ -624,6 +625,80 @@ export const VERB_REGISTRY = [
     ],
   },
   {
+    // The typed verdict channel (VC-85), and the pattern-setting coordination
+    // verb. It replaces the `VERDICT: FIRST-LINE` comment convention the
+    // rc-0.1.0 orchestration pass invented: a convention any reader had to
+    // parse by eye, any writer could spell wrong, and no query could reach.
+    //
+    // Coordination tier, and VC-92 pinned WHY it is the first verb that must
+    // require an authenticated session actor rather than merely attributing
+    // one: an unforgeable verdict channel is the entire point, and a signal
+    // any same-uid process can mint is the convention again with better
+    // syntax. Today the socket attributes; VC-163 is where it authenticates.
+    //
+    // Deliberately no `--dry-run`. The ratified preview matrix covers writes
+    // whose blast radius is worth rehearsing; this one appends a single typed
+    // row that supersedes nothing and moves nothing, and a preview of it would
+    // cost a round trip to be told exactly what the verb says it does.
+    key: "ticket.signal",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: { site: "main", id: "ticket.signal" },
+    listed: true,
+    referenceOrder: 16,
+    group: "Write",
+    summary: "Record a typed verdict on a ticket: which stage, and how it went.",
+    example: 'volli ticket signal VC-12 --kind review --verdict pass --detail "Two nits, fixed"',
+    notes: [
+      "Acts as this session; needs a Volli session, because a verdict is only worth what its signer is.",
+      "Signals carry state and comments carry prose — post both when a verdict needs an argument.",
+      "The board does not move. Use ticket move for that, deliberately.",
+      "Append-only: a later signal of the same kind supersedes an earlier one by being newer.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-signal",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket signal and its signaled Ticket event, in one transaction.",
+        },
+      ],
+      humanVisible: [
+        "The verdict appears in the Ticket activity feed and in ticket show's latest-signal lines.",
+      ],
+      nonEffects: [
+        "The Ticket does not move: signals are orthogonal to the board by design.",
+        "No Session starts, no notification fires, and no earlier signal is edited or erased.",
+      ],
+    },
+    positionalId: "required",
+    options: [
+      {
+        name: "--kind",
+        kind: "value",
+        placeholder: "<kind>",
+        values: `valid: ${TICKET_SIGNAL_KINDS.join(", ")}`,
+        required: true,
+        help: "Which stage this verdict is about.",
+      },
+      {
+        name: "--verdict",
+        kind: "value",
+        placeholder: "<verdict>",
+        values: `valid: ${TICKET_SIGNAL_VERDICTS.join(", ")}`,
+        required: true,
+        help: "How that stage went.",
+      },
+      {
+        name: "--detail",
+        kind: "value",
+        placeholder: "<text>",
+        help: "One line of prose for a reader; the verdict is what machines read.",
+      },
+    ],
+  },
+  {
     // VC-92 ruled this one off the agent surface entirely — an app-only
     // curation act, no bundle and no CLI access mode. It is still on the socket
     // here because this table records today's surface; VC-163 empties its
@@ -633,7 +708,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "ticket.archive" },
     listed: true,
-    referenceOrder: 16,
+    referenceOrder: 17,
     group: "Write",
     summary: "Archive a ticket (its worktree is preserved).",
     example: "volli ticket archive VC-12",
@@ -822,7 +897,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 18,
+    referenceOrder: 19,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
@@ -840,7 +915,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 19,
+    referenceOrder: 20,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -882,7 +957,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.start" },
     listed: true,
-    referenceOrder: 17,
+    referenceOrder: 18,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
@@ -1007,7 +1082,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 20,
+    referenceOrder: 21,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -1042,7 +1117,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 22,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -1073,7 +1148,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 23,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -1133,7 +1208,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 24,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -1192,7 +1267,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 27,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1237,7 +1312,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 26,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1274,7 +1349,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 25,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1299,7 +1374,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 27,
+    referenceOrder: 28,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
@@ -1365,6 +1440,12 @@ export const VERB_REGISTRY = [
           type: "number",
           description:
             "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+        },
+        {
+          name: "sinceMs",
+          type: "number",
+          description:
+            "Wake immediately on a matching event that already happened after this epoch-milliseconds time. Pass the previous wake's occurredAt so nothing that fired between two waits is ever missed.",
         },
       ],
     },

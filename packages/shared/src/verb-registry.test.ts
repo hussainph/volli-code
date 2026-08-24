@@ -16,9 +16,14 @@ import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
 
 /**
  * The socket surface as it stood before the registry existed: the 27 strings
- * `AGENT_COMMANDS` was authored with, in the order it authored them. The
- * projection has to reproduce this exactly — this ticket re-seats the surface,
- * it does not redesign it.
+ * `AGENT_COMMANDS` was authored with, in the order it authored them, plus what
+ * has been ADDED to the socket since. The projection has to reproduce this
+ * exactly — VC-161 re-seated the surface without redesigning it, and every
+ * later addition is named here in the open, where growing the agent surface is
+ * a line somebody has to write.
+ *
+ * Added since: `ticket.signal` (VC-85), declared beside the other ticket
+ * writes, which is where declaration order puts it.
  */
 const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
   "identify",
@@ -30,6 +35,7 @@ const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
   "ticket.update",
   "ticket.move",
   "ticket.comment",
+  "ticket.signal",
   "ticket.archive",
   "ticket.brief",
   "worktree.status",
@@ -69,6 +75,7 @@ const REFERENCE_SURFACE = [
   "ticket.update",
   "ticket.move",
   "ticket.comment",
+  "ticket.signal",
   "ticket.archive",
   "session.start",
   "session.list",
@@ -131,6 +138,11 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "ticket.update": "coordination",
   "ticket.move": "coordination",
   "ticket.comment": "coordination",
+  // VC-85's verdict channel, and the tier VC-92 pinned for it: a visible,
+  // attributable, reversible write on the Agent CLI. It is the verb that will
+  // be the first to REQUIRE its session actor rather than merely record one
+  // (VC-163); until that door authenticates, the tier reads as it is.
+  "ticket.signal": "coordination",
   notify: "coordination",
   "session.done": "coordination",
   "session.blocked": "coordination",
@@ -300,8 +312,9 @@ describe("verbTier", () => {
     // in the same breath, on the grounds that spend has to be cheap to sample.
     expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(16);
     // VC-92 assigns 10 coordination verbs; `ticket.archive` and `session.start`
-    // ride here too until VC-163 and VC-162 move them.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);
+    // ride here too until VC-163 and VC-162 move them, and `ticket.signal`
+    // (VC-85) was born into the class.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(13);
     expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
   });
 

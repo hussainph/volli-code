@@ -43,6 +43,10 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
   it("grants a Session the coordination verbs it already uses to report progress", () => {
     expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("ticket.comment");
     expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("session.done");
+    // Reporting a verdict is the same act as reporting progress (VC-85), so it
+    // is a default rather than something a project has to grant — otherwise the
+    // report goes back into a comment and nothing can query it.
+    expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("ticket.signal");
   });
 
   it("lets the user and a Session await the whole vocabulary, and an unauthenticated caller nothing (VC-85)", () => {

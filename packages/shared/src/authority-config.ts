@@ -186,6 +186,13 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
   "ticket.comment",
   "ticket.create",
   "ticket.move",
+  // The verdict channel (VC-85). A default rather than a grant, for the same
+  // reason `session.done` is one: reporting how your own stage went is the job,
+  // not a privilege on top of it. What makes a signal worth reading is that its
+  // signer is authenticated, which is VC-163's door to close — not a shorter
+  // list here, which would only push the report back into a comment nobody can
+  // query.
+  "ticket.signal",
   "ticket.update",
   "session.blocked",
   "session.done",

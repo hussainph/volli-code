@@ -255,6 +255,36 @@ export function isTicketSignalVerdict(value: unknown): value is TicketSignalVerd
   return typeof value === "string" && (TICKET_SIGNAL_VERDICTS as readonly string[]).includes(value);
 }
 
+/**
+ * One recorded verdict (`ticket_signals` table, migration 028) — the typed
+ * replacement for the `VERDICT:` first-line comment convention (VC-85).
+ *
+ * It pairs with the `signaled` event exactly as {@link TicketComment} pairs
+ * with `commented`: the row is the fact, the event makes it discoverable from
+ * planner history, and both are written in one transaction so neither can
+ * exist alone. The two channels stay separate on purpose — comments carry
+ * prose a person reads, signals carry state a machine reads, and folding them
+ * back together is the convention this replaces.
+ *
+ * Append-only, and never a board move. A later signal of the same kind
+ * supersedes an earlier one by being newer; nothing is edited, nothing is
+ * deleted, and a column changes only when someone deliberately moves it.
+ */
+export interface TicketSignal {
+  id: string;
+  ticketId: string;
+  kind: TicketSignalKind;
+  verdict: TicketSignalVerdict;
+  /** Free prose from `--detail`; `null` when the signer supplied none. */
+  detail: string | null;
+  /** {@link USER_ACTOR}, or the `"session"` token a socket write records. */
+  actor: string;
+  /** The Session that signed it; `null` only for a row whose Session was deleted. */
+  sessionId: string | null;
+  /** Epoch milliseconds. */
+  createdAt: number;
+}
+
 export type TicketEventActorKind = "user" | "session" | "automation";
 
 export interface TicketEventActorContext {
