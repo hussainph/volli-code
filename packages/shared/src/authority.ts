@@ -36,6 +36,7 @@
  */
 
 import type { JudgmentMode } from "./authority-config";
+import type { VerbToolKey } from "./verb-registry";
 
 /**
  * Which working tree a Session executes in.
@@ -87,8 +88,21 @@ export const NON_CODING_TOOL_IDS = [
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
 
-/** The complete durable Agent Tool Surface vocabulary, in canonical order. */
-export const SESSION_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as const;
+/**
+ * The capability half of the Agent Tool Surface vocabulary, in canonical order.
+ *
+ * These are the tools a Session holds by having something wired — an execution
+ * environment, an interaction port, a web boundary — rather than by its Role
+ * naming them. The other half is registry data: verbs carrying a `tool` access
+ * mode (`VERB_TOOL_KEYS`), which a Role bundle and a Session grant name.
+ * `agent-tool-surface.ts` is where the two are read together, and it is the only
+ * place that knows the whole vocabulary.
+ *
+ * Named for what it is rather than `SESSION_TOOL_IDS`, which it was called when
+ * it really was the complete list; a constant whose name overclaims its
+ * contents is how a caller ends up validating half a surface (VC-162).
+ */
+export const CAPABILITY_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as const;
 
 /**
  * Every name the Agent Tool Surface can carry, whatever kind of tool it is.
@@ -105,17 +119,28 @@ export const SESSION_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as 
  * above are that source, and `sessionToolIds` is the one place they are read
  * together.
  *
- * So this union will hold two spellings, and that is decided rather than
+ * So this union holds two spellings, and that is decided rather than
  * overlooked. Registry verbs are dot-named (`ticket.archive`, `session.start`);
- * the three tools here are not, and are not renamed to match. They are VC-92's
+ * the three tools above are not, and are not renamed to match. They are VC-92's
  * first family — product-authored tools that were already inside Pi's loop, with
  * no registry entry to take a key from — and `ask_user` is a name a model has
  * already been trained against by every harness that ships one. The rule the
  * amendment actually sets is that a name here must not *differ* from its verb's
  * dot-name; a verb with no dot-name cannot differ from one. A tool promoted from
  * the Agent CLI arrives dot-named and keeps it.
+ *
+ * The dot survives everywhere except the provider wire, which accepts no dot at
+ * all — so `VerbToolProjection.name` renders `session.start` as `session_start`
+ * for the tool array, and the runtime adapter translates back before anything
+ * durable is written. This union is the durable spelling, so it keeps the dot.
+ *
+ * Type-only import, and deliberately: `verb-registry.ts` reaches
+ * `agent-runtime.ts` for its own vocabulary, which reaches back here, so a value
+ * import would close a module cycle. Nothing here needs one — the runtime guard
+ * over these names is `isSessionToolId` in `agent-tool-surface.ts`, which is
+ * downstream of both.
  */
-export type SessionToolId = CodingToolId | NonCodingToolId;
+export type SessionToolId = CodingToolId | NonCodingToolId | VerbToolKey;
 
 /**
  * When silent denial stops being the right answer and the user should be asked.

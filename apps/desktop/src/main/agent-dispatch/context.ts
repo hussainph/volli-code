@@ -120,7 +120,22 @@ export interface AgentCommandServiceOptions {
    * lands in the log and in the Session's own durable state, never in the
    * caller's exit code.
    */
-  submitSessionMessage?: (input: { sessionId: string; text: string }) => Promise<void>;
+  submitSessionMessage?: (input: {
+    sessionId: string;
+    text: string;
+    /**
+     * The turn's durable ids, derived by the caller from its own operation id
+     * rather than minted here (VC-162).
+     *
+     * `message.submit` is deduplicated by command id in the Session Engine, so
+     * whether a replayed start sends one kickoff or two is decided entirely by
+     * whether this id is stable. Minting it here — which is what this port used
+     * to do — made every replay a second turn, which no caller could fix from
+     * outside.
+     */
+    commandId: string;
+    messageId: string;
+  }) => Promise<void>;
   /**
    * Fires one model-call title refinement (VC-81) behind a kickoff-derived
    * heuristic title, on the owner's ladder — utility default, then the

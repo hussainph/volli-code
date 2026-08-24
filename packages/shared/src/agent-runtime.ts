@@ -26,6 +26,9 @@ import type {
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
+// Type-only: `verb-registry.ts` reads this module's own vocabulary, so a value
+// import here would close a cycle. Nothing below needs one.
+import type { VerbToolKey } from "./verb-registry";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -184,8 +187,36 @@ export type RuntimeSessionIdentity = TicketRuntimeIdentity | ProjectRuntimeIdent
 /** Where execution happens. Local is the only venue built today. */
 export type ExecutionVenue = "local";
 
+/**
+ * The named half of a Session's Agent Tool Surface: what its Role handed it,
+ * as opposed to what a wired port gave it.
+ *
+ * Two fields rather than one widened list, and the reason is a sentence in the
+ * system prompt. `prompt.ts` renders {@link tools} as *"The available coding
+ * tools are: …"*, which is true of `read`/`edit`/`write`/`execute` and would
+ * become false the moment a product verb joined them. Widening the field would
+ * have made the prompt lie; adding a field beside it leaves those bytes exactly
+ * as they were (VC-162).
+ *
+ * They are also wired differently, which is the deeper reason they are not one
+ * list. A coding tool is answered by the execution environment the runtime
+ * holds; a verb tool is answered by a host port. Keeping them apart is what
+ * lets {@link SessionToolBinding} carry the right thing for each.
+ */
 export interface RuntimeToolBundle {
+  /** Coding tools, in the order this venue offers them. */
   tools: readonly CodingToolId[];
+  /**
+   * Product verbs from `bundle(Role) ∪ grants(session)`, in canonical registry
+   * order. Absent means none — a Ticket Session holds no verb tool today, and
+   * that absence is the Role-scoped availability VC-92 asked for.
+   *
+   * Membership comes from here; execution comes from
+   * {@link SessionRuntimeSpec.callVerb}. A bundle naming a verb with no port
+   * behind it fails where the surface is built, which is the cheapest place
+   * for it to fail.
+   */
+  verbs?: readonly VerbToolKey[];
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -633,14 +664,64 @@ export interface SessionRuntimeSpec {
    * answer and fails the call.
    */
   webSearch?: (input: { query: string; signal: AbortSignal }) => Promise<RuntimeWebSearchResults>;
+  /**
+   * Run one product verb the Session's Role bundle names, in the host's own
+   * process (VC-162).
+   *
+   * The door that makes Role-scoped availability real. A verb reached this way
+   * never crosses the agent socket, so the caller is not *attributed* from an
+   * environment variable it could have been handed — it is the Session this
+   * spec belongs to, bound by the host at attach and not stated in the call.
+   * That is the whole difference between the two doors, and it is why a verb
+   * whose misuse cannot be tolerated from an arbitrary same-uid process can
+   * live here and not on the socket.
+   *
+   * Unlike {@link askUser} and {@link webFetch}, this port does NOT decide
+   * membership: the bundle does. A Session whose bundle names a verb and whose
+   * spec omits this port is a host that promised a tool it cannot answer, and
+   * {@link sessionToolBindings} throws rather than building a surface with a
+   * hole in it. The asymmetry is deliberate — a web boundary is a capability a
+   * profile may genuinely lack, while a host that can attach a Session can
+   * always run its own verbs.
+   *
+   * `input` has already been checked against the registry's schema for that
+   * verb. What it has NOT been checked for is meaning: whether the Ticket
+   * exists, whether the model is available, whether the caller's project holds
+   * it. Those are the host's, and their refusals come back as text the model
+   * can act on rather than as thrown errors — the line {@link webFetch} draws
+   * between a refusal and a host that could not answer at all.
+   */
+  callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
+}
+
+/** One product verb call, as the runtime hands it to the host. */
+export interface RuntimeVerbCall {
+  /** The canonical dot-key, never the provider wire name. */
+  verb: VerbToolKey;
+  /** Schema-checked arguments; semantics are still the host's to judge. */
+  input: Readonly<Record<string, unknown>>;
+  /**
+   * The runtime's own id for this call.
+   *
+   * Carried so the host can derive a durable operation id from trusted caller
+   * identity plus this, rather than minting a fresh random one per execution.
+   * That is what makes a replayed tool call land as one durable act instead of
+   * two — the same reasoning the Session Engine's command dedup already runs on.
+   */
+  toolCallId: string;
+}
+
+/** What the model is told a verb did. Text, because that is all a model reads. */
+export interface RuntimeVerbResult {
+  text: string;
 }
 
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch"
+  "tools" | "askUser" | "webFetch" | "webSearch" | "callVerb"
 >;
 
 /**
@@ -658,7 +739,8 @@ export type SessionToolBinding =
   | { tool: CodingToolId }
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
-  | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> };
+  | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
+  | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
  * The Agent Tool Surface one spec describes, in the order it is offered.
@@ -694,9 +776,27 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
     web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
   };
+  const verbs = spec.tools.verbs ?? [];
+  const callVerb = spec.callVerb;
+  if (verbs.length > 0 && callVerb === undefined) {
+    // Loudly, and at the boundary that builds the surface. A bundle naming a
+    // verb the host cannot run is not a smaller surface — it is a Session whose
+    // durable record says it holds a tool that was never offered, which is the
+    // exact disagreement `sessionToolIds` exists to make unrepresentable.
+    throw new Error(
+      `This Session's bundle names ${verbs.join(", ")}, but no verb port is wired to answer it.`,
+    );
+  }
   return [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
+    ...verbs.map(
+      (verb): SessionToolBinding => ({
+        tool: verb,
+        verb,
+        port: callVerb as NonNullable<typeof callVerb>,
+      }),
+    ),
   ];
 }
 

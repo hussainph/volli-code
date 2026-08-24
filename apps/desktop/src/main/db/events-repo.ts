@@ -123,6 +123,58 @@ export function recordTicketEvent(
 }
 
 /**
+ * Record that a Session started on this Ticket, at most once per Session
+ * (VC-162).
+ *
+ * A Session starts exactly once, so this planner fact is about the Session
+ * rather than about the act of asking for one — and asking can now happen
+ * twice. A `session_start` tool call replayed by the provider re-enters the
+ * whole start, where every OTHER durable write is keyed on the caller's
+ * operation id and collapses: `session.create` and the kickoff `message.submit`
+ * both deduplicate on their command id in the Session Engine. A ticket event
+ * carries no such key, which would have left this the one write a replay
+ * duplicated — one Session, one kickoff, and two "started" lines in the
+ * Activity feed.
+ *
+ * So the fact itself is the key. Asking whether this exact Session already has
+ * a `session_started` row is a question the ledger can always answer, needs
+ * nothing threaded down from the caller, and is equally right for the two doors
+ * that never replay (the renderer's optimistic `create`, the socket's `start`)
+ * because for them it is simply never true.
+ *
+ * Atomic without a transaction: `better-sqlite3` is synchronous and main owns
+ * the only writer, so no other JavaScript can interleave between the read and
+ * the insert — there is no `await` between them to yield at.
+ *
+ * @returns whether this call is the one that wrote the row.
+ */
+export function recordSessionStartedOnce(
+  db: Database.Database,
+  input: { ticketId: string; sessionId: string; now: number; actor: TicketEventActor },
+): boolean {
+  // Keyed on kind and session id in SQL rather than folding the Ticket's whole
+  // history in memory: a Ticket accumulates events for as long as it is worked,
+  // and every Session start would have paid for all of them.
+  const existing = prepared<[string, string], { found: number }>(
+    db,
+    `SELECT 1 AS found FROM ticket_events
+      WHERE ticket_id = ?
+        AND kind = 'session_started'
+        AND json_extract(payload, '$.sessionId') = ?
+      LIMIT 1`,
+  ).get(input.ticketId, input.sessionId);
+  if (existing !== undefined) return false;
+  recordTicketEvent(
+    db,
+    input.ticketId,
+    { kind: "session_started", sessionId: input.sessionId },
+    input.now,
+    input.actor,
+  );
+  return true;
+}
+
+/**
  * A ticket's full event history, chronological (`created_at` ascending,
  * insertion-order/`rowid` tiebreak for events sharing a timestamp) — backs
  * the Activity feed (`api.tickets.events`).

@@ -37,7 +37,7 @@
 
 import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
-import { SESSION_TOOL_IDS } from "./authority";
+import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
@@ -1029,9 +1029,32 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
   });
 }
 
+/**
+ * A frozen Agent Tool Surface, read back.
+ *
+ * Guarded by {@link isSessionToolId} rather than one closed list, because the
+ * vocabulary now has two halves that live in different modules: the capability
+ * tools, and the Verb Registry keys this build can project as tools (VC-162).
+ * A name from either half decodes; anything else is a record this build cannot
+ * honestly rebind, and refusing it beats handing back a tool array quietly
+ * missing an entry.
+ *
+ * Refusing is EXPENSIVE, and deliberately stated so rather than softened. This
+ * throws a plain `Error`, and only {@link UnknownSessionEventKindError} is
+ * droppable at a ledger — so a record naming a name this build cannot bind
+ * fails every later read of that Session, not just its next attachment. That is
+ * the same bargain the closed list struck before VC-162, but the stakes moved:
+ * the capability half is a hand-edited list that does not shrink, while the
+ * verb half is derived from registry `accessModes`. Removing a `tool` access
+ * mode, or renaming a verb key, therefore makes every Session that recorded it
+ * unreadable — which is a migration to write, not a refactor to do quietly.
+ */
 function decodeSessionToolIds(value: unknown, context: string): readonly SessionToolId[] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((tool, index) => enumValue(tool, SESSION_TOOL_IDS, `${context}[${index}]`));
+  return value.map((tool, index) => {
+    if (!isSessionToolId(tool)) throw new Error(`${context}[${index}] has an unsupported value`);
+    return tool;
+  });
 }
 
 function decodeModelSelection(value: unknown, context: string): ModelSelection {
