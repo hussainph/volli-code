@@ -78,11 +78,15 @@ import {
   askOffer,
   askInteractionId,
   askUserInteractionId,
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
   readSkillResources,
   sessionToolIds,
   type AgentRuntime,
+  type AuthorityPolicy,
+  type AuthoritySnapshot,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ModelSelection,
@@ -152,15 +156,54 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
 };
 
 /**
- * The coding tools this slice loads — with no gate and no sandbox, the only
- * bound. Exported for the `prompt.baseline` diagnostic, which must price the
- * authority layer over the same tool list a real attach names.
+ * The coding tools this slice loads. Exported for the `prompt.baseline`
+ * diagnostic, which must price the authority layer over the same tool list a
+ * real attach names.
  */
 export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 type PiCodingToolId = (typeof PI_TOOLS.tools)[number];
 
 function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
   return (PI_TOOLS.tools as readonly SessionToolId[]).includes(tool);
+}
+
+/**
+ * The Authority Snapshot for one attachment, or `null` when the gate is off.
+ *
+ * Handed the Session's FROZEN Agent Tool Surface rather than deriving one, and
+ * that is the whole point of taking `toolSurface`: it is durable data recorded
+ * once for the Session (VC-164), and `runtimeSpec` asserts the array Pi resolves
+ * against re-derives to exactly it. So the list history records and the list the
+ * model can call are the same list by construction. A hand-written list here
+ * would compile, would look right, and would under-report the surface by exactly
+ * the three tools that tripped VC-3 — and it would no longer be caught, because
+ * `tool.not-bundled` was deleted once the lists had one source. What is left of
+ * that failure is quieter and worse for being durable: a Snapshot recorded here
+ * is read back months later to interpret a denial, and a tool list that was
+ * never the Session's is a record that lies.
+ *
+ * `null` for `enforcement: "off"` — the Session then runs at Pi's own defaults
+ * with no Snapshot to pin, which is what every Session did before VC-44 and what
+ * Codex and Claude Code both ship as an explicit bypass. It is a decision a
+ * project makes, not a state the product falls into.
+ */
+function piAuthoritySnapshot(
+  policy: AuthorityPolicy,
+  location: WorkLocationKind,
+  toolSurface: readonly SessionToolId[],
+): AuthoritySnapshot | null {
+  if (policy.enforcement === "off") return null;
+  return {
+    mode: "auto",
+    location,
+    enforcement: policy.enforcement,
+    judgmentMode: policy.judgmentMode,
+    tools: [...toolSurface],
+    rulePackId: BUILTIN_RULE_PACK_ID,
+    rulePackHash: BUILTIN_RULE_PACK_HASH,
+    classifierModel: policy.classifierModel,
+    fallback: policy.fallback,
+  };
 }
 
 /** Everything about a Session that a directory cannot tell the runtime. */
@@ -191,11 +234,41 @@ interface PiRuntimeContextFields {
    * `location.ts`, and policy that assumed otherwise would treat a person's
    * uncommitted work as a disposable branch.
    *
-   * Resolved but unread while Pi runs ungated — it exists only to key policy,
-   * and no Authority Snapshot is built. Kept resolved because the resolver is
-   * the correct answer to a question the re-architecture still asks.
+   * Read onto every Authority Snapshot this adapter builds (VC-44), which is
+   * what a rule like `command.git-discards-work` keys off: `git reset --hard` in
+   * a disposable branch worktree and the same command in a person's Main
+   * checkout are not the same act.
    */
   location: WorkLocationKind;
+  /**
+   * The project's resolved authority policy — built-in defaults with this
+   * project's recorded departures applied (VC-44).
+   *
+   * Resolved by main, because only main can reach the store: it is a column on
+   * `projects` in the SQLite database under Electron's `userData`, and this
+   * module stays Electron-free so its tests run in plain Node. That split is
+   * also the security property. Policy is read from app-owned state and never
+   * from the tree the Session is editing, so a Session cannot write the file
+   * that governs it — the privilege-escalation loop Claude Code's classifier
+   * refuses repo-local `autoMode` settings to avoid.
+   *
+   * Read once per attachment, like the web ports and for the same reason: what a
+   * Session may do is pinned when it starts, so a Settings change never lands
+   * mid-turn.
+   */
+  authorityPolicy: AuthorityPolicy;
+  /**
+   * Refusals this Session accrued before this attachment existed, from
+   * `SessionProjection.authorityDenials` (VC-44).
+   *
+   * Carried because the Session half of {@link AuthorityFallback} is a fact
+   * about the Session and not about one attachment: a counter that restarted at
+   * zero on every attach would never reach a threshold of twenty, so the
+   * escalation it exists to trigger would simply never happen. It is live
+   * machine state rather than policy, which is why it rides beside the Snapshot
+   * instead of inside it — the Snapshot is pinned and this is re-read every time.
+   */
+  priorAuthorityDenials: number;
   /**
    * The skills this Session was explicitly started with, read from its own
    * durable `prompt-resources` record — never from disk at attach time, so a
@@ -569,6 +642,8 @@ class PiBinding implements BindingHandle {
    */
   #releasing = false;
   #released = false;
+  /** Pinned at construction; see {@link PiBinding.authority}. */
+  readonly #authority: AuthoritySnapshot | null;
 
   constructor(options: PiBindingOptions) {
     this.#spec = options.spec;
@@ -579,6 +654,27 @@ class PiBinding implements BindingHandle {
     this.#web = options.web;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
+    // Last, because every field it reads must already be set.
+    //
+    // A rehydrated attachment REPLAYS the Snapshot it opened under; only a fresh
+    // one resolves current policy (VC-44). Pinning is a claim about the
+    // attachment's whole life, not about one process, so an attachment that
+    // outlives a relaunch and a policy edit must keep answering with the pack it
+    // was judged against — otherwise `authority.denied`, which resolves through
+    // `attachmentId`, would cite a pack that never saw the call.
+    //
+    // Tested for PRESENCE, not for truthiness: a rehydrated attachment that
+    // opened under `off` pins `null`, and `??` would read that as "nobody said"
+    // and resolve today's policy — handing a Snapshot to the one attachment that
+    // is entitled to run without one.
+    this.#authority =
+      "pinnedAuthority" in options.spec
+        ? (options.spec.pinnedAuthority ?? null)
+        : piAuthoritySnapshot(
+            options.context.authorityPolicy,
+            options.context.location,
+            options.context.toolSurface,
+          );
   }
 
   /**
@@ -598,6 +694,17 @@ class PiBinding implements BindingHandle {
 
   get native(): SessionNativeReference {
     return this.#native;
+  }
+
+  /**
+   * The policy this attachment runs under, for the Session Engine to record.
+   *
+   * Computed once in the constructor rather than per read, because a Snapshot is
+   * pinned for the life of an attachment by its own definition — two reads that
+   * could differ would make "pinned" a claim rather than a property.
+   */
+  get authority(): AuthoritySnapshot | null {
+    return this.#authority;
   }
 
   runtimeSpec(): SessionRuntimeSpec {
@@ -630,11 +737,29 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // No `authority`: Volli runs Pi ungated, so the runtime installs no gate
-      // and the rule pack never runs. The Snapshot is omitted rather than
-      // neutered — see docs/plans/authority-two-axis-rearchitecture.md, which
-      // replaces the policy this adapter used to pin and keeps the mechanism,
-      // including the `ask` port still wired below.
+      // The Snapshot reaches the runtime only when it is meant to bind, which
+      // is what makes `enforcement` real rather than advisory (VC-44). Pi
+      // installs `beforeToolCall` on this field's PRESENCE, so:
+      //
+      //   off      → no Snapshot at all      → absent → no gate
+      //   observe  → Snapshot, recorded only → absent → no gate
+      //   enforce  → Snapshot, handed over   → present → gate installs
+      //
+      // `observe` is deliberately absent here rather than present-and-permissive.
+      // A gate that installs and allows everything would still normalize every
+      // call — resolving paths, lexing shells — and could still refuse one it
+      // could not read (`call.unreadable` fails closed by design). That is a real
+      // behaviour change bought for a record nothing writes yet. The Snapshot is
+      // still pinned and still durable, through `authority` above, which is what
+      // this slice owes. VC-28 v0 adds the recording gate that gives `observe`
+      // its second half.
+      //
+      // Spread rather than assigned for `promptResources`' reason: the field must
+      // be ABSENT, not set to undefined.
+      ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      // Read on every attach, never pinned: it is the count of refusals history
+      // already holds, and the Session's own threshold is measured against it.
+      priorAuthorityDenials: this.#context.priorAuthorityDenials,
       brief: { text: this.#context.brief },
       // Spread, not assigned, for the same reason `promptResources` is: an
       // unmeasured workspace must reach the prompt as an ABSENT field rather

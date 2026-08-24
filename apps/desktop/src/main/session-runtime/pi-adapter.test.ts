@@ -8,8 +8,12 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
 import {
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
+  DEFAULT_AUTHORITY_POLICY,
   errorMessage,
   promptResourceBlock,
+  resolveAuthorityPolicy,
   sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
@@ -41,6 +45,11 @@ const ATTACHMENT_ID = "attachment-1";
 const context: PiRuntimeContext = {
   role: "ticket",
   location: "worktree",
+  // The built-in defaults, which is what a project that has recorded no
+  // departure resolves to — `enforcement: "observe"`, so the Snapshot is pinned
+  // and the runtime is handed none.
+  authorityPolicy: DEFAULT_AUTHORITY_POLICY,
+  priorAuthorityDenials: 0,
   projectId: "project-1",
   ticketId: "ticket-1",
   rootThreadId: sessionRootThreadId(SESSION_ID),
@@ -402,6 +411,179 @@ describe("Pi runtime host", () => {
   });
 });
 
+/**
+ * VC-44's acceptance, held here because this is the one product caller that
+ * constructs an Authority Snapshot.
+ */
+describe("Pi native adapter authority snapshot", () => {
+  const policy = (over: Parameters<typeof resolveAuthorityPolicy>[0]) =>
+    ({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        authorityPolicy: resolveAuthorityPolicy(over),
+      }),
+    }) satisfies Partial<PiAdapterOptions>;
+
+  it("pins a Snapshot the Session Engine can record, naming the pack it ran under", async () => {
+    const { binding } = await attached();
+
+    // The whole point of the ticket: `rulePackId`/`rulePackHash` finally have
+    // something durable to be pinned on, so an `authority.denied` event — which
+    // carries this attachment's id — resolves to the exact pack that refused.
+    expect(binding.authority).toMatchObject({
+      mode: "auto",
+      location: "worktree",
+      rulePackId: BUILTIN_RULE_PACK_ID,
+      rulePackHash: BUILTIN_RULE_PACK_HASH,
+    });
+  });
+
+  it("records the Agent Tool Surface the Session actually holds, interaction tools included", async () => {
+    // VC-3's guarantee, held in the product rather than only in tests: the
+    // Snapshot is the Session's FROZEN tool surface, and `runtimeSpec` asserts
+    // the array Pi resolves against re-derives to that same list. So it cannot
+    // under-report by the three tools that used to trip `tool.not-bundled`.
+    const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+      }),
+      resolveWebPorts: () => ({
+        webFetch: async () => {
+          throw new Error("unused");
+        },
+        webSearch: async () => {
+          throw new Error("unused");
+        },
+      }),
+    });
+
+    expect(binding.authority?.tools).toEqual([
+      "read",
+      "edit",
+      "write",
+      "execute",
+      "ask_user",
+      "web_fetch",
+      "web_search",
+    ]);
+    expect(binding.authority?.tools).toEqual(sessionToolIds(runtime.spec));
+  });
+
+  it("omits a web tool from the Snapshot when the Session's surface never named one", async () => {
+    // A tool the Session was never offered must not appear in the durable record
+    // of what it was allowed to do. The frozen surface is what decides that, so
+    // resolving no port cannot add one and could not silently drop one either.
+    const { binding } = await attached({ resolveWebPorts: () => ({}) });
+
+    expect(binding.authority?.tools).toEqual(["read", "edit", "write", "execute", "ask_user"]);
+  });
+
+  it("observes by default: the Snapshot is pinned and the runtime is handed none", async () => {
+    const { binding, runtime } = await attached(policy(null));
+
+    expect(binding.authority?.enforcement).toBe("observe");
+    // Absent, not present-and-permissive: Pi installs `beforeToolCall` on this
+    // field's presence, so absence is what keeps the pack dormant.
+    expect("authority" in runtime.spec).toBe(false);
+  });
+
+  it("hands the runtime the Snapshot only when the project asks it to enforce", async () => {
+    const { binding, runtime } = await attached(policy({ enforcement: "enforce" }));
+
+    expect(binding.authority?.enforcement).toBe("enforce");
+    expect(runtime.spec.authority).toEqual(binding.authority);
+  });
+
+  it("pins no Snapshot at all when a project turns the gate off", async () => {
+    // The explicit bypass — Codex's and Claude Code's — and what every Session
+    // ran under before VC-44. Nothing to record, because nothing governed it.
+    const { binding, runtime } = await attached(policy({ enforcement: "off" }));
+
+    expect(binding.authority).toBeNull();
+    expect("authority" in runtime.spec).toBe(false);
+  });
+
+  it("carries the judgment mode and thresholds the project recorded", async () => {
+    const { binding } = await attached(
+      policy({ judgmentMode: "auto", fallback: { consecutiveDenials: 1 } }),
+    );
+
+    expect(binding.authority?.judgmentMode).toBe("auto");
+    expect(binding.authority?.fallback).toEqual({ consecutiveDenials: 1, sessionDenials: 20 });
+  });
+
+  it("seeds the runtime with the refusals history already holds", async () => {
+    // The Session half of the fallback is a fact about the Session. A counter
+    // that restarted at zero on every attach would never reach a threshold of
+    // twenty, so the escalation it exists to trigger would never fire — a gate
+    // that looks configured and silently never asks anyone anything.
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({ ...context, priorAuthorityDenials: 19 }),
+    });
+
+    expect(runtime.spec.priorAuthorityDenials).toBe(19);
+  });
+
+  it("replays a rehydrated attachment's own Snapshot instead of today's policy", async () => {
+    // Pinning is a claim about the attachment's whole life, not about one
+    // process. A relaunch rebuilds the binding from history, and the project's
+    // policy may have changed in between; re-resolving it here would leave the
+    // live gate and the durable record disagreeing about one `attachmentId` —
+    // and `authority.denied` resolves through exactly that id, so the durable
+    // half would be the wrong one.
+    const opened = await attached();
+    const pinned = opened.binding.authority;
+    expect(pinned?.enforcement).toBe("observe");
+
+    const { binding, runtime } = await attached(
+      // The project turned enforcement on after this attachment opened.
+      policy({ enforcement: "enforce" }),
+      attachmentSpec({
+        continuity: "native_resume",
+        native: opened.binding.native,
+        pinnedAuthority: pinned,
+      }),
+    );
+
+    expect(binding.authority).toEqual(pinned);
+    // And the posture rides with it: the replayed Snapshot still observes, so
+    // the gate stays uninstalled for the attachment that opened without it.
+    expect("authority" in runtime.spec).toBe(false);
+  });
+
+  it("keeps a rehydrated attachment ungoverned when it opened with no Snapshot", async () => {
+    // `null` is a real answer, distinct from absence: the attachment opened
+    // under `off` (or predates VC-44), and a policy edit made afterwards must
+    // not retroactively hand it a Snapshot it never ran under.
+    const opened = await attached();
+    const { binding, runtime } = await attached(
+      policy({ enforcement: "enforce" }),
+      attachmentSpec({
+        continuity: "native_resume",
+        native: opened.binding.native,
+        pinnedAuthority: null,
+      }),
+    );
+
+    expect(binding.authority).toBeNull();
+    expect("authority" in runtime.spec).toBe(false);
+  });
+
+  it("records the tree the Session runs in, so policy can tell a worktree from a Main checkout", async () => {
+    const { binding } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        role: "project",
+        ticketId: null,
+        location: "main-checkout",
+      }),
+    });
+
+    expect(binding.authority?.location).toBe("main-checkout");
+  });
+});
+
 describe("Pi native adapter attach", () => {
   it("starts a ticket session in the prepared directory with the pinned model and brief", async () => {
     const { runtime, binding } = await attached();
@@ -656,6 +838,8 @@ describe("Pi native adapter attach", () => {
         resolveRuntimeContext: async () => ({
           role: "project",
           location: "main-checkout",
+          authorityPolicy: DEFAULT_AUTHORITY_POLICY,
+          priorAuthorityDenials: 0,
           projectId: "project-1",
           ticketId: null,
           rootThreadId: sessionRootThreadId(SESSION_ID),

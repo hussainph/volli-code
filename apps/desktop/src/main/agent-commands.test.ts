@@ -1537,6 +1537,7 @@ describe("agent command service", () => {
           venue: { id: "local", kind: "local" },
           continuity: "fresh",
           native: { id: "pi-1", detail: null },
+          authority: null,
         },
       });
       await sessionEngine.observe({

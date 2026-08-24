@@ -17,7 +17,16 @@ const OVERRIDABLE: AuthorityVerdict = {
   reason: "This command discards uncommitted work in a Main checkout.",
 };
 
-/** A refusal that stands whatever the answer, because the sandbox denies it too. */
+/**
+ * A refusal over workspace containment.
+ *
+ * It used to stand whatever the answer, because Seatbelt denied the same read a
+ * layer down and consent was therefore moot. VC-44 re-derived that when it wired
+ * the gate: the sandbox is not installed, so a "yes" here would actually be
+ * carried out, and Volli's own skills index asks a Session to read a
+ * personal-tier `SKILL.md` outside its workspace. It is overridable now, which
+ * is what the assertions below record.
+ */
 const REPORTED: AuthorityVerdict = {
   outcome: "deny",
   cause: "path.outside-workspace",
@@ -143,7 +152,7 @@ describe("AuthorityEscalation", () => {
         turnId: "turn-1",
         reason: REPORTED.reason,
         trip: "session",
-        overridable: false,
+        overridable: true,
       },
       expect.any(AbortSignal),
     );

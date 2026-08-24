@@ -14,6 +14,8 @@ function snapshot(overrides: Partial<AuthoritySnapshot> = {}): AuthoritySnapshot
   return {
     mode: "auto",
     location: "worktree",
+    enforcement: "enforce",
+    judgmentMode: "ask",
     tools: ["read", "edit", "write", "execute"] satisfies CodingToolId[],
     rulePackId: BUILTIN_RULE_PACK_ID,
     rulePackHash: BUILTIN_RULE_PACK_HASH,

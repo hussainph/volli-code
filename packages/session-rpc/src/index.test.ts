@@ -64,6 +64,7 @@ function attachmentWithRecovery(): SessionAttachmentProjection {
     venue: { id: "local", kind: "local" },
     continuity: "fresh",
     native: recoveryNative(),
+    authority: null,
     status: "open",
     openedAt: 10,
     closedAt: null,
@@ -180,6 +181,7 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
     venue: attachment.venue,
     continuity: attachment.continuity,
     native: attachment.native,
+    authority: attachment.authority,
   };
   return [
     frameWithPayload(5, { kind: "attachment.opened", attachment: eventAttachment }),

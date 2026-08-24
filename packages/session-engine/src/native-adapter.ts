@@ -1,4 +1,5 @@
 import type {
+  AuthoritySnapshot,
   ModelSelection,
   RuntimeObservation,
   SessionAttachmentContinuity,
@@ -21,6 +22,25 @@ export interface NativeAttachmentSpec {
   directory: string;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
+  /**
+   * The Authority Snapshot this attachment ALREADY opened under, when it is
+   * being rebuilt rather than opened (VC-44).
+   *
+   * Present only on the cold-rehydration path, and it is what makes "pinned for
+   * the life of one attachment" a property instead of a claim. The adapter
+   * resolves current project policy when it opens an attachment; replaying that
+   * resolution on rehydration would re-govern a live attachment from whatever
+   * the store says today, so a relaunch after a policy edit would leave the same
+   * `attachmentId` running under one policy while `authority.denied` — which
+   * resolves through that id — still cited the recorded one. Two answers to one
+   * question, and the durable one wrong.
+   *
+   * `null` is meaningful and distinct from absence: the attachment opened with
+   * no Snapshot (its project had `enforcement: "off"`, or it predates VC-44), and
+   * it must keep running with none rather than acquire one from a policy edit
+   * made after it opened. Absent means "not a rehydration" — resolve policy.
+   */
+  pinnedAuthority?: AuthoritySnapshot | null;
 }
 
 export type NativeMessageDelivery = "queue" | "steer" | "replace";
@@ -121,6 +141,23 @@ export type ReleaseReason = "requested" | "shutdown" | "replaced" | "adapter_fai
 
 export interface BindingHandle {
   readonly native: SessionNativeReference;
+  /**
+   * The Authority Snapshot this binding runs under, for the Session Engine to
+   * record onto the attachment (VC-44).
+   *
+   * Read the same way and at the same moment as {@link BindingHandle.native}:
+   * once, straight after `attach` resolves, on the way to writing
+   * `attachment.opened`. That is what makes the Snapshot durable without giving
+   * this package any part in constructing one — the Engine owns Session history
+   * and the adapter owns policy, and neither has to learn the other's job.
+   *
+   * Optional on the interface and null-able in the answer, which are two
+   * different absences. An adapter that predates authority (a terminal
+   * companion) does not implement the field at all; an adapter that implements
+   * it answers `null` for a Session whose project turned the gate off. Both
+   * record as `null`, because both mean the same thing about the attachment.
+   */
+  readonly authority?: AuthoritySnapshot | null;
   dispatch(command: HarnessCommand): Promise<DeliveryReceipt>;
   reconcile(cursor: SessionNativeDetail | null): Promise<Reconciliation>;
   /** Called only after every fact in the returned reconciliation batch commits durably. */
