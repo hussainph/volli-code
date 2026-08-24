@@ -1443,6 +1443,23 @@ async function attachSession(
           // while both remain in the ledger and on screen.
           agent.state.messages = outcome.messages;
         }
+        // Recorded before the compaction fact, so a crash between the two
+        // loses the summary rather than the bill: the summary is recoverable
+        // from Pi's own entry, and spend that went unrecorded is not.
+        if (outcome.kind === "compacted" && outcome.usage !== null) {
+          await commitObservation(
+            await persistObservation({
+              kind: "usage",
+              // Named after the compaction entry, which is what makes a
+              // replayed compaction land on the bill it already has.
+              entryId: outcome.entry.id,
+              // Compaction has no turn of its own. Inventing one here would
+              // put maintenance spend inside a conversation unit it is not in.
+              turnId: null,
+              usage: outcome.usage,
+            }),
+          );
+        }
         await commitObservation(
           await persistObservation(
             outcome.kind === "compacted"

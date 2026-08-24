@@ -4612,6 +4612,24 @@ describe("compacting a context that reached its reserve", () => {
     ]);
     const [compaction] = compactions(attachment.observations);
     expect(compaction?.state === "compacted" && compaction.tokensAfter).toBeLessThan(OVER_RESERVE);
+
+    // Summarising a Session costs a model call, and that call is spent on the
+    // Session's behalf. A cost report that omitted it would tell an owner the
+    // long pass was cheaper than the short one.
+    const compactionUsage = attachment.observations.flatMap((observation) =>
+      observation.kind === "usage" && observation.usage.cause === "compaction"
+        ? [observation.usage]
+        : [],
+    );
+    expect(compactionUsage).toEqual([
+      expect.objectContaining({
+        cause: "compaction",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: expect.any(Number),
+        costBasis: "catalog-estimate",
+      }),
+    ]);
     await handle.close();
   });
 

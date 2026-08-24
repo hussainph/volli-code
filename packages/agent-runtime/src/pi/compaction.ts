@@ -55,8 +55,9 @@ import {
   type ProvisionedEntry,
   type Session,
 } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { sanitizeDiagnostic } from "./transcript";
+import type { Api, Model, Models, Usage } from "@earendil-works/pi-ai";
+import type { SessionUsage } from "@volli/shared";
+import { costBasisForApi, sanitizeDiagnostic } from "./transcript";
 
 /**
  * A model's usable window, or nothing when the catalog does not report one.
@@ -206,7 +207,20 @@ export function contextMessages(path: readonly Entry[]): AgentMessage[] {
 
 /** What one compaction attempt did. Only `compacted` changes anything. */
 export type CompactionOutcome =
-  | { kind: "compacted"; entry: CompactionEntry; messages: AgentMessage[] }
+  | {
+      kind: "compacted";
+      entry: CompactionEntry;
+      messages: AgentMessage[];
+      /**
+       * What the summarization cost, when Pi reported it.
+       *
+       * Carried on the outcome rather than left in the durable entry because
+       * the entry is Pi's storage shape and the Session's bill is Volli's
+       * fact. Pi may make more than one summarization request; the result it
+       * returns is already the aggregate.
+       */
+      usage: SessionUsage | null;
+    }
   /** Pi found nothing to compact — an empty path, or one already ending in a compaction. */
   | { kind: "skipped" }
   /** The summarization call failed or was aborted. Nothing was written. */
@@ -270,7 +284,35 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     details: compacted.details,
   };
   const entry = await input.sidecar.appendEntry<CompactionEntry>(durableJson(provisioned), "main");
-  return { kind: "compacted", entry, messages: contextMessages([...input.path, entry]) };
+  return {
+    kind: "compacted",
+    entry,
+    messages: contextMessages([...input.path, entry]),
+    usage: compactionUsage(compacted.usage, input.model),
+  };
+}
+
+/**
+ * The summary call's usage, in Volli's own vocabulary.
+ *
+ * `CompactResult` carries a provider usage block but no API family, so the
+ * basis comes from the model the summary was generated on — which is the same
+ * model, and therefore the same adapter, that priced it.
+ */
+function compactionUsage(usage: Usage | undefined, model: Model<Api>): SessionUsage | null {
+  if (usage === undefined) return null;
+  const costUsd = Number.isFinite(usage.cost.total) ? usage.cost.total : null;
+  return {
+    cause: "compaction",
+    providerId: model.provider,
+    modelId: model.id,
+    inputTokens: Number.isFinite(usage.input) ? usage.input : null,
+    outputTokens: Number.isFinite(usage.output) ? usage.output : null,
+    cacheReadTokens: Number.isFinite(usage.cacheRead) ? usage.cacheRead : null,
+    cacheWriteTokens: Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : null,
+    costUsd,
+    costBasis: costUsd === null ? "unavailable" : costBasisForApi(model.api),
+  };
 }
 
 /**
