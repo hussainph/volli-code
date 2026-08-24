@@ -57,6 +57,9 @@ import type {
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
+  SessionUsageGrouping,
+  SessionUsageReport,
+  SessionUsageScope,
   SkillReference,
   TerminalBusyResult,
   TerminalCommandResult,
@@ -268,6 +271,21 @@ export interface SessionRetitledEvent {
 /** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
 export interface SessionStartsInput {
   sinceMs: number;
+}
+
+/**
+ * What a usage read is asking about (VC-87).
+ *
+ * The scope is the ledger's own tagged union rather than three optional ids,
+ * so "every project" and "a project I have not named" cannot be spelled the
+ * same way across the wire. `sinceMs` is inclusive and `untilMs` exclusive, so
+ * adjacent windows tile without counting a boundary operation twice.
+ */
+export interface UsageReportInput {
+  scope: SessionUsageScope;
+  sinceMs?: number;
+  untilMs?: number;
+  groupBy?: SessionUsageGrouping;
 }
 
 /**
@@ -514,6 +532,15 @@ export interface VolliDataIpcContract {
    * `session-list` would fold every Session's whole history to answer it.
    */
   "volli:session-starts": { args: [input: SessionStartsInput]; result: SessionStartsResult };
+  /**
+   * What a scope consumed over a window, optionally broken down (VC-87).
+   *
+   * One indexed read over the usage projection plus one pass of arithmetic —
+   * no Session histories folded and no transcript artifacts opened. It carries
+   * only metadata: token counts, a cost, a basis and ids. No prompt, reply,
+   * path, credential or provider error prose crosses this channel.
+   */
+  "volli:usage-report": { args: [input: UsageReportInput]; result: UsageReportResult };
   /**
    * The venue a Session of this scope runs in, measured (VC-55): the checkout,
    * its branch, the four-state file partition, and the lines moved against the
@@ -1878,6 +1905,12 @@ export type SessionRenameResult = Result;
 
 /** Session creation stamps in the requested window, ascending — every project's. */
 export type SessionStartsResult = Result<{ startedAt: number[] }>;
+
+/**
+ * One usage rollup (`usage-report`): a total, its optional breakdown, and the
+ * metered-Session count that keeps an honest gap visible.
+ */
+export type UsageReportResult = Result<{ report: SessionUsageReport }>;
 
 /** One venue reading (`venue-snapshot`); the error arm carries git's own message. */
 export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;

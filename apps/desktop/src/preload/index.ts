@@ -125,6 +125,8 @@ import type {
   SessionsResult,
   SessionStartedNotice,
   SessionStartsResult,
+  UsageReportInput,
+  UsageReportResult,
   TerminalOverlayWriteResult,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -450,6 +452,17 @@ const api = {
      */
     starts: (sinceMs: number): Promise<SessionStartsResult> =>
       invoke("volli:session-starts", { sinceMs }),
+    /**
+     * What a scope consumed over a window, optionally broken down (VC-87).
+     *
+     * A pull, with no subscription beside it. Usage changes when a turn
+     * settles, which the renderer already learns about through the Session
+     * stream — so the rails re-ask on that signal rather than polling, and a
+     * second push channel carrying the same news would be a second clock to
+     * keep in step.
+     */
+    usageReport: (input: UsageReportInput): Promise<UsageReportResult> =>
+      invoke("volli:usage-report", input),
     /**
      * Subscribes to backward-move interrupt announcements (issue #78, CONCEPT
      * #20): fired only when a ticket move out of the active columns actually

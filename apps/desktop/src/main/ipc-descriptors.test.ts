@@ -1037,6 +1037,55 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:usage-report", () => {
+    const { guard, invalidError } = DATA_IPC["volli:usage-report"];
+
+    it("accepts each scope arm with the id that arm requires", () => {
+      expect(guard([{ scope: { kind: "all" } }])).toBe(true);
+      expect(guard([{ scope: { kind: "project", projectId: "p1" } }])).toBe(true);
+      expect(guard([{ scope: { kind: "ticket", ticketId: "t1" } }])).toBe(true);
+      expect(guard([{ scope: { kind: "session", sessionId: "s1" } }])).toBe(true);
+    });
+
+    it("rejects an unknown scope arm, and an arm missing its id", () => {
+      // The arm must not fall through to the ledger's own switch: an
+      // unrecognised kind there would read a scope nobody asked for.
+      expect(guard([{ scope: { kind: "everything" } }])).toBe(false);
+      expect(guard([{ scope: { kind: "project" } }])).toBe(false);
+      expect(guard([{ scope: { kind: "ticket", ticketId: 7 } }])).toBe(false);
+      expect(guard([{ scope: { kind: "session", sessionId: null } }])).toBe(false);
+      expect(guard([{}])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("treats the window bounds as optional but requires them to be usable", () => {
+      expect(guard([{ scope: { kind: "all" }, sinceMs: 0 }])).toBe(true);
+      expect(guard([{ scope: { kind: "all" }, sinceMs: 1, untilMs: 2 }])).toBe(true);
+      // A NaN bound would reach SQLite as a comparison that matches nothing,
+      // and the surface would draw the empty report as a measured zero.
+      expect(guard([{ scope: { kind: "all" }, sinceMs: Number.NaN }])).toBe(false);
+      expect(guard([{ scope: { kind: "all" }, untilMs: Number.POSITIVE_INFINITY }])).toBe(false);
+      expect(guard([{ scope: { kind: "all" }, sinceMs: "last week" }])).toBe(false);
+    });
+
+    it("accepts only the four grouping dimensions the report offers", () => {
+      for (const groupBy of ["ticket", "session", "model", "day"]) {
+        expect(guard([{ scope: { kind: "all" }, groupBy }])).toBe(true);
+      }
+      expect(guard([{ scope: { kind: "all" }, groupBy: "provider" }])).toBe(false);
+      expect(guard([{ scope: { kind: "all" }, groupBy: null }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ scope: { kind: "all" } }, { scope: { kind: "all" } }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid usage query");
+    });
+  });
+
   describe("volli:venue-snapshot", () => {
     const { guard, invalidError } = DATA_IPC["volli:venue-snapshot"];
 
@@ -1562,9 +1611,10 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 56 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(56);
+    it("covers all 57 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(57);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      expect(DATA_CHANNELS).toContain("volli:usage-report");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
