@@ -4,6 +4,7 @@ import {
   askChoice,
   askOffer,
   REASONING_LEVELS,
+  sessionToolBindings,
   sessionToolIds,
   UtilityCompletionError,
   type RuntimeAskRequest,
@@ -143,6 +144,12 @@ const port = async () => {
 };
 
 /**
+ * The verb port, which unlike the three above decides no membership — the
+ * bundle does. Kept apart because it has a return type the others do not.
+ */
+const verbPort = async () => ({ text: "a verb port fixture is presence only" });
+
+/**
  * The one derivation of a Session's Agent Tool Surface.
  *
  * These are not tests of a list-builder. They are the tests that stand in for a
@@ -192,6 +199,42 @@ describe("sessionToolIds", () => {
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
     expect(everything).toHaveLength(7);
+  });
+
+  it("puts the Role's verbs last, after every capability tool (VC-162)", () => {
+    // Appending the verb half is what keeps a verb added in a later product
+    // version from shifting the position of anything already in a Session's
+    // frozen record — which would be a full Cache Prefix miss for a surface
+    // that did not otherwise change.
+    expect(
+      sessionToolIds({
+        tools: { tools: ["read", "edit"], verbs: ["session.start"] },
+        askUser: port,
+        callVerb: verbPort,
+      }),
+    ).toEqual(["read", "edit", "ask_user", "session.start"]);
+  });
+
+  it("carries the port on the verb binding, so the runtime never null-checks one", () => {
+    const bindings = sessionToolBindings({
+      tools: { tools: [], verbs: ["session.start"] },
+      callVerb: verbPort,
+    });
+
+    // The dot-key twice: once as the surface name every durable record spells,
+    // once as the verb the host is asked to run. The provider-safe rendering
+    // belongs to the runtime adapter and appears nowhere in here.
+    expect(bindings).toEqual([{ tool: "session.start", verb: "session.start", port: verbPort }]);
+  });
+
+  it("refuses to build a surface whose bundle names a verb nothing can answer", () => {
+    // Unlike an interaction port, this one decides no membership — the bundle
+    // does. So a missing port is not a smaller surface; it is a Session whose
+    // record claims a tool that was never offered, and that disagreement is
+    // exactly what this derivation exists to make unrepresentable.
+    expect(() => sessionToolIds({ tools: { tools: ["read"], verbs: ["session.start"] } })).toThrow(
+      "This Session's bundle names session.start, but no verb port is wired to answer it.",
+    );
   });
 });
 

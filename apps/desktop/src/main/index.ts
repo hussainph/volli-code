@@ -30,9 +30,9 @@ import {
   draftAttachmentHashes,
   makeAgentError,
   memoizedPathExists,
+  resolveAgentToolSurface,
   resolveDefaultModel,
   resolveShell,
-  sessionToolIds,
   skillPromptResource,
   skillResourcePart,
   skillsIndexResource,
@@ -43,6 +43,7 @@ import {
 } from "@volli/shared";
 import type {
   PromptResource,
+  RuntimeVerbResult,
   SessionEnvRepair,
   SessionEvent,
   SessionInput,
@@ -72,7 +73,7 @@ import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/pr
 import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
-import { recordTicketEvent } from "./db/events-repo";
+import { recordSessionStartedOnce } from "./db/events-repo";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -147,6 +148,9 @@ import {
   broadcastSystemAppearance,
   broadcastUpdateState,
 } from "./broadcast";
+import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
+import { createAgentToolDoor } from "./agent-tool-door";
+import type { AgentToolDoor } from "./agent-tool-door";
 import { startOrphanSweep } from "./orphan-sweep";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -789,19 +793,28 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null
       ? {
-          resolve: () => {
+          resolve: (role) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
-            // to prove the capability works, but `sessionToolIds` retains only
-            // sanitized names/order; the provider closures are discarded here.
+            // to prove the capability works, but only sanitized names and order
+            // survive this closure; the provider closures are discarded here.
             const web = webPortsFor(webAccess.resolve());
-            return sessionToolIds({
-              tools: PI_TOOLS,
-              // The desktop always owns the ask surface. This placeholder is
-              // never called; the adapter binds the real interaction port.
-              askUser: async () => {
-                throw new Error("Tool-surface resolution cannot ask a question.");
+            return resolveAgentToolSurface({
+              role,
+              capabilities: {
+                coding: PI_TOOLS.tools,
+                // The desktop always owns the ask surface, so `ask_user` is a
+                // standing capability rather than a configured one. Web Access
+                // is the opposite: a profile with no provider gives its
+                // Sessions no web tool at all, rather than one that refuses.
+                interaction: [
+                  "ask_user",
+                  ...(web.webFetch === undefined ? [] : (["web_fetch"] as const)),
+                  ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
+                ],
               },
-              ...web,
+              // No grants: VC-162 ships the resolver seam and no store. A
+              // durable per-Session grant is a later slice, and it inherits a
+              // resolver that already refuses an unknown or non-tool key.
             });
           },
           record: async (sessionId, tools) => {
@@ -826,6 +839,23 @@ app.whenReady().then(async () => {
     ? new AgentObservability({ db: dbHandle.db, serviceVersion: app.getVersion() })
     : null;
   agentObservability?.start();
+  /**
+   * The Agent Tool Surface's door into main (VC-162) — the same application
+   * handler the socket's `session.start` reaches, entered with a caller main
+   * bound rather than one a request claimed.
+   *
+   * Declared here and assigned far below, because construction is circular: the
+   * Pi adapter a few lines down closes over this to answer verb calls, while
+   * the door itself is built from the Sessions facade, which is built from that
+   * adapter's own host. Something has to be declared across that loop.
+   *
+   * An initialized `let` rather than a `const` reached from above, so a call
+   * that somehow arrived before the assignment gets the sentence written for
+   * that case instead of a `ReferenceError` about a temporal dead zone. Nothing
+   * should: every path between here and the assignment is a handler body that
+   * cannot run before the window exists.
+   */
+  let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
       ? createPiRuntimeHost({
@@ -885,6 +915,24 @@ app.whenReady().then(async () => {
           // ignored. This is the only attach path that reads the stored key,
           // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
+          // The verb half of the Agent Tool Surface (VC-162). Unlike the web
+          // ports this decides no membership — the Session's frozen record does
+          // — it supplies the one closure every bundled verb is answered
+          // through. Referenced lazily because the door is composed further
+          // down this same function, after the facade it calls exists; by the
+          // time any attachment runs, it is built or the launch has no database
+          // and no Sessions either.
+          // The return type is annotated rather than inferred, and has to be:
+          // this closure reaches a door composed from the Sessions facade,
+          // which is built from this same host. Inference would chase that
+          // circle; the annotation cuts it.
+          callVerb: (caller, request, signal): Promise<RuntimeVerbResult> => {
+            if (agentToolDoor === null) {
+              throw new Error("This launch has no Volli verb handlers.");
+            }
+            signal.throwIfAborted();
+            return agentToolDoor(caller, request);
+          },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
           // recorded once before the first runtime construction; every later
@@ -906,10 +954,20 @@ app.whenReady().then(async () => {
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
+              //
+              // The Role comes from the Session's own durable `ticketId`, which
+              // is what the Role IS — so a legacy Project Session backfills the
+              // project bundle and a legacy Ticket Session backfills none, the
+              // same answer its mint would have given had this existed then.
               toolSurface = toolSurfaceTools(
                 await sessionEngine.getOrRecordSessionInput({
                   sessionId,
-                  input: { kind: "tool-surface", tools: sessionToolSurface.resolve() },
+                  input: {
+                    kind: "tool-surface",
+                    tools: sessionToolSurface.resolve(
+                      attaching.ticketId === null ? "project" : "ticket",
+                    ),
+                  },
                   provenance,
                 }),
               );
@@ -1154,15 +1212,11 @@ app.whenReady().then(async () => {
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own
-          // door derived.
+          // door derived. Once per Session and not once per call (VC-162), now
+          // that a replayed tool call can mint through it twice — the guard
+          // lives with the ledger that can answer whether it already happened.
           recordSessionStarted: ({ ticketId, sessionId, actor }) => {
-            recordTicketEvent(
-              sessionDb,
-              ticketId,
-              { kind: "session_started", sessionId },
-              Date.now(),
-              actor,
-            );
+            recordSessionStartedOnce(sessionDb, { ticketId, sessionId, now: Date.now(), actor });
           },
         })
       : null;
@@ -1288,6 +1342,61 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  /**
+   * The kickoff turn's delivery seam, shared by both `session.start` doors.
+   *
+   * `message.submit` resolves when the TURN it started ends, so a door fires it
+   * detached and a refusal lands in the Session's own durable state and the
+   * log. Its ids are the CALLER's, derived from that door's operation id — the
+   * Session Engine deduplicates on the command id, which is what lets a
+   * replayed tool call submit this exact turn again and land one message.
+   */
+  const submitKickoffMessage =
+    sessionRuntime === null
+      ? undefined
+      : async ({
+          sessionId,
+          text,
+          commandId,
+          messageId,
+        }: {
+          sessionId: string;
+          text: string;
+          commandId: string;
+          messageId: string;
+        }): Promise<void> => {
+          await sessionRuntime.command({
+            commandId,
+            sessionId,
+            command: {
+              kind: "message.submit",
+              message: { id: messageId, role: "user", parts: [{ type: "text", text }] },
+            },
+          });
+        };
+  // Every dependency is read through a closure rather than captured, because
+  // this is composed before some of them exist and outlives changes to the
+  // rest: the project list grows, and the facade is built further down this
+  // same function. See the declaration above for why the binding is split.
+  agentToolDoor =
+    sessionDb === null
+      ? null
+      : createAgentToolDoor({
+          db: sessionDb,
+          projects: () => listProjects(sessionDb),
+          sessions: () => sessions,
+          ...(submitKickoffMessage === undefined
+            ? {}
+            : { submitSessionMessage: submitKickoffMessage }),
+          ...(autoTitler === null
+            ? {}
+            : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
+          onMutation: (change) => broadcastDataChanged(change),
+          onSessionStarted: (notice) => broadcastSessionStarted(notice),
+          actorTicketDisplay: (ticketId) =>
+            actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
+          now: () => Date.now(),
+        });
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
   // database open recorded above, Node-ABI classification included). Left
@@ -2287,17 +2396,27 @@ app.whenReady().then(async () => {
                 submitSessionMessage: async ({
                   sessionId,
                   text,
+                  commandId,
+                  messageId,
                 }: {
                   sessionId: string;
                   text: string;
+                  commandId: string;
+                  messageId: string;
                 }) => {
+                  // Both ids come from the caller's operation, never from
+                  // `randomUUID()` (VC-162). The Session Engine deduplicates a
+                  // `message.submit` by command id, so a start replayed with
+                  // the same operation id submits this exact turn again and
+                  // lands one message — which is what makes a replayed tool
+                  // call idempotent rather than merely unlikely to repeat.
                   await sessionRuntime.command({
-                    commandId: randomUUID(),
+                    commandId,
                     sessionId,
                     command: {
                       kind: "message.submit",
                       message: {
-                        id: randomUUID(),
+                        id: messageId,
                         role: "user",
                         parts: [{ type: "text", text }],
                       },

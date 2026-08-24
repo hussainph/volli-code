@@ -244,6 +244,66 @@ describe("Sessions", () => {
     expect(commands.some((request) => request.command.kind === "adapter.attach")).toBe(false);
   });
 
+  it("resolves the surface for the Role the mint is creating (VC-162)", async () => {
+    // Role determines the tool bundle, and `ticketId !== null` IS the Role on
+    // start. Before this argument existed every Session resolved the same list
+    // and Role-scoped availability was true only in CONTEXT.md.
+    const roles: string[] = [];
+    const door = () =>
+      sessions({
+        toolSurface: {
+          resolve: (role) => {
+            roles.push(role);
+            return ["read"];
+          },
+          record: async () => undefined,
+        },
+      }).sessions;
+
+    await door().create({
+      operationId: "operation-project",
+      projectId: "project-1",
+      ticketId: null,
+      title: "A project chat",
+    });
+    await door().create({
+      operationId: "operation-ticket",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Ticket work",
+    });
+
+    expect(roles).toEqual(["project", "ticket"]);
+  });
+
+  it("never re-resolves the surface for a Session that already exists", async () => {
+    // The freeze, asserted where it is decided (VC-162). A grant recorded after
+    // a Session exists is inert for it at EVERY later attachment — not merely
+    // at the next one — because attaching does not consult the resolver at all.
+    // A later grant reaches the next Session created.
+    let resolves = 0;
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: () => {
+          resolves += 1;
+          return ["read"];
+        },
+        record: async () => undefined,
+      },
+    });
+
+    await door.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: null,
+      title: "Frozen at birth",
+    });
+    await door.attach({ operationId: "operation-2", sessionId: "session-1" });
+    await door.attach({ operationId: "operation-3", sessionId: "session-1" });
+
+    expect(resolves).toBe(1);
+  });
+
   it("reattaches an existing Session with no Role question asked — one attach for both Roles", async () => {
     // The old Ticket/project facades each guarded "is this Session mine?" — a
     // wrong-namespace mistake the single door makes unrepresentable, so the

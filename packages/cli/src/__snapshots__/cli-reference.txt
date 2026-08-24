@@ -394,7 +394,7 @@ volli help session start
 ============================================================================
 session start — Start an agent chat session on a ticket.
 
-Door: Agent CLI
+Door: Agent CLI and Agent Tool Surface
 Verb tier: coordination
 
 Usage: volli session start <id> [options]
@@ -689,7 +689,7 @@ Run volli help model <subcommand> for detail.
 volli help session
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent CLI]
+  session start    Start an agent chat session on a ticket. [Agent CLI and Agent Tool Surface]
   session list     List a project's active terminal and chat sessions. [Agent CLI]
   session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
   session done     Record that this session's work is finished. [Agent CLI]
@@ -742,7 +742,7 @@ In this compiled baseline, the local socket attributes VOLLI_SESSION but does no
 
 The three product surfaces
 The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session's Role bundle. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role was or was not handed that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.
-Every agent-facing operation has one Verb Registry key everywhere. For example, session.start renders as volli session start in shell syntax and remains session.start as a named tool. Help names the right door. A wrong-door refusal redirects to that door; a no-door refusal means this build declares no such verb.
+Every agent-facing operation has one Verb Registry key everywhere, and that key is its identity: help, authority, a Role bundle, and a Session's durable frozen tool list all spell it. Only the surface spelling changes. For example, session.start renders as volli session start in shell syntax, and reaches a model as the named tool session_start, because no model provider accepts a dot in a tool name. The two are one verb with one handler, not two capabilities. Help names the right door. A wrong-door refusal redirects to that door; a no-door refusal means this build declares no such verb.
 
 Derived Verb Tiers
 A Verb Tier is derived from a registry entry's access modes and actor requirement. It is not a risk label stored beside the verb. Read tier means Agent CLI access for any local caller. Coordination tier means an Agent CLI write attributed to a Session actor. Control tier means a Role-gated named tool that is absent from the agent socket. A verb on no agent surface has no tier.
@@ -889,7 +889,7 @@ Read before writing; work your own board unless instructed; use comments and del
 volli help session harness
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent CLI]
+  session start    Start an agent chat session on a ticket. [Agent CLI and Agent Tool Surface]
   session list     List a project's active terminal and chat sessions. [Agent CLI]
   session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
   session done     Record that this session's work is finished. [Agent CLI]

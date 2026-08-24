@@ -43,10 +43,25 @@ import { isAssignment, lexCommandLine, splitProgram, type LexedSegment } from ".
  * Pi's tool spellings, mapped to the product names the rules are written in.
  *
  * Coding tools only, and complete for them: `bash` is the sole entry whose two
- * names differ, which is the whole reason this map exists. A non-coding tool is
- * absent by design rather than by omission — its Pi name and its product name
- * are the same string, and nothing below would know what to do with its
- * arguments anyway.
+ * names differ, which is the whole reason this map exists. An interaction tool
+ * (`ask_user`, `web_fetch`, `web_search`) is absent by design rather than by
+ * omission — its Pi name and its product name are the same string, and nothing
+ * below would know what to do with its arguments anyway.
+ *
+ * A VERB tool is the third case, and the one this map does NOT reconcile
+ * (VC-162). Its two names differ the way `bash`/`execute` do — the registry
+ * key `session.start` reaches the provider as `session_start`, because no
+ * provider accepts a dot — but unlike a coding tool there is nothing here that
+ * could interpret its arguments, so mapping it would buy nothing. It therefore
+ * falls through to the pass-through below and is judged under its WIRE name,
+ * while `AuthoritySnapshot.tools` records the dot-key.
+ *
+ * That split is safe only while no rule keys on a verb tool's name: every rule
+ * reads the empty operand lists a pass-through carries, so the answer is allow
+ * either way. It stops being safe the moment one does. A rule written against
+ * `session.start` would never match `session_start` and would fail OPEN, which
+ * is the one direction this layer refuses to fail — so the rule vocabulary and
+ * this map have to be settled together (VC-3), not one before the other.
  */
 const CODING_TOOL_BY_PI_NAME = new Map<string, CodingToolId>([
   ["read", "read"],

@@ -15,6 +15,7 @@ import {
   errorMessage,
   REQUIRABLE_SESSION_ENV_TOOLS,
   resolveDefaultModel,
+  roleVerbBundle,
   runDoctorChecks,
 } from "@volli/shared";
 import type {
@@ -350,7 +351,11 @@ export async function promptBaselineVerb(
   // Measured here the way a real attach measures it (VC-156).
   const baseline = promptBaseline({
     role,
-    tools: { tools: [...PI_TOOLS.tools] },
+    // The Role's real bundle, verb half included (VC-162): the first message
+    // names what the Session holds, and a Project Session's block is longer
+    // than a Ticket Session's because it holds more. Priced from the same
+    // registry data a real mint resolves, so the two cannot disagree.
+    tools: { tools: [...PI_TOOLS.tools], verbs: roleVerbBundle(role) },
     ...(index === null ? {} : { promptResources: [index] }),
     brief: { text: brief },
     workspaceEnvironment: readWorkspaceEnvironment(workspacePath),

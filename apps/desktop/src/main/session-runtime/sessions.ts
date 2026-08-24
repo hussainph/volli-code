@@ -25,6 +25,7 @@ import type {
   ModelSelection,
   PromptResource,
   ReasoningLevel,
+  RuntimeSessionRole,
   SessionStartResult,
   SessionToolId,
   TicketEventActor,
@@ -114,7 +115,25 @@ export interface SessionSkillPorts {
  * array.
  */
 export interface SessionToolSurfacePorts {
-  resolve(): readonly SessionToolId[];
+  /**
+   * The whole surface for one Role: `capability tools ∪ bundle(Role) ∪
+   * grants(session)` (VC-162).
+   *
+   * Takes the Role because the Role is what decides the verb half — a Project
+   * Session carries the agent-control family and a Ticket Session carries none,
+   * which is the availability-as-enforcement property VC-92 asked for. Before
+   * this argument existed every Session resolved the same list, and "Role
+   * determines the tool bundle" was true only in `CONTEXT.md`.
+   *
+   * {@link RuntimeSessionRole} and NOT {@link SessionDefaultModelRole}, though
+   * the two spell the same pair today. They answer different questions: one is
+   * which rung of the default-model ladder to read, the other is which Role's
+   * bundle to resolve, and borrowing the model policy's vocabulary for a tool
+   * decision is how the next Role gets added to one and not the other. This is
+   * the runtime's Role vocabulary — the same one `RuntimeToolBundle` and the
+   * first-message block are written in. VC-9 widens it here, in the open.
+   */
+  resolve(role: RuntimeSessionRole): readonly SessionToolId[];
   record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
 }
 
@@ -327,12 +346,17 @@ export function createSessions(options: SessionsOptions): Sessions {
         "The requested Ticket was not found in this project.",
       );
     }
-    const model = await resolveModelSelection(
-      options,
-      input.modelOverride,
-      input.ticketId === null ? "project" : "ticket",
-      input.projectId,
-    );
+    // One derivation of the Role for this mint, read by both the model policy
+    // and the tool surface. `ticketId !== null` IS the Role on start, and
+    // asking twice is how two answers start disagreeing.
+    //
+    // The two ports name their argument in different vocabularies on purpose
+    // (`SessionDefaultModelRole` is a ladder rung, `RuntimeSessionRole` is a
+    // Role), and this one literal satisfies both while they spell the same
+    // pair. The day they diverge, this is the line that has to split — which
+    // is the point of not having collapsed them.
+    const role: SessionDefaultModelRole = input.ticketId === null ? "project" : "ticket";
+    const model = await resolveModelSelection(options, input.modelOverride, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
     const explicit =
@@ -350,7 +374,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
-    const toolSurface = options.toolSurface.resolve();
+    const toolSurface = options.toolSurface.resolve(role);
     const created = await options.runtime.command({
       commandId: `${input.operationId}:create`,
       command: {

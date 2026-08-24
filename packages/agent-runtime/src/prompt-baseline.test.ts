@@ -10,12 +10,14 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   promptBaseline,
   PROMPT_BASELINE_CHARS_PER_TOKEN,
+  TOOL_SURFACE_REMINDER_ID,
   WORKSPACE_ENVIRONMENT_REMINDER_ID,
 } from "./prompt-baseline";
 import type { PromptBaselineInput } from "./prompt-baseline";
 import {
   composeBriefBlock,
   composeSystemPrompt,
+  composeToolSurfaceBlock,
   composeTurnReminderBlock,
   systemPromptSections,
 } from "./prompt";
@@ -38,7 +40,9 @@ function skill(name: string): SkillReference {
 function input(overrides: Partial<PromptBaselineInput> = {}): PromptBaselineInput {
   return {
     role: "project",
-    tools: { tools: ["read", "edit", "write", "execute"] },
+    // A Project Session's real bundle, verb half included (VC-162) — the
+    // baseline exists to price what a fresh Session is actually sent.
+    tools: { tools: ["read", "edit", "write", "execute"], verbs: ["session.start"] },
     brief: { text: "A project-scoped chat Session." },
     promptResources: [INDEX],
     ...overrides,
@@ -55,7 +59,7 @@ describe("promptBaseline", () => {
     );
   });
 
-  it("names every section the composer renders, in delivery order, then the brief", () => {
+  it("names every section the composer renders, in delivery order, then the message blocks", () => {
     const measured = promptBaseline(input());
     expect(measured.sections.map((section) => section.id)).toEqual([
       "operating",
@@ -65,6 +69,7 @@ describe("promptBaseline", () => {
       "resources-header",
       "resource:skills index",
       "brief",
+      TOOL_SURFACE_REMINDER_ID,
     ]);
   });
 
@@ -72,7 +77,7 @@ describe("promptBaseline", () => {
     const measured = promptBaseline(input());
     const block = composeBriefBlock("project", { text: "A project-scoped chat Session." });
     expect(measured.brief.chars).toBe(block.length);
-    expect(measured.sections.at(-1)).toEqual({
+    expect(measured.sections.find((section) => section.id === "brief")).toEqual({
       id: "brief",
       chars: block.length,
       tokens: Math.ceil(block.length / PROMPT_BASELINE_CHARS_PER_TOKEN),
@@ -85,11 +90,29 @@ describe("promptBaseline", () => {
     const measured = promptBaseline(input());
     expect(measured.reminder).toEqual({ chars: 0, tokens: 0 });
     expect(measured.total.chars).toBe(
-      measured.system.chars + measured.brief.chars + measured.reminder.chars,
+      measured.system.chars +
+        measured.brief.chars +
+        measured.reminder.chars +
+        measured.toolSurface.chars,
     );
     expect(measured.total.tokens).toBe(
-      measured.system.tokens + measured.brief.tokens + measured.reminder.tokens,
+      measured.system.tokens +
+        measured.brief.tokens +
+        measured.reminder.tokens +
+        measured.toolSurface.tokens,
     );
+  });
+
+  it("prices the Role bundle block, for a Session that holds nothing too", () => {
+    // The block is unconditional (VC-162), so unlike the workspace reminder it
+    // never measures zero: a Ticket Session is told it holds no verbs, and
+    // being told costs bytes that have to appear in the breakdown.
+    const ticket = promptBaseline(input({ role: "ticket", tools: { tools: ["read"] } }));
+    expect(ticket.toolSurface.chars).toBe(
+      composeToolSurfaceBlock("ticket", { tools: ["read"] }).length,
+    );
+    expect(ticket.toolSurface.chars).toBeGreaterThan(0);
+    expect(ticket.sections.at(-1)?.id).toBe(TOOL_SURFACE_REMINDER_ID);
   });
 
   it("drops the resource sections when a Session carries no resources", () => {
@@ -100,6 +123,7 @@ describe("promptBaseline", () => {
       "authority",
       "workspace",
       "brief",
+      TOOL_SURFACE_REMINDER_ID,
     ]);
   });
 
@@ -137,7 +161,10 @@ describe("promptBaseline — the Turn Reminder as a priced section (VC-164)", ()
     expect(withReminder.system).toEqual(without.system);
     expect(withReminder.total.chars).toBe(without.total.chars + withReminder.reminder.chars);
     expect(withReminder.total.chars).toBe(
-      withReminder.system.chars + withReminder.brief.chars + withReminder.reminder.chars,
+      withReminder.system.chars +
+        withReminder.brief.chars +
+        withReminder.reminder.chars +
+        withReminder.toolSurface.chars,
     );
   });
 
@@ -188,6 +215,11 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
       // The single largest section, and shared by every Session in the project.
       ["resource:skills index", "project-static", "prefix"],
       ["brief", "session-static", "message"],
+      // Session-static and NOT role-static, which is why it is a message block
+      // rather than a prompt layer (VC-162): grants make bundle membership vary
+      // between two Sessions of the same Role, and a prefix section that did
+      // that would split their Cache Prefix.
+      [TOOL_SURFACE_REMINDER_ID, "session-static", "message"],
     ]);
   });
 
@@ -248,6 +280,6 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
       measured.sections
         .filter((section) => section.placement === "message")
         .map((section) => section.id),
-    ).toEqual(["brief", WORKSPACE_ENVIRONMENT_REMINDER_ID]);
+    ).toEqual(["brief", TOOL_SURFACE_REMINDER_ID, WORKSPACE_ENVIRONMENT_REMINDER_ID]);
   });
 });
