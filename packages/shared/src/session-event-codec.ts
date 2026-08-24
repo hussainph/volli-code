@@ -70,6 +70,7 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionUsageAttribution,
   TranscriptReference,
 } from "./session-ledger";
 
@@ -410,6 +411,7 @@ const codecs = {
       kind: "usage.recorded",
       attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
       turnId: readNullableString(record.turnId, `${context}.turnId`),
+      attribution: decodeUsageAttribution(record.attribution, `${context}.attribution`),
       usage: decodeSessionUsage(record.usage, `${context}.usage`),
     }),
     // Usage is metadata about a request, never any part of its content: no
@@ -1279,6 +1281,25 @@ function decodeInteractionResolution(
 }
 
 /* ----------------------------------------------------------------- readers */
+
+/**
+ * What the spend was on, read back.
+ *
+ * Required, with no absent-reads-as-null grace — the opposite stance from
+ * `attachment.authority` a few functions up, and deliberately so. There, absent
+ * is a real historical answer: every attachment written before VC-44 ran at the
+ * runtime's defaults, and that is a fact the record can state. Here, absent
+ * would mean the fact never recorded what it was spent on, which no build has
+ * ever been able to write. Accepting it would let a rebuild quietly file real
+ * spend as unattributed rather than say the history is corrupt.
+ */
+function decodeUsageAttribution(value: unknown, context: string): SessionUsageAttribution {
+  const row = asRecord(value, context);
+  return {
+    projectId: readString(row.projectId, `${context}.projectId`),
+    ticketId: readNullableString(row.ticketId, `${context}.ticketId`),
+  };
+}
 
 function decodeSessionUsage(value: unknown, context: string): SessionUsage {
   const row = asRecord(value, context);

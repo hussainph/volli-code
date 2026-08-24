@@ -6,6 +6,7 @@ import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
+import { AutomationEditorDialog } from "@renderer/components/automations/automation-editor";
 import { CommandPalette } from "@renderer/components/command-palette";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
@@ -86,6 +87,9 @@ export function ChromeBar() {
         <TerminalFocusExit />
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      {/* The Automation editor mounts beside the palette that opens it: both are
+          window-level surfaces summoned from anywhere (VC-126). */}
+      <AutomationEditorDialog />
     </>
   );
 }

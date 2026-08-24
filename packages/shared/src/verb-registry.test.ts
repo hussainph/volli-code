@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
+  agentCommandBindingsFrom,
   agentCommandsFrom,
   cliVerbName,
   REFERENCE_VERBS,
@@ -138,7 +140,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "socket.verb",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "socket.verb" },
     listed: true,
     referenceOrder: 20,
     group: "Read",
@@ -149,7 +151,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "tool.verb",
     accessModes: ["tool"],
     actor: "role",
-    handler: "main",
+    handler: { site: "main", id: "tool.verb" },
     listed: true,
     referenceOrder: 0,
     group: "Session",
@@ -160,7 +162,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "local.verb",
     accessModes: ["cli"],
     actor: "any",
-    handler: "cli",
+    handler: { site: "cli", id: "local.verb" },
     listed: true,
     referenceOrder: 10,
     group: "App",
@@ -171,7 +173,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "app.only",
     accessModes: [],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "app.only" },
     listed: false,
     group: "Write",
     summary: "On no agent surface at all.",
@@ -197,6 +199,49 @@ describe("AGENT_COMMANDS projection", () => {
   });
 });
 
+describe("the handler binding (VC-167)", () => {
+  it("binds every verb to a handler id that is its own key", () => {
+    // The whole discipline in one line: the binding id IS the canonical key, so
+    // main's dispatch table keys on the registry's vocabulary rather than on a
+    // second naming scheme that could drift from it.
+    for (const entry of VERB_REGISTRY) {
+      expect(entry.handler.id).toBe(entry.key);
+      expect(["main", "cli"]).toContain(entry.handler.site);
+    }
+  });
+
+  it("maps every socket verb to the binding that answers it", () => {
+    expect(Object.keys(AGENT_COMMAND_BINDINGS)).toEqual([...AGENT_COMMANDS]);
+    for (const command of AGENT_COMMANDS) {
+      expect(AGENT_COMMAND_BINDINGS[command]).toBe(command);
+    }
+  });
+
+  it("is derived from the registry rather than authored beside it", () => {
+    expect(agentCommandBindingsFrom(VERB_REGISTRY)).toEqual(AGENT_COMMAND_BINDINGS);
+  });
+
+  it("leaves a locally handled or tool-only verb out of the socket's bindings", () => {
+    // `app.launch` and `help` answer in the `volli` process, and a tool-only
+    // verb never reaches the socket at all. Neither may appear here, because a
+    // binding in this map is main promising to answer that verb over the wire.
+    expect(agentCommandBindingsFrom(SYNTHETIC)).toEqual({ "socket.verb": "socket.verb" });
+  });
+
+  it("lets one verb's binding be resolved without its wire name", () => {
+    // The seam VC-162 rides: a verb that moves to a `tool` access mode leaves
+    // the socket's map, and the id it named goes on identifying the same one
+    // handler for whichever surface kept it.
+    const relocated: VerbEntry = {
+      ...SYNTHETIC[0]!,
+      accessModes: ["tool"],
+      actor: "role",
+    };
+    expect(agentCommandBindingsFrom([relocated])).toEqual({});
+    expect(relocated.handler.id).toBe("socket.verb");
+  });
+});
+
 describe("CLI reference projection", () => {
   it("keeps only listed CLI entries and orders them from entry data", () => {
     expect(referenceVerbsFrom(SYNTHETIC).map((entry) => entry.key)).toEqual([
@@ -215,14 +260,14 @@ describe("CLI reference projection", () => {
       key: "unordered.verb",
       accessModes: ["cli"],
       actor: "any",
-      handler: "main",
+      handler: { site: "main", id: "unordered.verb" },
       listed: true,
       group: "Read",
       summary: "Missing its reference position.",
       options: [],
     };
     expect(() => referenceVerbsFrom([unordered])).toThrow(
-      "Listed CLI verb unordered.verb requires referenceOrder",
+      "Listed verb unordered.verb requires referenceOrder",
     );
   });
 });
@@ -277,6 +322,35 @@ describe("verbTier", () => {
       expect(Object.keys(entry)).not.toContain("tier");
     }
   });
+
+  /**
+   * VC-44's non-negotiable, held here because this table is what would break it.
+   *
+   * The agent must not be able to author the policy that governs it. Authority
+   * policy is app-owned state written through one IPC channel
+   * (`volli:project-authority-policy`) with no verb behind it, and that has to
+   * stay true as the registry grows — a `volli authority set` added later would
+   * hand the agent its own permissions back, and would do it quietly.
+   *
+   * The check is a floor, not a proof: it catches a verb NAMED for the write.
+   * What actually enforces the rule is `verbTier` refusing a `cli` access mode
+   * on a role actor, which is tested above and cannot be worked around — any
+   * such verb must be `tool`-only, and a tool bundle is not the agent socket.
+   */
+  it("puts no authority-policy WRITE on the agent surface", () => {
+    const authorityWrites = VERB_REGISTRY.filter(
+      (entry) => entry.key.startsWith("authority") && entry.actor !== "any",
+    );
+    expect(authorityWrites).toEqual([]);
+
+    // Reads would be legitimate on the socket — VC-44's `authority
+    // defaults|effective` are two read verbs. If one lands, it stays read tier.
+    for (const entry of VERB_REGISTRY.filter((candidate) =>
+      candidate.key.startsWith("authority"),
+    )) {
+      expect(verbTier(entry)).toBe("read");
+    }
+  });
 });
 
 describe("the registry table", () => {
@@ -287,7 +361,8 @@ describe("the registry table", () => {
 
   it("gives every verb a handler binding and at least one access mode", () => {
     for (const entry of VERB_REGISTRY) {
-      expect(["main", "cli"]).toContain(entry.handler);
+      expect(["main", "cli"]).toContain(entry.handler.site);
+      expect(entry.handler.id.length).toBeGreaterThan(0);
       expect(entry.accessModes.length).toBeGreaterThan(0);
       expect(entry.summary.length).toBeGreaterThan(0);
     }
@@ -330,6 +405,36 @@ describe("the registry table", () => {
         expect(option.help.length).toBeGreaterThan(0);
         expect("placeholder" in option).toBe(option.kind !== "flag");
       }
+    }
+  });
+
+  it("keeps the ratified preview matrix on the verbs themselves", () => {
+    const previewed = VERB_REGISTRY.filter((entry) =>
+      entry.options.some((option) => option.name === "--dry-run"),
+    ).map((entry) => entry.key);
+    expect(previewed).toEqual([
+      "ticket.create",
+      "ticket.update",
+      "ticket.move",
+      "ticket.comment",
+      "session.done",
+      "session.blocked",
+      "session.link",
+      "notify",
+      "doctor",
+    ]);
+  });
+
+  it("pins human-visible effects and explicit non-effects on every voluntary write", () => {
+    const voluntaryWrites = VERB_REGISTRY.filter((entry) => entry.listed && entry.actor !== "any");
+    for (const entry of voluntaryWrites) {
+      expect(entry.effects, entry.key).toBeDefined();
+      expect(entry.effects!.humanVisible.length, entry.key).toBeGreaterThan(0);
+      expect(entry.effects!.nonEffects.length, entry.key).toBeGreaterThan(0);
+    }
+
+    for (const key of ["doctor", "app.launch"] as const) {
+      expect(verbEntry(key)?.effects, key).toBeDefined();
     }
   });
 

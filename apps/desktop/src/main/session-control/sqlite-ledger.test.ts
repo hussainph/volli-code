@@ -1513,4 +1513,39 @@ describe("the Session usage projection", () => {
       control.reportUsage({ scope: { kind: "all" }, groupBy: "model" }),
     ).resolves.toEqual(live);
   });
+
+  /**
+   * The case that decides whether "rebuildable" is true.
+   *
+   * Deleting the Ticket nulls `sessions.ticket_id`, so a rebuild that read
+   * attribution from the Session row would move this bill into unticketed
+   * spend — the projection would answer one thing before a rebuild and another
+   * after, with no fact having changed. Attribution is on the event, so the
+   * two answers are the same answer.
+   */
+  it("rebuilds a deleted Ticket's spend back onto that Ticket, not into unticketed", async () => {
+    const { ledger, control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-gone", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-gone",
+      commandId: "create-rebuild-after-delete",
+    });
+    await record(control, sessionId, "rd1", 1_000, metered({ costUsd: 4 }));
+    const before = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("ticket-gone");
+    await ledger.transaction((transaction) => {
+      transaction.rebuildUsageProjection();
+    });
+
+    const after = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+    expect(after).toEqual(before);
+    expect(after.groups.map((group) => group.key)).toEqual(["ticket-gone"]);
+    // And the Ticket-scoped read still finds it, which is what an orchestrator
+    // asking `volli cost --ticket` after a cleanup actually does.
+    await expect(
+      control.reportUsage({ scope: { kind: "ticket", ticketId: "ticket-gone" } }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 4, requestCount: 1 } });
+  });
 });

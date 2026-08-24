@@ -868,7 +868,7 @@ CREATE TABLE secrets (
 `;
 
 /**
- * Migration 026: `session_usage` — the read model for what Sessions consumed.
+ * Migration 027: `session_usage` — the read model for what Sessions consumed.
  *
  * A fact INDEX, not an aggregate. One row per metered model operation, keyed
  * by the `usage.recorded` event that proves it, so the table can be dropped
@@ -880,14 +880,46 @@ CREATE TABLE secrets (
  * `DEFAULT 0` here would erase the difference at the storage layer where no
  * reader could recover it.
  *
- * `project_id` and `ticket_id` are copied from the Session at write time and
+ * `project_id` and `ticket_id` are copied from the *event* at write time and
  * carry no foreign key to `tickets`. `sessions.ticket_id` is ON DELETE SET
  * NULL, so joining live would move a deleted Ticket's whole bill into
  * unticketed Project spend — a quieter lie than an id that no longer resolves.
- * The Session reference does cascade: a Session that is gone has no history for
- * these rows to index.
+ * Attribution therefore rides in the immutable `usage.recorded` event, which is
+ * what lets a rebuild reproduce this table row for row. The Session reference
+ * does cascade: a Session that is gone has no history for these rows to index.
+ *
+ * `session_usage_coverage` records HOW FAR BACK this profile can answer, and it
+ * is the difference between a partial total and a wrong one. A database that
+ * existed before this migration has real spend in its past that was never
+ * evented, so the index starts empty and the first total a reader saw would
+ * otherwise be “no metered model calls yet”, followed later by a complete-
+ * looking figure covering only what happened after the upgrade.
+ *
+ * NOT BACKFILLED, and the choice is deliberate rather than deferred. The only
+ * historical source is the settled transcript artifacts, and settled messages
+ * are a biased sample of spend: a tool-use-only reply, a reply that failed
+ * after its prompt was billed, a Context Compaction and the auto-title utility
+ * call each cost money and settle no transcript row. A backfill from that
+ * source would produce a number that is systematically low and
+ * indistinguishable from a complete one — which is precisely the sentence this
+ * whole feature exists to prevent. A boundary a reader can see beats a total
+ * nobody can check.
+ *
+ * `metered_from` is the newest fact already in history rather than a wall
+ * clock: a migration must be a deterministic function of the database it is
+ * handed, and everything at or before that instant demonstrably predates
+ * metering. `0` — the value a fresh profile gets — means there is no boundary
+ * and every window is complete.
  */
-const MIGRATION_026_SESSION_USAGE = `
+const MIGRATION_027_SESSION_USAGE = `
+CREATE TABLE session_usage_coverage (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  metered_from INTEGER NOT NULL
+);
+
+INSERT INTO session_usage_coverage (id, metered_from)
+VALUES (1, COALESCE((SELECT MAX(occurred_at) FROM session_events), 0));
+
 CREATE TABLE session_usage (
   event_id           TEXT PRIMARY KEY,
   session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -950,6 +982,131 @@ CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, oc
 const MIGRATION_025_PROJECT_AUTHORITY_POLICY = `
 ALTER TABLE projects ADD COLUMN authority_policy TEXT
   CHECK (authority_policy IS NULL OR json_valid(authority_policy));
+`;
+
+/**
+ * Migration 026: Automations V1's durable command ledger and projections
+ * (VC-112, tracer VC-126).
+ *
+ * `automations` and `automation_runs` are projections: every product write
+ * arrives first as a command, is recorded as an immutable event, then changes
+ * one of these readable rows in the same transaction. This is deliberately
+ * the same acceptance shape as Sessions, rather than another Electron-only
+ * collection of SQLite mutations.
+ *
+ * A Run snapshots both `automation_id` and `automation_name`. The id has no
+ * foreign key on purpose: deleting an Automation removes its editable
+ * projection, not the historical reference from a Run. `automation_name`
+ * means the later history can still name the deleted Automation; `NULL` for
+ * both is reserved for a future Unbound Run.
+ *
+ * `automation_run_deliveries` is the idempotent first-message intent. It is
+ * committed with the Run before the caller gets success, so an attach that
+ * needs recovery (or a process crash) cannot leave a durable Run/Session with
+ * its Instructions silently lost. Its fixed Session command and message ids
+ * make a later delivery replay safe.
+ */
+const MIGRATION_026_AUTOMATIONS = `
+CREATE TABLE IF NOT EXISTS automations (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  instructions TEXT NOT NULL CHECK (instructions <> ''),
+  runtime      TEXT CHECK (runtime IS NULL OR json_valid(runtime)),
+  row_version  INTEGER NOT NULL DEFAULT 1,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_project ON automations(project_id, name);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id              TEXT PRIMARY KEY,
+  automation_id   TEXT,
+  automation_name TEXT,
+  ticket_id       TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  provider_id     TEXT NOT NULL CHECK (provider_id <> ''),
+  model_id        TEXT NOT NULL CHECK (model_id <> ''),
+  reasoning_level TEXT NOT NULL CHECK (reasoning_level <> ''),
+  created_at      INTEGER NOT NULL,
+  CHECK (
+    (automation_id IS NULL AND automation_name IS NULL) OR
+    (automation_id IS NOT NULL AND automation_name IS NOT NULL AND automation_name <> '')
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_ticket ON automation_runs(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_session ON automation_runs(session_id);
+
+CREATE TABLE IF NOT EXISTS automation_commands (
+  id         TEXT PRIMARY KEY,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS automation_events (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  kind       TEXT NOT NULL,
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_events_command ON automation_events(command_id, created_at, id);
+
+CREATE TABLE IF NOT EXISTS automation_command_receipts (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  status     TEXT NOT NULL CHECK (status IN ('accepted', 'completed', 'rejected')),
+  result     TEXT NOT NULL CHECK (json_valid(result)),
+  recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_receipts_command
+  ON automation_command_receipts(command_id, recorded_at, id);
+
+CREATE TABLE IF NOT EXISTS automation_run_deliveries (
+  run_id                TEXT PRIMARY KEY REFERENCES automation_runs(id) ON DELETE CASCADE,
+  session_id            TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  automation_command_id TEXT NOT NULL REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  message_command_id    TEXT NOT NULL,
+  message_id            TEXT NOT NULL,
+  text                  TEXT NOT NULL,
+  resources             TEXT NOT NULL CHECK (json_valid(resources)),
+  created_at            INTEGER NOT NULL,
+  delivered_at          INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_session
+  ON automation_run_deliveries(session_id, delivered_at);
+
+CREATE TRIGGER IF NOT EXISTS automation_commands_immutable_update
+BEFORE UPDATE ON automation_commands
+BEGIN
+  SELECT RAISE(ABORT, 'automation commands are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_commands_immutable_delete
+BEFORE DELETE ON automation_commands
+BEGIN
+  SELECT RAISE(ABORT, 'automation commands are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_events_immutable_update
+BEFORE UPDATE ON automation_events
+BEGIN
+  SELECT RAISE(ABORT, 'automation events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_events_immutable_delete
+BEFORE DELETE ON automation_events
+BEGIN
+  SELECT RAISE(ABORT, 'automation events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_receipts_immutable_update
+BEFORE UPDATE ON automation_command_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'automation receipts are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_receipts_immutable_delete
+BEFORE DELETE ON automation_command_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'automation receipts are immutable');
+END;
 `;
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -1071,14 +1228,21 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "projects.authority_policy — the per-project authority departures, app-owned",
     sql: MIGRATION_025_PROJECT_AUTHORITY_POLICY,
   },
-  // Renumbered from 025 when VC-44's authority policy store landed on main
-  // first. A version is a position in an ordered, already-applied history, not
-  // a name — two migrations claiming 025 would leave whichever profile ran the
-  // other one silently missing this table.
   {
     version: 26,
+    name: "automations — command ledger, projections and durable first-message intents",
+    sql: MIGRATION_026_AUTOMATIONS,
+    apply: applyMigration026Automations,
+  },
+  // Renumbered twice — 025 when VC-44's authority policy store reached main
+  // first, 027 when VC-118's automations took 026. A version is a position in
+  // an ordered, already-applied history, not a name: two migrations claiming
+  // one number would leave whichever profile ran the other one silently
+  // missing this table, at a `user_version` that says it is up to date.
+  {
+    version: 27,
     name: "session_usage — the rebuildable index of what each model operation consumed",
-    sql: MIGRATION_026_SESSION_USAGE,
+    sql: MIGRATION_027_SESSION_USAGE,
   },
 ];
 
@@ -1101,6 +1265,81 @@ function applyMigration024ProjectAgentConfig(db: Database.Database): void {
   if (secretsColumns.some((column) => column.name === "ciphertext")) {
     db.exec(MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN);
   }
+}
+
+interface LegacyAutomationRunRow {
+  id: string;
+  automation_id: string | null;
+  ticket_id: string | null;
+  session_id: string;
+  provider_id: string;
+  model_id: string;
+  reasoning_level: string;
+  created_at: number;
+}
+
+/**
+ * Migration 026 began life on this branch as a conflicting migration 025.
+ * Main's real 025 is `projects.authority_policy`, so current installations at
+ * user_version 25 need the whole Automation schema here. The probe also makes
+ * a developer database that ran the short-lived branch schema converge: its
+ * old Run table gets rebuilt to preserve the Automation id and snapshot a
+ * name, instead of retaining `ON DELETE SET NULL` and losing provenance on
+ * the next delete.
+ */
+function applyMigration026Automations(db: Database.Database): void {
+  // A developer database that ran this branch's original migration 025 already
+  // reports version 25, so main's real authority-policy migration would be
+  // skipped by the normal version gate. Converge that fork here before adding
+  // the corrected Automation schema.
+  const projectColumns = db.pragma("table_info(projects)") as { name: string }[];
+  if (!projectColumns.some((column) => column.name === "authority_policy")) {
+    db.exec(MIGRATION_025_PROJECT_AUTHORITY_POLICY);
+  }
+  const hasRuns =
+    (db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'automation_runs'")
+      .get() as unknown) !== undefined;
+  const runColumns = hasRuns
+    ? (db.pragma("table_info(automation_runs)") as { name: string }[]).map((column) => column.name)
+    : [];
+  if (hasRuns && !runColumns.includes("automation_name")) {
+    const legacyRuns = db
+      .prepare(
+        `SELECT id, automation_id, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at
+           FROM automation_runs`,
+      )
+      .all() as LegacyAutomationRunRow[];
+    const names = new Map(
+      (
+        db.prepare("SELECT id, name FROM automations").all() as Array<{ id: string; name: string }>
+      ).map((automation) => [automation.id, automation.name]),
+    );
+    // The old table owns its indexes, so drop it before the new schema creates
+    // identically named projection indexes. This is still inside migrate's one
+    // transaction; an error restores the old table and its rows.
+    db.exec("DROP TABLE automation_runs");
+    db.exec(MIGRATION_026_AUTOMATIONS);
+    const insert = db.prepare(
+      `INSERT INTO automation_runs
+        (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+       VALUES (@id, @automation_id, @automation_name, @ticket_id, @session_id, @provider_id, @model_id, @reasoning_level, @created_at)`,
+    );
+    for (const run of legacyRuns) {
+      insert.run({
+        ...run,
+        // A legacy deleted Automation had already lost its name under the old
+        // FK. Preserve the id and make that historical limitation explicit;
+        // every 026-written row stores the true snapshot.
+        automation_name:
+          run.automation_id === null
+            ? null
+            : (names.get(run.automation_id) ?? "Deleted Automation"),
+      });
+    }
+    return;
+  }
+  db.exec(MIGRATION_026_AUTOMATIONS);
 }
 
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */

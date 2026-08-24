@@ -1,0 +1,28 @@
+---
+import { AGENT_CAPABILITY_BASELINE, AGENT_CAPABILITY_CHANGES } from "@volli/shared";
+
+const categories = ["added", "changed", "fixed", "removed"] as const;
+---
+
+<p>
+  The record starts at source revision <code>{AGENT_CAPABILITY_BASELINE}</code>. It does not backfill
+  canaries or v0.1.0.
+</p>
+
+{
+  AGENT_CAPABILITY_CHANGES.map((change) => (
+    <section>
+      <h2>{change.build} <small>(after {change.baseline})</small></h2>
+      {categories.map((category) => (
+        <section>
+          <h3>{category[0]!.toUpperCase() + category.slice(1)}</h3>
+          {change[category].length === 0 ? (
+            <p>None in this record.</p>
+          ) : (
+            <ul>{change[category].map((item) => <li>{item}</li>)}</ul>
+          )}
+        </section>
+      ))}
+    </section>
+  ))
+}

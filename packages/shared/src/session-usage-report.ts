@@ -40,6 +40,38 @@ export type SessionUsageGrouping = "ticket" | "session" | "model" | "day";
 export interface SessionUsageReportQuery {
   /** Absent means one total and no breakdown. */
   groupBy?: SessionUsageGrouping;
+  /**
+   * The window's lower bound, epoch milliseconds. Read here only to judge
+   * {@link SessionUsageHistory}; the rows were already filtered by it.
+   */
+  since?: number;
+  /**
+   * Epoch milliseconds from which every metered operation is indexed. `0` and
+   * absent both mean the whole of history is.
+   */
+  meteredFrom?: number;
+}
+
+/**
+ * How far back the answer goes — the difference between a partial total and a
+ * wrong one.
+ *
+ * A profile that installed Volli before metering existed has real spend in its
+ * past that no read model can recover, because the only surviving evidence is
+ * settled transcript messages and most spend settles none. Reporting that past
+ * as absent would make an old project look cheap; reporting a floor and naming
+ * it lets a reader decide what the number is worth.
+ *
+ * Carried on every report rather than offered as a separate query, because the
+ * one moment it matters is the moment a total is printed — and a caller that
+ * had to ask a second question to learn a first answer was partial will print
+ * the first answer alone.
+ */
+export interface SessionUsageHistory {
+  /** Epoch milliseconds the index begins at; `0` means all of history. */
+  meteredFrom: number;
+  /** False when the window asked about reaches behind {@link meteredFrom}. */
+  complete: boolean;
 }
 
 export interface SessionUsageGroup {
@@ -57,6 +89,8 @@ export interface SessionUsageReport {
   total: SessionUsageSummary;
   /** Ordered by known cost, descending. Empty when no grouping was asked for. */
   groups: readonly SessionUsageGroup[];
+  /** How much of the window asked about this profile is able to answer. */
+  history: SessionUsageHistory;
   /**
    * Sessions that recorded at least one metered operation.
    *
@@ -77,7 +111,24 @@ export function reportSessionUsage(
   return {
     total,
     groups: query.groupBy === undefined ? [] : groupUsage(entries, query.groupBy),
+    history: usageHistory(query),
     meteredSessionCount: meteredSessionIds.size,
+  };
+}
+
+/**
+ * Whether the window asked about lies wholly inside what the index holds.
+ *
+ * An unbounded window (`since` absent) is complete only where there is no
+ * boundary at all: “everything” against a profile with an unmetered past is
+ * exactly the question the floor exists to qualify. A bound at or after the
+ * floor is complete however far forward it runs.
+ */
+function usageHistory(query: SessionUsageReportQuery): SessionUsageHistory {
+  const meteredFrom = query.meteredFrom ?? 0;
+  return {
+    meteredFrom,
+    complete: meteredFrom === 0 || (query.since !== undefined && query.since >= meteredFrom),
   };
 }
 

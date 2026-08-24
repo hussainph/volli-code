@@ -19,6 +19,7 @@ function report(over: Partial<SessionUsageReport> = {}): SessionUsageReport {
       cachedInputShare: 0.84,
     },
     groups: [],
+    history: { meteredFrom: 0, complete: true },
     meteredSessionCount: 2,
     ...over,
   };

@@ -184,6 +184,7 @@ async function main(): Promise<void> {
     observe: () => observeEnvironment(),
     request: (path, request) =>
       requestAgent(path, request, { timeoutMs: timeoutForCommand(request.cmd) }),
+    helpRequest: (path, request) => requestAgent(path, request, { timeoutMs: 500 }),
     launch: (timeoutMs) => {
       return launchApp(
         {

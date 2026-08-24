@@ -892,6 +892,10 @@ describe("SessionRuntime native adapter contract", () => {
       kind: "usage.recorded",
       attachmentId,
       turnId: "turn-1",
+      // Stamped by the engine off the Session row, not reported by the
+      // executor: what a model call cost is the adapter's to observe, what it
+      // was spent ON is not. `createAndAttach` makes a ticketless Session.
+      attribution: { projectId: "project-1", ticketId: null },
       usage,
     });
     expect(snapshot.projection.usage).toMatchObject({

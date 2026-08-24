@@ -561,6 +561,8 @@ export type SessionEventPayload =
       attachmentId: string | null;
       /** Null for spend outside a turn: compaction, and utility work. */
       turnId: string | null;
+      /** What the spend was ON, frozen here — see {@link SessionUsageAttribution}. */
+      attribution: SessionUsageAttribution;
       usage: SessionUsage;
     };
 
@@ -598,6 +600,28 @@ interface SessionObservationBase {
 }
 
 /**
+ * What a metered operation was spent ON, frozen into the fact that records it.
+ *
+ * NOT re-derived from `sessions` at read time, and this is the whole reason it
+ * is here rather than joined. `sessions.ticket_id` is ON DELETE SET NULL, so a
+ * report that joined live would move a deleted Ticket's entire bill into
+ * unticketed Project spend the moment the Ticket went — and, worse, the usage
+ * projection is declared REBUILDABLE, so a rebuild after that delete would
+ * silently produce a different answer from the one the live append path had
+ * already written. A read model may be discarded and derived again only if
+ * every fact it needs is in the immutable history it derives from; attribution
+ * is one of those facts, so it lives in the event.
+ *
+ * The Session id is deliberately absent: that is the event envelope's, and a
+ * second copy here would give a reader two places to disagree.
+ */
+export interface SessionUsageAttribution {
+  projectId: string;
+  /** Null is Project spend — a Session that was born without a Ticket. */
+  ticketId: string | null;
+}
+
+/**
  * The payload kinds external evidence can prove — the durable union minus the
  * control plane's own facts (creation, commands, receipts, signals, model
  * policy), which only the Session Engine writes.
@@ -625,14 +649,42 @@ type ObservedSessionEventKind =
   | "usage.recorded";
 
 /**
+ * Fields an observer never supplies because only the Session Engine can know
+ * them, subtracted from the observed twin of a payload arm.
+ *
+ * `usage.recorded.attribution` is the only one. An executor reports what a
+ * model call consumed; it does not know, and must not have an opinion about,
+ * which Ticket the Session it is attached to is working on — the Session row
+ * inside the appending transaction is the single authority for that, exactly as
+ * a receipt's stamp is. Observers pass it in and the engine stamps it, which is
+ * why this is subtracted here rather than made optional on the payload: absent
+ * attribution must be impossible in durable history, not merely unusual.
+ */
+type EngineStampedFields = "attribution";
+
+/**
+ * `Omit` over each arm of a union rather than over the union itself.
+ *
+ * The built-in collapses a discriminated union to its common keys, which would
+ * quietly turn {@link SessionObservation} into one shapeless object with a wide
+ * `kind` — every arm's own fields gone, and no error anywhere to say so.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/**
  * Observed arms are the payload arms themselves under an observation envelope,
  * derived rather than restated so a payload field added to the durable union
- * cannot silently miss its observation twin. `command.receipt` stays
- * hand-written: it is the one arm that is not a payload — it carries an
- * *unstamped* receipt, and only the Session Engine may stamp one.
+ * cannot silently miss its observation twin, minus {@link EngineStampedFields}.
+ * `command.receipt` stays hand-written: it is the one arm that is not a payload
+ * — it carries an *unstamped* receipt, and only the Session Engine may stamp
+ * one.
  */
 export type SessionObservation =
-  | (SessionObservationBase & Extract<SessionEventPayload, { kind: ObservedSessionEventKind }>)
+  | (SessionObservationBase &
+      DistributiveOmit<
+        Extract<SessionEventPayload, { kind: ObservedSessionEventKind }>,
+        EngineStampedFields
+      >)
   | (SessionObservationBase & { kind: "command.receipt"; receipt: UnstampedCommandReceipt });
 
 /**
@@ -646,8 +698,16 @@ export type SessionObservation =
  * persisted payload's bytes are compared by exact match on replay. Each arm
  * names exactly what the durable payload declares, and the derived union
  * makes a missing or misspelled field a compile error here.
+ *
+ * `attribution` is the one field no observation carries. It is read off the
+ * Session row inside the transaction that appends the event and passed in here
+ * — see {@link SessionUsageAttribution} for why it has to end up in the fact
+ * rather than being joined back later.
  */
-export function observationPayload(observation: SessionObservation): SessionEventPayload {
+export function observationPayload(
+  observation: SessionObservation,
+  attribution: SessionUsageAttribution,
+): SessionEventPayload {
   switch (observation.kind) {
     case "attachment.opened":
       return { kind: observation.kind, attachment: observation.attachment };
@@ -752,6 +812,7 @@ export function observationPayload(observation: SessionObservation): SessionEven
         kind: observation.kind,
         attachmentId: observation.attachmentId ?? null,
         turnId: observation.turnId,
+        attribution,
         usage: observation.usage,
       };
   }
@@ -1370,6 +1431,16 @@ export interface SessionLedgerTransaction {
    * needs a documented total order first.
    */
   listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[];
+  /**
+   * Epoch milliseconds from which this store's usage index is complete; `0`
+   * when it always was.
+   *
+   * A durable store that predates metering holds Sessions whose spend was never
+   * recorded as a fact, and no read of the projection can tell that past from
+   * an idle one. The floor is the store's own answer to “how far back can I be
+   * asked”, and every report carries it so no total is printed without it.
+   */
+  usageMeteredFrom(): number;
   /**
    * Discard the usage projection and derive it again from `usage.recorded`.
    *

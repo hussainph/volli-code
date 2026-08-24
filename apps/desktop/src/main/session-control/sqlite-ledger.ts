@@ -13,6 +13,7 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
   SessionUsage,
+  SessionUsageAttribution,
   SessionUsageEntry,
 } from "@volli/shared";
 import {
@@ -234,14 +235,32 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   }
 
   /**
+   * How far back this profile's index reaches, from the single coverage row
+   * migration 027 wrote.
+   *
+   * Read rather than derived. `MIN(occurred_at)` over the projection would say
+   * when spending happened to start, which for a quiet profile upgraded today
+   * is indistinguishable from a complete history — and that is exactly the
+   * reading the floor exists to refuse.
+   */
+  usageMeteredFrom(): number {
+    this.assertOpen();
+    const row = this.db
+      .prepare("SELECT metered_from FROM session_usage_coverage WHERE id = 1")
+      .get() as unknown;
+    /* v8 ignore next -- migration 027 inserts the row in the same statement that creates the table. */
+    if (row === undefined) return 0;
+    return readInteger(asRecord(row, "session_usage_coverage row").metered_from, "metered_from");
+  }
+
+  /**
    * One projection row. Shared by the live append and the rebuild, so the two
    * paths cannot store the same fact two different ways.
    */
   private insertUsage(entry: {
     eventId: string;
     sessionId: string;
-    projectId: string;
-    ticketId: string | null;
+    attribution: SessionUsageAttribution;
     occurredAt: number;
     usage: SessionUsage;
   }): void {
@@ -259,8 +278,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       .run({
         eventId: entry.eventId,
         sessionId: entry.sessionId,
-        projectId: entry.projectId,
-        ticketId: entry.ticketId,
+        projectId: entry.attribution.projectId,
+        ticketId: entry.attribution.ticketId,
         occurredAt: entry.occurredAt,
         cause: entry.usage.cause,
         providerId: entry.usage.providerId,
@@ -274,14 +293,22 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       });
   }
 
+  /**
+   * Derive the projection again from the events alone.
+   *
+   * NO JOIN TO `sessions`, deliberately. Attribution comes out of the event's
+   * own payload, exactly as the live append path takes it, so the two produce
+   * the same rows for the same history — including after a Ticket delete, which
+   * nulls `sessions.ticket_id` and would otherwise move that Ticket's whole
+   * bill into unticketed Project spend on the next rebuild.
+   */
   rebuildUsageProjection(): void {
     this.assertOpen();
     this.db.exec("DELETE FROM session_usage");
     const events = this.db
       .prepare(
-        `SELECT e.id, e.session_id, e.occurred_at, e.payload, s.project_id, s.ticket_id
+        `SELECT e.id, e.session_id, e.occurred_at, e.payload
            FROM session_events e
-           JOIN sessions s ON s.id = e.session_id
           WHERE json_extract(e.payload, '$.kind') = 'usage.recorded'
           ORDER BY e.session_id COLLATE BINARY ASC, e.sequence ASC`,
       )
@@ -297,14 +324,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       this.insertUsage({
         eventId: readString(value.id, "usage rebuild row.id"),
         sessionId: readString(value.session_id, "usage rebuild row.session_id"),
-        // Read from the Session's row rather than the event, because the event
-        // does not carry attribution. A rebuild after a Ticket delete
-        // therefore CAN lose the original Ticket — the same ON DELETE SET NULL
-        // the live write path avoids by copying at append time. Nothing better
-        // is recoverable once the column is null, and inventing an id would be
-        // worse than reporting the spend as unticketed.
-        projectId: readString(value.project_id, "usage rebuild row.project_id"),
-        ticketId: readNullableString(value.ticket_id, "usage rebuild row.ticket_id"),
+        attribution: payload.attribution,
         occurredAt: readInteger(value.occurred_at, "usage rebuild row.occurred_at"),
         usage: payload.usage,
       });
@@ -382,18 +402,14 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     // written afterwards would have a window in which the ledger and its read
     // model disagree, and the disagreement would survive a crash.
     if (event.payload.kind === "usage.recorded") {
-      const session = this.getSession(event.sessionId);
-      /* v8 ignore next -- the foreign key above already refused an unknown Session. */
-      if (session === null)
-        throw new Error(`Session ${event.sessionId} has no row to attribute to`);
       this.insertUsage({
         eventId: event.id,
         sessionId: event.sessionId,
-        // Copied now, not joined later: `sessions.ticket_id` is ON DELETE SET
-        // NULL, and a report that read it live would silently move a deleted
-        // Ticket's whole bill into unticketed Project spend.
-        projectId: session.projectId,
-        ticketId: session.ticketId,
+        // Straight off the fact, which is the only reason `rebuildUsageProjection`
+        // can promise the same rows: both paths read one immutable source, so
+        // neither can be told a different story later by `sessions.ticket_id`
+        // going null under a deleted Ticket.
+        attribution: event.payload.attribution,
         occurredAt: event.occurredAt,
         usage: event.payload.usage,
       });

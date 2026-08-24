@@ -14,12 +14,14 @@ import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
+import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { PuzzlePieceIcon } from "@phosphor-icons/react/dist/csr/PuzzlePiece";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import type { Project } from "@volli/shared";
 
 import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
+import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
 import { PluginsPane } from "./configure/plugins-pane";
@@ -86,6 +88,43 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           icon: PuzzlePieceIcon,
           keywords: ["plugin", "installed plugins", "bundle", "marketplace", "contents", "browse"],
           content: <PluginsPane />,
+        },
+        {
+          // Agent, not Project: this is what this repo's agents are ALLOWED to
+          // do, which is the same question Skills and Commands answer about
+          // what they can reach. It is also the only surface in the product
+          // that writes authority policy — no agent verb projects it, by
+          // design (VC-172).
+          key: "authority",
+          label: "Authority",
+          icon: ShieldCheckIcon,
+          keywords: [
+            "authority",
+            "permission",
+            "permissions",
+            "policy",
+            "enforce",
+            "observe",
+            "sandbox",
+            "guardrail",
+            "approval",
+            "escalation",
+            "denial",
+            "transcript",
+            "peek",
+            "auto mode",
+            // The row labels, so rail search finds the page from what is on
+            // it — `settings-search-smoke.mjs` walks every visible label and
+            // holds this list to that contract.
+            "rule enforcement",
+            "who judges the rest",
+            "ask me after",
+            "or after, in total",
+            "you can read",
+            "an authenticated session can read",
+            "an unauthenticated caller can read",
+          ],
+          content: <AuthorityPane project={project} />,
         },
       ],
     },

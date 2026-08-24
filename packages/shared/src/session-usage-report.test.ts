@@ -141,3 +141,53 @@ describe("reportSessionUsage", () => {
     expect(report.total.knownCostUsd).toBe(3);
   });
 });
+
+/**
+ * The floor is what stops a profile that upgraded yesterday from printing a
+ * complete-looking lifetime total covering one day. Every arm below is a
+ * sentence a reader would otherwise get wrong.
+ */
+describe("reportSessionUsage history coverage", () => {
+  it("calls a profile with no unmetered past complete, whatever the window", () => {
+    expect(reportSessionUsage([entry({})], {}).history).toEqual({
+      meteredFrom: 0,
+      complete: true,
+    });
+    expect(reportSessionUsage([entry({})], { since: 5_000 }).history).toEqual({
+      meteredFrom: 0,
+      complete: true,
+    });
+  });
+
+  it("calls an unbounded window partial when history begins after the beginning", () => {
+    expect(reportSessionUsage([entry({})], { meteredFrom: 9_000 }).history).toEqual({
+      meteredFrom: 9_000,
+      complete: false,
+    });
+  });
+
+  it("calls a window that starts at or after the floor complete", () => {
+    expect(
+      reportSessionUsage([entry({})], { meteredFrom: 9_000, since: 9_000 }).history.complete,
+    ).toBe(true);
+    expect(
+      reportSessionUsage([entry({})], { meteredFrom: 9_000, since: 9_001 }).history.complete,
+    ).toBe(true);
+  });
+
+  it("calls a window that reaches behind the floor partial", () => {
+    expect(
+      reportSessionUsage([entry({})], { meteredFrom: 9_000, since: 8_999 }).history.complete,
+    ).toBe(false);
+  });
+
+  // The empty report is the one that misleads hardest: "no metered model calls
+  // yet" reads as "this project is free", and only the floor distinguishes that
+  // from "this project's spend predates measurement".
+  it("still reports the floor when nothing at all is in the window", () => {
+    expect(reportSessionUsage([], { meteredFrom: 9_000 }).history).toEqual({
+      meteredFrom: 9_000,
+      complete: false,
+    });
+  });
+});

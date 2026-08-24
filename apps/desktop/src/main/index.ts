@@ -25,13 +25,16 @@ import {
   getHarnessAdapter,
   harnessAdapters,
   globalSkillsDir,
+  projectCommandsDir,
   projectSkillsDir,
   draftAttachmentHashes,
+  makeAgentError,
   memoizedPathExists,
   resolveDefaultModel,
   resolveShell,
   sessionToolIds,
   skillPromptResource,
+  skillResourcePart,
   skillsIndexResource,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
@@ -66,10 +69,15 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
-import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
+import {
+  chatSessionRecord,
+  createDesktopSessionEngine,
+  watchSessionActivity,
+} from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
@@ -96,6 +104,13 @@ import {
   type SessionToolSurfacePorts,
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
+import { loadPromptTemplates } from "./prompt-templates";
+import { registerAutomationIpcHandlers } from "./automations/ipc";
+import { createAutomationEngine } from "./automations/engine";
+import { createAutomationRunner } from "./automations/run";
+import type { AutomationRunner } from "./automations/run";
+import { createAutomationService } from "./automations/service";
+import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
   readCompactionPolicy,
@@ -981,6 +996,32 @@ app.whenReady().then(async () => {
         })
       : null;
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  // Automations own a transport-neutral command/event/projection core. Keep
+  // the runner mutable until below: Session RPC's attach door closes over it,
+  // so a human Retry can resume a durable first-message intent too.
+  const automationEngine =
+    sessionDb === null
+      ? null
+      : createAutomationEngine({
+          ledger: new SqliteAutomationLedger(sessionDb),
+          now: Date.now,
+          nextId: randomUUID,
+        });
+  const automationService =
+    sessionDb === null || automationEngine === null
+      ? null
+      : createAutomationService({
+          engine: automationEngine,
+          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
+          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
+          runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          ...(piRuntimeHost === null
+            ? {}
+            : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
+          onMutation: (change) => broadcastDataChanged(change),
+        });
+  let automationRunner: AutomationRunner | null = null;
   /**
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
@@ -1082,15 +1123,24 @@ app.whenReady().then(async () => {
     sessionToolSurface !== null
       ? createSessions({
           runtime: sessionRuntime,
-          // Role in, purpose out (VC-53): a Ticket Session resolves the
-          // execution default, a project chat the orchestration one, and each
-          // inherits the project default when it holds no explicit choice of
-          // its own — stated by `resolveDefaultModel`, never substituted.
-          readDefaultModel: (role) =>
-            resolveDefaultModel(
-              readModelAccessDefaults(sessionDb),
-              role === "ticket" ? "ticket" : "global",
-            ),
+          // The inheritance chain, in rung order (VC-112, VC-126): the
+          // project's own runtime preference first — `projects.session_model`
+          // (migration 024, NULL = inherit) — then the app-wide per-purpose
+          // record, Role in and purpose out (VC-53): a Ticket Session resolves
+          // the execution default, a project chat the orchestration one —
+          // stated by `resolveDefaultModel`, never substituted. One closure so
+          // every door — renderer chat, CLI start, an Automation Run — walks
+          // the same rungs.
+          readDefaultModel: (role, projectId) => {
+            const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
+            return (
+              project?.sessionModel ??
+              resolveDefaultModel(
+                readModelAccessDefaults(sessionDb),
+                role === "ticket" ? "ticket" : "global",
+              )
+            );
+          },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readModelSelection: async (sessionId) =>
@@ -1150,7 +1200,20 @@ app.whenReady().then(async () => {
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
           createSession: sessions?.create,
-          attachSession: sessions?.attach,
+          // Every renderer Retry rides this wrapper. A ready attachment is the
+          // recovery point for an Automation's durable first-message intent;
+          // the runner's fixed Session command id reconciles rather than
+          // duplicates if a crash happened after dispatch but before its mark.
+          attachSession:
+            sessions === null
+              ? undefined
+              : async (input) => {
+                  const attached = await sessions.attach(input);
+                  if (attached.state === "ready") {
+                    await automationRunner?.resumeDeliveryForSession(input.sessionId);
+                  }
+                  return attached;
+                },
         });
   /**
    * Model-call titling (VC-81): the one main-side hook both doors feed.
@@ -1524,6 +1587,75 @@ app.whenReady().then(async () => {
       },
     },
   );
+  // Automations (VC-112, tracer VC-126): the host half of the command ledger.
+  // CRUD remains available when Sessions are down; only a Run needs the
+  // Session facade. The renderer's Retry arrives through the RPC wrapper above
+  // and resumes this same runner's durable message intent.
+  automationRunner =
+    sessions !== null && sessionRuntime !== null && sessionDb !== null && automationEngine !== null
+      ? createAutomationRunner({
+          engine: automationEngine,
+          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          findTicket: (ticketId) => getTicket(sessionDb, ticketId),
+          listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          sessions,
+          promptSupply: async (projectId) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) throw new Error("Unknown project");
+            const [loaded, skills] = await Promise.all([
+              loadPromptTemplates({
+                projectCommandsDir: projectCommandsDir(project.path),
+                globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+              }),
+              loadSkills({
+                projectSkillsDir: projectSkillsDir(project.path),
+                globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+              }),
+            ]);
+            if (!loaded.ok) throw new Error(loaded.error);
+            if (!skills.ok) throw new Error(skills.error);
+            return {
+              templates: loaded.templates,
+              // The ruled list, exactly as `volli:prompt-templates` hands the
+              // composer: an `off` skill is not offered, a `manual` one is.
+              skills: applySkillModes(skills.skills, project.skillModes ?? {}),
+            };
+          },
+          // The composer's message shape, with the Run's durable command/message
+          // ids rather than freshly minted ones. A crash after dispatch is then
+          // a Session-runtime replay, never a duplicate first turn.
+          deliverInstructions: ({ sessionId, commandId, messageId, text, resources }) =>
+            sessionRuntime.command({
+              commandId,
+              sessionId,
+              command: {
+                kind: "message.submit",
+                message: {
+                  id: messageId,
+                  role: "user",
+                  parts: [{ type: "text", text }, ...resources.map(skillResourcePart)],
+                },
+              },
+            }),
+          // Projection failures deliberately propagate: the runner fails the
+          // single-flight guard closed instead of treating unknown as idle.
+          readSessionActivity: async (sessionId) => {
+            const snapshot = await sessionRuntime.projection({ sessionId });
+            return chatSessionRecord(snapshot.projection).activity;
+          },
+          onRunStarted: ({ projectId, run }) =>
+            broadcastDataChanged({ projectId, ticketId: run.ticketId ?? undefined }),
+        })
+      : null;
+  if (automationRunner !== null) {
+    void automationRunner.recover().catch((error: unknown) => {
+      console.error(`[volli] automation recovery failed: ${errorMessage(error)}`);
+    });
+  }
+  registerAutomationIpcHandlers(dbHandle, {
+    service: automationService,
+    runner: automationRunner,
+  });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
   // against the `color-scheme` this app stamps, so it reports the mode already
@@ -2255,7 +2387,7 @@ app.whenReady().then(async () => {
           ({
             v: 1,
             ok: false,
-            error: { code: "DB_UNAVAILABLE", message: dbHandle.error },
+            error: makeAgentError("DB_UNAVAILABLE", dbHandle.error),
           }) as const;
     await agentSocket.start({
       socketPath: runtimePaths.socketPath,

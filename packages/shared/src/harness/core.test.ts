@@ -358,6 +358,8 @@ describe("buildHarnessInstallPlan", () => {
 
     expect(paths).toContain("/home/dev/.agents/skills/volli/SKILL.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/cli.md");
+    expect(paths).toContain("/home/dev/.agents/skills/volli/concepts.md");
+    expect(paths).toContain("/home/dev/.agents/skills/volli/changes.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/orchestration.md");
     expect(paths).toContain("/home/dev/.agents/skills/volli/plugin.md");
     expect(paths.some((path) => path.includes(".codex/prompts"))).toBe(false);
@@ -371,6 +373,8 @@ describe("buildHarnessInstallPlan", () => {
     expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
       "/home/dev/.agents/skills/volli/SKILL.md",
       "/home/dev/.agents/skills/volli/cli.md",
+      "/home/dev/.agents/skills/volli/concepts.md",
+      "/home/dev/.agents/skills/volli/changes.md",
       "/home/dev/.agents/skills/volli/orchestration.md",
       "/home/dev/.agents/skills/volli/plugin.md",
     ]);
@@ -403,6 +407,8 @@ describe("buildHarnessInstallPlan", () => {
     expect(plan.slice(0, CANONICAL_SKILL_FILES).map((action) => action.path)).toEqual([
       "/home/dev/.agents/skills/volli/SKILL.md",
       "/home/dev/.agents/skills/volli/cli.md",
+      "/home/dev/.agents/skills/volli/concepts.md",
+      "/home/dev/.agents/skills/volli/changes.md",
       "/home/dev/.agents/skills/volli/orchestration.md",
       "/home/dev/.agents/skills/volli/plugin.md",
     ]);

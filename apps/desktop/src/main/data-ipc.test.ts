@@ -4,6 +4,7 @@ import type {
   AppStateSetResult,
   BootstrapResult,
   DatabaseResult,
+  ProjectAuthorityPolicyResult,
   ProjectCreateResult,
   ProjectMutationResult,
   Result,
@@ -108,6 +109,7 @@ import { createDesktopSessionEngine } from "./session-control";
 import { insertSession } from "./session-control/test-support";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
+import { getProjectById } from "./db/projects-repo";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { worktreesHome } from "./worktree-runtime";
@@ -234,6 +236,80 @@ describe("volli:database", () => {
     expect(showSaveDialog).toHaveBeenCalledWith(
       expect.objectContaining({ filters: [{ name: "JSON", extensions: ["json"] }] }),
     );
+  });
+});
+
+/**
+ * The door the product was missing (VC-172). The handler is where a policy
+ * document is JUDGED — `resolveAuthorityPolicy` degrades a bad one on the attach
+ * path, and that bargain is only honest if something refuses it earlier, where a
+ * person is present to be told.
+ */
+describe("volli:project-authority-policy", () => {
+  it("records a departure and answers with the project carrying it", () => {
+    const id = createProject();
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: { enforcement: "enforce" },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The DEPARTURES ride back, not the resolved document — the pane needs to
+    // tell a chosen value from an inherited one.
+    expect(result.project.authorityPolicy).toEqual({ enforcement: "enforce" });
+  });
+
+  it("REFUSES an unknown field, naming it, rather than storing a document that governs nothing", () => {
+    const id = createProject();
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: { enforcment: "enforce" },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual(["Unknown field: enforcment."]);
+    // And nothing was written: a refused write leaves the project inheriting.
+    expect(getProjectById(ctx.db, id)?.authorityPolicy).toBeNull();
+  });
+
+  it("reports every reason at once, so one fix does not surface the next", () => {
+    const id = createProject();
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: { enforcement: "sideways", fallback: { sessionDenials: 0 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toHaveLength(2);
+  });
+
+  it("clears every departure on null", () => {
+    const id = createProject();
+    invoke("volli:project-authority-policy", { id, override: { enforcement: "off" } });
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.project.authorityPolicy).toBeNull();
+  });
+
+  it("refuses a project it does not know", () => {
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id: "missing",
+      override: {},
+    });
+
+    expect(result).toEqual({ ok: false, error: "Unknown project" });
   });
 });
 

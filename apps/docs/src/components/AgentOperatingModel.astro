@@ -1,0 +1,17 @@
+---
+import { AGENT_CONCEPT_SECTIONS } from "@volli/shared";
+---
+
+{
+  AGENT_CONCEPT_SECTIONS.map((section) => (
+    <section>
+      <h3>{section.heading}</h3>
+      {section.paragraphs.map((paragraph) => <p>{paragraph}</p>)}
+      {section.bullets && (
+        <ul>
+          {section.bullets.map((bullet) => <li>{bullet}</li>)}
+        </ul>
+      )}
+    </section>
+  ))
+}

@@ -315,7 +315,17 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return event;
         }
 
-        const payload = observationPayload(observation);
+        // Attribution is stamped from the Session row this event is being
+        // appended against, inside the same transaction, and becomes part of
+        // the immutable fact. Read at rebuild time instead, it would be
+        // whatever `sessions.ticket_id` had become by then — null, after a
+        // Ticket delete — and the rebuilt projection would disagree with the
+        // one the live path wrote. A read model that cannot be derived again
+        // to the same answer is not rebuildable.
+        const payload = observationPayload(observation, {
+          projectId: session.projectId,
+          ticketId: session.ticketId,
+        });
         const commandId = observation.commandId ?? null;
         assertObservationCausation(transaction, session, observation);
         assertAttachmentStartRoute(transaction, observation);
@@ -590,7 +600,13 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async reportUsage(query) {
       return ports.ledger.transaction((transaction) =>
-        reportSessionUsage(transaction.listUsage(query), query),
+        // The floor is read in the SAME transaction as the rows. Two reads
+        // would let an upgrade land between them and produce a report that
+        // claimed complete coverage of rows it had not seen.
+        reportSessionUsage(transaction.listUsage(query), {
+          ...query,
+          meteredFrom: transaction.usageMeteredFrom(),
+        }),
       );
     },
   };

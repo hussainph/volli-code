@@ -351,6 +351,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       kind: "usage.recorded",
       attachmentId: "attachment-1",
       turnId: "turn-1",
+      attribution: { projectId: "project-1", ticketId: "ticket-1" },
       usage: {
         cause: "assistant",
         providerId: "anthropic",
@@ -367,6 +368,9 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       kind: "usage.recorded",
       attachmentId: null,
       turnId: null,
+      // Project spend: a Session born without a Ticket still records what
+      // project it belongs to, so an unticketed total is attributable.
+      attribution: { projectId: "project-1", ticketId: null },
       usage: {
         cause: "utility",
         providerId: "openai",
@@ -434,6 +438,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       kind: "usage.recorded",
       attachmentId: null,
       turnId: null,
+      attribution: { projectId: "project-1", ticketId: "ticket-1" },
       usage: {
         cause: "compaction",
         providerId: "anthropic",
@@ -644,12 +649,14 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
       costUsd: null,
       costBasis: "unavailable",
     };
+    const attribution = { projectId: "project-1", ticketId: "ticket-1" };
     expect(() =>
       decodeSessionEventPayload(
         {
           kind: "usage.recorded",
           attachmentId: null,
           turnId: null,
+          attribution,
           usage: { ...usage, cause: "auto-title" },
         },
         "payload",
@@ -661,6 +668,7 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
           kind: "usage.recorded",
           attachmentId: null,
           turnId: null,
+          attribution,
           usage: { ...usage, costBasis: "guessed" },
         },
         "payload",
@@ -673,6 +681,7 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
           kind: "usage.recorded",
           attachmentId: null,
           turnId: null,
+          attribution,
           usage: { ...usage, inputTokens: 12.5 },
         },
         "payload",
@@ -685,11 +694,33 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
           kind: "usage.recorded",
           attachmentId: null,
           turnId: null,
+          attribution,
           usage: { ...usage, costUsd: Number.NaN },
         },
         "payload",
       ),
     ).toThrow("payload.usage.costUsd must be a finite number");
+    // Attribution is what makes the projection rebuildable, so a fact without
+    // it is corrupt rather than old: no build has ever been able to write one,
+    // and reading it as unattributed would file real spend under nothing.
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "usage.recorded", attachmentId: null, turnId: null, usage },
+        "payload",
+      ),
+    ).toThrow("payload.attribution must be an object");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          attribution: { projectId: null, ticketId: null },
+          usage,
+        },
+        "payload",
+      ),
+    ).toThrow("payload.attribution.projectId must be a string");
   });
 
   it("rejects a malformed session entity inside session.created", () => {
@@ -1124,6 +1155,7 @@ describe("the renderer-safe scrub", () => {
       kind: "usage.recorded",
       attachmentId: "attachment-1",
       turnId: "turn-1",
+      attribution: { projectId: "project-1", ticketId: "ticket-1" },
       usage: {
         cause: "assistant",
         providerId: "anthropic",

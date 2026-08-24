@@ -181,8 +181,13 @@ export interface Sessions {
    * and boots the Agent Runtime — follows as its own call off that critical
    * path. Same refusals as `start`: an unknown ticket or a missing default
    * model refuses before anything durable exists.
+   *
+   * The answer carries the model policy the mint durably recorded — the
+   * RESOLVED selection, which an Automation Run stores as its own record
+   * (VC-126) — widening {@link SessionCreateResult} structurally, so the
+   * renderer's create RPC (typed to the narrower shape) is untouched.
    */
-  create(input: SessionStartInput): Promise<SessionCreateResult>;
+  create(input: SessionStartInput): Promise<SessionCreateResult & { model: ModelSelection }>;
   /** Mint and attach in one call — the agent socket's door (VC-13). */
   start(input: SessionStartInput): Promise<SessionStartOutcome>;
   /**
@@ -212,13 +217,18 @@ export type SessionDefaultModelRole = "ticket" | "project";
 export interface SessionsOptions {
   runtime: StructuredSessionCommands;
   /**
-   * The configured default for one Role: the execution default for a Ticket
-   * Session, the orchestration default for a project chat (VC-53). Separate
-   * answers, asked at the one moment the Role is known — never a substitution,
-   * since a Role with no explicit choice of its own inherits the project
-   * default by stated policy rather than by silent fallback.
+   * The configured default for one Role, resolved through the inheritance
+   * chain the app documents (VC-112): the project's own runtime preference
+   * first (`projects.session_model`, NULL = inherit), then the app-wide
+   * per-purpose record. Separate answers, asked at the one moment the Role is
+   * known — never a substitution, since a rung with no explicit choice of its
+   * own inherits the next by stated policy rather than by silent fallback.
+   *
+   * `projectId` is `null` only where no project is known — the legacy
+   * model-backfill on `attach`, which holds a bare Session id — and reads as
+   * "global chain only". Every mint passes its project.
    */
-  readDefaultModel(role: SessionDefaultModelRole): ModelSelection | null;
+  readDefaultModel(role: SessionDefaultModelRole, projectId: string | null): ModelSelection | null;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
@@ -257,8 +267,9 @@ async function resolveModelSelection(
   options: SessionsOptions,
   override: SessionModelOverride | undefined,
   role: SessionDefaultModelRole,
+  projectId: string,
 ): Promise<ModelSelection> {
-  const base = options.readDefaultModel(role);
+  const base = options.readDefaultModel(role, projectId);
   if (
     override === undefined ||
     (override.model === undefined && override.reasoningLevel === undefined)
@@ -320,6 +331,7 @@ export function createSessions(options: SessionsOptions): Sessions {
       options,
       input.modelOverride,
       input.ticketId === null ? "project" : "ticket",
+      input.projectId,
     );
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
@@ -374,7 +386,7 @@ export function createSessions(options: SessionsOptions): Sessions {
   return {
     async create(input) {
       const created = await mint(input);
-      return { sessionId: created.sessionId };
+      return { sessionId: created.sessionId, model: created.model };
     },
 
     async start(input) {
@@ -399,7 +411,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         // `model.select` before the attachment, so what it resolved to is
         // visible in its history rather than assumed.
         const model = requireDefaultModel(
-          options.readDefaultModel("project"),
+          options.readDefaultModel("project", null),
           DEFAULT_MODEL_REQUIRED,
           input.sessionId,
         );

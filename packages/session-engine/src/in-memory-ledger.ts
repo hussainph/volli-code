@@ -12,20 +12,33 @@ import type {
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionUsageAttribution,
   SessionUsageEntry,
   SessionUsageScope,
 } from "@volli/shared";
 
-function inUsageScope(scope: SessionUsageScope, session: Session): boolean {
+/**
+ * Scope is decided by the ATTRIBUTION on the fact, never by the Session row.
+ *
+ * Same rule the SQLite projection follows, and it has to be, because this
+ * adapter is the reference that one is checked against: a Ticket that has since
+ * been deleted still owns the spend recorded against it, and a scope resolved
+ * off `sessions.ticket_id` would answer `{ kind: "ticket" }` with nothing while
+ * the projection still answered with the bill.
+ */
+function inUsageScope(
+  scope: SessionUsageScope,
+  entry: { sessionId: string; attribution: SessionUsageAttribution },
+): boolean {
   switch (scope.kind) {
     case "all":
       return true;
     case "project":
-      return session.projectId === scope.projectId;
+      return entry.attribution.projectId === scope.projectId;
     case "ticket":
-      return session.ticketId === scope.ticketId;
+      return entry.attribution.ticketId === scope.ticketId;
     case "session":
-      return session.id === scope.sessionId;
+      return entry.sessionId === scope.sessionId;
   }
 }
 
@@ -131,6 +144,14 @@ class InMemorySessionLedger implements SessionLedger {
         assertOpen();
         return this.#listUsage(query);
       },
+      // Always complete. This adapter derives usage from the events it holds,
+      // and it holds every event it was ever given — there is no era of its
+      // history that predates metering, because there is no history it did not
+      // build in this process.
+      usageMeteredFrom: () => {
+        assertOpen();
+        return 0;
+      },
       // The in-memory adapter derives usage on every read, so there is no
       // stored projection to discard. Keeping the verb rather than throwing is
       // deliberate: rebuild is part of the port every adapter must honour, and
@@ -151,17 +172,15 @@ class InMemorySessionLedger implements SessionLedger {
     const entries: SessionUsageEntry[] = [];
     for (const event of this.#events.values()) {
       if (event.payload.kind !== "usage.recorded") continue;
-      const session = this.#sessions.get(event.sessionId);
-      /* v8 ignore next -- `#appendEvent` refuses an event whose Session is absent, and nothing here deletes one. */
-      if (session === undefined) throw new Error(`Session ${event.sessionId} was not found`);
       if (query.since !== undefined && event.occurredAt < query.since) continue;
       if (query.until !== undefined && event.occurredAt >= query.until) continue;
-      if (!inUsageScope(query.scope, session)) continue;
+      const { attribution } = event.payload;
+      if (!inUsageScope(query.scope, { sessionId: event.sessionId, attribution })) continue;
       entries.push({
         ...event.payload.usage,
-        sessionId: session.id,
-        projectId: session.projectId,
-        ticketId: session.ticketId,
+        sessionId: event.sessionId,
+        projectId: attribution.projectId,
+        ticketId: attribution.ticketId,
         occurredAt: event.occurredAt,
       });
     }

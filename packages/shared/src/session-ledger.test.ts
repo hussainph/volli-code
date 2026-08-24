@@ -41,6 +41,9 @@ const session: Session = {
   createdAt: 100,
 };
 
+/** What the engine stamps onto a usage fact, standing in for a Session row read. */
+const attribution = { projectId: session.projectId, ticketId: session.ticketId };
+
 const localVenue = { id: "machine-1", kind: "local" as const };
 const systemProvenance = {
   source: { kind: "system" as const, id: "session-engine", detail: null },
@@ -213,15 +216,18 @@ describe("interaction prompts", () => {
 describe("observationPayload", () => {
   it("canonicalizes an omitted adapter-observation attachment id to null", () => {
     expect(
-      observationPayload({
-        id: "adapter-observation-omitted-attachment",
-        sessionId: session.id,
-        occurredAt: 1,
-        provenance: systemProvenance,
-        kind: "adapter.observed",
-        name: "native.session-signal",
-        native: null,
-      } as SessionObservation),
+      observationPayload(
+        {
+          id: "adapter-observation-omitted-attachment",
+          sessionId: session.id,
+          occurredAt: 1,
+          provenance: systemProvenance,
+          kind: "adapter.observed",
+          name: "native.session-signal",
+          native: null,
+        } as SessionObservation,
+        attribution,
+      ),
     ).toEqual({
       kind: "adapter.observed",
       attachmentId: null,
@@ -233,16 +239,19 @@ describe("observationPayload", () => {
   it("canonicalizes an omitted usage attachment id to null", () => {
     const usage = metered();
     expect(
-      observationPayload({
-        id: "usage-omitted-attachment",
-        sessionId: session.id,
-        occurredAt: 1,
-        provenance: systemProvenance,
-        kind: "usage.recorded",
-        turnId: null,
-        usage,
-      } as SessionObservation),
-    ).toEqual({ kind: "usage.recorded", attachmentId: null, turnId: null, usage });
+      observationPayload(
+        {
+          id: "usage-omitted-attachment",
+          sessionId: session.id,
+          occurredAt: 1,
+          provenance: systemProvenance,
+          kind: "usage.recorded",
+          turnId: null,
+          usage,
+        } as SessionObservation,
+        attribution,
+      ),
+    ).toEqual({ kind: "usage.recorded", attachmentId: null, turnId: null, attribution, usage });
   });
 
   it("round-trips an authority.denied observation into its matching payload", () => {
@@ -259,7 +268,7 @@ describe("observationPayload", () => {
       reason: "rm -rf resolves under a home directory",
     };
 
-    expect(observationPayload(observation)).toEqual({
+    expect(observationPayload(observation, attribution)).toEqual({
       kind: "authority.denied",
       attachmentId: "attachment-1",
       turnId: "turn-1",
@@ -268,7 +277,9 @@ describe("observationPayload", () => {
       reason: "rm -rf resolves under a home directory",
     });
     // A denial before any turn opened carries no turn to blame it on.
-    expect(observationPayload({ ...observation, turnId: null })).toMatchObject({ turnId: null });
+    expect(observationPayload({ ...observation, turnId: null }, attribution)).toMatchObject({
+      turnId: null,
+    });
   });
 
   it("round-trips both halves of a compaction into their matching payloads", () => {
@@ -281,14 +292,17 @@ describe("observationPayload", () => {
     } as const;
 
     expect(
-      observationPayload({
-        ...observed,
-        kind: "context.compacted",
-        reason: "overflow",
-        entryId: "pi-entry-9",
-        tokensBefore: 190_000,
-        tokensAfter: 12_000,
-      }),
+      observationPayload(
+        {
+          ...observed,
+          kind: "context.compacted",
+          reason: "overflow",
+          entryId: "pi-entry-9",
+          tokensBefore: 190_000,
+          tokensAfter: 12_000,
+        },
+        attribution,
+      ),
     ).toEqual({
       kind: "context.compacted",
       attachmentId: "attachment-1",
@@ -298,12 +312,15 @@ describe("observationPayload", () => {
       tokensAfter: 12_000,
     });
     expect(
-      observationPayload({
-        ...observed,
-        kind: "context.compaction_failed",
-        reason: "threshold",
-        detail: "Summarization failed.",
-      }),
+      observationPayload(
+        {
+          ...observed,
+          kind: "context.compaction_failed",
+          reason: "threshold",
+          detail: "Summarization failed.",
+        },
+        attribution,
+      ),
     ).toEqual({
       kind: "context.compaction_failed",
       attachmentId: "attachment-1",
@@ -479,13 +496,17 @@ describe("observationPayload", () => {
       },
     ];
 
-    expect(observationPayload(observations.at(-1)!)).toEqual({
+    expect(observationPayload(observations.at(-1)!, attribution)).toEqual({
       kind: "interaction.cancelled",
       attachmentId: attachment.id,
       interactionId: "question-1",
       reason: "abandoned",
     });
-    expect(observations.map(observationPayload).map(({ kind }) => kind)).toEqual([
+    expect(
+      observations
+        .map((observation) => observationPayload(observation, attribution))
+        .map(({ kind }) => kind),
+    ).toEqual([
       "attachment.opened",
       "attachment.native_referenced",
       "attachment.failed",
@@ -503,31 +524,37 @@ describe("observationPayload", () => {
       "interaction.cancelled",
     ]);
     expect(
-      observationPayload({
-        id: "10-session-wide",
-        sessionId: session.id,
-        occurredAt: 10,
-        provenance,
-        kind: "adapter.observed",
-        attachmentId: null,
-        name: "native.session-signal",
-        native: null,
-      }),
+      observationPayload(
+        {
+          id: "10-session-wide",
+          sessionId: session.id,
+          occurredAt: 10,
+          provenance,
+          kind: "adapter.observed",
+          attachmentId: null,
+          name: "native.session-signal",
+          native: null,
+        },
+        attribution,
+      ),
     ).toMatchObject({ kind: "adapter.observed", attachmentId: null });
     expect(() =>
-      observationPayload({
-        id: "11",
-        sessionId: session.id,
-        occurredAt: 11,
-        provenance,
-        kind: "command.receipt",
-        receipt: {
-          id: "receipt-1",
-          commandId: "command-1",
-          status: "unreconciled",
-          detail: "Awaiting reconciliation",
+      observationPayload(
+        {
+          id: "11",
+          sessionId: session.id,
+          occurredAt: 11,
+          provenance,
+          kind: "command.receipt",
+          receipt: {
+            id: "receipt-1",
+            commandId: "command-1",
+            status: "unreconciled",
+            detail: "Awaiting reconciliation",
+          },
         },
-      }),
+        attribution,
+      ),
     ).toThrow("require Session Engine stamping");
   });
 
@@ -1182,6 +1209,7 @@ function recorded(sequence: number, usage: SessionUsage): SessionEvent {
     kind: "usage.recorded",
     attachmentId: "attachment-1",
     turnId: null,
+    attribution,
     usage,
   });
 }

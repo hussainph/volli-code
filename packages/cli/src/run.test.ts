@@ -1,12 +1,260 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { AGENT_ERROR_CODES } from "@volli/shared";
-import type { AgentRequest } from "@volli/shared";
+import {
+  AGENT_ERROR_CODES,
+  buildMutationPlan,
+  makeAgentError,
+  MUTATION_PLAN_CONTRACT,
+  verbEntry,
+} from "@volli/shared";
+import type { AgentRequest, AgentResponse, VerbEntry } from "@volli/shared";
 
-import { runCli } from "./run";
+import { renderParseRefusal, runCli, teachingErrorForParseResult } from "./run";
 import { AgentClientError } from "./client";
 
+/** One `volli help` against an app whose optional read answers as scripted. */
+const helpWith = async (
+  helpRequest: (socket: string, request: AgentRequest) => Promise<AgentResponse>,
+  session: string | null = "session-1",
+): Promise<string> => {
+  const output: string[] = [];
+  const code = await runCli(["help"], {
+    env: {
+      VOLLI_SOCKET: "/socket",
+      VOLLI_TICKET: "VC-9",
+      ...(session === null ? {} : { VOLLI_SESSION: session }),
+    },
+    cwd: "/work",
+    stdout: (text) => output.push(text),
+    stderr: () => undefined,
+    readText: async () => "",
+    observe: async () => ({}),
+    request: async () => {
+      throw new Error("static help must not use the command transport");
+    },
+    helpRequest,
+    launch: async () => ({ alreadyRunning: true }),
+  });
+  expect(code).toBe(0);
+  return output.join("");
+};
+
+/** One `--dry-run` attempt against an app whose identify answers as scripted. */
+const previewAgainst = async (
+  identifyData: unknown,
+): Promise<{ code: number; stderr: string; commands: string[] }> => {
+  const stderr: string[] = [];
+  const requests: AgentRequest[] = [];
+  const code = await runCli(["ticket", "comment", "VC-1", "-m", "hi", "--dry-run"], {
+    env: { VOLLI_SOCKET: "/socket" },
+    cwd: "/work",
+    stdout: () => undefined,
+    stderr: (text) => stderr.push(text),
+    readText: async () => "",
+    observe: async () => ({}),
+    request: async (_socket, request) => {
+      requests.push(request);
+      return { v: 1, ok: true, data: identifyData };
+    },
+    launch: async () => ({ alreadyRunning: true }),
+  });
+  return { code, stderr: stderr.join(""), commands: requests.map((request) => request.cmd) };
+};
+
 describe("runCli", () => {
+  it("teaches whether a resolved Role carries a tool reached through the wrong door", () => {
+    const parsed = {
+      ok: false as const,
+      code: "WRONG_DOOR" as const,
+      verb: "session.start",
+      message:
+        "volli session start exists on the Agent Tool Surface as session.start; the Agent CLI does not execute it.",
+    };
+    const toolOnly: VerbEntry = {
+      key: "session.start",
+      accessModes: ["tool"],
+      actor: "role",
+      handler: { site: "main", id: "session.start" },
+      listed: true,
+      referenceOrder: 1,
+      group: "Session",
+      summary: "Start a Session.",
+      options: [],
+    };
+    const lookup = () => toolOnly;
+    const carried = teachingErrorForParseResult(
+      parsed,
+      {
+        appVersion: "0.1.1",
+        surface: { sessionId: "s1", role: "project", tools: ["session.start"] },
+        surfaceUnknownReason: null,
+      },
+      lookup,
+    );
+    expect(carried).toMatchObject({
+      code: "WRONG_DOOR",
+      reason: expect.stringContaining("project Role's frozen bundle carries session.start"),
+      next: expect.stringContaining("named session.start tool"),
+    });
+
+    const absent = teachingErrorForParseResult(
+      parsed,
+      {
+        appVersion: "0.1.1",
+        surface: { sessionId: "s2", role: "ticket", tools: [] },
+        surfaceUnknownReason: null,
+      },
+      lookup,
+    );
+    expect(absent).toMatchObject({
+      code: "WRONG_DOOR",
+      reason: expect.stringContaining("ticket Role's frozen bundle does not carry session.start"),
+      next: expect.stringContaining("do not bypass the refusal"),
+    });
+
+    const unknown = teachingErrorForParseResult(
+      parsed,
+      {
+        appVersion: null,
+        surface: null,
+        surfaceUnknownReason: "the app is stopped",
+      },
+      lookup,
+    );
+    expect(unknown.reason).toContain("Role availability is unknown because the app is stopped");
+
+    // A wrong door whose declared entry is not a tool teaches without Role
+    // claims: there is no bundle that could carry it.
+    const undeclared = teachingErrorForParseResult(parsed, null, () => undefined);
+    expect(undeclared).toEqual(makeAgentError("WRONG_DOOR", parsed.message));
+
+    // Without a runtime at all, the refusal names the missing Session honestly.
+    const outside = teachingErrorForParseResult(parsed, null, lookup);
+    expect(outside.reason).toContain("Role availability is unknown outside a resolved Session");
+  });
+
+  it("renders a wrong door through the optional Role read and every other parse error locally", async () => {
+    const stderr: string[] = [];
+    let helpReads = 0;
+    const dependencies = {
+      env: {},
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: (text: string) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async () => {
+        throw new Error("a parse refusal must not use the command transport");
+      },
+      helpRequest: async () => {
+        helpReads += 1;
+        throw new Error("no socket");
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    };
+    const wrongDoor = {
+      ok: false as const,
+      code: "WRONG_DOOR" as const,
+      verb: "session.start",
+      message: "volli session start exists on the Agent Tool Surface as session.start.",
+    };
+    expect(await renderParseRefusal(wrongDoor, ["session", "start", "--json"], dependencies)).toBe(
+      2,
+    );
+    expect(stderr[0]).toContain('"code":"WRONG_DOOR"');
+
+    const usage = {
+      ok: false as const,
+      code: "USAGE" as const,
+      message: "ticket comment requires -m or --file",
+    };
+    expect(await renderParseRefusal(usage, ["ticket", "comment"], dependencies)).toBe(2);
+    expect(stderr[1]).toContain("error[USAGE]");
+    // With no VOLLI_SOCKET, even the wrong door's optional read degraded
+    // statically before any transport use — and the usage error never asked.
+    expect(helpReads).toBe(0);
+  });
+
+  it("degrades the optional help read honestly for each way it can fail", async () => {
+    // The app answered, but with a frozen surface help cannot trust — whether
+    // malformed, missing, nulled, or the wrong shape entirely.
+    for (const agentSurface of [{ role: "admin", tools: [1] }, undefined, null, []]) {
+      const malformed = await helpWith(async () => ({
+        v: 1,
+        ok: true,
+        data: { appVersion: "0.1.1", ...(agentSurface === undefined ? {} : { agentSurface }) },
+      }));
+      expect(malformed).toContain(
+        "unknown (the running app did not return this Session's frozen Agent Tool Surface)",
+      );
+    }
+
+    // The app refused the read — with this build's structured refusal, or a
+    // pre-VC-91 envelope that carries only a code and message.
+    const refused = await helpWith(async () => ({
+      v: 1,
+      ok: false,
+      error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
+    }));
+    expect(refused).toContain("unknown (DB_UNAVAILABLE: Database failed to open.)");
+    const legacyRefusal = await helpWith(
+      async () =>
+        ({
+          v: 1,
+          ok: false,
+          error: { code: "DB_UNAVAILABLE", message: "Database failed to open." },
+        }) as AgentResponse,
+    );
+    expect(legacyRefusal).toContain("unknown (DB_UNAVAILABLE: Database failed to open.)");
+
+    // A Session without a socket cannot read its bundle and says so.
+    const socketless: string[] = [];
+    expect(
+      await runCli(["help"], {
+        env: { VOLLI_SESSION: "session-1" },
+        cwd: "/work",
+        stdout: (text) => socketless.push(text),
+        stderr: () => undefined,
+        readText: async () => "",
+        observe: async () => ({}),
+        request: async () => {
+          throw new Error("static help must not use the command transport");
+        },
+        launch: async () => ({ alreadyRunning: true }),
+      }),
+    ).toBe(0);
+    expect(socketless.join("")).toContain(
+      "unknown (VOLLI_SOCKET is absent, so the frozen bundle cannot be read)",
+    );
+
+    // The read itself failed in transit.
+    const failed = await helpWith(async () => {
+      throw new Error("socket vanished");
+    });
+    expect(failed).toContain("unknown (the optional app read failed: socket vanished)");
+
+    // Outside a Session, the same failures stay silent about Roles: there is
+    // no bundle to be unknown about, whatever the app answered.
+    for (const sessionless of [
+      await helpWith(async () => ({ v: 1, ok: true, data: 5 }) as const, null),
+      await helpWith(
+        async () => ({
+          v: 1,
+          ok: false,
+          error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
+        }),
+        null,
+      ),
+      await helpWith(async () => {
+        throw new Error("socket vanished");
+      }, null),
+    ]) {
+      expect(sessionless).toContain(
+        "Session Role availability: not claimed outside a resolved Session.",
+      );
+    }
+  });
+
   it("sends parsed context once and writes the JSON response to stdout", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -177,6 +425,39 @@ describe("runCli", () => {
     for (const code of AGENT_ERROR_CODES) expect(help).toContain(code);
   });
 
+  it("adds the live app identity and exact frozen Session surface when the optional help read succeeds", async () => {
+    const output: string[] = [];
+    const requests: AgentRequest[] = [];
+    const dependencies = {
+      env: { VOLLI_SOCKET: "/socket", VOLLI_SESSION: "session-full-id" },
+      cwd: "/work",
+      stdout: (text: string) => output.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socket: string, request: AgentRequest) => {
+        requests.push(request);
+        return {
+          v: 1 as const,
+          ok: true as const,
+          data: {
+            appVersion: "0.1.1",
+            agentSurface: { role: "ticket", tools: ["read", "edit", "ask_user"] },
+          },
+        };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    };
+
+    expect(await runCli(["help"], dependencies)).toBe(0);
+    expect(await runCli(["help", "changes"], dependencies)).toBe(0);
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.cmd === "identify")).toBe(true);
+    expect(output[0]).toContain("Resolved Session Role: ticket");
+    expect(output[0]).toContain("Frozen Agent Tool Surface: read, edit, ask_user");
+    expect(output[1]).toContain("Running app: 0.1.1");
+  });
+
   it("documents every published error code's exit class in volli help exit-codes", async () => {
     const output: string[] = [];
     await runCli(["help", "exit-codes"], {
@@ -217,25 +498,81 @@ describe("runCli", () => {
       launch: async () => ({ alreadyRunning: true }),
     };
 
-    for (const topic of ["json", "addressing", "orchestration", "unknown"]) {
+    for (const topic of ["concepts", "changes", "json", "addressing", "orchestration"]) {
       expect(await runCli(["help", topic], dependencies)).toBe(0);
     }
-    expect(output).toHaveLength(4);
-    expect(output[0]).toContain("structured JSON");
-    expect(output[1]).toContain("Context ladder");
-    expect(output[2]).toContain("Read before writing");
-    // An unknown topic falls back to the full compact reference, not an error.
-    expect(output[3]).toContain("self-documenting planning CLI");
+    expect(output).toHaveLength(5);
+    expect(output[0]).toContain("durable identity");
+    expect(output[1]).toContain("Bundle identity");
+    expect(output[2]).toContain("structured JSON");
+    expect(output[3]).toContain("Context ladder");
+    expect(output[4]).toContain("Read before writing");
+
+    expect(await runCli(["help", "unknown"], dependencies)).toBe(2);
+    expect(errors[0]).toContain("error[USAGE] Unknown help path");
+    expect(errors[0]).toContain("Next: Run `volli help`");
 
     // A malformed (non-empty) command surfaces the parser's usage error, exit 2.
     expect(await runCli(["ticket", "move", "VC-1"], dependencies)).toBe(2);
-    expect(errors).toEqual(["error[USAGE] ticket move requires --to\n"]);
+    expect(errors[1]).toBe(
+      "error[USAGE] ticket move requires --to Next: Run `volli help <command>` and retry with the documented arguments.\n",
+    );
 
     // Bare `volli` prints the complete reference to stderr and exits 2 (usage).
     expect(await runCli([], dependencies)).toBe(2);
-    expect(errors).toHaveLength(2);
-    expect(errors[1]).toContain("self-documenting planning CLI");
-    expect(errors[1]).toContain("volli help <command> for detail");
+    expect(errors).toHaveLength(3);
+    expect(errors[2]).toContain("self-documenting planning CLI");
+    expect(errors[2]).toContain("volli help <command> for detail");
+  });
+
+  it("renders parser refusals as structured JSON with stable code, reason, and nullable next", async () => {
+    const errors: string[] = [];
+    const exitCode = await runCli(["ticket", "move", "VC-1", "--json"], {
+      env: {},
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: (text) => errors.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async () => ({ v: 1, ok: true, data: {} }),
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(exitCode).toBe(2);
+    expect(JSON.parse(errors[0]!)).toEqual({
+      error: {
+        code: "USAGE",
+        message: "ticket move requires --to",
+        reason: "ticket move requires --to",
+        next: "Run `volli help <command>` and retry with the documented arguments.",
+      },
+    });
+
+    expect(
+      await runCli(["board", "--json"], {
+        env: { VOLLI_SOCKET: "/socket" },
+        cwd: "/work",
+        stdout: () => undefined,
+        stderr: (text) => errors.push(text),
+        readText: async () => "",
+        observe: async () => ({}),
+        request: async () => ({
+          v: 1,
+          ok: false,
+          error: makeAgentError("MUTATION_FAILED", "SQLite returned no receipt."),
+        }),
+        launch: async () => ({ alreadyRunning: true }),
+      }),
+    ).toBe(1);
+    expect(JSON.parse(errors[1]!)).toEqual({
+      error: {
+        code: "MUTATION_FAILED",
+        message: "SQLite returned no receipt.",
+        reason:
+          "SQLite returned no receipt. Volli lacks enough durable outcome evidence to name a safe retry.",
+        next: null,
+      },
+    });
   });
 
   it("routes command and --help help through renderHelp, with --json wrapping", async () => {
@@ -298,11 +635,13 @@ describe("runCli", () => {
         }),
       ).toBe(1);
     }
-    expect(errors).toEqual([
-      "error[TIMEOUT] late\n",
-      "error[MUTATION_FAILED] broken\n",
-      "error[MUTATION_FAILED] unknown failure\n",
-    ]);
+    expect(errors[0]).toContain("error[TIMEOUT] late Next:");
+    expect(errors[1]).toContain(
+      "error[MUTATION_FAILED] broken Volli lacks enough durable outcome evidence",
+    );
+    expect(errors[2]).toContain(
+      "error[MUTATION_FAILED] unknown failure Volli lacks enough durable outcome evidence",
+    );
   });
 
   it("degrades identify without a socket and rejects other commands with exit 3", async () => {
@@ -366,7 +705,7 @@ describe("runCli", () => {
         request: async () => ({
           v: 1,
           ok: false,
-          error: { code: "INVALID_REQUEST", message: "bad" },
+          error: makeAgentError("INVALID_REQUEST", "bad"),
         }),
       }),
     ).toBe(2);
@@ -387,11 +726,11 @@ describe("runCli", () => {
       }),
     ).toBe(1);
     expect(output).toEqual([]);
-    expect(errors).toEqual([
-      "error[INVALID_REQUEST] bad\n",
-      "error[APP_UNREACHABLE] down\n",
-      "error[MUTATION_FAILED] boom\n",
-    ]);
+    expect(errors[0]).toContain("error[INVALID_REQUEST] bad Next:");
+    expect(errors[1]).toContain("error[APP_UNREACHABLE] down Next:");
+    expect(errors[2]).toContain(
+      "error[MUTATION_FAILED] boom Volli lacks enough durable outcome evidence",
+    );
   });
 
   it("sends a minimal context when optional env values are absent", async () => {
@@ -479,6 +818,161 @@ describe("runCli — doctor", () => {
     expect(requests[0]?.args["requiredTools"]).toEqual(["git", "node", "yarn"]);
   });
 
+  // A preview that validated different input than the real call would is not a
+  // preview of it. The file is read (a read), folded into the same argument the
+  // real request carries, and only then previewed.
+  it("previews the body a file-sourced write would really send", async () => {
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("ticket.create")!, {
+      kind: "project",
+      id: "VC",
+      label: "Volli Code (VC)",
+    });
+    const argv = ["ticket", "create", "--title", "T", "--body-file", "/tmp/b", "--dry-run"];
+    const code = await runCli(argv, {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async (path) => `body from ${path}`,
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        requests.push(request);
+        if (request.cmd === "identify") {
+          return { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } };
+        }
+        return { v: 1, ok: true, data: plan };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    // The preview flag has to survive materialization, or the read would have
+    // turned the preview into the write it was previewing.
+    expect(code).toBe(0);
+    const preview = requests.find((request) => request.cmd === "ticket.create");
+    expect(preview?.args).toEqual({
+      title: "T",
+      body: "body from /tmp/b",
+      dryRun: true,
+    });
+  });
+
+  it("keeps doctor --fix preview free of local observation and a second request", async () => {
+    const requests: AgentRequest[] = [];
+    let observed = false;
+    const plan = buildMutationPlan(verbEntry("doctor")!, {
+      kind: "integration",
+      id: null,
+      label: "Volli-managed harness integration for future Sessions",
+    });
+    const code = await runCli(["doctor", "--fix", "--dry-run", "--json"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => {
+        observed = true;
+        throw new Error("preview must not inspect files");
+      },
+      request: async (_socket, request) => {
+        requests.push(request);
+        if (request.cmd === "identify") {
+          return { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } };
+        }
+        return { v: 1, ok: true, data: plan };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(observed).toBe(false);
+    // The read-only preflight travels first; the preview itself is one request.
+    expect(requests.map((request) => request.cmd)).toEqual(["identify", "doctor"]);
+    // It asks the capability question and nothing else. A context-shaped
+    // identify resolves a Project, so `doctor --fix --dry-run` run outside a
+    // registered directory would be refused with PROJECT_REQUIRED while the
+    // real repair succeeded.
+    expect(requests[0]?.args).toEqual({ capabilities: true });
+    expect(requests[1]?.args).toEqual({ fix: true, dryRun: true });
+  });
+
+  // An app that predates the preview contract ignores the unknown dryRun
+  // argument and executes the real write — the one outcome a preview promises
+  // can never happen — so the CLI refuses before anything mutable is sent.
+  it("refuses --dry-run up front when the running app does not declare the preview contract", async () => {
+    const versioned = await previewAgainst({ appVersion: "0.1.1" });
+    expect(versioned.code).toBe(1);
+    expect(versioned.commands).toEqual(["identify"]);
+    expect(versioned.stderr).toContain("error[SOCKET_PROTOCOL]");
+    expect(versioned.stderr).toContain(
+      "The running app 0.1.1 does not declare the side-effect preview contract",
+    );
+    expect(versioned.stderr).toContain("volli help changes");
+
+    // A malformed identify answer is the same refusal, without inventing a version.
+    const malformed = await previewAgainst(123);
+    expect(malformed.code).toBe(1);
+    expect(malformed.commands).toEqual(["identify"]);
+    expect(malformed.stderr).toContain(
+      "The running app does not declare the side-effect preview contract",
+    );
+  });
+
+  it("surfaces the preflight identify refusal instead of sending the preview", async () => {
+    const stderr: string[] = [];
+    const requests: AgentRequest[] = [];
+    const code = await runCli(["notify", "-m", "ready", "--dry-run"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return {
+          v: 1,
+          ok: false,
+          error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
+        };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(1);
+    expect(requests.map((request) => request.cmd)).toEqual(["identify"]);
+    expect(stderr.join("")).toContain("error[DB_UNAVAILABLE]");
+  });
+
+  // Behind the preflight, a success that is not the shared plan means the app
+  // may have run the real write; rendering it as a preview would launder that.
+  it("never renders a non-plan answer to --dry-run as a preview success", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await runCli(["ticket", "comment", "VC-1", "-m", "hi", "--dry-run"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        if (request.cmd === "identify") {
+          return { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } };
+        }
+        return { v: 1, ok: true, data: { comment: { id: "c-1" } } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(1);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("")).toContain("error[SOCKET_PROTOCOL]");
+    expect(stderr.join("")).toContain("durable state may have changed");
+    expect(stderr.join("")).toContain("none is safe from this evidence");
+  });
+
   // The observation travels with the request, so the one that arrived WITH the
   // repair describes the world the repair was about to change. Rendering the
   // checks against it told a user who had just run `--fix` to run `--fix`.
@@ -556,7 +1050,7 @@ describe("runCli — doctor", () => {
           : {
               v: 1,
               ok: false as const,
-              error: { code: "MUTATION_FAILED", message: "Re-check failed" },
+              error: makeAgentError("MUTATION_FAILED", "Re-check failed"),
             };
       },
       launch: async () => ({ alreadyRunning: true }),
@@ -602,7 +1096,7 @@ describe("runCli — doctor", () => {
         return {
           v: 1,
           ok: false,
-          error: { code: "MUTATION_FAILED", message: "Repair failed: disk is full" },
+          error: makeAgentError("MUTATION_FAILED", "Repair failed: disk is full"),
         };
       },
       launch: async () => ({ alreadyRunning: true }),

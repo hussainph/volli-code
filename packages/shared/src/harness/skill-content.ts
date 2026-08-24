@@ -1,3 +1,94 @@
+import {
+  AGENT_CAPABILITY_BASELINE,
+  AGENT_CAPABILITY_CHANGES,
+  AGENT_CONCEPT_SECTIONS,
+  ERROR_RECOVERY,
+} from "../agent-product";
+import { AGENT_ERROR_CODES } from "../agent-surface";
+import { VERB_REGISTRY } from "../verb-registry";
+import type { VerbEffects, VerbEntry } from "../verb-registry";
+
+function conceptsMarkdown(): string {
+  const lines = [
+    "# Volli operating model",
+    "",
+    "This local primer is the same operating model projected by `volli help concepts`.",
+  ];
+  for (const section of AGENT_CONCEPT_SECTIONS) {
+    lines.push("", `## ${section.heading}`, "");
+    for (const paragraph of section.paragraphs) lines.push(paragraph, "");
+    for (const bullet of section.bullets ?? []) lines.push(`- ${bullet}`);
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function changesMarkdown(): string {
+  const lines = [
+    "# Agent capability changes",
+    "",
+    "Run `volli help changes` for the exact source/build identity and running app version answering now.",
+    "",
+    `Capability baseline: \`${AGENT_CAPABILITY_BASELINE}\`. Earlier canaries and v0.1.0 are intentionally not backfilled.`,
+  ];
+  for (const change of AGENT_CAPABILITY_CHANGES) {
+    lines.push("", `## ${change.build} (after ${change.baseline})`);
+    for (const [heading, values] of [
+      ["Added", change.added],
+      ["Changed", change.changed],
+      ["Fixed", change.fixed],
+      ["Removed", change.removed],
+    ] as const) {
+      lines.push("", `### ${heading}`, "");
+      lines.push(
+        ...(values.length === 0 ? ["- None in this record."] : values.map((v) => `- ${v}`)),
+      );
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function effectsMarkdown(): string {
+  const lines = ["## What a person sees", ""];
+  const entries = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+    (verb): verb is VerbEntry & { effects: VerbEffects } =>
+      verb.listed && verb.effects !== undefined,
+  );
+  for (const entry of entries) {
+    lines.push(`### \`${entry.key}\``, "");
+    if (entry.effects.when) lines.push(`Applies when \`${entry.effects.when}\` is supplied.`, "");
+    if (entry.effects.durableWrites.length === 0) lines.push("- Durable writes: none.");
+    for (const write of entry.effects.durableWrites)
+      lines.push(`- Durable write: ${write.summary}`);
+    for (const effect of entry.effects.humanVisible) lines.push(`- Human sees: ${effect}`);
+    for (const nonEffect of entry.effects.nonEffects) lines.push(`- Does not: ${nonEffect}`);
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
+function recoveryMarkdown(): string {
+  const lines = [
+    "## Recover from a refusal",
+    "",
+    "Branch on the stable code. Read `reason` and `next` in JSON; `next` is null when Volli cannot name a safe action.",
+    "",
+  ];
+  for (const code of AGENT_ERROR_CODES) {
+    const guidance = ERROR_RECOVERY[code];
+    lines.push(`### \`${code}\``, "", guidance.why, "");
+    lines.push(
+      guidance.next === null
+        ? "Safe next action: unknown. Inspect current durable state before deciding whether a retry is safe."
+        : `Safe next action: ${guidance.next}`,
+      "",
+    );
+  }
+  return lines.join("\n").trimEnd();
+}
+
+export const VOLLI_CONCEPTS = conceptsMarkdown();
+export const VOLLI_CHANGES = changesMarkdown();
+
 export const VOLLI_SKILL = `---
 name: volli
 description: Coordinates Volli planning, tickets, and terminal sessions through the bundled CLI. Use when working in a Volli-tracked project or a Volli terminal session.
@@ -15,7 +106,9 @@ The CLI is self-documenting — it is the authoritative reference, not this skil
 - \`volli help <command>\` — details for one command.
 - Start with \`volli identify\` to resolve your project/ticket/session context.
 
-- Read [cli.md](cli.md) for the workflow (when to read, comment, move, or signal).
+- Read [concepts.md](concepts.md) when Session identity, doors, board effects, worktrees, actors, or Verb Tiers are unfamiliar.
+- Read [changes.md](changes.md) before probing whether this CLI/app build carries a capability.
+- Read [cli.md](cli.md) for the workflow, human-visible effects, and refusal recovery.
 - Read [orchestration.md](orchestration.md) before coordinating multiple tickets or sessions.
 - Read [plugin.md](plugin.md) to register the harness you are running inside, when Volli does not already know it.
 - Treat files under \`custom/\` as user-owned extensions when present.
@@ -48,6 +141,12 @@ Inspect state before mutating it: read the board and the target ticket first, so
 - Move (\`volli ticket move\`) only for a deliberate, real status change. Signals never move the board: when the ticket is ready, the move is its own explicit step.
 - Signal \`volli session blocked\` when you are stuck and need a person — the \`--reason\` is exactly what they see.
 - Signal \`volli session done\` to record that your session finished; it lands in the session ledger only, so pair it with the comment and move that actually hand the work over.
+
+### Side effects and recovery
+
+${effectsMarkdown()}
+
+${recoveryMarkdown()}
 
 Surface every CLI error; never continue silently after a failed mutation.
 `;

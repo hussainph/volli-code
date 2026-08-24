@@ -65,6 +65,34 @@ function sessions(
 }
 
 describe("Sessions", () => {
+  it("asks the default-model port with the Role AND the project — the chain's project rung (VC-126)", async () => {
+    const asked: Array<[string, string | null]> = [];
+    const { sessions: door } = sessions({
+      readDefaultModel: (role, projectId) => {
+        asked.push([role, projectId]);
+        return MODEL;
+      },
+    });
+
+    await door.create({
+      operationId: "operation-ticket",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+    await door.create({
+      operationId: "operation-project",
+      projectId: "project-2",
+      ticketId: null,
+      title: "Project chat",
+    });
+
+    expect(asked).toEqual([
+      ["ticket", "project-1"],
+      ["project", "project-2"],
+    ]);
+  });
+
   it("create mints a Ticket Session and a project Session through the one door — ticketId is the Role", async () => {
     const ticketsAsked: string[] = [];
     const { commands, sessions: door } = sessions({
@@ -88,9 +116,10 @@ describe("Sessions", () => {
     });
 
     // Both are durable and addressable NOW — the attach follows separately,
-    // off the caller's critical path (VC-16).
-    expect(ticketed).toEqual({ sessionId: "session-1" });
-    expect(ticketless).toEqual({ sessionId: "session-1" });
+    // off the caller's critical path (VC-16) — and each answer carries the
+    // model policy the mint recorded, which is what a Run stores (VC-126).
+    expect(ticketed).toEqual({ sessionId: "session-1", model: MODEL });
+    expect(ticketless).toEqual({ sessionId: "session-1", model: MODEL });
     // The Role travels as the nullable ticketId itself; nothing re-derives it.
     expect(commands).toMatchObject([
       {
