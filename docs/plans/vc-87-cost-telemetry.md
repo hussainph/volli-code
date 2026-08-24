@@ -2,6 +2,61 @@
 
 Validated against `origin/main` at `8e8a17c0` after VC-164 and VC-119 merged.
 
+## Status
+
+**Slice A shipped. Slice B shipped except the legacy backfill. Slices C and D
+not started**, by explicit scope decision: the owner's call was to land the
+ledger and its read model first, and to hold the agent-facing read surface back
+rather than put spend routing in an agent's hands before a person has looked at
+the numbers.
+
+What exists now:
+
+| Piece | Where |
+| --- | --- |
+| `SessionUsage`, `CostBasis`, `summarizeSessionUsage` | `packages/shared/src/session-usage.ts` |
+| `reportSessionUsage`, scopes and groupings | `packages/shared/src/session-usage-report.ts` |
+| `usage.recorded` payload, codec, scrub | `packages/shared/src/session-{ledger,event-codec}.ts` |
+| `SessionProjection.usage` | `projectSession` |
+| Capture at `message_end`, compaction, utility | `packages/agent-runtime/src/pi/{runtime,compaction,transcript}.ts` |
+| `usage` observation, marker, translation | `@volli/shared`, `packages/session-engine/src/observation-translation.ts` |
+| `session_usage` table and indexes | migration 025 |
+| Projection write, indexed read, rebuild | `apps/desktop/src/main/session-control/sqlite-ledger.ts` |
+| `SessionEngine.reportUsage` | `packages/session-engine/src/session-engine.ts` |
+
+Three decisions were taken during implementation and are recorded below where
+they change what the rest of the plan should do:
+
+1. **Cost basis is derived from Pi's API family**, keyed by `KnownApi` so a Pi
+   upgrade that adds an adapter fails to compile. All nine direct adapters are
+   `catalog-estimate`; `pi-messages` is `provider-reported`; anything else is
+   `unavailable`. See `costBasisForApi`.
+2. **Attribution is copied at write time, not joined at read time.**
+   `sessions.ticket_id` is `ON DELETE SET NULL`, so a live join would move a
+   deleted Ticket's whole bill into unticketed Project spend.
+3. **The plan's `source: "runtime" | "legacy-transcript"` field was not added.**
+   Nothing writes a legacy row yet, and `SessionEventProvenance` already
+   distinguishes who wrote a fact. The backfill slice should decide whether
+   provenance is enough or whether the projection needs its own column —
+   see the open question below.
+
+### Still open, in the order it matters
+
+- **Legacy transcript backfill.** Deliberately deferred rather than rushed. It
+  has a real design question the rest of the work did not: a settled transcript
+  artifact carries `providerId`, `modelId`, `cost` and token counts, but **no
+  API family** — so a backfilled row cannot derive its own cost basis. The
+  conservative answer is `unavailable` with the cost preserved, which reads as
+  "a real number whose kind we cannot vouch for" and is true. Confirm that
+  before writing rows, because they are immutable once written.
+- **Partial historical coverage** needs somewhere to live once backfill exists.
+  Tool-use-only, failed, compaction and utility spend was never recoverable
+  from transcript artifacts, so a backfilled Session's total is a floor.
+- **Slice C (`volli cost`, `session list` columns)** and **Slice D (app
+  surfaces)** are unchanged by the above; both consume `reportUsage`.
+
+---
+
 ## Decision summary
 
 VC-87 is feasible, but the original premise is only partly true: some usage data is already durable, while a meaningful share of model spend is not. The work must start at the Agent Runtime boundary, not in the CLI or renderer.

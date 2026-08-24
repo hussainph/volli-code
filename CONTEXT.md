@@ -229,6 +229,50 @@ no Cache Prefix ahead of it.
 _Avoid_: cache tier, TTL (the provider's retention window, not a section's
 stability), static/dynamic (says nothing about how often)
 
+**Metered operation**:
+One model call Volli made on a Session's behalf, and what the provider said it
+consumed: uncached input, output, cache-read and cache-write tokens, each
+counted apart because each is priced apart. Its `cause` says which kind of work
+bought it — an `assistant` reply, a Context Compaction, or `utility` work such
+as auto-titling. A reply that only called tools, a reply that failed after its
+prompt was billed, and every attempt in a retry storm are each one of these; a
+turn is usually several. Recorded as a `usage.recorded` Session Event, never as
+metadata on the message it happened to produce — most metered operations produce
+no message at all. An unreported number is absent, never zero: a provider that
+charged nothing and a provider that said nothing are different facts.
+_Avoid_: request (says nothing about billing), token count (only one of four),
+message usage (most spend has no message)
+
+**Cost basis**:
+What a cost number IS: `provider-reported` when a backend supplied its own
+accounting, `catalog-estimate` when the executor multiplied token counts by a
+local price table, `unavailable` when Volli cannot vouch for either. Almost all
+of Volli's costs are estimates — right about consumption, only approximate about
+the invoice, and sharply so for subscription-backed models where a list-price
+value can be calculated for traffic nobody is marginally billed for. A report
+summarising several bases says `mixed` rather than choosing one, and no local
+total may be presented as provider account spend.
+_Avoid_: bill, actual cost, spend (all claim an invoice Volli has not seen)
+
+**Usage projection**:
+The rebuildable index of metered operations, one row per operation, keyed by the
+Session Event that proves it. It is a fact index and never a stored total:
+nothing writes a running sum a later fact could contradict, and dropping the
+whole table loses nothing that the ledger cannot derive again. Ticket, Session,
+model and time rollups are query-time aggregation over it. Attribution is
+copied when the operation is recorded rather than joined at read time, so
+deleting a Ticket cannot move its old spend into unticketed Project spend.
+_Avoid_: usage table (understates that it is derived), cost cache, running total
+
+**Cached input share**:
+Cache reads as a fraction of all prompt tokens — `cacheRead / (input + cacheRead
+
+- cacheWrite)`. It is the measurement that a **Cache class** predicts, and a
+  falling share is an operational incident rather than a curiosity: cache reads
+  bill at roughly a tenth of an uncached input token and writes at more than one.
+  _Avoid_: cache hit rate (providers report token classes, not one hit-or-miss bit
+  per request)
+
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
 Session: message content, an interaction, activity, Thread lineage, attachment
