@@ -6,8 +6,9 @@
  * dot, and a second band here would repeat it.
  *
  * Nothing about the Session lives in this component. The stream, the fold, the
- * queue and the lifecycle belong to the resident client (`chat/client.ts`) and
- * the store beside it, both of which outlive every mount — so a chat left for
+ * queue and the lifecycle belong to the resident client
+ * (@volli/session-presentation) and the store beside it, both of which
+ * outlive every mount — so a chat left for
  * the board keeps folding and releases its queued message whether or not this is
  * on screen. Nor does the half-typed message: it is part of the Session too, so
  * it lives in `stores/chat-drafts.ts` and survives both a tab switch and a
@@ -61,6 +62,7 @@ import {
   groupTurns,
   interactionForApproval,
   isAwaitingFirstOutput,
+  isDeliverable,
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
@@ -68,9 +70,9 @@ import {
   type ChatSegment,
   type ComposerIntent,
   type InteractionSubmission,
+  type MessageDelivery,
   type QueuedMessage,
 } from "@volli/session-presentation";
-import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
 import {
   useSessionController,
   type ChatSessionsStore,

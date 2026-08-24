@@ -127,12 +127,11 @@ export default defineConfig(({ mode }) => ({
       // lifecycle bootstrap: excluded on purpose, never add ../main/**.
       include: [
         "src/stores/**",
-        // The pure chat projection modules moved to @volli/session-presentation
-        // (VC-169) and took their gate entries with them — see that package's
+        // The chat projection modules — and, in slice 2, the resident client
+        // and its registry — moved to @volli/session-presentation (VC-169)
+        // and took their gate entries with them; see that package's
         // vite.config.ts. What stays here is the desktop-coupled remainder.
-        "src/chat/client.ts",
         "src/chat/composer-picker.ts",
-        "src/chat/registry.ts",
         "src/chat/rename.ts",
         "src/chat/transport.ts",
         "src/components/attachments/attachment-model.ts",

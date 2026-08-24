@@ -30,18 +30,15 @@ import type {
   SessionStartResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+
+import { isUntitledChatSession, nextRelease, type QueuedMessage } from "./session-model";
+import { movesProjection, type ChatSessionFrame, type ChatTranscriptState } from "./transcript";
 import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
-  isUntitledChatSession,
-  movesProjection,
-  nextRelease,
   rejectedReceipt,
-  type ChatSessionFrame,
-  type ChatTranscriptState,
-  type QueuedMessage,
-} from "@volli/session-presentation";
+} from "./wire";
 
 /**
  * What a Session's plumbing is doing, as a surface has to draw it.
@@ -153,7 +150,11 @@ export function settledLifecycle(
 
 /* ---------------------------------------------------------------- the store */
 
-/** Everything a resident client writes back. The chat-sessions store is it. */
+/**
+ * Everything a resident client writes back. The desktop's chat-sessions
+ * store satisfies it by delegating to the session-slice transitions;
+ * `createSurfaceStore` is those transitions with nothing else around them.
+ */
 export interface ChatSessionWrites {
   sessions: Readonly<Record<string, ChatSessionSlice>>;
   applyStream(

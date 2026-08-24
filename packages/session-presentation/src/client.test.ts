@@ -1,15 +1,16 @@
 /**
  * The resident Session core, driven through the seams it declares.
  *
- * Everything effectful is injected, so these run against a real store and a real
- * fold with a scripted RPC edge and a flush the test decides the moment of.
- * That is the point of the shape: the behaviours worth protecting here — one
- * store write per batch, a reconnect that resumes rather than replays, a queued
- * message that leaves exactly once — are all about *when* things happen, and
- * none of them is observable through a component.
+ * Everything effectful is injected, so these run against the package's real
+ * surface store and a real fold with a scripted RPC edge, recorded notify and
+ * rename fakes, and a flush the test decides the moment of. That is the point
+ * of the shape: the behaviours worth protecting here — one store write per
+ * batch, a reconnect that resumes rather than replays, a queued message that
+ * leaves exactly once — are all about *when* things happen, and none of them
+ * is observable through a component.
  */
 import type { CommandReceipt, ModelSelection, SessionPresentationProjection } from "@volli/shared";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
   isDeliverable,
@@ -22,16 +23,11 @@ import {
   type ChatStreamCursor,
   type FlushHost,
   type FlushScheduler,
-} from "@renderer/chat/client";
-import { getChatClient } from "@renderer/chat/registry";
-import { EMPTY_TRANSCRIPT, rejectedReceipt } from "@volli/session-presentation";
-import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { toast } from "sonner";
-
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
-
-/** The last error toast's message — the one surface event failures speak to. */
-const lastToast = (): unknown => vi.mocked(toast.error).mock.calls.at(-1)?.[0];
+} from "./client";
+import { disposeChatClient, getOrCreateChatClient } from "./registry";
+import { createSurfaceStore, type SessionSurfaceStore } from "./surface-store";
+import { EMPTY_TRANSCRIPT } from "./transcript";
+import { rejectedReceipt } from "./wire";
 
 /* ------------------------------------------------------------------ scripts */
 
@@ -370,7 +366,16 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
   const scheduler = new ManualScheduler();
   prepare(rpc);
   let commandIds = 0;
-  const store = createChatSessionsStore(() => ({
+  const notifications: string[] = [];
+  const renames: { sessionId: string; title: string; refineFrom?: string }[] = [];
+  const store = createSurfaceStore();
+  const sessionId = `session-${++sessionCounter}`;
+  // The desktop's adopt glue, restated locally: seed the slice, register the
+  // client, open its stream. Everything the desktop store wraps around this
+  // — tabs, starting flags, create/adopt orchestration — is desktop policy,
+  // deliberately absent here.
+  store.getState().seed(sessionId, "ready");
+  const client = getOrCreateChatClient(sessionId, {
     rpc,
     scheduler,
     newCommandId: () => `cmd-${++commandIds}`,
@@ -387,21 +392,44 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
         throughSequence: answer.throughSequence ?? 1,
       };
     },
-  }));
-  const sessionId = `session-${++sessionCounter}`;
-  open.push({ close: () => store.getState().closeChatSession(sessionId) });
-  store.getState().adoptChatSession(sessionId);
-  const client = getChatClient(sessionId)!;
+    store,
+    notify: (message) => {
+      notifications.push(message);
+    },
+    renameSession: (target, title, refineFrom) => {
+      renames.push({
+        sessionId: target,
+        title,
+        ...(refineFrom === undefined ? {} : { refineFrom }),
+      });
+    },
+  });
+  void client.connect();
+  // The desktop's close order restated: dispose the client first, then drop
+  // the slice, so nothing folds into a Session the surface no longer holds.
+  const close = () => {
+    disposeChatClient(sessionId);
+    store.getState().remove(sessionId);
+  };
+  open.push({ close });
   await settle();
   const slice = () => store.getState().sessions[sessionId];
-  return { client, rpc, scheduler, store, sessionId, slice, stream: () => rpc.streams.at(-1)! };
+  return {
+    client,
+    rpc,
+    scheduler,
+    store,
+    sessionId,
+    slice,
+    close,
+    notifications,
+    renames,
+    stream: () => rpc.streams.at(-1)!,
+  };
 }
 
 /** Every distinct slice the store published, for counting writes per batch. */
-function watchSlices(
-  store: ReturnType<typeof createChatSessionsStore>,
-  sessionId: string,
-): ChatSessionSlice[] {
+function watchSlices(store: SessionSurfaceStore, sessionId: string): ChatSessionSlice[] {
   const writes: ChatSessionSlice[] = [];
   store.subscribe(() => {
     const slice = store.getState().sessions[sessionId];
@@ -641,8 +669,8 @@ describe("connect", () => {
   });
 
   it("subscribes from the start for a Session this surface no longer holds", async () => {
-    const { client, rpc, store, sessionId } = await adopted();
-    store.getState().closeChatSession(sessionId);
+    const { client, rpc, sessionId, close } = await adopted();
+    close();
 
     await client.connect();
 
@@ -915,8 +943,8 @@ describe("retryAttach", () => {
   });
 
   it("refuses for a Session this surface no longer holds", async () => {
-    const { client, store, sessionId } = await adopted();
-    store.getState().closeChatSession(sessionId);
+    const { client, close } = await adopted();
+    close();
 
     await expect(client.retryAttach()).resolves.toBe(false);
   });
@@ -943,8 +971,8 @@ describe("recover", () => {
   });
 
   it("does nothing for a Session this surface no longer holds", async () => {
-    const { client, store, sessionId, rpc } = await adopted();
-    store.getState().closeChatSession(sessionId);
+    const { client, rpc, close } = await adopted();
+    close();
 
     await expect(client.recover()).resolves.toBe(false);
     expect(rpc.commands).toHaveLength(0);
@@ -1432,8 +1460,8 @@ describe("submit", () => {
   });
 
   it("refuses for a Session this surface no longer holds", async () => {
-    const { client, store, sessionId, rpc } = await ready();
-    store.getState().closeChatSession(sessionId);
+    const { client, rpc, close } = await ready();
+    close();
 
     await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
@@ -1478,30 +1506,26 @@ describe("auto-title on delivery", () => {
   }
 
   it("names an untitled Session once its first message delivers", async () => {
-    const { client, sessionId } = await readyWithTitle(null);
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const { client, sessionId, renames } = await readyWithTitle(null);
 
     await expect(
       client.submit({ id: "m1", text: "Fix the parser\nmore detail" }, "steer"),
     ).resolves.toBe("delivered");
-    await settle();
 
     // One call, not two: the heuristic title and the message a model may
     // sharpen it from travel together, so no window exists between them in
     // which the title could change out from under the refinement's baseline.
-    expect(renameMock).toHaveBeenCalledWith({
-      sessionId,
-      title: "Fix the parser",
-      refineFrom: "Fix the parser\nmore detail",
-    });
-    vi.unstubAllGlobals();
+    expect(renames).toEqual([
+      {
+        sessionId,
+        title: "Fix the parser",
+        refineFrom: "Fix the parser\nmore detail",
+      },
+    ]);
   });
 
   it("refines an attachment-only message from the file label", async () => {
-    const { client, sessionId } = await readyWithTitle(null);
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const { client, sessionId, renames } = await readyWithTitle(null);
 
     await expect(
       client.submit(
@@ -1522,79 +1546,57 @@ describe("auto-title on delivery", () => {
         "steer",
       ),
     ).resolves.toBe("delivered");
-    await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({
-      sessionId,
-      title: "shot.png",
-      refineFrom: "shot.png",
-    });
-    vi.unstubAllGlobals();
+    expect(renames).toEqual([
+      {
+        sessionId,
+        title: "shot.png",
+        refineFrom: "shot.png",
+      },
+    ]);
   });
 
   it("fires through a queue release too — the one choke point both paths share", async () => {
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
     // No live executor yet, so the message queues; setProjection below is what
     // the queue's release rule reacts to, exactly as it would off a stream
     // frame that just brought one up.
-    const { store, sessionId } = await adopted((fake) => {
+    const { store, sessionId, renames } = await adopted((fake) => {
       fake.snapshotProjection = {
         ...projectionFor(null),
         session: { ...SESSION, title: null },
       };
     });
     store.getState().enqueue(sessionId, { id: "q1", text: "Fix the parser" });
-    expect(renameMock).not.toHaveBeenCalled();
+    expect(renames).toEqual([]);
 
     store.getState().setProjection(sessionId, projectionWithTitle(null));
     await settle();
 
-    expect(renameMock).toHaveBeenCalledWith({
-      sessionId,
-      title: "Fix the parser",
-      refineFrom: "Fix the parser",
-    });
-    vi.unstubAllGlobals();
+    expect(renames).toEqual([
+      {
+        sessionId,
+        title: "Fix the parser",
+        refineFrom: "Fix the parser",
+      },
+    ]);
   });
 
   it("leaves every user title alone, including one that resembles the old default", async () => {
-    const { client } = await readyWithTitle("Chat 1");
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const { client, renames } = await readyWithTitle("Chat 1");
 
     await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
       "delivered",
     );
-    await settle();
 
-    expect(renameMock).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
+    expect(renames).toEqual([]);
   });
 
   it("never delivers, and never renames, a blank message", async () => {
-    const { client } = await readyWithTitle(null);
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const { client, renames } = await readyWithTitle(null);
 
     await expect(client.submit({ id: "m1", text: "   " }, "steer")).resolves.toBe("refused");
 
-    expect(renameMock).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
-  it("does not fail the submit when the rename itself fails", async () => {
-    const { client } = await readyWithTitle(null);
-    const renameMock = vi.fn().mockRejectedValue(new Error("ipc down"));
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
-
-    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
-      "delivered",
-    );
-    await settle();
-
-    expect(renameMock).toHaveBeenCalled();
-    vi.unstubAllGlobals();
+    expect(renames).toEqual([]);
   });
 });
 
@@ -1657,23 +1659,23 @@ describe("commands addressed to an attachment", () => {
     expect(slice()!.sessionError).toBeNull();
   });
 
-  it("toasts a command the harness refused, without latching the Session", async () => {
-    const { client, slice } = await adopted((fake) => {
+  it("notifies a command the harness refused, without latching the Session", async () => {
+    const { client, slice, notifications } = await adopted((fake) => {
       fake.answerCancel = () => REFUSED;
     });
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
 
     // A refused withdrawal is a moment, not a state: the card it addressed is
-    // still on screen saying so, so the failure is toasted and the Session's
-    // plumbing is not implicated.
-    expect(lastToast()).toBe("Decision not cancelled: Pi is unavailable");
+    // still on screen saying so, so the failure is one notify line (a toast,
+    // on the desktop) and the Session's plumbing is not implicated.
+    expect(notifications.at(-1)).toBe("Decision not cancelled: Pi is unavailable");
     expect(slice()!.sessionError).toBeNull();
     expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("toasts a command the transport dropped, without latching the Session", async () => {
-    const { client, slice } = await adopted((fake) => {
+  it("notifies a command the transport dropped, without latching the Session", async () => {
+    const { client, slice, notifications } = await adopted((fake) => {
       fake.answerCancel = () => {
         throw new Error("socket hang up");
       };
@@ -1681,7 +1683,7 @@ describe("commands addressed to an attachment", () => {
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
 
-    expect(lastToast()).toBe("Decision not cancelled: socket hang up");
+    expect(notifications.at(-1)).toBe("Decision not cancelled: socket hang up");
     expect(slice()!.sessionError).toBeNull();
   });
 });
@@ -1782,7 +1784,7 @@ describe("the queued message", () => {
 
   it("stops when the Session closes mid-release", async () => {
     const gate = deferred();
-    const { rpc, store, sessionId } = await pending((fake) => {
+    const { rpc, store, sessionId, close } = await pending((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
       fake.answer = async () => {
         await gate.promise;
@@ -1792,7 +1794,7 @@ describe("the queued message", () => {
 
     store.getState().enqueue(sessionId, { id: "q1", text: "first" });
     store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    store.getState().closeChatSession(sessionId);
+    close();
     gate.release();
     await settle();
 
@@ -1938,7 +1940,7 @@ describe("the queued message", () => {
   });
 
   it("refuses queue claims after the owning surface closes", async () => {
-    const { client, scheduler, store, sessionId, stream } = await pending((fake) => {
+    const { client, scheduler, store, sessionId, stream, close } = await pending((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
       fake.liveProjection = projectionFor("attach-1");
     });
@@ -1948,7 +1950,7 @@ describe("the queued message", () => {
     store.getState().enqueue(sessionId, { id: "q1", text: "first" });
     expect(client.claimQueued("q1")).toBe(true);
 
-    store.getState().closeChatSession(sessionId);
+    close();
 
     expect(client.claimQueued("q1")).toBe(false);
     expect(client.dequeueClaimed("q1")).toBe(false);
@@ -1984,7 +1986,7 @@ describe("the queued message", () => {
 
 describe("dispose", () => {
   it("cancels a pending flush and unsubscribes", async () => {
-    const { client, scheduler, stream, slice, store, sessionId } = await adopted();
+    const { client, scheduler, stream, slice, close } = await adopted();
     stream().send("1", transcriptFrameOf(1, "m1"));
 
     client.dispose();
@@ -1994,7 +1996,7 @@ describe("dispose", () => {
     expect(stream().unsubscribed).toBe(true);
     // The slice is the store's; disposing a client says nothing about it.
     expect(slice()).toBeDefined();
-    store.getState().closeChatSession(sessionId);
+    close();
   });
 
   it("is safe with nothing pending and no stream open", async () => {

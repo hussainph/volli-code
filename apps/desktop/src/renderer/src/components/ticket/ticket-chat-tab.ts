@@ -7,7 +7,7 @@
  * waiting for the first collision.
  */
 
-import type { ChatSessionLifecycle } from "@renderer/chat/client";
+import type { ChatSessionLifecycle } from "@volli/session-presentation";
 import type { TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 
 const CHAT_TAB_PREFIX = "chat:";

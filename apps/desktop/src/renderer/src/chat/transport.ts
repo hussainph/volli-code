@@ -6,7 +6,8 @@
  * here is exactly what a second Volli client would replace, and nothing here
  * is anything the core needs to know.
  */
-import { racingFlushScheduler, type ChatSessionTransport } from "@renderer/chat/client";
+import { racingFlushScheduler, type ChatSessionTransport } from "@volli/session-presentation";
+
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 /** The app's transport. Built per call; the RPC client underneath is a singleton. */

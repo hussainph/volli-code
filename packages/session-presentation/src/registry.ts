@@ -10,7 +10,7 @@
  * here on mount instead of constructing one, which is what makes a queued
  * message written before a tab was closed still leave when the harness frees up.
  */
-import { ChatSessionClient, type ChatSessionClientDeps } from "@renderer/chat/client";
+import { ChatSessionClient, type ChatSessionClientDeps } from "./client";
 
 const clients = new Map<string, ChatSessionClient>();
 const membershipListeners = new Set<() => void>();
