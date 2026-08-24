@@ -25,6 +25,7 @@ import {
   getHarnessAdapter,
   harnessAdapters,
   globalSkillsDir,
+  projectCommandsDir,
   projectSkillsDir,
   draftAttachmentHashes,
   makeAgentError,
@@ -33,6 +34,7 @@ import {
   resolveShell,
   sessionToolIds,
   skillPromptResource,
+  skillResourcePart,
   skillsIndexResource,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
@@ -70,7 +72,11 @@ import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/pr
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordTicketEvent } from "./db/events-repo";
-import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
+import {
+  chatSessionRecord,
+  createDesktopSessionEngine,
+  watchSessionActivity,
+} from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
@@ -97,6 +103,9 @@ import {
   type SessionToolSurfacePorts,
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
+import { loadPromptTemplates } from "./prompt-templates";
+import { registerAutomationIpcHandlers } from "./automations/ipc";
+import { createAutomationRunner } from "./automations/run";
 import {
   assertDefaultModelAvailable,
   readCompactionPolicy,
@@ -1083,15 +1092,24 @@ app.whenReady().then(async () => {
     sessionToolSurface !== null
       ? createSessions({
           runtime: sessionRuntime,
-          // Role in, purpose out (VC-53): a Ticket Session resolves the
-          // execution default, a project chat the orchestration one, and each
-          // inherits the project default when it holds no explicit choice of
-          // its own — stated by `resolveDefaultModel`, never substituted.
-          readDefaultModel: (role) =>
-            resolveDefaultModel(
-              readModelAccessDefaults(sessionDb),
-              role === "ticket" ? "ticket" : "global",
-            ),
+          // The inheritance chain, in rung order (VC-112, VC-126): the
+          // project's own runtime preference first — `projects.session_model`
+          // (migration 024, NULL = inherit) — then the app-wide per-purpose
+          // record, Role in and purpose out (VC-53): a Ticket Session resolves
+          // the execution default, a project chat the orchestration one —
+          // stated by `resolveDefaultModel`, never substituted. One closure so
+          // every door — renderer chat, CLI start, an Automation Run — walks
+          // the same rungs.
+          readDefaultModel: (role, projectId) => {
+            const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
+            return (
+              project?.sessionModel ??
+              resolveDefaultModel(
+                readModelAccessDefaults(sessionDb),
+                role === "ticket" ? "ticket" : "global",
+              )
+            );
+          },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readModelSelection: async (sessionId) =>
@@ -1505,6 +1523,78 @@ app.whenReady().then(async () => {
       },
     },
   );
+  // Automations (VC-112, tracer VC-126): the record's CRUD plus the one Run
+  // door. The runner exists only when the Session runtime does — the CRUD half
+  // is plain SQLite and stays available either way — and every dependency it
+  // is handed is the SAME seam the equivalent surface already rides: the
+  // Sessions facade for the fresh mint, the composer's own template/skill
+  // loaders for Instructions resolution, and the chat listing's projection for
+  // the single-flight activity read.
+  const automationRunner =
+    sessions !== null && sessionRuntime !== null && sessionDb !== null
+      ? createAutomationRunner({
+          db: sessionDb,
+          sessions,
+          promptSupply: async (projectId) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) throw new Error("Unknown project");
+            const [loaded, skills] = await Promise.all([
+              loadPromptTemplates({
+                projectCommandsDir: projectCommandsDir(project.path),
+                globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+              }),
+              loadSkills({
+                projectSkillsDir: projectSkillsDir(project.path),
+                globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+              }),
+            ]);
+            if (!loaded.ok) throw new Error(loaded.error);
+            if (!skills.ok) throw new Error(skills.error);
+            return {
+              templates: loaded.templates,
+              // The ruled list, exactly as `volli:prompt-templates` hands the
+              // composer: an `off` skill is not offered, a `manual` one is.
+              skills: applySkillModes(skills.skills, project.skillModes ?? {}),
+            };
+          },
+          // The composer's own message shape: the text as typed (templates
+          // spliced), each `/skill` body riding beside as a typed resource part.
+          deliverInstructions: async ({ sessionId, text, resources }) => {
+            await sessionRuntime.command({
+              commandId: randomUUID(),
+              sessionId,
+              command: {
+                kind: "message.submit",
+                message: {
+                  id: randomUUID(),
+                  role: "user",
+                  parts: [{ type: "text", text }, ...resources.map(skillResourcePart)],
+                },
+              },
+            });
+          },
+          readSessionActivity: async (sessionId) => {
+            try {
+              const snapshot = await sessionRuntime.projection({ sessionId });
+              return chatSessionRecord(snapshot.projection).activity;
+            } catch {
+              // A Session the engine cannot project cannot be "in flight".
+              return null;
+            }
+          },
+          now: Date.now,
+        })
+      : null;
+  registerAutomationIpcHandlers(dbHandle, {
+    runner: automationRunner,
+    ...(piRuntimeHost !== null
+      ? { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }
+      : {}),
+    // Every committed mutation reaches the other windows the way every other
+    // planning mutation does; the scope is the best the surface knows.
+    onMutation: (change) => broadcastDataChanged(change),
+    now: Date.now,
+  });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
   // against the `color-scheme` this app stamps, so it reports the mode already
