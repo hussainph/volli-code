@@ -179,6 +179,57 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("types a verdict, and refuses a word outside either vocabulary", () => {
+    expect(
+      parseCliArgs([
+        "ticket",
+        "signal",
+        "VC-12",
+        "--kind",
+        "review",
+        "--verdict",
+        "pass",
+        "--detail",
+        "Two nits, fixed",
+      ]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "ticket.signal",
+        args: { id: "VC-12", kind: "review", verdict: "pass", detail: "Two nits, fixed" },
+        json: false,
+      },
+    });
+    // Detail is optional; the two halves of the verdict are not.
+    expect(
+      parseCliArgs(["ticket", "signal", "VC-12", "--kind", "budget", "--verdict", "blocked"]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "ticket.signal",
+        args: { id: "VC-12", kind: "budget", verdict: "blocked" },
+        json: false,
+      },
+    });
+    // A fixed vocabulary is only cheap to live with if being wrong teaches you
+    // the right words — and this process holds the same list main checks.
+    expect(
+      parseCliArgs(["ticket", "signal", "VC-12", "--kind", "vibes", "--verdict", "pass"]),
+    ).toEqual({
+      ok: false,
+      code: "USAGE",
+      message:
+        'Unknown signal kind "vibes" (valid: validate, implement, review, merge, human-gate, budget)',
+    });
+    expect(
+      parseCliArgs(["ticket", "signal", "VC-12", "--kind", "review", "--verdict", "probably"]),
+    ).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: 'Unknown verdict "probably" (valid: pass, fail, blocked)',
+    });
+  });
+
   it("routes comments, archive, lifecycle signals, and notifications", () => {
     expect(parseCliArgs(["ticket", "comment", "VC-12", "-m", "Ready for review"])).toEqual({
       ok: true,
@@ -461,6 +512,11 @@ describe("parseCliArgs", () => {
     [["ticket", "move"], "ticket move requires <id>"],
     [["ticket", "move", "VC-1"], "ticket move requires --to"],
     [["ticket", "comment"], "ticket comment requires <id>"],
+    // Half a verdict is not a weaker verdict, it is not one: a stage with no
+    // outcome and an outcome with no stage each say nothing (VC-85).
+    [["ticket", "signal"], "ticket signal requires <id>"],
+    [["ticket", "signal", "VC-1", "--verdict", "pass"], "ticket signal requires --kind"],
+    [["ticket", "signal", "VC-1", "--kind", "review"], "ticket signal requires --verdict"],
     [["ticket", "comment", "VC-1"], "ticket comment requires exactly one of -m or --file"],
     [["ticket", "comment", "VC-1", "-m"], "-m requires a value"],
     [
@@ -905,12 +961,15 @@ describe("registry ↔ argv mechanics", () => {
 
   // Which verbs the walker cannot serve, named rather than inferred: `hook`
   // takes two bare positionals and never walks the parser, `help` takes a
-  // command path or a topic word instead of an option table.
-  it("leaves exactly the two verbs the walker cannot serve without mechanics", () => {
+  // command path or a topic word instead of an option table, and `ticket.await`
+  // is not on the shell at all — it is control tier, because a CLI verb must
+  // never wait (VC-85). The first two are shapes argv cannot express; the third
+  // is a door this process does not have.
+  it("leaves exactly the verbs the walker cannot serve without mechanics", () => {
     const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
       (entry) => entry.key,
     );
-    expect(missing).toEqual(["hook", "help"]);
+    expect(missing).toEqual(["hook", "help", "ticket.await"]);
   });
 });
 

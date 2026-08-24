@@ -68,7 +68,10 @@ export function emitTicketWake(
   wake: TicketWake,
   reportFailure: (error: unknown) => void = (error) => console.error(error),
 ): void {
-  for (const listener of [...listeners]) {
+  // A snapshot, not the live Set: the listener a wake settles is the listener
+  // that unsubscribes on it, and every waiter does exactly that.
+  const settled = [...listeners];
+  for (const listener of settled) {
     try {
       listener(wake);
     } catch (error) {

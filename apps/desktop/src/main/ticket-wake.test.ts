@@ -92,7 +92,7 @@ describe("marking and emitting what a mutation committed", () => {
 
   function watch(): TicketWake[] {
     const seen: TicketWake[] = [];
-    unsubscribes.push(subscribeTicketWake((one) => seen.push(one)));
+    unsubscribes.push(subscribeTicketWake((notice) => seen.push(notice)));
     return seen;
   }
 
@@ -114,9 +114,9 @@ describe("marking and emitting what a mutation committed", () => {
       createSignal(ctx.db, { ticketId, kind: "review", verdict: "pass", actor: "session" }, 2);
     });
 
-    expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["status_changed", "signaled"]);
+    expect(seen.map((notice) => notice.event.payload.kind)).toEqual(["status_changed", "signaled"]);
     // The project rides along so a subscriber can filter without a second read.
-    expect(seen.every((wake) => wake.projectId === projectId)).toBe(true);
+    expect(seen.every((notice) => notice.projectId === projectId)).toBe(true);
   });
 
   it("wakes only on what happened AFTER the mark", () => {
@@ -128,7 +128,7 @@ describe("marking and emitting what a mutation committed", () => {
       recordTicketEvent(ctx.db, ticketId, { kind: "unarchived" }, 2);
     });
 
-    expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["unarchived"]);
+    expect(seen.map((notice) => notice.event.payload.kind)).toEqual(["unarchived"]);
   });
 
   it("says nothing for a mutation that wrote nothing", () => {
@@ -146,11 +146,13 @@ describe("marking and emitting what a mutation committed", () => {
     const { ticketId } = setup();
     const readable: boolean[] = [];
     unsubscribes.push(
-      subscribeTicketWake((wake) => {
+      subscribeTicketWake((notice) => {
         // Inside the listener, the event is durable: a wake for something SQLite
         // could still roll back is a wake for something that never happened.
         readable.push(
-          listTicketEvents(ctx.db, wake.event.ticketId).some((event) => event.id === wake.event.id),
+          listTicketEvents(ctx.db, notice.event.ticketId).some(
+            (event) => event.id === notice.event.id,
+          ),
         );
       }),
     );
@@ -182,7 +184,7 @@ describe("marking and emitting what a mutation committed", () => {
 
     // The move is durably in the log whatever the caller was told, and a waiter
     // reads the log rather than the caller's exit code.
-    expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["status_changed"]);
+    expect(seen.map((notice) => notice.event.payload.kind)).toEqual(["status_changed"]);
   });
 
   it("wakes nobody for a ticket that no longer exists to attribute", () => {
