@@ -1,16 +1,22 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
+import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
 import type { ChatSessionRecord } from "@volli/shared";
 
+import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
 import {
+  buildAutomationRunItems,
   buildCommandPaletteItems,
+  paletteRunContext,
   type CommandPaletteItems,
 } from "@renderer/components/command-palette-model";
+import { useAutomationsStore } from "@renderer/stores/automations";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -69,6 +75,34 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
   const [chatSessions, setChatSessions] = React.useState<readonly ChatSessionRecord[]>([]);
   const [query, setQuery] = React.useState("");
+  const openTicketId = useWorkspaceStore((state) =>
+    selectedProjectId === null ? null : (state.byProject[selectedProjectId]?.openTicketId ?? null),
+  );
+  const automationsByProject = useAutomationsStore((state) => state.byProject);
+
+  // The automations the selected project lists, re-read per open — same
+  // staleness stance as the chat rows below: the palette's open IS the moment
+  // a stale list would show.
+  React.useEffect(() => {
+    if (!open || selectedProjectId === null) return;
+    void useAutomationsStore.getState().refresh(selectedProjectId);
+  }, [open, selectedProjectId]);
+
+  // "Run by name" targets the OPEN Ticket, resolved against the live board so
+  // a remembered id whose Ticket is gone offers nothing (VC-126; the richer
+  // choose-a-ticket surfaces are VC-127/VC-129).
+  const selectedProject = projects.find((candidate) => candidate.id === selectedProjectId) ?? null;
+  const runContext = open
+    ? paletteRunContext(
+        openTicketId,
+        selectedProject,
+        selectedProjectId === null ? [] : (ticketsByProject[selectedProjectId] ?? []),
+      )
+    : null;
+  const automationRuns = buildAutomationRunItems(
+    selectedProjectId === null ? [] : (automationsByProject[selectedProjectId] ?? []),
+    runContext,
+  );
 
   // Closed and invisible: every board/session mutation would otherwise
   // re-run this projects×tickets×sessions rebuild for nothing. Gating on
@@ -176,6 +210,59 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       </div>
       <Command.List className="max-h-[min(460px,60vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]">
         <Command.Empty className={EMPTY_INLINE}>No matching tickets or sessions.</Command.Empty>
+
+        {automationRuns.length > 0 || selectedProjectId !== null ? (
+          <Command.Group heading="Automations" className={MENU_LABEL_CMDK}>
+            {automationRuns.map((item) => (
+              <Command.Item
+                key={`automation-run:${item.automationId}`}
+                value={`run automation ${item.name} ${item.ticketDisplayId}`}
+                keywords={[item.name, item.ticketDisplayId, "run", "automation"]}
+                onSelect={() => {
+                  // The palette closes now; the run navigates to the fresh
+                  // Session itself the moment main answers (run-automation.ts).
+                  void runAutomationOnTicket({
+                    automationId: item.automationId,
+                    ticketId: item.ticketId,
+                  });
+                  finishNavigation();
+                }}
+                className={PALETTE_ROW}
+              >
+                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ui font-medium">{item.name}</span>
+                  <span className="truncate text-label text-muted-foreground">
+                    {item.ownership === "global" ? "All projects" : "This project"}
+                  </span>
+                </span>
+                <span className="shrink-0 text-label text-muted-foreground">
+                  Run on {item.ticketDisplayId}
+                </span>
+              </Command.Item>
+            ))}
+            {selectedProjectId !== null ? (
+              <Command.Item
+                key="automation-new"
+                value="new automation create automation"
+                keywords={["new", "create", "automation"]}
+                onSelect={() => {
+                  useAutomationsStore.getState().openEditor(selectedProjectId);
+                  finishNavigation();
+                }}
+                className={PALETTE_ROW}
+              >
+                <PlusIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ui font-medium">New Automation…</span>
+                  <span className="truncate text-label text-muted-foreground">
+                    Name it, write Instructions, choose a Runtime
+                  </span>
+                </span>
+              </Command.Item>
+            ) : null}
+          </Command.Group>
+        ) : null}
 
         {items.sessions.length > 0 ? (
           <Command.Group heading="Sessions" className={MENU_LABEL_CMDK}>

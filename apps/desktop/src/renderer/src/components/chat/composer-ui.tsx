@@ -717,7 +717,7 @@ export const SessionComposer = React.memo(function SessionComposer({
 /* ------------------------------------------------------------------ picker */
 
 /** The caret bindings the stack owns and the textarea below it consumes. */
-interface ComposerCaretBinding {
+export interface ComposerCaretBinding {
   ref: React.RefCallback<HTMLTextAreaElement>;
   /** Consumes the picker's keys. `true` means the composer must not act on it. */
   handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean;
@@ -735,6 +735,21 @@ const ComposerCaretContext = React.createContext<ComposerCaretBinding>({
 });
 
 /**
+ * The stack's caret binding, for a textarea that is not the chat's own.
+ *
+ * The Automation editor (VC-126) renders its Instructions box inside a
+ * {@link ComposerPickerStack} so `/` and `@` resolve identically to the chat
+ * composer — same picker, same insertion, same grammar — without inheriting
+ * the chat textarea's queue and steer semantics. Any consumer must wire all
+ * three members exactly as {@link ComposerTextarea} does: `ref`, then
+ * `handleKeyDown` first in its own keydown, then `trackCaret` on
+ * change/select/keyup.
+ */
+export function useComposerCaretBinding(): ComposerCaretBinding {
+  return React.useContext(ComposerCaretContext);
+}
+
+/**
  * The picker card, the composer under it, and the one piece of state they
  * share.
  *
@@ -745,7 +760,7 @@ const ComposerCaretContext = React.createContext<ComposerCaretBinding>({
  * hand back — so it lives here, in the one component that has both the list
  * that reacts to it and the input that produces it beneath it.
  */
-function ComposerPickerStack({
+export function ComposerPickerStack({
   children,
   ...input
 }: React.PropsWithChildren<{
