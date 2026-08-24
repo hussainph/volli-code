@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { listTicketEvents, listTicketStatusEntries, recordTicketEvent } from "./events-repo";
+import {
+  listTicketEvents,
+  listTicketStatusEntries,
+  recordSessionStartedOnce,
+  recordTicketEvent,
+} from "./events-repo";
 import { insertProject } from "./projects-repo";
 import { openTestDb, testProject, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
@@ -291,5 +296,140 @@ describe("listTicketStatusEntries", () => {
 
     expect(entries).toHaveLength(5);
     expect(prepareSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The one durable write in a `session.start` that carries no idempotency key of
+ * its own (VC-162).
+ *
+ * `session.create` and the kickoff `message.submit` both deduplicate on a
+ * command id derived from the caller's operation id, so a replayed
+ * `session_start` tool call collapses into one Session and one kickoff. A
+ * ticket event has no such key, which is what this guard replaces — and what
+ * makes acceptance 5's "one `session_started`" true rather than likely.
+ */
+describe("recordSessionStartedOnce", () => {
+  it("records the planner fact the first time and reports that it wrote", () => {
+    const { ticketId } = setup();
+
+    const wrote = recordSessionStartedOnce(ctx.db, {
+      ticketId,
+      sessionId: "session-1",
+      now: 100,
+      actor: { kind: "user" },
+    });
+
+    expect(wrote).toBe(true);
+    expect(listTicketEvents(ctx.db, ticketId).map((event) => event.payload)).toEqual([
+      { kind: "session_started", sessionId: "session-1" },
+    ]);
+  });
+
+  it("is a no-op for the same Session, however many times a start is replayed", () => {
+    const { ticketId } = setup();
+    const start = (now: number) =>
+      recordSessionStartedOnce(ctx.db, {
+        ticketId,
+        sessionId: "session-1",
+        now,
+        actor: { kind: "session", sessionId: "caller", ticketId: null },
+      });
+
+    expect([start(100), start(200), start(300)]).toEqual([true, false, false]);
+
+    // One line in the Activity feed, and it is the FIRST one: a replay must not
+    // restamp the fact to a later time either, or a Session would appear to
+    // have started whenever the provider last retried the call.
+    const events = listTicketEvents(ctx.db, ticketId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.createdAt).toBe(100);
+  });
+
+  it("keeps the actor the first call attributed, not a later one's", () => {
+    const { ticketId } = setup();
+    recordSessionStartedOnce(ctx.db, {
+      ticketId,
+      sessionId: "session-1",
+      now: 100,
+      actor: { kind: "session", sessionId: "caller", ticketId: null },
+    });
+
+    recordSessionStartedOnce(ctx.db, {
+      ticketId,
+      sessionId: "session-1",
+      now: 200,
+      actor: { kind: "user" },
+    });
+
+    const events = listTicketEvents(ctx.db, ticketId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.actor).toBe("session");
+  });
+
+  it("separates Sessions on one Ticket, which is not a replay", () => {
+    // A Ticket can legitimately be worked by several Sessions over its life.
+    // The key is the Session, never the Ticket.
+    const { ticketId } = setup();
+
+    for (const sessionId of ["session-1", "session-2", "session-3"]) {
+      expect(
+        recordSessionStartedOnce(ctx.db, {
+          ticketId,
+          sessionId,
+          now: 100,
+          actor: { kind: "user" },
+        }),
+      ).toBe(true);
+    }
+
+    expect(listTicketEvents(ctx.db, ticketId)).toHaveLength(3);
+  });
+
+  it("holds its answer across a long history of unrelated events", () => {
+    // The predicate reads both `kind` and the payload's session id, and the
+    // rows it has to see through are whatever the Ticket accumulated in
+    // between. A guard that matched on `kind` alone would refuse the second
+    // Session ever started on a Ticket; one that lost the first row behind
+    // later events would let a replay through.
+    const { ticketId } = setup();
+    for (let index = 0; index < 20; index += 1) {
+      recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, index);
+      recordTicketEvent(ctx.db, ticketId, { kind: "unarchived" }, index);
+    }
+    recordSessionStartedOnce(ctx.db, {
+      ticketId,
+      sessionId: "session-1",
+      now: 100,
+      actor: { kind: "user" },
+    });
+    recordTicketEvent(ctx.db, ticketId, { kind: "commented", commentId: "comment-1" }, 150);
+
+    // A Ticket worked by a second Session is the ordinary case, not a replay.
+    expect(
+      recordSessionStartedOnce(ctx.db, {
+        ticketId,
+        sessionId: "session-2",
+        now: 200,
+        actor: { kind: "user" },
+      }),
+    ).toBe(true);
+    // And the first is still held, with all of that between.
+    expect(
+      recordSessionStartedOnce(ctx.db, {
+        ticketId,
+        sessionId: "session-1",
+        now: 300,
+        actor: { kind: "user" },
+      }),
+    ).toBe(false);
+
+    const started = listTicketEvents(ctx.db, ticketId).filter(
+      (event) => event.payload.kind === "session_started",
+    );
+    expect(started.map((event) => event.payload)).toEqual([
+      { kind: "session_started", sessionId: "session-1" },
+      { kind: "session_started", sessionId: "session-2" },
+    ]);
   });
 });

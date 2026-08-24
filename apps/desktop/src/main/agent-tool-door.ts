@@ -249,10 +249,20 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
   "session.start": startSessionTool,
 };
 
+/**
+ * The one closure the Pi adapter hands every attachment that holds a verb.
+ *
+ * Named so main can declare the binding before it can build it: the door is
+ * composed from the Sessions facade, which is composed after the adapter that
+ * calls the door.
+ */
+export type AgentToolDoor = (
+  session: RuntimeSessionIdentity,
+  request: RuntimeVerbCall,
+) => Promise<RuntimeVerbResult>;
+
 /** Build the one closure the Pi adapter hands every attachment that holds a verb. */
-export function createAgentToolDoor(
-  options: AgentToolDoorOptions,
-): (session: RuntimeSessionIdentity, request: RuntimeVerbCall) => Promise<RuntimeVerbResult> {
+export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoor {
   return async (session, request) => {
     const handler = VERB_TOOL_HANDLERS[request.verb];
     if (handler === undefined) {

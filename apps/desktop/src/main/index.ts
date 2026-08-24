@@ -73,7 +73,7 @@ import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/pr
 import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
-import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
+import { recordSessionStartedOnce } from "./db/events-repo";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -150,6 +150,7 @@ import {
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
+import type { AgentToolDoor } from "./agent-tool-door";
 import { startOrphanSweep } from "./orphan-sweep";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -838,6 +839,23 @@ app.whenReady().then(async () => {
     ? new AgentObservability({ db: dbHandle.db, serviceVersion: app.getVersion() })
     : null;
   agentObservability?.start();
+  /**
+   * The Agent Tool Surface's door into main (VC-162) — the same application
+   * handler the socket's `session.start` reaches, entered with a caller main
+   * bound rather than one a request claimed.
+   *
+   * Declared here and assigned far below, because construction is circular: the
+   * Pi adapter a few lines down closes over this to answer verb calls, while
+   * the door itself is built from the Sessions facade, which is built from that
+   * adapter's own host. Something has to be declared across that loop.
+   *
+   * An initialized `let` rather than a `const` reached from above, so a call
+   * that somehow arrived before the assignment gets the sentence written for
+   * that case instead of a `ReferenceError` about a temporal dead zone. Nothing
+   * should: every path between here and the assignment is a handler body that
+   * cannot run before the window exists.
+   */
+  let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
       ? createPiRuntimeHost({
@@ -1194,26 +1212,11 @@ app.whenReady().then(async () => {
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own
-          // door derived.
+          // door derived. Once per Session and not once per call (VC-162), now
+          // that a replayed tool call can mint through it twice — the guard
+          // lives with the ledger that can answer whether it already happened.
           recordSessionStarted: ({ ticketId, sessionId, actor }) => {
-            // Once per Session, not once per call (VC-162). A Session starts
-            // exactly once, so this planner fact is about the Session rather
-            // than about the act of asking — and the durable writes around it
-            // are all keyed on the operation id, which would leave this the one
-            // thing a replayed start duplicated. Ticket events carry no
-            // idempotency key of their own, so the guard is the fact itself.
-            const already = listTicketEvents(sessionDb, ticketId).some(
-              (event) =>
-                event.payload.kind === "session_started" && event.payload.sessionId === sessionId,
-            );
-            if (already) return;
-            recordTicketEvent(
-              sessionDb,
-              ticketId,
-              { kind: "session_started", sessionId },
-              Date.now(),
-              actor,
-            );
+            recordSessionStartedOnce(sessionDb, { ticketId, sessionId, now: Date.now(), actor });
           },
         })
       : null;
@@ -1351,17 +1354,11 @@ app.whenReady().then(async () => {
             },
           });
         };
-  /**
-   * The Agent Tool Surface's door into main (VC-162) — the same application
-   * handler the socket's `session.start` reaches, entered with a caller main
-   * bound rather than one a request claimed.
-   *
-   * Every dependency is read through a closure rather than captured, because
-   * this is composed before some of them exist and outlives changes to the
-   * rest: the project list grows, and the facade is built further down this
-   * same function.
-   */
-  const agentToolDoor =
+  // Every dependency is read through a closure rather than captured, because
+  // this is composed before some of them exist and outlives changes to the
+  // rest: the project list grows, and the facade is built further down this
+  // same function. See the declaration above for why the binding is split.
+  agentToolDoor =
     sessionDb === null
       ? null
       : createAgentToolDoor({

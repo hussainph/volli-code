@@ -25,6 +25,7 @@ import type {
   ModelSelection,
   PromptResource,
   ReasoningLevel,
+  RuntimeSessionRole,
   SessionStartResult,
   SessionToolId,
   TicketEventActor,
@@ -123,8 +124,16 @@ export interface SessionToolSurfacePorts {
    * which is the availability-as-enforcement property VC-92 asked for. Before
    * this argument existed every Session resolved the same list, and "Role
    * determines the tool bundle" was true only in `CONTEXT.md`.
+   *
+   * {@link RuntimeSessionRole} and NOT {@link SessionDefaultModelRole}, though
+   * the two spell the same pair today. They answer different questions: one is
+   * which rung of the default-model ladder to read, the other is which Role's
+   * bundle to resolve, and borrowing the model policy's vocabulary for a tool
+   * decision is how the next Role gets added to one and not the other. This is
+   * the runtime's Role vocabulary — the same one `RuntimeToolBundle` and the
+   * first-message block are written in. VC-9 widens it here, in the open.
    */
-  resolve(role: SessionDefaultModelRole): readonly SessionToolId[];
+  resolve(role: RuntimeSessionRole): readonly SessionToolId[];
   record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
 }
 
@@ -340,6 +349,12 @@ export function createSessions(options: SessionsOptions): Sessions {
     // One derivation of the Role for this mint, read by both the model policy
     // and the tool surface. `ticketId !== null` IS the Role on start, and
     // asking twice is how two answers start disagreeing.
+    //
+    // The two ports name their argument in different vocabularies on purpose
+    // (`SessionDefaultModelRole` is a ladder rung, `RuntimeSessionRole` is a
+    // Role), and this one literal satisfies both while they spell the same
+    // pair. The day they diverge, this is the line that has to split — which
+    // is the point of not having collapsed them.
     const role: SessionDefaultModelRole = input.ticketId === null ? "project" : "ticket";
     const model = await resolveModelSelection(options, input.modelOverride, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
