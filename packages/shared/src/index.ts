@@ -44,6 +44,7 @@ export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";
 export * from "./session-usage";
+export * from "./session-usage-report";
 export * from "./session-streak";
 export * from "./session-venue";
 export * from "./session-event-codec";

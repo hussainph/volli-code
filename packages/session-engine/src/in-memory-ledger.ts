@@ -4,6 +4,7 @@ import type {
   ListLatestTicketSignalsQuery,
   ListSessionStartsQuery,
   ListSessionsQuery,
+  ListSessionUsageQuery,
   LatestSessionSignal,
   ListSessionEventsQuery,
   Session,
@@ -11,7 +12,22 @@ import type {
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionUsageEntry,
+  SessionUsageScope,
 } from "@volli/shared";
+
+function inUsageScope(scope: SessionUsageScope, session: Session): boolean {
+  switch (scope.kind) {
+    case "all":
+      return true;
+    case "project":
+      return session.projectId === scope.projectId;
+    case "ticket":
+      return session.ticketId === scope.ticketId;
+    case "session":
+      return session.id === scope.sessionId;
+  }
+}
 
 type ConcreteLatestSessionSignal = Omit<LatestSessionSignal, "sessionId"> & { sessionId: string };
 
@@ -111,7 +127,47 @@ class InMemorySessionLedger implements SessionLedger {
         assertOpen();
         this.#appendReceipt(receipt);
       },
+      listUsage: (query) => {
+        assertOpen();
+        return this.#listUsage(query);
+      },
+      // The in-memory adapter derives usage on every read, so there is no
+      // stored projection to discard. Keeping the verb rather than throwing is
+      // deliberate: rebuild is part of the port every adapter must honour, and
+      // an adapter that refused it would make the port a lie about SQLite.
+      rebuildUsageProjection: () => {
+        assertOpen();
+      },
     };
+  }
+
+  /**
+   * Derived from the events, not from a table. This adapter exists for tests,
+   * where correctness is the whole point and a scan costs nothing — and
+   * deriving it here is what makes it the reference the SQLite projection is
+   * checked against.
+   */
+  #listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[] {
+    const entries: SessionUsageEntry[] = [];
+    for (const event of this.#events.values()) {
+      if (event.payload.kind !== "usage.recorded") continue;
+      const session = this.#sessions.get(event.sessionId);
+      if (session === undefined) continue;
+      if (query.since !== undefined && event.occurredAt < query.since) continue;
+      if (query.until !== undefined && event.occurredAt >= query.until) continue;
+      if (!inUsageScope(query.scope, session)) continue;
+      entries.push({
+        ...event.payload.usage,
+        sessionId: session.id,
+        projectId: session.projectId,
+        ticketId: session.ticketId,
+        occurredAt: event.occurredAt,
+      });
+    }
+    return entries.toSorted(
+      (left, right) =>
+        right.occurredAt - left.occurredAt || (left.sessionId < right.sessionId ? 1 : -1),
+    );
   }
 
   #getSession(sessionId: string): Session | null {

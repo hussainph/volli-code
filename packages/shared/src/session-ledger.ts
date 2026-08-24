@@ -7,6 +7,7 @@ import type { CompactionReason, ModelSelection, PromptResource } from "./agent-r
 import type { SessionToolId } from "./authority";
 import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
+import type { SessionUsageEntry } from "./session-usage-report";
 
 export interface Session {
   id: string;
@@ -908,6 +909,35 @@ export interface ListLatestTicketSignalsQuery {
   projectId: string;
 }
 
+/**
+ * What a usage read is asking about.
+ *
+ * A tagged scope rather than several optional ids, so "every project" and "a
+ * project I have not named yet" cannot be spelled the same way. A caller
+ * holding `{ kind: "ticket" }` has said what it means; a caller holding three
+ * undefined ids has said nothing, and every reader would have to guess the
+ * same combination rules independently.
+ */
+export type SessionUsageScope =
+  | { kind: "all" }
+  | { kind: "project"; projectId: string }
+  | { kind: "ticket"; ticketId: string }
+  | { kind: "session"; sessionId: string };
+
+/**
+ * One bounded read over the usage projection.
+ *
+ * The window is half-open — `since` inclusive, `until` exclusive — so adjacent
+ * windows tile without counting a boundary operation twice.
+ */
+export interface ListSessionUsageQuery {
+  scope: SessionUsageScope;
+  /** Inclusive lower bound on when the operation happened, epoch milliseconds. */
+  since?: number;
+  /** Exclusive upper bound, epoch milliseconds. */
+  until?: number;
+}
+
 export interface ListSessionEventsQuery {
   sessionId: string;
   afterSequence?: number;
@@ -1308,6 +1338,24 @@ export interface SessionLedgerTransaction {
   listLatestTicketSignals(
     query: ListLatestTicketSignalsQuery,
   ): readonly import("./ticket-events").LatestSessionSignal[];
+  /**
+   * Metered operations in scope, newest first, from the usage projection.
+   *
+   * Rows, not a total. Selecting them cheaply is what the projection's indexes
+   * are for; adding them up is {@link reportSessionUsage}'s job, and an
+   * adapter that returned a pre-summed answer would be a second opinion about
+   * what a partial total means.
+   */
+  listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[];
+  /**
+   * Discard the usage projection and derive it again from `usage.recorded`.
+   *
+   * The projection is a read model over immutable facts, so this must always
+   * be available and must always produce the same answer. It is what makes a
+   * schema change, a repaired backfill or a suspected drift a rebuild rather
+   * than a migration nobody can verify.
+   */
+  rebuildUsageProjection(): void;
   insertSession(session: Session): void;
   getEvent(eventId: string): SessionEvent | null;
   appendEvent(event: SessionEvent): void;

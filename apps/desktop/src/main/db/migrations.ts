@@ -867,6 +867,50 @@ CREATE TABLE secrets (
 );
 `;
 
+/**
+ * Migration 025: `session_usage` — the read model for what Sessions consumed.
+ *
+ * A fact INDEX, not an aggregate. One row per metered model operation, keyed
+ * by the `usage.recorded` event that proves it, so the table can be dropped
+ * and rebuilt from the ledger at any time and no total is ever stored where a
+ * later write could disagree with the facts under it.
+ *
+ * Every measured column is nullable and none defaults to zero. A provider that
+ * reported no cost and a provider that charged nothing are different facts, and
+ * `DEFAULT 0` here would erase the difference at the storage layer where no
+ * reader could recover it.
+ *
+ * `project_id` and `ticket_id` are copied from the Session at write time and
+ * carry no foreign key to `tickets`. `sessions.ticket_id` is ON DELETE SET
+ * NULL, so joining live would move a deleted Ticket's whole bill into
+ * unticketed Project spend — a quieter lie than an id that no longer resolves.
+ * The Session reference does cascade: a Session that is gone has no history for
+ * these rows to index.
+ */
+const MIGRATION_025_SESSION_USAGE = `
+CREATE TABLE session_usage (
+  event_id           TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  project_id         TEXT NOT NULL,
+  ticket_id          TEXT,
+  occurred_at        INTEGER NOT NULL,
+  cause              TEXT NOT NULL,
+  provider_id        TEXT NOT NULL,
+  model_id           TEXT NOT NULL,
+  input_tokens       INTEGER,
+  output_tokens      INTEGER,
+  cache_read_tokens  INTEGER,
+  cache_write_tokens INTEGER,
+  cost_usd           REAL,
+  cost_basis         TEXT NOT NULL
+);
+
+CREATE INDEX session_usage_project_time ON session_usage(project_id, occurred_at);
+CREATE INDEX session_usage_ticket_time ON session_usage(ticket_id, occurred_at);
+CREATE INDEX session_usage_session_time ON session_usage(session_id, occurred_at);
+CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, occurred_at);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -980,6 +1024,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "projects agent config — the per-project skills, harness and model Configure writes",
     sql: MIGRATION_024_PROJECT_AGENT_CONFIG,
     apply: applyMigration024ProjectAgentConfig,
+  },
+  {
+    version: 25,
+    name: "session_usage — the rebuildable index of what each model operation consumed",
+    sql: MIGRATION_025_SESSION_USAGE,
   },
 ];
 

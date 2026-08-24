@@ -5,14 +5,19 @@ import type {
   ListLatestTicketSignalsQuery,
   ListSessionStartsQuery,
   ListSessionsQuery,
+  ListSessionUsageQuery,
   LatestSessionSignal,
   Session,
   SessionCommand,
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionUsage,
+  SessionUsageEntry,
 } from "@volli/shared";
 import {
+  COST_BASES,
+  SESSION_USAGE_CAUSES,
   assertSession,
   assertSessionEvent,
   decodeCommandReceipt,
@@ -194,6 +199,118 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     });
   }
 
+  listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[] {
+    this.assertOpen();
+    const scope =
+      query.scope.kind === "all"
+        ? ""
+        : query.scope.kind === "project"
+          ? " AND project_id = @projectId"
+          : query.scope.kind === "ticket"
+            ? " AND ticket_id = @ticketId"
+            : " AND session_id = @sessionId";
+    // Half-open, so two adjacent windows tile without billing a boundary
+    // operation to both of them.
+    const window =
+      (query.since === undefined ? "" : " AND occurred_at >= @since") +
+      (query.until === undefined ? "" : " AND occurred_at < @until");
+    const rows = this.db
+      .prepare(
+        `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                cost_usd, cost_basis
+           FROM session_usage
+          WHERE 1 = 1${scope}${window}
+          ORDER BY occurred_at DESC, event_id COLLATE BINARY DESC`,
+      )
+      .all({
+        ...(query.scope.kind === "project" ? { projectId: query.scope.projectId } : {}),
+        ...(query.scope.kind === "ticket" ? { ticketId: query.scope.ticketId } : {}),
+        ...(query.scope.kind === "session" ? { sessionId: query.scope.sessionId } : {}),
+        ...(query.since === undefined ? {} : { since: query.since }),
+        ...(query.until === undefined ? {} : { until: query.until }),
+      }) as unknown[];
+    return rows.map((row) => decodeUsageEntry(row, "session_usage row"));
+  }
+
+  /**
+   * One projection row. Shared by the live append and the rebuild, so the two
+   * paths cannot store the same fact two different ways.
+   */
+  private insertUsage(entry: {
+    eventId: string;
+    sessionId: string;
+    projectId: string;
+    ticketId: string | null;
+    occurredAt: number;
+    usage: SessionUsage;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO session_usage
+           (event_id, session_id, project_id, ticket_id, occurred_at, cause,
+            provider_id, model_id, input_tokens, output_tokens,
+            cache_read_tokens, cache_write_tokens, cost_usd, cost_basis)
+         VALUES
+           (@eventId, @sessionId, @projectId, @ticketId, @occurredAt, @cause,
+            @providerId, @modelId, @inputTokens, @outputTokens,
+            @cacheReadTokens, @cacheWriteTokens, @costUsd, @costBasis)`,
+      )
+      .run({
+        eventId: entry.eventId,
+        sessionId: entry.sessionId,
+        projectId: entry.projectId,
+        ticketId: entry.ticketId,
+        occurredAt: entry.occurredAt,
+        cause: entry.usage.cause,
+        providerId: entry.usage.providerId,
+        modelId: entry.usage.modelId,
+        inputTokens: entry.usage.inputTokens,
+        outputTokens: entry.usage.outputTokens,
+        cacheReadTokens: entry.usage.cacheReadTokens,
+        cacheWriteTokens: entry.usage.cacheWriteTokens,
+        costUsd: entry.usage.costUsd,
+        costBasis: entry.usage.costBasis,
+      });
+  }
+
+  rebuildUsageProjection(): void {
+    this.assertOpen();
+    this.db.exec("DELETE FROM session_usage");
+    const events = this.db
+      .prepare(
+        `SELECT e.id, e.session_id, e.occurred_at, e.payload, s.project_id, s.ticket_id
+           FROM session_events e
+           JOIN sessions s ON s.id = e.session_id
+          WHERE json_extract(e.payload, '$.kind') = 'usage.recorded'
+          ORDER BY e.session_id COLLATE BINARY ASC, e.sequence ASC`,
+      )
+      .all() as unknown[];
+    for (const row of events) {
+      const value = asRecord(row, "usage rebuild row");
+      const payload = decodeSessionEventPayload(
+        JSON.parse(readString(value.payload, "usage rebuild row.payload")),
+        "usage rebuild row.payload",
+      );
+      /* v8 ignore next -- the query selects this kind and nothing else. */
+      if (payload.kind !== "usage.recorded") continue;
+      this.insertUsage({
+        eventId: readString(value.id, "usage rebuild row.id"),
+        sessionId: readString(value.session_id, "usage rebuild row.session_id"),
+        // Read from the Session's row rather than the event, because the event
+        // does not carry attribution. A rebuild after a Ticket delete
+        // therefore CAN lose the original Ticket — the same ON DELETE SET NULL
+        // the live write path avoids by copying at append time. Nothing better
+        // is recoverable once the column is null, and inventing an id would be
+        // worse than reporting the spend as unticketed.
+        projectId: readString(value.project_id, "usage rebuild row.project_id"),
+        ticketId: readNullableString(value.ticket_id, "usage rebuild row.ticket_id"),
+        occurredAt: readInteger(value.occurred_at, "usage rebuild row.occurred_at"),
+        usage: payload.usage,
+      });
+    }
+  }
+
   insertSession(session: Session): void {
     this.assertOpen();
     assertSession(session, "Session");
@@ -261,6 +378,26 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         commandId: event.commandId ?? null,
         payload: encodeSessionJson(event.payload),
       });
+    // Projected in the same transaction that appends the fact. A projection
+    // written afterwards would have a window in which the ledger and its read
+    // model disagree, and the disagreement would survive a crash.
+    if (event.payload.kind === "usage.recorded") {
+      const session = this.getSession(event.sessionId);
+      /* v8 ignore next -- the foreign key above already refused an unknown Session. */
+      if (session === null)
+        throw new Error(`Session ${event.sessionId} has no row to attribute to`);
+      this.insertUsage({
+        eventId: event.id,
+        sessionId: event.sessionId,
+        // Copied now, not joined later: `sessions.ticket_id` is ON DELETE SET
+        // NULL, and a report that read it live would silently move a deleted
+        // Ticket's whole bill into unticketed Project spend.
+        projectId: session.projectId,
+        ticketId: session.ticketId,
+        occurredAt: event.occurredAt,
+        usage: event.payload.usage,
+      });
+    }
     if (event.payload.kind === "command.receipt.recorded") {
       const receipt = this.getReceipt(event.payload.receipt.id);
       if (!receipt || !sameCommandReceipt(receipt, event.payload.receipt)) {
@@ -550,6 +687,36 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   }
 }
 
+/**
+ * One projection row, read back into the domain shape.
+ *
+ * Null survives as null through every measured column. Healing an absent token
+ * count to zero here would be the one place a reader could never detect it:
+ * the row would claim a provider reported nothing consumed, rather than that
+ * it reported nothing at all.
+ */
+function decodeUsageEntry(row: unknown, context: string): SessionUsageEntry {
+  const value = asRecord(row, context);
+  return {
+    sessionId: readString(value.session_id, `${context}.session_id`),
+    projectId: readString(value.project_id, `${context}.project_id`),
+    ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),
+    occurredAt: readInteger(value.occurred_at, `${context}.occurred_at`),
+    cause: enumValue(value.cause, SESSION_USAGE_CAUSES, `${context}.cause`),
+    providerId: readString(value.provider_id, `${context}.provider_id`),
+    modelId: readString(value.model_id, `${context}.model_id`),
+    inputTokens: readNullableInteger(value.input_tokens, `${context}.input_tokens`),
+    outputTokens: readNullableInteger(value.output_tokens, `${context}.output_tokens`),
+    cacheReadTokens: readNullableInteger(value.cache_read_tokens, `${context}.cache_read_tokens`),
+    cacheWriteTokens: readNullableInteger(
+      value.cache_write_tokens,
+      `${context}.cache_write_tokens`,
+    ),
+    costUsd: readNullableNumber(value.cost_usd, `${context}.cost_usd`),
+    costBasis: enumValue(value.cost_basis, COST_BASES, `${context}.cost_basis`),
+  };
+}
+
 function decodeSession(row: unknown, context: string): Session {
   const value = asRecord(row, context);
   const session: Session = {
@@ -663,6 +830,19 @@ function readString(value: unknown, context: string): string {
 
 function readNullableString(value: unknown, context: string): string | null {
   return value === null ? null : readString(value, context);
+}
+
+function readNullableInteger(value: unknown, context: string): number | null {
+  return value === null ? null : readInteger(value, context);
+}
+
+/** A money amount: the one stored number that is not whole, and never NaN. */
+function readNullableNumber(value: unknown, context: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a finite number`);
+  }
+  return value;
 }
 
 function readInteger(value: unknown, context: string): number {

@@ -1,6 +1,7 @@
 import {
   observationPayload,
   projectSession,
+  reportSessionUsage,
   sameCommandReceipt,
   sameSessionCommand,
   sameCommandReceiptOutcome,
@@ -16,6 +17,7 @@ import type {
   ListSessionStartsQuery,
   ListLatestTicketSignalsQuery,
   ListSessionEventsQuery,
+  ListSessionUsageQuery,
   Session,
   SessionAttachment,
   SessionCommand,
@@ -32,6 +34,8 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjection,
+  SessionUsageReport,
+  SessionUsageReportQuery,
   LatestSessionSignal,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -118,7 +122,17 @@ export interface SessionEngine {
     query: ListLatestTicketSignalsQuery,
   ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
+  /**
+   * What a scope consumed, over a window, optionally broken down.
+   *
+   * One indexed read plus one pass of arithmetic — no Session histories folded
+   * and no transcript artifacts opened, which is the difference between a cost
+   * question that is cheap to ask and one nobody asks twice.
+   */
+  reportUsage(query: ReportSessionUsageQuery): Promise<SessionUsageReport>;
 }
+
+export type ReportSessionUsageQuery = ListSessionUsageQuery & SessionUsageReportQuery;
 
 export interface SessionEnginePorts {
   ledger: SessionLedger;
@@ -572,6 +586,12 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async listEvents(query) {
       return ports.ledger.transaction((transaction) => transaction.listEvents(query));
+    },
+
+    async reportUsage(query) {
+      return ports.ledger.transaction((transaction) =>
+        reportSessionUsage(transaction.listUsage(query), query),
+      );
     },
   };
 }
