@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { AGENT_CONCEPT_SECTIONS, ERROR_RECOVERY } from "../agent-product";
+import { AGENT_ERROR_CODES } from "../agent-surface";
+import { VERB_REGISTRY } from "../verb-registry";
+import type { VerbEffects, VerbEntry } from "../verb-registry";
 import { parseHarnessManifest } from "./manifest";
 import {
+  VOLLI_CHANGES,
   VOLLI_CLI_REFERENCE,
   VOLLI_COMMAND_DOC,
+  VOLLI_CONCEPTS,
   VOLLI_FENCED_INSTRUCTIONS,
   VOLLI_PATH_PROFILE_BLOCK,
   VOLLI_PLUGIN_DOC,
@@ -38,6 +44,37 @@ describe("VOLLI_PATH_PROFILE_BLOCK", () => {
   it("is a zsh-safe fragment that prepends ~/.local/bin without expanding $HOME early", () => {
     expect(VOLLI_PATH_PROFILE_BLOCK).toContain('export PATH="$HOME/.local/bin:$PATH"');
     expect(VOLLI_PATH_PROFILE_BLOCK).not.toContain("<!--");
+  });
+});
+
+describe("managed Volli product guidance", () => {
+  it("projects every canonical concept section into the local concepts file", () => {
+    for (const section of AGENT_CONCEPT_SECTIONS) {
+      expect(VOLLI_CONCEPTS).toContain(`## ${section.heading}`);
+      for (const paragraph of section.paragraphs) expect(VOLLI_CONCEPTS).toContain(paragraph);
+      for (const bullet of section.bullets ?? []) expect(VOLLI_CONCEPTS).toContain(bullet);
+    }
+    expect(VOLLI_CHANGES).toContain("Capability baseline: `8e8a17c0`");
+  });
+
+  it("projects every registry effect and recovery policy into cli.md", () => {
+    const effectVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+      (verb): verb is VerbEntry & { effects: VerbEffects } =>
+        verb.listed && verb.effects !== undefined,
+    );
+    for (const entry of effectVerbs) {
+      expect(VOLLI_CLI_REFERENCE).toContain(`### \`${entry.key}\``);
+      for (const write of entry.effects.durableWrites) {
+        expect(VOLLI_CLI_REFERENCE).toContain(write.summary);
+      }
+      for (const effect of [...entry.effects.humanVisible, ...entry.effects.nonEffects]) {
+        expect(VOLLI_CLI_REFERENCE).toContain(effect);
+      }
+    }
+    for (const code of AGENT_ERROR_CODES) {
+      expect(VOLLI_CLI_REFERENCE).toContain(`### \`${code}\``);
+      expect(VOLLI_CLI_REFERENCE).toContain(ERROR_RECOVERY[code].why);
+    }
   });
 });
 

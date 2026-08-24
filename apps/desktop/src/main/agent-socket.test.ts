@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { makeAgentError } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
@@ -483,7 +484,7 @@ describe("agent socket", () => {
       execute: async () => ({
         v: 1,
         ok: false,
-        error: { code: "DB_UNAVAILABLE", message: "Database failed to open." },
+        error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
       }),
     });
 
@@ -501,7 +502,7 @@ describe("agent socket", () => {
     ).toEqual({
       v: 1,
       ok: false,
-      error: { code: "DB_UNAVAILABLE", message: "Database failed to open." },
+      error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
     });
   });
 

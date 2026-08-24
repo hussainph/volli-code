@@ -5,8 +5,10 @@ import { cursorAdapter } from "./cursor";
 import { opencodeAdapter } from "./opencode";
 import { genericHarnessActions } from "./generic";
 import {
+  VOLLI_CHANGES,
   VOLLI_CLI_REFERENCE,
   VOLLI_COMMAND_DOC,
+  VOLLI_CONCEPTS,
   VOLLI_ORCHESTRATION,
   VOLLI_PLUGIN_DOC,
   VOLLI_SKILL,
@@ -110,7 +112,7 @@ export function managedWriteDecision(input: {
 export const HOME_TOKEN = "{home}";
 
 /** The canonical skill files every plan opens with, before any per-harness surface. */
-export const CANONICAL_SKILL_FILES = 4;
+export const CANONICAL_SKILL_FILES = 6;
 
 function normalizedHome(home: string): string {
   return home.endsWith("/") ? home.slice(0, -1) : home;
@@ -195,6 +197,8 @@ export function buildHarnessInstallPlan(input: {
   return [
     { kind: "write", path: `${canonical}/SKILL.md`, content: VOLLI_SKILL, managed: true },
     { kind: "write", path: `${canonical}/cli.md`, content: VOLLI_CLI_REFERENCE, managed: true },
+    { kind: "write", path: `${canonical}/concepts.md`, content: VOLLI_CONCEPTS, managed: true },
+    { kind: "write", path: `${canonical}/changes.md`, content: VOLLI_CHANGES, managed: true },
     {
       kind: "write",
       path: `${canonical}/orchestration.md`,

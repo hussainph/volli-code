@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { bareHelpText, renderHelp } from "./help";
+import { bareHelpText, renderHelp, resolveHelp } from "./help";
 import { parseCliArgs } from "./parser";
 
 /**
@@ -81,8 +81,15 @@ const GROUP_WORDS = [
   "prompt",
 ] as const;
 
-/** The four reference topics (not commands). */
-const TOPICS = ["exit-codes", "addressing", "json", "orchestration"] as const;
+/** The local reference topics (not commands). */
+const TOPICS = [
+  "concepts",
+  "changes",
+  "exit-codes",
+  "addressing",
+  "json",
+  "orchestration",
+] as const;
 
 /**
  * Paths that are deliberately NOT reference entries. `session harness` and
@@ -99,9 +106,22 @@ const OFF_REFERENCE: readonly (readonly string[])[] = [
 ];
 
 const RULE = "=".repeat(76);
+const REFERENCE_IDENTITY = {
+  cliVersion: "0.0.1",
+  releaseVersion: "0.1.0",
+  sourceRevision: "8e8a17c0+VC-91",
+  buildId: "reference-fixture",
+} as const;
 
 function section(title: string, body: string): string {
   return `${RULE}\n${title}\n${RULE}\n${body}`;
+}
+
+function helpOutcome(path: readonly string[]): string {
+  const resolved = resolveHelp(path, undefined, { identity: REFERENCE_IDENTITY });
+  return resolved.ok
+    ? resolved.text
+    : `${resolved.error.code} ${resolved.error.reason} Next: ${resolved.error.next ?? "null"}\n`;
 }
 
 /** How the parser answered — the message for a usage error, the shape for a parse. */
@@ -121,16 +141,16 @@ function parseOutcome(argv: readonly string[]): string {
 function referenceDocument(): string {
   const parts: string[] = [section("volli help", bareHelpText())];
   for (const name of REFERENCE_COMMANDS) {
-    parts.push(section(`volli help ${name}`, renderHelp(name.split(" "))));
+    parts.push(section(`volli help ${name}`, helpOutcome(name.split(" "))));
   }
   for (const word of GROUP_WORDS) {
-    parts.push(section(`volli help ${word}`, renderHelp([word])));
+    parts.push(section(`volli help ${word}`, helpOutcome([word])));
   }
   for (const topic of TOPICS) {
-    parts.push(section(`volli help ${topic}`, renderHelp([topic])));
+    parts.push(section(`volli help ${topic}`, helpOutcome([topic])));
   }
   for (const path of OFF_REFERENCE) {
-    parts.push(section(`volli help ${path.join(" ")}`, renderHelp(path)));
+    parts.push(section(`volli help ${path.join(" ")}`, helpOutcome(path)));
   }
   const probes: string[] = [section("volli frobnicate", parseOutcome(["frobnicate"]))];
   for (const name of [...REFERENCE_COMMANDS, "session harness"]) {

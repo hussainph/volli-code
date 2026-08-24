@@ -9,7 +9,10 @@ import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-en
 import {
   applyTicketBodyMutation,
   autoTitleFromKickoff,
+  buildMutationPlan,
+  MUTATION_PLAN_CONTRACT,
   blobsSectionInput,
+  cliVerbName,
   composeAttachmentsSection,
   composeTicketPrompt,
   DEFAULT_KICKOFF_MESSAGE,
@@ -27,6 +30,7 @@ import {
   isTicketStatus,
   isFirstClassHarnessId,
   isValidBranchName,
+  makeAgentError,
   parseHarnessId,
   REASONING_LEVELS,
   REQUIRABLE_SESSION_ENV_TOOLS,
@@ -39,6 +43,7 @@ import {
   TICKET_PRIORITIES,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
+  verbEntry,
   worktreeOrientationPreamble,
 } from "@volli/shared";
 import type {
@@ -49,6 +54,8 @@ import type {
   DoctorObservation,
   HarnessId,
   ModelAccessSnapshot,
+  MutationPlanOverrides,
+  MutationPlanTarget,
   Observed,
   Project,
   PromptResource,
@@ -59,6 +66,7 @@ import type {
   SessionRecord,
   SessionEnvRepair,
   SessionEnvReport,
+  SessionEvent,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
@@ -344,8 +352,59 @@ export interface AgentCommandService {
   execute(request: AgentRequest): Promise<AgentResponse>;
 }
 
-function failure(code: AgentErrorCode, message: string): AgentResponse {
-  return { v: 1, ok: false, error: { code, message } };
+function failure(code: AgentErrorCode, reason: string, next?: string | null): AgentResponse {
+  return { v: 1, ok: false, error: makeAgentError(code, reason, next) };
+}
+
+/** Returns the shared side-effect plan after a handler has finished read-only validation. */
+function dryRunResponse(
+  request: AgentRequest,
+  target: MutationPlanTarget,
+  overrides?: MutationPlanOverrides,
+): AgentResponse | null {
+  if (request.args["dryRun"] !== true) return null;
+  const entry = verbEntry(request.cmd);
+  if (entry === undefined) {
+    return failure("UNSUPPORTED_COMMAND", `No Verb Registry entry matches ${request.cmd}.`);
+  }
+  return {
+    v: 1,
+    ok: true,
+    data: buildMutationPlan(entry, target, overrides),
+  };
+}
+
+/**
+ * Why an undeclared `dryRun` may not proceed, or null when the verb declares a
+ * preview. The bundled CLI's parser already refuses this, but the socket is a
+ * public door and a registry-projected tool builds its own arguments — so the
+ * only place the promise "a preview never executes the real write" can actually
+ * be kept is here, where the write would otherwise happen. Registry-generic on
+ * purpose: a verb becomes previewable by declaring the option, never by being
+ * named in a second list.
+ */
+/**
+ * What this build can do, answered without resolving Project, Ticket or
+ * Session. The `--dry-run` preflight asks this and nothing else: an ordinary
+ * `identify` can fail with PROJECT_REQUIRED or SESSION_NOT_FOUND, and refusing
+ * a preview for either would be the same confident-but-irrelevant refusal the
+ * teaching-error work exists to remove. An app that predates the marker simply
+ * ignores the unknown argument and answers a context-shaped identify, which
+ * carries no `previewContract` — so the preflight stays fail-closed.
+ */
+function capabilityReport(appVersion: string): AgentResponse {
+  return { v: 1, ok: true, data: { appVersion, previewContract: MUTATION_PLAN_CONTRACT } };
+}
+
+function undeclaredPreviewRefusal(request: AgentRequest): AgentResponse | null {
+  if (request.args["dryRun"] !== true) return null;
+  const entry = verbEntry(request.cmd);
+  if (entry?.options.some((option) => option.name === "--dry-run") === true) return null;
+  return failure(
+    "INVALID_REQUEST",
+    `${request.cmd} declares no side-effect preview, so dryRun was refused rather than ignored on the way to a real write.`,
+    `Run \`volli help ${cliVerbName(request.cmd)}\` to see whether this verb offers --dry-run, or drop dryRun to perform the real operation.`,
+  );
 }
 
 /**
@@ -392,6 +451,7 @@ function resolveRequestedHarness(
       response: failure(
         "INVALID_REQUEST",
         `Invalid harness ${JSON.stringify(value)} (valid: ${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness)`,
+        "Use a built-in id or the exact slug of a registered, trusted harness, then retry.",
       ),
     };
   }
@@ -403,6 +463,7 @@ function resolveRequestedHarness(
       response: failure(
         "INVALID_REQUEST",
         `Unknown harness ${JSON.stringify(value)} — no harness by that name is registered (built in: ${FIRST_CLASS_HARNESS_IDS.join(", ")})`,
+        "Register that harness through the app or use one of the built-in ids named in the refusal.",
       ),
     };
   }
@@ -412,6 +473,7 @@ function resolveRequestedHarness(
       response: failure(
         "INVALID_REQUEST",
         `Harness ${JSON.stringify(value)} is registered but not trusted, so nothing can launch on it.`,
+        "Review and trust that harness in the app, or choose a trusted harness, before retrying.",
       ),
     };
   }
@@ -584,6 +646,19 @@ function projectForCreate(
  * "via VC-9's session" attribution. `null` when the actor has no
  * session ticket (a Project Session) or it no longer resolves.
  */
+/** Reads VC-164's frozen list without backfilling or consulting current Settings. */
+function recordedAgentToolSurface(events: readonly SessionEvent[]): readonly string[] | null {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.tools;
+    }
+  }
+  return null;
+}
+
 function actorSessionTicketDisplay(
   db: Database.Database,
   projects: readonly Project[],
@@ -1267,6 +1342,14 @@ export function createAgentCommandService(
 
   return {
     async execute(request): Promise<AgentResponse> {
+      // Both answers below precede every read: a preview must be refused before
+      // the work that would perform it, and a capability probe must not be able
+      // to fail for a reason that has nothing to do with the capability.
+      const undeclaredPreview = undeclaredPreviewRefusal(request);
+      if (undeclaredPreview !== null) return undeclaredPreview;
+      if (request.cmd === "identify" && request.args["capabilities"] === true) {
+        return capabilityReport(options.appVersion);
+      }
       const projects = listProjects(options.db);
       // Hooks arrive on a process-per-event hot path. They address one durable
       // Session directly, so avoid taking a complete multi-project snapshot
@@ -1347,6 +1430,21 @@ export function createAgentCommandService(
             ticket && displayId
               ? worktreeMisalignment(displayId, ticket.worktreePath, request.ctx.cwd)
               : null;
+          // Read-only, opt-in, and deliberately nullable for Sessions that
+          // predate VC-164. Help must never freeze or reconstruct a bundle as a
+          // side effect of asking what this Session already recorded.
+          //
+          // Only the caller that needs it pays for it. Reading the frozen list
+          // means folding this Session's whole ledger, and `identify` already
+          // folds it once through `getSession` — doing it twice on the command
+          // agents are told to run first would be a real cost for a fact only
+          // role-aware `volli help` consumes.
+          const frozenTools =
+            request.args["agentSurface"] === true
+              ? recordedAgentToolSurface(
+                  await sessionEngine.listEvents({ sessionId: envSession.id }),
+                )
+              : null;
           return {
             v: 1,
             ok: true,
@@ -1358,6 +1456,18 @@ export function createAgentCommandService(
               ...(warning === null ? {} : { warning }),
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
+              // Declared, not implied by a version: a CLI refuses to send a
+              // dryRun request to a build that does not answer this marker,
+              // because an older build would run the real write instead.
+              previewContract: MUTATION_PLAN_CONTRACT,
+              ...(frozenTools === null
+                ? {}
+                : {
+                    agentSurface: {
+                      role: envSession.ticketId === null ? "project" : "ticket",
+                      tools: frozenTools,
+                    },
+                  }),
               ...(env === undefined ? {} : { env }),
             },
           };
@@ -1387,6 +1497,7 @@ export function createAgentCommandService(
             worktreePath: request.ctx.cwd,
             socket: request.ctx.env.socket ?? null,
             appVersion: options.appVersion,
+            previewContract: MUTATION_PLAN_CONTRACT,
             ...(env === undefined ? {} : { env }),
           },
         };
@@ -1794,6 +1905,12 @@ export function createAgentCommandService(
         ) {
           return failure("INVALID_REQUEST", "notify requires a message and optional title.");
         }
+        const preview = dryRunResponse(request, {
+          kind: "notification",
+          id: null,
+          label: `Native notification ${JSON.stringify(title.trim())}`,
+        });
+        if (preview !== null) return preview;
         options.notify?.(title, message);
         return { v: 1, ok: true, data: { notified: true } };
       }
@@ -1818,6 +1935,12 @@ export function createAgentCommandService(
         }
         const reason = typeof reasonValue === "string" ? reasonValue : null;
         const signal = request.cmd === "session.done" ? "done" : "blocked";
+        const preview = dryRunResponse(request, {
+          kind: "session",
+          id: shortSessionId(envSession.id),
+          label: `Session ${shortSessionId(envSession.id)}`,
+        });
+        if (preview !== null) return preview;
         const submitted = await sessionEngine.submit({
           commandId: newId(),
           sessionId: envSession.id,
@@ -1872,6 +1995,12 @@ export function createAgentCommandService(
         if (harnessSessionId.length > 200) {
           return failure("INVALID_REQUEST", "The harness session id is too long (max 200 chars).");
         }
+        const preview = dryRunResponse(request, {
+          kind: "session",
+          id: shortSessionId(session.id),
+          label: `Session ${shortSessionId(session.id)}`,
+        });
+        if (preview !== null) return preview;
         const updated = await updateTerminalNative(
           terminalUpdateLocks,
           sessionEngine,
@@ -2208,6 +2337,22 @@ export function createAgentCommandService(
         if (!options.doctorFacts) {
           return failure("APP_UNREACHABLE", "The harness runtime is not available this launch.");
         }
+        if (request.args["dryRun"] === true) {
+          if (request.args["fix"] !== true) {
+            return failure("INVALID_REQUEST", "doctor dry-run requires fix intent.");
+          }
+          if (!options.doctorRepair) {
+            return failure(
+              "APP_UNREACHABLE",
+              "The harness repair runtime is not available this launch.",
+            );
+          }
+          return dryRunResponse(request, {
+            kind: "integration",
+            id: null,
+            label: "Volli-managed harness integration for future Sessions",
+          })!;
+        }
         // The caller reports what it sees from inside the environment under
         // test; main supplies only what it alone knows. Keeping those apart is
         // the point — an observation main reconstructed would be exactly the
@@ -2481,6 +2626,16 @@ export function createAgentCommandService(
         if (nextBody && !nextBody.ok) {
           return failure(nextBody.code, nextBody.message);
         }
+        const updateDisplayId = displayTicketId(
+          resolved.project.ticketPrefix,
+          resolved.ticket.ticketNumber,
+        );
+        const updatePreview = dryRunResponse(request, {
+          kind: "ticket",
+          id: updateDisplayId,
+          label: updateDisplayId,
+        });
+        if (updatePreview !== null) return updatePreview;
         try {
           const updatedAt = now();
           const run = options.db.transaction((): Ticket => {
@@ -2570,16 +2725,38 @@ export function createAgentCommandService(
         if (!isTicketStatus(to)) {
           return failure("INVALID_REQUEST", "ticket move requires a valid destination column.");
         }
+        const moveDisplayId = displayTicketId(
+          resolved.project.ticketPrefix,
+          resolved.ticket.ticketNumber,
+        );
         // A CLI move carries column semantics only (no drop index), so a move to
         // the column the ticket already occupies is an idempotent no-op — never
         // a reorder to the bottom, and no status event. Returned unchanged.
         if (resolved.ticket.status === to) {
+          const noOpPreview = dryRunResponse(
+            request,
+            { kind: "ticket", id: moveDisplayId, label: moveDisplayId },
+            {
+              durableWrites: [],
+              humanVisibleEffects: [],
+              nonEffects: [
+                `The Ticket is already in ${TICKET_STATUS_LABELS[to]}; no row, event, Session, or notification would be created.`,
+              ],
+            },
+          );
+          if (noOpPreview !== null) return noOpPreview;
           return {
             v: 1,
             ok: true,
             data: { ticket: agentTicket(resolved.ticket, resolved.project) },
           };
         }
+        const movePreview = dryRunResponse(request, {
+          kind: "ticket",
+          id: moveDisplayId,
+          label: moveDisplayId,
+        });
+        if (movePreview !== null) return movePreview;
         try {
           const movedAt = now();
           const before = listTicketsByProject(options.db, resolved.project.id);
@@ -2654,6 +2831,12 @@ export function createAgentCommandService(
         if (typeof message !== "string" || message.trim().length === 0) {
           return failure("INVALID_REQUEST", "ticket comment requires a message.");
         }
+        const commentPreview = dryRunResponse(request, {
+          kind: "ticket",
+          id: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
+          label: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
+        });
+        if (commentPreview !== null) return commentPreview;
         try {
           const comment = createTicketCommentCommand(
             options.db,
@@ -2724,11 +2907,17 @@ export function createAgentCommandService(
       ) {
         return failure("INVALID_REQUEST", "Invalid ticket create arguments.");
       }
+      const actor = requestActor(request, envSession);
+      if (!actor.ok) return actor.response;
+      const createPreview = dryRunResponse(request, {
+        kind: "project",
+        id: resolved.project.ticketPrefix,
+        label: `${resolved.project.name} (${resolved.project.ticketPrefix})`,
+      });
+      if (createPreview !== null) return createPreview;
 
       try {
         const createdAt = now();
-        const actor = requestActor(request, envSession);
-        if (!actor.ok) return actor.response;
         const ticket = createTicketCommand(
           options.db,
           {

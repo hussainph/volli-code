@@ -40,10 +40,16 @@ describe("harness install executor", () => {
     const second = await applyHarnessInstallPlan(plan, manifestPath);
 
     expect(first.conflicts).toEqual([]);
-    // 4 canonical skill files + claude/codex skill symlinks + opencode command.
-    expect(first.written).toHaveLength(7);
+    // 6 canonical skill files + claude/codex skill symlinks + opencode command.
+    expect(first.written).toHaveLength(9);
     expect(second.written).toEqual([]);
-    expect(second.skipped).toHaveLength(7);
+    expect(second.skipped).toHaveLength(9);
+    expect(await readFile(join(root, ".agents/skills/volli/concepts.md"), "utf8")).toContain(
+      "A Session is the durable identity",
+    );
+    expect(await readFile(join(root, ".agents/skills/volli/changes.md"), "utf8")).toContain(
+      "Capability baseline: `8e8a17c0`",
+    );
     expect(await readFile(join(root, ".agents/skills/volli/custom/mine.md"), "utf8")).toBe(
       "user owned",
     );

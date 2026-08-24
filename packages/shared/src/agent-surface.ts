@@ -23,6 +23,7 @@ export const AGENT_ERROR_CODES = [
   "USAGE",
   "INVALID_REQUEST",
   "UNSUPPORTED_COMMAND",
+  "WRONG_DOOR",
   "APP_UNREACHABLE",
   "DB_UNAVAILABLE",
   "PROJECT_REQUIRED",
@@ -70,8 +71,14 @@ export interface AgentRequest {
 }
 
 export interface AgentError {
+  /** Stable automation vocabulary. */
   code: AgentErrorCode;
+  /** Backward-compatible human message; `reason` may add missing-evidence detail. */
   message: string;
+  /** What failed and why, without requiring an agent to parse `message`. */
+  reason: string;
+  /** One safe next action, or null when Volli lacks enough evidence to name one. */
+  next: string | null;
 }
 
 export type AgentResponse =

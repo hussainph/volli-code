@@ -82,12 +82,30 @@ function runHookProcess(mode: "idle" | "flood"): Promise<HookRun> {
   });
 }
 
-describe("volli hook — stdin", () => {
+describe("volli built entrypoint", () => {
   beforeAll(() => {
     const built = spawnSync(fileURLToPath(new URL("../node_modules/.bin/vp", import.meta.url)), [
       "pack",
     ]);
     expect(built.status, `vp pack failed: ${built.stderr?.toString() ?? ""}`).toBe(0);
+  });
+
+  it("embeds source and per-build identity separately from promoted versions", () => {
+    const env = { ...process.env };
+    delete env["VOLLI_SOCKET"];
+    delete env["VOLLI_SESSION"];
+    delete env["VOLLI_TICKET"];
+    const run = spawnSync(process.execPath, [bundlePath, "help", "changes"], {
+      env,
+      encoding: "utf8",
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("CLI package: @volli/cli 0.0.1");
+    expect(run.stdout).toContain("Release promotion marker: 0.1.0");
+    expect(run.stdout).toMatch(/Source revision: [0-9a-f]{12}(?:\+dirty)?/);
+    expect(run.stdout).toMatch(/Build id: [0-9a-f]{12}(?:\+dirty)?@/);
+    expect(run.stdout).not.toContain("source mode");
+    expect(run.stdout).not.toContain("unbundled-source");
   });
 
   // The read budget used to bound the promise and not the process: the `data`
