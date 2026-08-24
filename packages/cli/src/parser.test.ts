@@ -581,7 +581,7 @@ describe("parseCliArgs", () => {
       key: "session.stop",
       accessModes: ["tool"],
       actor: "role",
-      handler: "main",
+      handler: { site: "main", id: "session.stop" },
       listed: true,
       referenceOrder: 1,
       group: "Session",
@@ -598,14 +598,24 @@ describe("parseCliArgs", () => {
 
     // The other declared non-shell doors redirect the same way: an app-only
     // verb names the app, and any future non-CLI access mode names itself.
-    const appOnly: VerbEntry = { ...toolOnly, key: "ticket.discard", accessModes: [] };
+    const appOnly: VerbEntry = {
+      ...toolOnly,
+      key: "ticket.discard",
+      accessModes: [],
+      handler: { site: "main", id: "ticket.discard" },
+    };
     expect(parseCliArgs(["ticket", "discard", "VC-1"], [appOnly])).toMatchObject({
       ok: false,
       code: "WRONG_DOOR",
       verb: "ticket.discard",
       message: "volli ticket discard exists in the app only; no agent surface executes it.",
     });
-    const hostApiOnly: VerbEntry = { ...toolOnly, key: "review.fetch", accessModes: ["hostApi"] };
+    const hostApiOnly: VerbEntry = {
+      ...toolOnly,
+      key: "review.fetch",
+      accessModes: ["hostApi"],
+      handler: { site: "main", id: "review.fetch" },
+    };
     expect(parseCliArgs(["review", "fetch"], [hostApiOnly])).toMatchObject({
       ok: false,
       code: "WRONG_DOOR",

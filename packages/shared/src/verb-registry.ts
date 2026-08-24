@@ -57,11 +57,36 @@ export type VerbActor = "any" | "session" | "role";
 /**
  * Where the verb's one handler binding lives: `main` answers over the agent
  * socket (`apps/desktop/src/main/agent-commands.ts`), `cli` answers locally in
- * the `volli` process and never opens a socket. Declared and checked, never
- * read — dispatch is still a hand-written chain, and the parity test asserts
- * both directions against it.
+ * the `volli` process and never opens a socket.
  */
 export type VerbHandlerSite = "main" | "cli";
+
+/**
+ * The verb's one handler binding: WHERE it is answered, and WHICH handler
+ * answers it (VC-167).
+ *
+ * VC-161 recorded the site alone, and nothing read it — dispatch was a
+ * hand-written `if` chain, so the declaration was CHECKED against the chain by
+ * a source-text scan instead of driving it. The `id` is what closed that: main
+ * keys its dispatch table by these ids, so a declared verb with no handler is
+ * a compile error rather than a runtime `UNSUPPORTED_COMMAND`.
+ *
+ * Pure data, like every other field here — an id, never a function. The
+ * registry lives in `@volli/shared` and the handlers live in Electron main;
+ * a callable here would drag one process's implementation into a package the
+ * other imports.
+ *
+ * The id is the verb's own {@link VerbEntry.key}, and `verb-registry.test.ts`
+ * pins that. Naming it separately is what lets a surface move without the
+ * binding moving with it: when VC-162 flips `session.start` to a `tool` access
+ * mode, the tool surface resolves the SAME `session.start` binding rather than
+ * growing a second implementation of the verb.
+ */
+export interface VerbBinding {
+  readonly site: VerbHandlerSite;
+  /** The handler this verb resolves to — always the entry's own key. */
+  readonly id: string;
+}
 
 /** The heading a listed verb prints under in the CLI reference. */
 export type VerbGroup = "Read" | "Write" | "Session" | "App";
@@ -126,7 +151,7 @@ export interface VerbEntry {
   readonly key: string;
   readonly accessModes: readonly VerbAccessMode[];
   readonly actor: VerbActor;
-  readonly handler: VerbHandlerSite;
+  readonly handler: VerbBinding;
   /** Whether `volli help` prints the verb. Involuntary verbs stay unlisted. */
   readonly listed: boolean;
   /** Its position in the CLI reference; ignored when the verb is unlisted. */
@@ -176,7 +201,7 @@ export const VERB_REGISTRY = [
     key: "identify",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "identify" },
     listed: true,
     referenceOrder: 0,
     group: "Read",
@@ -200,7 +225,7 @@ export const VERB_REGISTRY = [
     key: "board",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "board" },
     listed: true,
     referenceOrder: 1,
     group: "Read",
@@ -212,7 +237,7 @@ export const VERB_REGISTRY = [
     key: "ticket.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.list" },
     listed: true,
     referenceOrder: 2,
     group: "Read",
@@ -241,7 +266,7 @@ export const VERB_REGISTRY = [
     key: "ticket.show",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.show" },
     listed: true,
     referenceOrder: 3,
     group: "Read",
@@ -267,7 +292,7 @@ export const VERB_REGISTRY = [
     key: "ticket.events",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.events" },
     listed: true,
     referenceOrder: 4,
     group: "Read",
@@ -282,7 +307,7 @@ export const VERB_REGISTRY = [
     key: "ticket.create",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.create" },
     listed: true,
     referenceOrder: 11,
     group: "Write",
@@ -353,7 +378,7 @@ export const VERB_REGISTRY = [
     key: "ticket.update",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.update" },
     listed: true,
     referenceOrder: 12,
     group: "Write",
@@ -431,7 +456,7 @@ export const VERB_REGISTRY = [
     key: "ticket.move",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.move" },
     listed: true,
     referenceOrder: 13,
     group: "Write",
@@ -469,7 +494,7 @@ export const VERB_REGISTRY = [
     key: "ticket.comment",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.comment" },
     listed: true,
     referenceOrder: 14,
     group: "Write",
@@ -522,7 +547,7 @@ export const VERB_REGISTRY = [
     key: "ticket.archive",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.archive" },
     listed: true,
     referenceOrder: 15,
     group: "Write",
@@ -548,7 +573,7 @@ export const VERB_REGISTRY = [
     key: "ticket.brief",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.brief" },
     listed: true,
     referenceOrder: 5,
     group: "Read",
@@ -561,7 +586,7 @@ export const VERB_REGISTRY = [
     key: "worktree.status",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "worktree.status" },
     listed: true,
     referenceOrder: 6,
     group: "Read",
@@ -575,7 +600,7 @@ export const VERB_REGISTRY = [
     key: "worktree.diff",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "worktree.diff" },
     listed: true,
     referenceOrder: 7,
     group: "Read",
@@ -599,7 +624,7 @@ export const VERB_REGISTRY = [
     key: "project.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "project.list" },
     listed: true,
     referenceOrder: 8,
     group: "Read",
@@ -611,7 +636,7 @@ export const VERB_REGISTRY = [
     key: "label.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "label.list" },
     listed: true,
     referenceOrder: 9,
     group: "Read",
@@ -625,7 +650,7 @@ export const VERB_REGISTRY = [
     key: "model.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "model.list" },
     listed: true,
     referenceOrder: 10,
     group: "Read",
@@ -647,7 +672,7 @@ export const VERB_REGISTRY = [
     key: "session.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "session.list" },
     listed: true,
     referenceOrder: 17,
     group: "Session",
@@ -665,7 +690,7 @@ export const VERB_REGISTRY = [
     key: "session.peek",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "session.peek" },
     listed: true,
     referenceOrder: 18,
     group: "Session",
@@ -700,7 +725,7 @@ export const VERB_REGISTRY = [
     key: "session.start",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.start" },
     listed: true,
     referenceOrder: 16,
     group: "Session",
@@ -765,7 +790,7 @@ export const VERB_REGISTRY = [
     key: "session.done",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.done" },
     listed: true,
     referenceOrder: 19,
     group: "Session",
@@ -800,7 +825,7 @@ export const VERB_REGISTRY = [
     key: "session.blocked",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.blocked" },
     listed: true,
     referenceOrder: 20,
     group: "Session",
@@ -831,7 +856,7 @@ export const VERB_REGISTRY = [
     key: "session.link",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.link" },
     listed: true,
     referenceOrder: 21,
     group: "Session",
@@ -868,7 +893,7 @@ export const VERB_REGISTRY = [
     key: "session.harness",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.harness" },
     listed: false,
     group: "Session",
     summary: "Record which harness is now running in the current Volli session.",
@@ -891,7 +916,7 @@ export const VERB_REGISTRY = [
     key: "notify",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "notify" },
     listed: true,
     referenceOrder: 22,
     group: "Session",
@@ -938,7 +963,7 @@ export const VERB_REGISTRY = [
     key: "hook",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "hook" },
     listed: false,
     group: "Session",
     summary: "Report a harness hook event for the current session.",
@@ -950,7 +975,7 @@ export const VERB_REGISTRY = [
     key: "doctor",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "doctor" },
     listed: true,
     referenceOrder: 25,
     group: "App",
@@ -995,7 +1020,7 @@ export const VERB_REGISTRY = [
     key: "prompt.baseline",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "prompt.baseline" },
     listed: true,
     referenceOrder: 24,
     group: "App",
@@ -1025,12 +1050,14 @@ export const VERB_REGISTRY = [
   // The two local verbs. They are on the Agent CLI like every verb above, but
   // `volli` answers them in its own process — so they are absent from
   // AGENT_COMMANDS, which is the SOCKET projection, not the CLI surface. That
-  // difference is exactly what `handler` records.
+  // difference is exactly what `handler.site` records, and it is why main's
+  // dispatch table cannot hold a binding for either: neither reaches the
+  // socket, so neither is in AgentCommandBindingId to be bound.
   {
     key: "app.launch",
     accessModes: ["cli"],
     actor: "any",
-    handler: "cli",
+    handler: { site: "cli", id: "app.launch" },
     listed: true,
     referenceOrder: 23,
     group: "App",
@@ -1055,7 +1082,7 @@ export const VERB_REGISTRY = [
     key: "help",
     accessModes: ["cli"],
     actor: "any",
-    handler: "cli",
+    handler: { site: "cli", id: "help" },
     listed: true,
     referenceOrder: 26,
     group: "App",
@@ -1072,8 +1099,8 @@ type RegistryEntry = (typeof VERB_REGISTRY)[number];
 /** Every declared verb key — the vocabulary rule packs and Role bundles name. */
 export type VerbKey = RegistryEntry["key"];
 
-/** The socket projection at the type level: handler `main`, plus a `cli` access mode. */
-type SocketProjected<E extends VerbEntry> = E extends { handler: "main" }
+/** The socket projection at the type level: handler site `main`, plus a `cli` access mode. */
+type SocketProjected<E extends VerbEntry> = E extends { handler: { site: "main" } }
   ? "cli" extends E["accessModes"][number]
     ? E["key"]
     : never
@@ -1085,15 +1112,56 @@ type SocketProjected<E extends VerbEntry> = E extends { handler: "main" }
  */
 export type AgentCommand = SocketProjected<RegistryEntry>;
 
+/** The binding of a socket-projected verb, at the type level. */
+type SocketBinding<E extends VerbEntry> = E extends { handler: { site: "main" } }
+  ? "cli" extends E["accessModes"][number]
+    ? E["handler"]["id"]
+    : never
+  : never;
+
+/**
+ * Every handler id the socket resolves — the key set main's dispatch table is
+ * a total mapping over (VC-167).
+ *
+ * Identical to {@link AgentCommand} today, because every binding id is its own
+ * verb's key. It is a separate type because the two answer different
+ * questions: `AgentCommand` is what a caller may put on the wire, and this is
+ * what main must have a handler for. VC-162 is where they part — a verb that
+ * leaves the `cli` access mode leaves the wire, and its binding goes on being
+ * resolved by the surface that kept it.
+ */
+export type AgentCommandBindingId = SocketBinding<RegistryEntry>;
+
 /**
  * The socket projection: entries whose handler lives in main AND that carry a
  * `cli` access mode. Takes its entries as an argument so a projection can be
  * proven against a synthetic table — no `tool`-only verb exists until VC-162.
  */
 export function agentCommandsFrom(entries: readonly VerbEntry[]): readonly string[] {
-  return entries
-    .filter((entry) => entry.handler === "main" && entry.accessModes.includes("cli"))
-    .map((entry) => entry.key);
+  return socketProjectedFrom(entries).map((entry) => entry.key);
+}
+
+/** The socket-projected entries: a `main` handler site, plus a `cli` access mode. */
+function socketProjectedFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  return entries.filter(
+    (entry) => entry.handler.site === "main" && entry.accessModes.includes("cli"),
+  );
+}
+
+/**
+ * Which handler answers each socket verb — the wire name a caller sends,
+ * mapped to the binding id main's dispatch table is keyed by.
+ *
+ * Derived, never authored, exactly as {@link AGENT_COMMANDS} is: this is the
+ * declaration DRIVING the dispatch, which is what VC-167 replaced VC-161's
+ * source-text parity scan with.
+ */
+export function agentCommandBindingsFrom(
+  entries: readonly VerbEntry[],
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    socketProjectedFrom(entries).map((entry) => [entry.key, entry.handler.id]),
+  );
 }
 
 /**
@@ -1106,6 +1174,15 @@ export function agentCommandsFrom(entries: readonly VerbEntry[]): readonly strin
  * strings, in the same order, that this list has always held.
  */
 export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly AgentCommand[];
+
+/**
+ * The socket's verb-to-binding map — what main's dispatch table resolves a
+ * request through. The cast restores the literal unions
+ * {@link agentCommandBindingsFrom} widens to `string`.
+ */
+export const AGENT_COMMAND_BINDINGS = agentCommandBindingsFrom(VERB_REGISTRY) as Readonly<
+  Record<AgentCommand, AgentCommandBindingId>
+>;
 
 /**
  * The Verb Tier a verb's access modes and actor requirement imply (VC-92 §2).

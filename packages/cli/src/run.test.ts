@@ -74,7 +74,7 @@ describe("runCli", () => {
       key: "session.start",
       accessModes: ["tool"],
       actor: "role",
-      handler: "main",
+      handler: { site: "main", id: "session.start" },
       listed: true,
       referenceOrder: 1,
       group: "Session",

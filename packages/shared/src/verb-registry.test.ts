@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
+  agentCommandBindingsFrom,
   agentCommandsFrom,
   cliVerbName,
   REFERENCE_VERBS,
@@ -138,7 +140,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "socket.verb",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "socket.verb" },
     listed: true,
     referenceOrder: 20,
     group: "Read",
@@ -149,7 +151,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "tool.verb",
     accessModes: ["tool"],
     actor: "role",
-    handler: "main",
+    handler: { site: "main", id: "tool.verb" },
     listed: true,
     referenceOrder: 0,
     group: "Session",
@@ -160,7 +162,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "local.verb",
     accessModes: ["cli"],
     actor: "any",
-    handler: "cli",
+    handler: { site: "cli", id: "local.verb" },
     listed: true,
     referenceOrder: 10,
     group: "App",
@@ -171,7 +173,7 @@ const SYNTHETIC: readonly VerbEntry[] = [
     key: "app.only",
     accessModes: [],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "app.only" },
     listed: false,
     group: "Write",
     summary: "On no agent surface at all.",
@@ -197,6 +199,49 @@ describe("AGENT_COMMANDS projection", () => {
   });
 });
 
+describe("the handler binding (VC-167)", () => {
+  it("binds every verb to a handler id that is its own key", () => {
+    // The whole discipline in one line: the binding id IS the canonical key, so
+    // main's dispatch table keys on the registry's vocabulary rather than on a
+    // second naming scheme that could drift from it.
+    for (const entry of VERB_REGISTRY) {
+      expect(entry.handler.id).toBe(entry.key);
+      expect(["main", "cli"]).toContain(entry.handler.site);
+    }
+  });
+
+  it("maps every socket verb to the binding that answers it", () => {
+    expect(Object.keys(AGENT_COMMAND_BINDINGS)).toEqual([...AGENT_COMMANDS]);
+    for (const command of AGENT_COMMANDS) {
+      expect(AGENT_COMMAND_BINDINGS[command]).toBe(command);
+    }
+  });
+
+  it("is derived from the registry rather than authored beside it", () => {
+    expect(agentCommandBindingsFrom(VERB_REGISTRY)).toEqual(AGENT_COMMAND_BINDINGS);
+  });
+
+  it("leaves a locally handled or tool-only verb out of the socket's bindings", () => {
+    // `app.launch` and `help` answer in the `volli` process, and a tool-only
+    // verb never reaches the socket at all. Neither may appear here, because a
+    // binding in this map is main promising to answer that verb over the wire.
+    expect(agentCommandBindingsFrom(SYNTHETIC)).toEqual({ "socket.verb": "socket.verb" });
+  });
+
+  it("lets one verb's binding be resolved without its wire name", () => {
+    // The seam VC-162 rides: a verb that moves to a `tool` access mode leaves
+    // the socket's map, and the id it named goes on identifying the same one
+    // handler for whichever surface kept it.
+    const relocated: VerbEntry = {
+      ...SYNTHETIC[0]!,
+      accessModes: ["tool"],
+      actor: "role",
+    };
+    expect(agentCommandBindingsFrom([relocated])).toEqual({});
+    expect(relocated.handler.id).toBe("socket.verb");
+  });
+});
+
 describe("CLI reference projection", () => {
   it("keeps only listed CLI entries and orders them from entry data", () => {
     expect(referenceVerbsFrom(SYNTHETIC).map((entry) => entry.key)).toEqual([
@@ -215,7 +260,7 @@ describe("CLI reference projection", () => {
       key: "unordered.verb",
       accessModes: ["cli"],
       actor: "any",
-      handler: "main",
+      handler: { site: "main", id: "unordered.verb" },
       listed: true,
       group: "Read",
       summary: "Missing its reference position.",
@@ -316,7 +361,8 @@ describe("the registry table", () => {
 
   it("gives every verb a handler binding and at least one access mode", () => {
     for (const entry of VERB_REGISTRY) {
-      expect(["main", "cli"]).toContain(entry.handler);
+      expect(["main", "cli"]).toContain(entry.handler.site);
+      expect(entry.handler.id.length).toBeGreaterThan(0);
       expect(entry.accessModes.length).toBeGreaterThan(0);
       expect(entry.summary.length).toBeGreaterThan(0);
     }
