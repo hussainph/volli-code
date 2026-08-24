@@ -1,0 +1,285 @@
+/**
+ * What every agent verb is handed: the service state a handler may reach, and
+ * the request-scoped snapshot the dispatch resolved before calling it (VC-167).
+ *
+ * The dispatch used to be one `execute` closure, and this is the state it
+ * closed over — the project list, the Session projections, the `VOLLI_SESSION`
+ * identity, the per-Session harness watermarks and the terminal update locks.
+ * Handlers now take it as an argument, so what a verb can reach is legible at
+ * its signature instead of being whatever happened to be in scope.
+ *
+ * The snapshot half is deliberately not resolved here. Several verbs skip work
+ * they do not need — the hook hot path takes no projection snapshot and no
+ * identity lookup — and that laziness is declared per verb in `table.ts`,
+ * beside the handler it belongs to, rather than hidden in a condition here.
+ */
+
+import type Database from "better-sqlite3";
+import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-engine";
+import type {
+  AgentErrorCode,
+  AgentRequest,
+  AgentResponse,
+  DoctorFacts,
+  ModelAccessSnapshot,
+  Project,
+  PromptResource,
+  SessionActivityState,
+  SessionProjection,
+  SessionRecord,
+  SessionEnvRepair,
+  SessionEnvReport,
+  TranscriptReference,
+} from "@volli/shared";
+import type {
+  DataChangedEvent,
+  HarnessEventNotice,
+  SessionHarnessNotice,
+  SessionStartedNotice,
+} from "../../ipc/contract";
+
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
+import type { Sessions } from "../session-runtime/sessions";
+import type { RunGit } from "../worktree";
+
+export interface AgentCommandServiceOptions {
+  db: Database.Database;
+  /** The app composition root's one durable Session Engine. */
+  sessionEngine: SessionEngine;
+  appVersion: string;
+  now?: () => number;
+  newId?: () => string;
+  /**
+   * The git runner the read-only worktree commands execute through. All git
+   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
+   * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
+   */
+  git?: RunGit;
+  /**
+   * Whether a ticket's stamped worktree directory still exists on disk (C3):
+   * threaded into the worktree read verbs' disk-existence seam so a stamped-
+   * but-deleted directory refuses with INVALID_REQUEST rather than letting
+   * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
+   * gone. Same seam shape as {@link git} — defaults to {@link existsSync}; tests
+   * substitute a scripted predicate.
+   */
+  worktreeExists?: (path: string) => boolean;
+  observeSession?: (
+    sessionId: string,
+    lines: number,
+  ) => { status: SessionActivityState; output: string } | undefined;
+  /**
+   * Reads one durable transcript artifact — what `session peek` renders a chat
+   * Session's tail from (VC-79). The store is a content-addressed directory and
+   * needs neither the db nor a live runtime, so production always has one;
+   * absent (tests) means the peek answers with its activity counts and no
+   * transcript rather than failing.
+   */
+  readTranscriptArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
+  notify?: (title: string, message: string) => void;
+  /**
+   * The Model Access snapshot read `model.list` serves (VC-78) — the same
+   * `inspectPiModelAccess` seam every app surface reads, threaded in the way
+   * {@link sessions} is so no parallel provider probe can grow here. Absent
+   * means the Pi runtime never came up this launch, which the verb reports as
+   * retryable APP_UNREACHABLE. The snapshot is structurally secret-free
+   * (`ModelAccessSnapshot` has no credential field), so passing it through is
+   * what keeps this verb's output credential-free.
+   */
+  inspectModelAccess?: (input: { signal: AbortSignal }) => Promise<ModelAccessSnapshot>;
+  /**
+   * How long `model.list` waits on the snapshot before answering TIMEOUT.
+   * Bounded below the CLI's own 10s socket deadline so a hung provider probe
+   * (VC-61's live pain — the sequential inspect loop has no per-probe bound
+   * yet) surfaces as this verb's legible TIMEOUT rather than the socket's.
+   * A seam only so tests need not wait out the real bound.
+   */
+  modelAccessTimeoutMs?: number;
+  /**
+   * The `env` block `volli identify` reports (VC-94): the session's resolved
+   * PATH, its provenance, the measured tools resolved against it and the
+   * subset this project implies, and whether its dependencies are installed. Injected because
+   * main is the only process that knows HOW the PATH came to be — it ran the
+   * boot probe and owns the adoption outcome — and absent (tests) means
+   * identify answers without an env block rather than inventing one.
+   */
+  sessionEnv?: (cwd: string) => Promise<SessionEnvReport>;
+  /**
+   * The product Session start route (VC-13) — the same facade the renderer's
+   * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
+   * so no parallel creation path can grow here. Raw `session.create` over
+   * this door stays FORBIDDEN. Absent means the Session runtime never came up
+   * this launch, which the verb reports as retryable.
+   */
+  sessions?: Pick<Sessions, "start">;
+  /**
+   * Submits one user message to a structured Session — the kickoff turn. The
+   * runtime answers a `message.submit` only when the TURN it started ends, so
+   * the door fires this detached and replies as the session opens; a refusal
+   * lands in the log and in the Session's own durable state, never in the
+   * caller's exit code.
+   */
+  submitSessionMessage?: (input: { sessionId: string; text: string }) => Promise<void>;
+  /**
+   * Fires one model-call title refinement (VC-81) behind a kickoff-derived
+   * heuristic title, on the owner's ladder — utility default, then the
+   * Session's own model, then the Role's default. Never fires for an
+   * explicit `--title` (that is already a person's choice), and never
+   * rejects: the heuristic is the fallback the titler keeps on failure.
+   * Absent means no model refinement this launch — heuristic only.
+   */
+  refineAutoTitle?: (input: AutoTitleRequest) => void;
+  /**
+   * Called after `session.start` opens a Session, with everything the
+   * renderer's toast says and targets. A notice, not a navigation: the app
+   * must never move or steal focus because a start landed — the toast's
+   * action is the only door into the new session's tab.
+   */
+  onSessionStarted?: (notice: SessionStartedNotice) => void;
+  /**
+   * Interrupts every live agent attachment of a ticket after a committed
+   * backward move. Its command and receipt are Session evidence; Esc leaves
+   * the terminal attachment alive. Absent (tests) means a no-op.
+   */
+  interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+  /**
+   * Called after a socket command COMMITS a planning mutation, with the exact
+   * ticket it resolved and touched — the scope index.ts broadcasts as
+   * `volli:data-changed` so the renderer refreshes the right surfaces promptly.
+   * Never called for a read-only command or a no-op (e.g. a same-column
+   * `ticket.move`). A ticketless Session mutation is project-scoped rather than
+   * targeted, so every reader refreshes conservatively.
+   * Absent (tests) means the broadcast is a no-op.
+   */
+  onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
+  /**
+   * Called for every canonical harness event this door ingests (harness-events),
+   * after any session-record write it implies has committed — the notice
+   * index.ts pushes to every window as `volli:harness-event`. Absent (tests)
+   * means the fan-out is a no-op.
+   */
+  onHarnessEvent?: (notice: HarnessEventNotice) => void;
+  /**
+   * Called when a wrapper announce actually CHANGES which harness a session is
+   * running — the notice index.ts pushes to every window as
+   * `volli:session-harness`, so the sidebar's label and the session's harness
+   * state move without waiting for a refetch. Never called for the ordinary
+   * announce that agrees with what Volli already believes. Absent (tests) means
+   * the fan-out is a no-op.
+   */
+  onSessionHarness?: (notice: SessionHarnessNotice) => void;
+  /**
+   * What only main can answer about the harness runtime — which wrappers it
+   * wrote, where the shim is, what the shell integration looks like. Injected
+   * rather than read here, because every one of these lives in the boot-time
+   * runtime state and none of it belongs in this door. Absent (tests) makes
+   * `doctor` report that it could not look.
+   */
+  doctorFacts?: () => Promise<DoctorFacts>;
+  /**
+   * Rebuilds the generated runtime and re-runs Session PATH adoption. Its
+   * report gives `doctor --fix` evidence for the PATH new Sessions will get;
+   * the calling Session's own observation remains intentionally unchanged.
+   */
+  doctorRepair?: () => Promise<SessionEnvRepair>;
+  /**
+   * The skills index a fresh Session with no explicit skills would carry — the
+   * SAME port `session start` composes through (`SessionSkillPorts.index` with
+   * nothing injected), threaded in so `prompt baseline` prices the index a real
+   * start would record rather than a reconstruction that could drift. `null`
+   * means no index (no skills, unreadable tier): a real, smaller baseline.
+   * Absent (tests, runtime never up) makes the command refuse rather than
+   * report a baseline it knows is missing a section.
+   */
+  skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
+}
+
+export interface AgentCommandService {
+  execute(request: AgentRequest): Promise<AgentResponse>;
+}
+
+/**
+ * The identity `VOLLI_SESSION` names — enough to attribute a write and resolve
+ * a project or ticket, and deliberately nothing about how the Session runs.
+ * Resolved against the Session Engine itself, so a structured (chat) Session
+ * answers exactly like a PTY one (VC-51); `terminalSessionRecord` stays the
+ * door to terminal facts (cwd, harness, exit), which identity never carries.
+ */
+export interface EnvSessionIdentity {
+  id: string;
+  projectId: string;
+  ticketId: string | null;
+}
+
+/**
+ * The service state and request-scoped snapshot one verb handler runs against.
+ *
+ * `options` is the composition root verbatim, because most of what a handler
+ * reaches for is an injected seam (`notify`, `onMutation`, `sessions`) that has
+ * no default and reads best at its own name. The fields beside it are the ones
+ * the service RESOLVED once at construction — a default applied, or a map it
+ * owns — so a handler cannot accidentally use an unresolved `options.now`.
+ */
+export interface AgentCommandContext {
+  /** Everything the composition root injected. */
+  readonly options: AgentCommandServiceOptions;
+  /** {@link AgentCommandServiceOptions.now}, defaulted to `Date.now`. */
+  readonly now: () => number;
+  /** {@link AgentCommandServiceOptions.newId}, defaulted to `randomUUID`. */
+  readonly newId: () => string;
+  /** {@link AgentCommandServiceOptions.git}, defaulted to `runGitCapturing`. */
+  readonly git: RunGit;
+  /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
+  readonly worktreeExists: (path: string) => boolean;
+  /**
+   * The app's one durable Session Engine. Lifted out of `options` because it
+   * is a service rather than a seam: every verb that touches a Session reads
+   * it, and none of them may substitute one.
+   */
+  readonly sessionEngine: SessionEngine;
+  /**
+   * The newest fire-time main has ingested per session — see
+   * `createAgentCommandService`. Service-lived and mutable: the hook path reads
+   * and writes it, and it must outlive the request that touched it.
+   */
+  readonly watermarks: Map<string, number>;
+  /**
+   * The per-Session read-modify-write locks the terminal native detail is
+   * updated under. Service-lived for the same reason: two hooks racing on one
+   * Session are exactly what it exists to serialize.
+   */
+  readonly terminalUpdateLocks: Map<string, Promise<void>>;
+  /** Every registered project, listed once per request. */
+  readonly projects: readonly Project[];
+  /**
+   * Every Session of every project, folded once — or empty, for a verb whose
+   * table entry declares it takes no snapshot. `sessions` below narrows it to
+   * the terminal rows.
+   */
+  readonly projections: readonly SessionProjection[];
+  /**
+   * The terminal half of {@link projections}: the verbs that need a PTY have
+   * nothing a structured-only Session can answer, and dropping it there is
+   * correct, not a compatibility gap.
+   */
+  readonly sessions: readonly SessionRecord[];
+  /**
+   * Who `VOLLI_SESSION` is, when the caller exported one and this verb's table
+   * entry asks for it. `null` means no session env, an id that resolves to no
+   * Session, or a verb that resolves its own.
+   */
+  readonly envSession: EnvSessionIdentity | null;
+}
+
+/**
+ * One verb's handler: the named function that replaced its branch of the
+ * chain. Uniformly async, so the table holds one shape rather than two.
+ */
+export type AgentVerbHandler = (
+  context: AgentCommandContext,
+  request: AgentRequest,
+) => Promise<AgentResponse>;
+
+export function failure(code: AgentErrorCode, message: string): AgentResponse {
+  return { v: 1, ok: false, error: { code, message } };
+}
