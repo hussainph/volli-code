@@ -15,6 +15,7 @@
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import type { RuntimeSessionIdentity } from "@volli/shared";
 
 import type { SessionStartedNotice } from "../ipc/contract";
@@ -94,9 +95,13 @@ function harness(overrides: { startError?: unknown } = {}) {
     onSessionStarted: (notice) => notices.push(notice),
     actorTicketDisplay: () => null,
     now: () => 1_000,
+    // `ticket.await`'s ports, inert for the start-tool suite: its own suite
+    // (`agent-await.test.ts`) drives them with real fakes.
+    authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+    subscribeTicketWake: () => () => undefined,
   });
   const call = (input: Record<string, unknown>, toolCallId = "tc-0") =>
-    door(CALLER, { verb: "session.start", input, toolCallId });
+    door(CALLER, { verb: "session.start", input, toolCallId }, new AbortController().signal);
   return { call, startInputs, kickoffs, notices };
 }
 

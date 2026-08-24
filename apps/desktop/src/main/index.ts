@@ -151,6 +151,7 @@ import {
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
 import type { AgentToolDoor } from "./agent-tool-door";
+import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanSweep } from "./orphan-sweep";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -931,7 +932,10 @@ app.whenReady().then(async () => {
               throw new Error("This launch has no Volli verb handlers.");
             }
             signal.throwIfAborted();
-            return agentToolDoor(caller, request);
+            // Forwarded, not just read: `ticket.await` parks on it, and the
+            // signal firing is the only notice a suspended wait ever gets
+            // that its turn was interrupted (VC-85).
+            return agentToolDoor(caller, request, signal);
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -1385,6 +1389,11 @@ app.whenReady().then(async () => {
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
+          // `ticket.await`'s two ports (VC-85): the wait is judged against the
+          // caller's project policy when it starts, and parks on the
+          // post-commit wake bus until a planner fact matches.
+          authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+          subscribeTicketWake,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),

@@ -39,6 +39,7 @@ import {
   shortSessionId,
 } from "@volli/shared";
 import type {
+  AuthorityPolicy,
   Project,
   ReasoningLevel,
   RuntimeSessionIdentity,
@@ -49,6 +50,8 @@ import type {
 } from "@volli/shared";
 
 import { ticketForDisplayId } from "./agent-dispatch/resolution";
+import { awaitTicketTool } from "./agent-await";
+import type { SubscribeTicketWake } from "./agent-await";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
 import type { StartSessionPorts } from "./session-runtime/start-session";
@@ -69,6 +72,10 @@ export interface AgentToolDoorOptions extends Omit<
   projects: () => readonly Project[];
   sessions: () => StartSessionPorts["sessions"] | null;
   actorTicketDisplay: StartSessionPorts["actorTicketDisplay"];
+  /** The caller's project policy, read per call — `ticket.await` judges its wait when it starts. */
+  authorityPolicy: (projectId: string) => AuthorityPolicy;
+  /** The post-commit wake bus (`ticket-wake.ts`, VC-85 slice C) `ticket.await` parks on. */
+  subscribeTicketWake: SubscribeTicketWake;
 }
 
 /** A refusal the model reads and can act on. Never a thrown error. */
@@ -140,6 +147,11 @@ async function startSessionTool(
   options: AgentToolDoorOptions,
   session: RuntimeSessionIdentity,
   request: RuntimeVerbCall,
+  // Starting a Session is not withdrawable mid-flight: by the time an abort
+  // could be read the Session either durably exists or never did, and a
+  // half-honoured cancel would strand the very record the operation id
+  // protects. The wait family is where the signal earns its keep.
+  _signal: AbortSignal,
 ): Promise<RuntimeVerbResult> {
   const sessions = options.sessions();
   if (sessions === null) {
@@ -242,11 +254,24 @@ type VerbToolHandlers = Record<
     options: AgentToolDoorOptions,
     session: RuntimeSessionIdentity,
     request: RuntimeVerbCall,
+    signal: AbortSignal,
   ) => Promise<RuntimeVerbResult>
 >;
 
 const VERB_TOOL_HANDLERS: VerbToolHandlers = {
   "session.start": startSessionTool,
+  "ticket.await": (options, session, request, signal) =>
+    awaitTicketTool(
+      {
+        db: options.db,
+        projects: options.projects,
+        authorityPolicy: options.authorityPolicy,
+        subscribeTicketWake: options.subscribeTicketWake,
+      },
+      session,
+      request,
+      signal,
+    ),
 };
 
 /**
@@ -259,11 +284,12 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
 export type AgentToolDoor = (
   session: RuntimeSessionIdentity,
   request: RuntimeVerbCall,
+  signal: AbortSignal,
 ) => Promise<RuntimeVerbResult>;
 
 /** Build the one closure the Pi adapter hands every attachment that holds a verb. */
 export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoor {
-  return async (session, request) => {
+  return async (session, request, signal) => {
     const handler = VERB_TOOL_HANDLERS[request.verb];
     if (handler === undefined) {
       // Unreachable through a resolved surface, and refused rather than
@@ -271,6 +297,6 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
       // total over, so arriving here means the two disagreed.
       return refusal(`${request.verb} is not a verb this build can run.`);
     }
-    return handler(options, session, request);
+    return handler(options, session, request, signal);
   };
 }
