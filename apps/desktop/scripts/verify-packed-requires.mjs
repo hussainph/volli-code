@@ -17,14 +17,16 @@
  * dist-electron/main.cjs in a tree pruned down to electron-builder.yml's
  * whitelist. This script is the thing that does.
  *
- * Two checks, matching the two ways a require() can go missing in the packed
- * app: (1) every relative specifier must resolve to a real file inside
- * dist-electron, the same directory Node will actually look in; (2) every
- * bare specifier's package must be in electron-builder.yml's node_modules
- * whitelist, walked transitively through each kept package's own production
- * `dependencies` — the automated version of the "KEEP IN SYNC" comment above
- * that whitelist, so a whitelisted package quietly gaining a new dependency
- * doesn't produce the same class of crash one layer down.
+ * Three checks, matching the ways a require() can break the packed app:
+ * (1) preload.cjs must have no relative specifiers at all because Electron's
+ * sandboxed preload cannot load sibling chunks; (2) every relative specifier
+ * in the remaining chunks must resolve to a real file inside dist-electron,
+ * the same directory Node will actually look in; (3) every bare specifier's
+ * package must be in electron-builder.yml's node_modules whitelist, walked
+ * transitively through each kept package's own production `dependencies` —
+ * the automated version of the "KEEP IN SYNC" comment above that whitelist,
+ * so a whitelisted package quietly gaining a new dependency doesn't produce
+ * the same class of crash one layer down.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -155,6 +157,15 @@ function isBuiltinOrElectron(specifier) {
   );
 }
 
+function isRelativeSpecifier(specifier) {
+  return (
+    specifier === "." ||
+    specifier === ".." ||
+    specifier.startsWith("./") ||
+    specifier.startsWith("../")
+  );
+}
+
 function isInKeepSet(packageName) {
   if (keepSet.has(packageName)) return true;
   const scope = packageName.split("/")[0];
@@ -237,7 +248,14 @@ for (const chunkFile of chunkFiles) {
   const source = readFileSync(chunkPath, "utf8");
 
   for (const specifier of extractRequireSpecifiers(source)) {
-    if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    if (isRelativeSpecifier(specifier)) {
+      if (chunkFile === "preload.cjs") {
+        violations.push(
+          `${chunkFile} → ${specifier} → sandboxed preload cannot use relative require()`,
+        );
+        continue;
+      }
+
       const result = resolveRelative(specifier, chunkDir);
       if (result.ok) {
         relativeVerifiedCount += 1;
