@@ -1,4 +1,12 @@
-import { displayTicketId, type ChatSessionRecord, type Project, type Ticket } from "@volli/shared";
+import {
+  automationOwnership,
+  displayTicketId,
+  type Automation,
+  type AutomationOwnership,
+  type ChatSessionRecord,
+  type Project,
+  type Ticket,
+} from "@volli/shared";
 
 import type { SessionContainer, SessionScope } from "@renderer/stores/sessions";
 
@@ -128,4 +136,66 @@ export function buildCommandPaletteItems(
   );
 
   return { tickets, sessions };
+}
+
+/* ------------------------------------------------------------ automations */
+
+/** One "Run ⟨name⟩ on ⟨ticket⟩" row — run by hand from the palette (VC-126). */
+export interface CommandPaletteAutomationRunItem {
+  kind: "automation-run";
+  automationId: string;
+  name: string;
+  ownership: AutomationOwnership;
+  ticketId: string;
+  ticketDisplayId: string;
+}
+
+/**
+ * The Ticket a palette-run would target: the workspace's open Ticket,
+ * resolved against the live board so a stale remembered id offers nothing.
+ */
+export interface CommandPaletteRunContext {
+  ticketId: string;
+  displayId: string;
+}
+
+/**
+ * The run rows the palette offers — every Automation the selected project
+ * lists (its own plus the global shelf, in main's own order), each targeting
+ * the open Ticket. No open Ticket means no rows rather than rows that would
+ * have to invent a target: the palette is "run by name", and the richer
+ * choose-a-ticket surfaces are later slices (VC-127, VC-129).
+ */
+export function buildAutomationRunItems(
+  automations: readonly Automation[],
+  context: CommandPaletteRunContext | null,
+): CommandPaletteAutomationRunItem[] {
+  if (context === null) return [];
+  return automations.map((automation) => ({
+    kind: "automation-run",
+    automationId: automation.id,
+    name: automation.name,
+    ownership: automationOwnership(automation),
+    ticketId: context.ticketId,
+    ticketDisplayId: context.displayId,
+  }));
+}
+
+/**
+ * The open Ticket as a run target, or null. Resolved against the project's
+ * live ticket list — `openTicketId` is remembered workspace state and may
+ * name a Ticket that has since been deleted or belongs to another project.
+ */
+export function paletteRunContext(
+  openTicketId: string | null,
+  selectedProject: Project | null,
+  tickets: readonly Ticket[],
+): CommandPaletteRunContext | null {
+  if (openTicketId === null || selectedProject === null) return null;
+  const ticket = tickets.find((candidate) => candidate.id === openTicketId);
+  if (ticket === undefined || ticket.projectId !== selectedProject.id) return null;
+  return {
+    ticketId: ticket.id,
+    displayId: displayTicketId(selectedProject.ticketPrefix, ticket.ticketNumber),
+  };
 }

@@ -52,6 +52,15 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  AutomationCreateInput,
+  AutomationDeleteResult,
+  AutomationIdInput,
+  AutomationResult,
+  AutomationRunInput,
+  AutomationRunsResult,
+  AutomationRunStartResult,
+  AutomationsResult,
+  AutomationUpdateInput,
   CliDoctorInput,
   CliDoctorResult,
   CliRepairResult,
@@ -665,6 +674,32 @@ const api = {
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
       invoke("volli:label-set-color", input),
+  },
+  /**
+   * Automations (VC-112, tracer VC-126): the saved record's CRUD and the one
+   * Run door. Running opens one fresh chat Session detached (VC-16's
+   * optimistic open) — the ok result is a durable Run naming that Session,
+   * which the caller adopts and shows.
+   */
+  automations: {
+    /** A project's own Automations plus every global one. */
+    list: (input: ProjectIdInput): Promise<AutomationsResult> =>
+      invoke("volli:automation-list", input),
+    /** Creates one Automation; main re-validates the draft and any Runtime pin. */
+    create: (input: AutomationCreateInput): Promise<AutomationResult> =>
+      invoke("volli:automation-create", input),
+    /** Rewrites one Automation's editable fields under the same validation. */
+    update: (input: AutomationUpdateInput): Promise<AutomationResult> =>
+      invoke("volli:automation-update", input),
+    /** A record delete — Runs keep their history. */
+    delete: (input: AutomationIdInput): Promise<AutomationDeleteResult> =>
+      invoke("volli:automation-delete", input),
+    /** Runs an Automation by hand on a Ticket. */
+    run: (input: AutomationRunInput): Promise<AutomationRunStartResult> =>
+      invoke("volli:automation-run", input),
+    /** A Ticket's Runs, newest first. */
+    runsForTicket: (input: TicketIdInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-ticket", input),
   },
   /**
    * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A

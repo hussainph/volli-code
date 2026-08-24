@@ -210,6 +210,37 @@ export interface ExportAppState {
   updatedAt: number;
 }
 
+/**
+ * One `automations` projection row (migration 026). `runtime` rides as its STORED JSON
+ * string, unparsed — {@link ExportProject.themeCanvas}'s reason: a hand-edited
+ * pin that no longer parses must not take the rescue document down with it.
+ */
+export interface ExportAutomation {
+  id: string;
+  /** `null` is a global Automation — the Ownership axis. */
+  projectId: string | null;
+  name: string;
+  instructions: string;
+  runtime: string | null;
+  rowVersion: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One `automation_runs` projection row (migration 026): identity snapshot plus resolved model columns. */
+export interface ExportAutomationRun {
+  id: string;
+  automationId: string | null;
+  /** Bound Automation name snapshot, retained after record deletion. */
+  automationName: string | null;
+  ticketId: string | null;
+  sessionId: string;
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+  createdAt: number;
+}
+
 export interface ExportDocument {
   format: typeof EXPORT_FORMAT;
   schemaVersion: number;
@@ -228,6 +259,8 @@ export interface ExportDocument {
   sessionCommandReceipts: ExportSessionCommandReceipt[];
   ticketComments: ExportTicketComment[];
   appState: ExportAppState[];
+  automations: ExportAutomation[];
+  automationRuns: ExportAutomationRun[];
 }
 
 export interface BuildExportDocumentOptions {
@@ -394,6 +427,61 @@ function exportTicketLabels(db: Database.Database): ExportTicketLabel[] {
     "SELECT * FROM ticket_labels ORDER BY ticket_id, label_id",
   ).all();
   return rows.map((row) => ({ ticketId: row.ticket_id, labelId: row.label_id }));
+}
+
+interface AutomationRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  instructions: string;
+  runtime: string | null;
+  row_version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function exportAutomations(db: Database.Database): ExportAutomation[] {
+  const rows = prepared<[], AutomationRow>(db, "SELECT * FROM automations ORDER BY id").all();
+  return rows.map((row) => ({
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    instructions: row.instructions,
+    runtime: row.runtime,
+    rowVersion: row.row_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+interface AutomationRunRow {
+  id: string;
+  automation_id: string | null;
+  automation_name: string | null;
+  ticket_id: string | null;
+  session_id: string;
+  provider_id: string;
+  model_id: string;
+  reasoning_level: string;
+  created_at: number;
+}
+
+function exportAutomationRuns(db: Database.Database): ExportAutomationRun[] {
+  const rows = prepared<[], AutomationRunRow>(
+    db,
+    "SELECT * FROM automation_runs ORDER BY id",
+  ).all();
+  return rows.map((row) => ({
+    id: row.id,
+    automationId: row.automation_id,
+    automationName: row.automation_name,
+    ticketId: row.ticket_id,
+    sessionId: row.session_id,
+    providerId: row.provider_id,
+    modelId: row.model_id,
+    reasoningLevel: row.reasoning_level,
+    createdAt: row.created_at,
+  }));
 }
 
 interface TicketEventRow {
@@ -634,6 +722,8 @@ export function buildExportDocument(
     sessionCommandReceipts: exportSessionCommandReceipts(db),
     ticketComments: exportTicketComments(db),
     appState: exportAppState(db),
+    automations: exportAutomations(db),
+    automationRuns: exportAutomationRuns(db),
   };
 }
 

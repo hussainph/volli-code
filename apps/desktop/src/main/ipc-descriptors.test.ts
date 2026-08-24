@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  AUTOMATION_CHANNELS,
+  AUTOMATION_IPC,
   DATA_CHANNELS,
   DATA_IPC,
   FILE_CHANNELS,
@@ -2511,6 +2513,146 @@ describe("CLI_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid doctor request");
+    });
+  });
+});
+
+describe("AUTOMATION_IPC descriptor table", () => {
+  const PIN = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" };
+  const COMMAND_ID = "00000000-0000-4000-8000-000000000001";
+  const DRAFT = {
+    commandId: COMMAND_ID,
+    name: "Review",
+    instructions: "/review go",
+    runtime: null,
+  };
+
+  describe("volli:automation-list", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-list"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation list request");
+    });
+  });
+
+  describe("volli:automation-create", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-create"];
+
+    it("accepts a project draft, a global draft, an inherit runtime and a whole pin", () => {
+      expect(guard([{ projectId: "p1", ...DRAFT }])).toBe(true);
+      expect(guard([{ projectId: null, ...DRAFT }])).toBe(true);
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: PIN }])).toBe(true);
+    });
+
+    it("refuses a malformed envelope: arity, non-record, bad projectId", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT }, "extra"])).toBe(false);
+      expect(guard(["p1"])).toBe(false);
+      expect(guard([{ projectId: 7, ...DRAFT }])).toBe(false);
+    });
+
+    it("refuses a draft whose fields are not strings, and a HALF pin — the pair travels whole", () => {
+      expect(guard([{ projectId: "p1", ...DRAFT, name: 7 }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, instructions: 7 }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: "pin" }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { ...PIN, providerId: "" } }])).toBe(
+        false,
+      );
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { ...PIN, modelId: "" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, runtime: { ...PIN, reasoningLevel: "galactic" } }]),
+      ).toBe(false);
+      expect(
+        guard([
+          { projectId: "p1", ...DRAFT, runtime: { providerId: "anthropic", modelId: "opus" } },
+        ]),
+      ).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation");
+    });
+  });
+
+  describe("volli:automation-update", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-update"];
+
+    it("accepts an automationId plus the draft shape", () => {
+      expect(guard([{ automationId: "a1", ...DRAFT }])).toBe(true);
+      expect(guard([{ automationId: "a1", ...DRAFT, runtime: PIN }])).toBe(true);
+    });
+
+    it("refuses a missing id, a non-record, wrong arity and a bad draft", () => {
+      expect(guard([{ ...DRAFT }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ automationId: "a1", ...DRAFT, name: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation");
+    });
+  });
+
+  describe("volli:automation-delete", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-delete"];
+
+    it("accepts a command id plus Automation id and refuses everything else", () => {
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ commandId: "counter-1", automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, automationId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation delete request");
+    });
+  });
+
+  describe("volli:automation-run", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-run"];
+
+    it("requires a UUID command plus both target halves — the Automation and the Ticket", () => {
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", ticketId: "t1" }])).toBe(true);
+      expect(guard([{ automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: "counter-1", automationId: "a1", ticketId: "t1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, ticketId: "t1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation run request");
+    });
+  });
+
+  describe("volli:automation-runs-for-ticket", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-runs-for-ticket"];
+
+    it("accepts a ticketId record and refuses everything else", () => {
+      expect(guard([{ ticketId: "t1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ ticketId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation runs request");
+    });
+  });
+
+  describe("AUTOMATION_CHANNELS derivation", () => {
+    it("derives from the descriptor table's keys and covers the whole surface", () => {
+      expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
+      expect(AUTOMATION_CHANNELS).toHaveLength(6);
     });
   });
 });

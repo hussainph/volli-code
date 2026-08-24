@@ -141,6 +141,10 @@ export default defineConfig(({ mode }) => ({
         "src/chat/transcript.ts",
         "src/chat/wire.ts",
         "src/components/attachments/attachment-model.ts",
+        // What the renderer does with the Run door's answer (VC-126): which
+        // refusal opens Model Access, which toasts, and what success opens —
+        // pure precisely so the gate can reach the classification.
+        "src/components/automations/run-automation-model.ts",
         // The drop/paste decision (VC-106) is a pure `.ts` beside the views
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.
@@ -375,7 +379,7 @@ export default defineConfig(({ mode }) => ({
       },
       build: {
         command:
-          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/verify-packed-requires.mjs",
+          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/verify-preload-standalone.mjs && node scripts/verify-packed-requires.mjs",
         cache: false,
       },
       // The UI lab (src/renderer/lab) — the renderer dev server alone, no

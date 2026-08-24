@@ -76,8 +76,15 @@ export interface ComposerRun {
  * Radix mounts the composer fresh on every open, so "once per mount" is "once
  * per open" — which is when the answer can have gone stale: a default changed
  * in Settings, a provider signed in, a model hidden.
+ *
+ * `projectDefault` is the target project's own runtime preference
+ * (`projects.session_model`), threaded in because the pill must preselect what
+ * the start would actually resolve: main's chain reads the project rung ahead
+ * of the per-purpose defaults (VC-126), and a pill that showed the app default
+ * over a project override would send that misreading back as an explicit
+ * override, quietly defeating the very rung the project configured.
  */
-export function useComposerRun(): ComposerRun {
+export function useComposerRun(projectDefault: ModelSelection | null = null): ComposerRun {
   const access = useModelAccessClient();
   const [models, setModels] = React.useState<readonly ComposerModel[]>(NO_MODELS);
   const [selection, setSelection] = React.useState<ModelSelection | null>(null);
@@ -93,10 +100,11 @@ export function useComposerRun(): ComposerRun {
       .then(([snapshot, hidden, configured]) => {
         if (!current) return;
         setModels(offerableModels(snapshot.models, snapshot.providers, hidden));
-        // `resolveDefaultModel` is the policy, not a guess: an unset Ticket
-        // default MEANS the project default, which is what the Settings row
-        // says when it is unset.
-        setSelection(resolveDefaultModel(configured, "ticket"));
+        // The chain in rung order, exactly as main resolves a start: the
+        // project's own preference first, then `resolveDefaultModel` — the
+        // policy, not a guess: an unset Ticket default MEANS the project
+        // default, which is what the Settings row says when it is unset.
+        setSelection(projectDefault ?? resolveDefaultModel(configured, "ticket"));
       })
       .catch(() => {
         // A catalog we could not read costs the ROW, never the kickoff: with
@@ -109,7 +117,7 @@ export function useComposerRun(): ComposerRun {
     return () => {
       current = false;
     };
-  }, [defaults, hiddenModels, inspect, revision]);
+  }, [defaults, hiddenModels, inspect, projectDefault, revision]);
 
   return { models, selection, setSelection };
 }
