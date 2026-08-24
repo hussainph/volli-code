@@ -31,8 +31,8 @@ describe("changeSetToDiffStat", () => {
           {
             path: "new.ts",
             status: "untracked",
-            insertions: null,
-            deletions: null,
+            insertions: 4,
+            deletions: 0,
             binary: false,
           },
           {
@@ -50,18 +50,18 @@ describe("changeSetToDiffStat", () => {
             binary: false,
           },
         ],
-        insertions: 5,
+        insertions: 9,
         deletions: 3,
       }),
     );
     expect(diff).toEqual({
       files: [
         { path: "src/a.ts", insertions: 3, deletions: 1, untracked: false },
-        { path: "new.ts", insertions: null, deletions: null, untracked: true },
+        { path: "new.ts", insertions: 4, deletions: 0, untracked: true },
         { path: "logo.png", insertions: null, deletions: null, untracked: false },
         { path: "conflict.ts", insertions: 2, deletions: 2, untracked: false },
       ],
-      insertions: 5,
+      insertions: 9,
       deletions: 3,
     });
   });

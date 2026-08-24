@@ -38,8 +38,8 @@ export function formatChangeStatus(status: ChangeSetFileStatus): string {
 
 /**
  * Line-count presentation for a Change Set row. Binary files must never render
- * as `+0 −0` — they show `"Binary"`. Untracked/empty null counts with no binary
- * flag return `null` so the row can omit the counts entirely.
+ * as `+0 −0` — they show `"Binary"`. Any unreadable/racing path with null
+ * counts and no binary flag returns `null` so the row can omit the counts.
  */
 export function formatChangeCounts(file: ChangeSetFile): string | null {
   if (file.binary) return "Binary";

@@ -47,6 +47,10 @@ import {
   type ChangesNavigatorState,
 } from "@renderer/components/ticket/ticket-changes-model";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
+import {
+  formatWorktreeState,
+  type WorktreeStatusSnapshot,
+} from "@renderer/components/ticket/worktree-done-flow-model";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -118,6 +122,52 @@ function ChangesTitle({ count }: { count: number }) {
       <p className="text-ui font-medium">Diffs</p>
       <Badge variant="count-pill">{count}</Badge>
     </>
+  );
+}
+
+/** Working tree, local commits, and remote state — visible without opening another page. */
+export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot }) {
+  const state = formatWorktreeState(status);
+  const items = [
+    {
+      label: "Working",
+      value: state.working,
+      ink: status.uncommitted ? "text-attention" : "text-muted-foreground",
+    },
+    {
+      label: "Local",
+      value: state.local,
+      ink:
+        status.aheadOfBase !== null && status.aheadOfBase > 0
+          ? "text-foreground"
+          : "text-muted-foreground",
+    },
+    {
+      label: "Remote",
+      value: state.remote,
+      ink:
+        status.unpushed === 0 && status.aheadOfBase !== 0
+          ? "text-positive"
+          : (status.unpushed !== null && status.unpushed > 0) ||
+              (status.unpushed === null && status.aheadOfBase !== null && status.aheadOfBase > 0)
+            ? "text-attention"
+            : "text-muted-foreground",
+    },
+  ] as const;
+
+  return (
+    <div
+      data-testid="ticket-changes-git-state"
+      aria-label={`Working: ${state.working}; Local: ${state.local}; Remote: ${state.remote}`}
+      className="grid grid-cols-3 gap-2 rounded-md bg-muted/50 px-2 py-1.5"
+    >
+      {items.map((item) => (
+        <span key={item.label} className="flex min-w-0 flex-col">
+          <span className="text-label text-muted-foreground">{item.label}</span>
+          <span className={cn("truncate text-label font-medium", item.ink)}>{item.value}</span>
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -318,6 +368,7 @@ export function TicketChangesPanel({
     hiddenCount: 0,
   }));
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
+  const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [watchError, setWatchError] = React.useState<string | null>(null);
@@ -332,7 +383,7 @@ export function TicketChangesPanel({
     setNav((prev) => (prev.activeTabId === activeTabId ? prev : { ...prev, activeTabId }));
   }, [activeTabId]);
 
-  // A snapshot is five git commands over the whole worktree, and a write storm
+  // A refresh spans several git reads over the whole worktree, and a write storm
   // can outpace it. Never stack overlapping loads: a request arriving mid-load
   // just marks one trailing re-run, so the panel always settles on the latest
   // state without queueing a subprocess pile behind it.
@@ -354,6 +405,7 @@ export function TicketChangesPanel({
         setError(null);
         setNav((prev) => ({ ...prev, revision: null, files: [] }));
         setDiff(null);
+        setStatus(null);
         setLoaded(true);
         return;
       }
@@ -363,7 +415,11 @@ export function TicketChangesPanel({
       }
       loading.current = true;
       try {
-        const result = await window.api.worktree.changeSet(ticket.id);
+        const [result, statusResult] = await Promise.all([
+          window.api.worktree.changeSet(ticket.id),
+          window.api.worktree.status(ticket.id),
+        ]);
+        setStatus(statusResult.ok ? statusResult.status : null);
         if (!result.ok) {
           setError(result.error);
           if (notify) toastError(`Couldn't load changes: ${result.error}`);
@@ -453,9 +509,9 @@ export function TicketChangesPanel({
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        {/* Nothing to refine or total up on a clean branch, so the header
-            keeps only its name and its zero — the controls would be three
-            no-ops over an empty list. */}
+        {/* Nothing to refine or total up on a clean branch, so the first row
+            keeps only its name and zero. The Git-state strip still distinguishes
+            a clean pushed branch from a branch with nothing committed yet. */}
         <div className="flex min-h-7 items-center gap-1">
           <ChangesTitle count={total} />
           {total === 0 ? null : (
@@ -483,6 +539,7 @@ export function TicketChangesPanel({
             </>
           )}
         </div>
+        {status === null ? null : <WorktreeStateStrip status={status} />}
         {filtering ? (
           <Input
             autoFocus
