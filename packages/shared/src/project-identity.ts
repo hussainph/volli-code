@@ -6,6 +6,7 @@
  */
 
 import { REASONING_LEVELS, type ModelSelection } from "./agent-runtime";
+import type { AuthorityPolicyOverride } from "./authority-config";
 import type { SkillModes } from "./skill";
 import type { Appearance, Canvas } from "./theme/canvas/types";
 import type { ProjectThemeOverride } from "./theme/project-override";
@@ -68,6 +69,23 @@ export interface Project {
    * for migration 014's reason: overriding one must not clear the other.
    */
   sessionModel?: ModelSelection | null;
+  /**
+   * What this project says about the authority its Sessions run under
+   * (migration 025, VC-44) — or `null`/absent to be governed entirely by
+   * {@link DEFAULT_AUTHORITY_POLICY}.
+   *
+   * The DEPARTURES, never the resolved document, for the reason migration 025
+   * ruled: storing the resolved policy would mean tightening a built-in default
+   * later silently skipped every project anyone had ever touched. `skillModes`
+   * above holds its column the same way and for the same reason.
+   *
+   * Carried up to the renderer in this shape too, so the surface that edits it
+   * can tell "this project chose `observe`" from "this project inherits
+   * `observe`" — a distinction the resolved document destroys, and the one a
+   * revert control needs in order to exist. Resolve it with
+   * {@link resolveAuthorityPolicy}; never hand the resolved value back here.
+   */
+  authorityPolicy?: AuthorityPolicyOverride | null;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */

@@ -220,6 +220,34 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:project-authority-policy", () => {
+    const { guard } = DATA_IPC["volli:project-authority-policy"];
+
+    it("accepts a departure document and the null that clears every departure", () => {
+      expect(guard([{ id: "p1", override: { enforcement: "enforce" } }])).toBe(true);
+      expect(guard([{ id: "p1", override: {} }])).toBe(true);
+      expect(guard([{ id: "p1", override: null }])).toBe(true);
+    });
+
+    it("admits a document it cannot vouch for, leaving the judgment to the handler", () => {
+      // SHAPE ONLY, on purpose. A guard can only refuse, and a refused policy
+      // write has to come back naming the field that was wrong —
+      // `validateAuthorityPolicyOverride` does that in the handler. A second
+      // structural check here would be a second validator to keep in agreement
+      // with the first, which is how the two drift apart.
+      expect(guard([{ id: "p1", override: { enforcement: "sideways" } }])).toBe(true);
+      expect(guard([{ id: "p1", override: { enforcment: "off" } }])).toBe(true);
+    });
+
+    it("rejects a missing id, a non-object override, or wrong arity", () => {
+      expect(guard([{ override: {} }])).toBe(false);
+      expect(guard([{ id: "p1" }])).toBe(false);
+      expect(guard([{ id: "p1", override: "enforce" }])).toBe(false);
+      expect(guard([{ id: "p1", override: [] }])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+  });
+
   describe("volli:project-session-defaults", () => {
     const { guard } = DATA_IPC["volli:project-session-defaults"];
     const model = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
@@ -1562,9 +1590,13 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 56 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(56);
+    it("covers all 57 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(57);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      // The authority policy write (VC-172). App-only on purpose: there is no
+      // agent verb behind it, because the agent must not author the policy that
+      // governs it.
+      expect(DATA_CHANNELS).toContain("volli:project-authority-policy");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");

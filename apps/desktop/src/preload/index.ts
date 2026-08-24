@@ -100,6 +100,8 @@ import type {
   ProjectCreateResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectAuthorityPolicyInput,
+  ProjectAuthorityPolicyResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -347,6 +349,14 @@ const api = {
     /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
     setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-session-defaults", input),
+    /**
+     * Replaces this project's authority departures — the Configure Authority
+     * pane (VC-172). Reachable from the app and from nowhere else: no agent verb
+     * projects this, because the agent must not author the policy governing it.
+     */
+    setAuthorityPolicy: (
+      input: ProjectAuthorityPolicyInput,
+    ): Promise<ProjectAuthorityPolicyResult> => invoke("volli:project-authority-policy", input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */

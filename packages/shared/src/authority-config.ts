@@ -455,3 +455,221 @@ function parseStringList(value: unknown): AuthorityListOverride | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.every((entry) => typeof entry === "string") ? (value as string[]) : undefined;
 }
+
+/**
+ * What {@link validateAuthorityPolicyOverride} answers: the document as it will
+ * be stored, or every reason it will not be.
+ *
+ * Every reason and not the first, because this reports to a person editing a
+ * form: fixing one field only to be told about the next is the interaction a
+ * batch of errors exists to avoid.
+ */
+export type AuthorityPolicyValidation =
+  | { readonly ok: true; readonly override: AuthorityPolicyOverride }
+  | { readonly ok: false; readonly errors: readonly string[] };
+
+/**
+ * Validate one override document on its way IN, refusing what
+ * {@link parseAuthorityPolicyOverride} would have quietly dropped.
+ *
+ * The write half of the bargain the read half makes, and deliberately the
+ * opposite bargain. {@link resolveAuthorityPolicy} runs on the attach path where
+ * a throw costs a Session its attachment, so it degrades; its doc names the
+ * trade and says where the other side lives — "validation belongs at the write,
+ * which is where someone is present to be told". This is that place.
+ *
+ * So the two differ on purpose and must not be collapsed into one pass:
+ *
+ * - An **unknown key** is an error here and invisible there. A misspelled
+ *   `enforcment` silently means "state nothing" on the read path, which is
+ *   indistinguishable from a project that chose the default — the exact failure
+ *   a person editing policy must never hit in silence.
+ * - A **bad value** is an error here and a dropped field there. `enforcement:
+ *   "enforced"` must not store as "inherit observe" and read back as though the
+ *   project never disagreed.
+ * - An **absent** field is inherit in both. That is the one agreement, and it is
+ *   the whole additive-inheritance design: a stored document records departures,
+ *   never a re-statement of the defaults.
+ *
+ * Errors are path-qualified (`actors.session.peek`) because a document nested
+ * three deep gives "invalid policy" nothing to point at.
+ */
+export function validateAuthorityPolicyOverride(value: unknown): AuthorityPolicyValidation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, errors: ["A policy override must be an object."] };
+  }
+  const row = value as Record<string, unknown>;
+  const errors: string[] = [];
+  const override: AuthorityPolicyOverride = {};
+
+  rejectUnknownKeys(
+    row,
+    ["enforcement", "judgmentMode", "classifierModel", "fallback", "actors"],
+    "",
+    errors,
+  );
+
+  if (row.enforcement !== undefined) {
+    const enforcement = enumOrUndefined(row.enforcement, AUTHORITY_ENFORCEMENTS);
+    if (enforcement === undefined) errors.push(badEnum("enforcement", AUTHORITY_ENFORCEMENTS));
+    else override.enforcement = enforcement;
+  }
+
+  if (row.judgmentMode !== undefined) {
+    const judgmentMode = enumOrUndefined(row.judgmentMode, JUDGMENT_MODES);
+    if (judgmentMode === undefined) errors.push(badEnum("judgmentMode", JUDGMENT_MODES));
+    else override.judgmentMode = judgmentMode;
+  }
+
+  // `null` is a MEANINGFUL value here, not an absence: it is how a project says
+  // "no classifier" against a default that names one. `undefined` is the
+  // absence, and only that inherits — which is why `resolveAuthorityPolicy`
+  // tests this field with `=== undefined` rather than `??`.
+  if (row.classifierModel !== undefined) {
+    if (row.classifierModel === null || typeof row.classifierModel === "string") {
+      override.classifierModel = row.classifierModel;
+    } else {
+      errors.push("classifierModel must be a string or null.");
+    }
+  }
+
+  if (row.fallback !== undefined) {
+    const fallback = validateFallback(row.fallback, errors);
+    if (fallback !== undefined) override.fallback = fallback;
+  }
+
+  if (row.actors !== undefined) {
+    const actors = validateActors(row.actors, errors);
+    if (actors !== undefined) override.actors = actors;
+  }
+
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, override };
+}
+
+/**
+ * Whether a validated override says nothing at all.
+ *
+ * The store's NULL rule, as a question the caller can ask before writing —
+ * `updateProjectSkillModes`'s bargain for this column. A project that reverted
+ * its last departure must be byte-identical in the database to one that never
+ * stated anything, or the two are distinguishable in the column and identical
+ * everywhere above it, which is a difference something will eventually depend on
+ * by accident.
+ */
+export function isEmptyAuthorityPolicyOverride(override: AuthorityPolicyOverride): boolean {
+  return Object.keys(override).length === 0;
+}
+
+function badEnum(path: string, allowed: readonly string[]): string {
+  return `${path} must be one of: ${allowed.join(", ")}.`;
+}
+
+/**
+ * An unrecognised key is refused rather than ignored.
+ *
+ * The single most valuable thing this validator does that the read path cannot.
+ * A typo'd field name is the one mistake that produces a document which stores
+ * cleanly, reads back cleanly, and governs nothing.
+ */
+function rejectUnknownKeys(
+  row: Record<string, unknown>,
+  allowed: readonly string[],
+  prefix: string,
+  errors: string[],
+): void {
+  for (const key of Object.keys(row)) {
+    if (!allowed.includes(key)) errors.push(`Unknown field: ${prefix}${key}.`);
+  }
+}
+
+function validateFallback(
+  value: unknown,
+  errors: string[],
+): Partial<AuthorityFallback> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    errors.push("fallback must be an object.");
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  rejectUnknownKeys(row, ["consecutiveDenials", "sessionDenials"], "fallback.", errors);
+  const fallback: Partial<AuthorityFallback> = {};
+  for (const key of ["consecutiveDenials", "sessionDenials"] as const) {
+    if (row[key] === undefined) continue;
+    // `isThreshold`'s floor of 1, surfaced as a refusal rather than a drop.
+    // `AuthorityEscalation` reads 0 and negatives as "never escalate", so a
+    // stored 0 would disable escalation while looking configured.
+    if (isThreshold(row[key])) fallback[key] = row[key] as number;
+    else errors.push(`fallback.${key} must be a whole number of denials, 1 or greater.`);
+  }
+  return Object.keys(fallback).length === 0 ? undefined : fallback;
+}
+
+function validateActors(
+  value: unknown,
+  errors: string[],
+): Partial<Record<AuthorityActorKind, AuthorityActorPolicyOverride>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    errors.push("actors must be an object.");
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  rejectUnknownKeys(row, AUTHORITY_ACTOR_KINDS, "actors.", errors);
+  const actors: Partial<Record<AuthorityActorKind, AuthorityActorPolicyOverride>> = {};
+  for (const kind of AUTHORITY_ACTOR_KINDS) {
+    if (row[kind] === undefined) continue;
+    const actor = validateActor(row[kind], `actors.${kind}`, errors);
+    if (actor !== undefined) actors[kind] = actor;
+  }
+  return Object.keys(actors).length === 0 ? undefined : actors;
+}
+
+function validateActor(
+  value: unknown,
+  path: string,
+  errors: string[],
+): AuthorityActorPolicyOverride | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    errors.push(`${path} must be an object.`);
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  rejectUnknownKeys(row, ["coordinationVerbs", "peek", "awaitable"], `${path}.`, errors);
+  const actor: AuthorityActorPolicyOverride = {};
+  for (const key of ["coordinationVerbs", "awaitable"] as const) {
+    if (row[key] === undefined) continue;
+    const list = validateStringList(row[key], `${path}.${key}`, errors);
+    if (list !== undefined) actor[key] = list;
+  }
+  if (row.peek !== undefined) {
+    const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
+    if (peek === undefined) errors.push(badEnum(`${path}.peek`, PEEK_DISCLOSURES));
+    else actor.peek = peek;
+  }
+  return Object.keys(actor).length === 0 ? undefined : actor;
+}
+
+/**
+ * A list is refused whole when any entry is not a string, matching
+ * {@link parseStringList}'s all-or-nothing rule for the reason given there — a
+ * list that lost one entry grants something different from what it says.
+ *
+ * {@link AUTHORITY_DEFAULTS_TOKEN} needs no special case: it is a string, and
+ * whether it appears is the project's business. A list that omits it replaces
+ * the defaults, which is a legal thing to mean and is the reason the token is a
+ * token rather than an implicit prefix.
+ */
+function validateStringList(
+  value: unknown,
+  path: string,
+  errors: string[],
+): AuthorityListOverride | undefined {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array of strings.`);
+    return undefined;
+  }
+  if (!value.every((entry) => typeof entry === "string")) {
+    errors.push(`${path} must contain only strings.`);
+    return undefined;
+  }
+  return value as string[];
+}
