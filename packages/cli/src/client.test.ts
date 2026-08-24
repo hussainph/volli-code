@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { makeAgentError } from "@volli/shared";
 import type { AgentRequest } from "@volli/shared";
 
 import { AgentClientError, requestAgent } from "./client";
@@ -120,9 +121,11 @@ describe("requestAgent", () => {
     await withSocketServer(
       (socket) => socket.end(`${JSON.stringify(response)}\n`),
       async (socketPath) => {
-        await expect(requestAgent(socketPath, request, { timeoutMs: 500 })).resolves.toEqual(
-          response,
-        );
+        await expect(requestAgent(socketPath, request, { timeoutMs: 500 })).resolves.toEqual({
+          v: 1,
+          ok: false,
+          error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
+        });
       },
     );
   });

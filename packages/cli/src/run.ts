@@ -2,15 +2,24 @@ import { existsSync } from "node:fs";
 
 import {
   errorMessage,
+  makeAgentError,
   memoizedPathExists,
+  verbEntry,
   requiredSessionEnvTools,
   SESSION_ENV_TOOLS,
   workspaceDependenciesStatus,
 } from "@volli/shared";
-import type { AgentCommand, AgentError, AgentRequest, AgentResponse } from "@volli/shared";
+import type {
+  AgentCommand,
+  AgentError,
+  AgentHelpRuntime,
+  AgentHelpSurface,
+  AgentRequest,
+  AgentResponse,
+} from "@volli/shared";
 
 import { AgentClientError } from "./client";
-import { bareHelpText, renderHelp } from "./help";
+import { bareHelpText, resolveHelp } from "./help";
 import { parseCliArgs } from "./parser";
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 import { materializeFileArguments } from "./runtime";
@@ -23,6 +32,8 @@ export interface RunCliDependencies {
   stderr(text: string): void;
   readText: ReadTextFile;
   request(socketPath: string, request: AgentRequest): Promise<AgentResponse>;
+  /** Bounded optional read used only to enrich otherwise-local help. */
+  helpRequest?(socketPath: string, request: AgentRequest): Promise<AgentResponse>;
   launch(timeoutMs: number): Promise<{ alreadyRunning: boolean }>;
   /** What this process sees of its own environment — `volli doctor`'s evidence. */
   observe(): Promise<Record<string, unknown>>;
@@ -35,8 +46,8 @@ export interface RunCliDependencies {
 }
 
 function clientError(error: unknown): AgentError {
-  if (error instanceof AgentClientError) return { code: error.code, message: error.message };
-  return { code: "MUTATION_FAILED", message: errorMessage(error) };
+  if (error instanceof AgentClientError) return makeAgentError(error.code, error.message);
+  return makeAgentError("MUTATION_FAILED", errorMessage(error));
 }
 
 /**
@@ -123,6 +134,119 @@ function omitFix(args: Readonly<Record<string, unknown>>): Record<string, unknow
   return rest;
 }
 
+function parsedHelpSurface(value: unknown, sessionId: string): AgentHelpSurface | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const surface = value as Record<string, unknown>;
+  const role = surface["role"];
+  const tools = surface["tools"];
+  if (
+    (role !== "project" && role !== "ticket" && role !== "subagent") ||
+    !Array.isArray(tools) ||
+    !tools.every((tool) => typeof tool === "string")
+  ) {
+    return null;
+  }
+  return { sessionId, role, tools };
+}
+
+/**
+ * Optional read for role-aware help and the running app version. Every failure
+ * degrades to static help; it never turns discovery into an app dependency.
+ */
+async function readHelpRuntime(dependencies: RunCliDependencies): Promise<AgentHelpRuntime> {
+  const socketPath = dependencies.env["VOLLI_SOCKET"];
+  const sessionId = dependencies.env["VOLLI_SESSION"];
+  if (socketPath === undefined) {
+    return {
+      appVersion: null,
+      surface: null,
+      surfaceUnknownReason:
+        sessionId === undefined
+          ? null
+          : "VOLLI_SOCKET is absent, so the frozen bundle cannot be read",
+    };
+  }
+  const request: AgentRequest = {
+    v: 1,
+    cmd: "identify",
+    args: {},
+    ctx: {
+      cwd: dependencies.cwd,
+      env: {
+        socket: socketPath,
+        ...(sessionId === undefined ? {} : { session: sessionId }),
+        ...(dependencies.env["VOLLI_TICKET"] === undefined
+          ? {}
+          : { ticket: dependencies.env["VOLLI_TICKET"] }),
+      },
+    },
+  };
+  try {
+    const response = await (dependencies.helpRequest ?? dependencies.request)(socketPath, request);
+    if (!response.ok) {
+      return {
+        appVersion: null,
+        surface: null,
+        surfaceUnknownReason:
+          sessionId === undefined
+            ? null
+            : `${response.error.code}: ${response.error.reason ?? response.error.message}`,
+      };
+    }
+    const data =
+      typeof response.data === "object" && response.data !== null && !Array.isArray(response.data)
+        ? (response.data as Record<string, unknown>)
+        : {};
+    const appVersion = typeof data["appVersion"] === "string" ? data["appVersion"] : null;
+    const surface =
+      sessionId === undefined ? null : parsedHelpSurface(data["agentSurface"], sessionId);
+    return {
+      appVersion,
+      surface,
+      surfaceUnknownReason:
+        sessionId === undefined || surface !== null
+          ? null
+          : "the running app did not return this Session's frozen Agent Tool Surface",
+    };
+  } catch (error) {
+    return {
+      appVersion: null,
+      surface: null,
+      surfaceUnknownReason:
+        sessionId === undefined ? null : `the optional app read failed: ${errorMessage(error)}`,
+    };
+  }
+}
+
+export function teachingErrorForParseResult(
+  parsed: Extract<ReturnType<typeof parseCliArgs>, { ok: false }>,
+  runtime: AgentHelpRuntime | null,
+  lookup: typeof verbEntry = verbEntry,
+): AgentError {
+  if (parsed.code !== "WRONG_DOOR" || parsed.verb === undefined) {
+    return makeAgentError(parsed.code, parsed.message);
+  }
+  const entry = lookup(parsed.verb);
+  if (entry === undefined || !entry.accessModes.includes("tool")) {
+    return makeAgentError(parsed.code, parsed.message);
+  }
+  if (runtime?.surface !== null && runtime?.surface !== undefined) {
+    const carried = runtime.surface.tools.includes(entry.key);
+    const roleReason = carried
+      ? ` This ${runtime.surface.role} Role's frozen bundle carries ${entry.key}.`
+      : ` This ${runtime.surface.role} Role's frozen bundle does not carry ${entry.key}.`;
+    const next = carried
+      ? `Call the named ${entry.key} tool through this Session's Agent Tool Surface.`
+      : `Use a Session whose frozen Role bundle carries ${entry.key}; do not bypass the refusal through process or database workarounds.`;
+    return makeAgentError("WRONG_DOOR", `${parsed.message}${roleReason}`, next);
+  }
+  const unknown = runtime?.surfaceUnknownReason;
+  return makeAgentError(
+    "WRONG_DOOR",
+    `${parsed.message} Role availability is unknown${unknown ? ` because ${unknown}` : " outside a resolved Session"}.`,
+  );
+}
+
 /** Runs one CLI invocation and returns its process exit code. */
 export async function runCli(
   argv: readonly string[],
@@ -136,14 +260,24 @@ export async function runCli(
   }
   const parsed = parseCliArgs(argv);
   if (!parsed.ok) {
-    dependencies.stderr(renderCliError({ code: "USAGE", message: parsed.message }));
-    return 2;
+    const runtime = parsed.code === "WRONG_DOOR" ? await readHelpRuntime(dependencies) : null;
+    const error = teachingErrorForParseResult(parsed, runtime);
+    dependencies.stderr(renderCliError(error, { json: argv.includes("--json") }));
+    return exitCodeForError(error.code);
   }
   if (parsed.invocation.command === "help") {
-    // The parser always supplies `path` as a string array for the help command.
-    const help = renderHelp(parsed.invocation.args["path"] as string[]);
+    const runtime = await readHelpRuntime(dependencies);
+    const resolved = resolveHelp(parsed.invocation.args["path"] as string[], undefined, {
+      runtime,
+    });
+    if (!resolved.ok) {
+      dependencies.stderr(renderCliError(resolved.error, { json: parsed.invocation.json }));
+      return exitCodeForError(resolved.error.code);
+    }
     dependencies.stdout(
-      parsed.invocation.json ? `${JSON.stringify({ help: help.trimEnd() })}\n` : help,
+      parsed.invocation.json
+        ? `${JSON.stringify({ help: resolved.text.trimEnd() })}\n`
+        : resolved.text,
     );
     return 0;
   }
@@ -164,7 +298,7 @@ export async function runCli(
       return 0;
     } catch (error) {
       const agentError = clientError(error);
-      dependencies.stderr(renderCliError(agentError));
+      dependencies.stderr(renderCliError(agentError, { json: parsed.invocation.json }));
       return exitCodeForError(agentError.code);
     }
   }
@@ -177,10 +311,14 @@ export async function runCli(
       return 0;
     }
     dependencies.stderr(
-      renderCliError({
-        code: "APP_UNREACHABLE",
-        message: "VOLLI_SOCKET is not set. Run the CLI installed by Volli or open a Volli session.",
-      }),
+      renderCliError(
+        makeAgentError(
+          "APP_UNREACHABLE",
+          "VOLLI_SOCKET is not set, so this command cannot reach the Volli app.",
+          "Run `volli app launch` from a Volli-installed shell or open a Volli Session, then retry once.",
+        ),
+        { json: parsed.invocation.json },
+      ),
     );
     return 3;
   }
@@ -190,7 +328,7 @@ export async function runCli(
     // intent: what this process can see from inside the environment under test,
     // which main has no way to observe and must not reconstruct.
     const args =
-      command === "doctor"
+      command === "doctor" && invocation.args["dryRun"] !== true
         ? { ...invocation.args, ...(await doctorObservation(dependencies)) }
         : invocation.args;
     const request: AgentRequest = {
@@ -217,7 +355,12 @@ export async function runCli(
     // measures again, now that they exist, and carries no `fix`, so nothing is
     // repaired twice and what gets printed is the world the repair left behind.
     let response = first;
-    if (first.ok && command === "doctor" && invocation.args["fix"] === true) {
+    if (
+      first.ok &&
+      command === "doctor" &&
+      invocation.args["fix"] === true &&
+      invocation.args["dryRun"] !== true
+    ) {
       // The second request carries the calling Session's fresh observation, but
       // the repair result exists only on the first. Preserve both facts: a
       // Session already running still reports its startup PATH, while main's
@@ -235,7 +378,7 @@ export async function runCli(
         : rechecked;
     }
     if (!response.ok) {
-      dependencies.stderr(renderCliError(response.error));
+      dependencies.stderr(renderCliError(response.error, { json: invocation.json }));
       return exitCodeForError(response.error.code);
     }
     dependencies.stdout(
@@ -252,7 +395,7 @@ export async function runCli(
       return 0;
     }
     const agentError = clientError(error);
-    dependencies.stderr(renderCliError(agentError));
+    dependencies.stderr(renderCliError(agentError, { json: parsed.invocation.json }));
     return exitCodeForError(agentError.code);
   }
 }

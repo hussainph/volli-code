@@ -1,4 +1,9 @@
-import { SESSION_ENV_TOOLS, TICKET_STATUS_LABELS } from "@volli/shared";
+import {
+  ERROR_RECOVERY,
+  isAgentMutationPlan,
+  SESSION_ENV_TOOLS,
+  TICKET_STATUS_LABELS,
+} from "@volli/shared";
 import type {
   AgentError,
   AgentErrorCode,
@@ -580,15 +585,67 @@ function renderCliTextSuccess(command: string, data: unknown): string {
 
 export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
   if (options.json) return `${terminalSafeJson(data)}\n`;
+  if (isAgentMutationPlan(data)) {
+    const writes =
+      data.durableWrites.length === 0
+        ? ["  - none"]
+        : data.durableWrites.map((write) => `  - ${write.summary}`);
+    const human =
+      data.humanVisibleEffects.length === 0
+        ? ["  - none"]
+        : data.humanVisibleEffects.map((effect) => `  - ${effect}`);
+    const nonEffects = data.nonEffects.map((effect) => `  - ${effect}`);
+    return terminalSafeText(
+      [
+        "Side-effect preview",
+        `Verb: ${data.verb}`,
+        `Target: ${data.target.label} (${data.target.kind})`,
+        "Durable writes:",
+        ...writes,
+        "Human-visible effects:",
+        ...human,
+        "Explicit non-effects:",
+        ...nonEffects,
+        data.caveat,
+        "",
+      ].join("\n"),
+    );
+  }
   return terminalSafeText(renderCliTextSuccess(command, data));
 }
 
-export function renderCliError(error: AgentError): string {
-  return `error[${error.code}] ${terminalSafeInline(error.message)}\n`;
+export interface RenderErrorOptions {
+  json?: boolean;
+}
+
+/** One-line plain refusal or stable structured JSON on stderr. */
+export function renderCliError(error: AgentError, options: RenderErrorOptions = {}): string {
+  // Accept a response from a pre-VC-91 app without turning a useful refusal
+  // into SOCKET_PROTOCOL. New producers always supply both structured fields.
+  const compatible = error as AgentError & { reason?: string; next?: string | null };
+  const reason = compatible.reason ?? compatible.message;
+  const next = Object.hasOwn(compatible, "next")
+    ? (compatible.next ?? null)
+    : ERROR_RECOVERY[compatible.code].next;
+  if (options.json === true) {
+    return `${terminalSafeJson({ error: { code: error.code, message: compatible.message, reason, next } })}\n`;
+  }
+  const recovery =
+    next === null
+      ? "Next: none is safe from this evidence; inspect current durable state before retrying."
+      : `Next: ${next}`;
+  return `error[${error.code}] ${terminalSafeInline(reason)} ${terminalSafeInline(recovery)}\n`;
 }
 
 export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 {
   if (code === "APP_UNREACHABLE") return 3;
-  if (code === "USAGE" || code === "INVALID_REQUEST" || code === "UNSUPPORTED_COMMAND") return 2;
+  if (
+    code === "USAGE" ||
+    code === "INVALID_REQUEST" ||
+    code === "UNSUPPORTED_COMMAND" ||
+    code === "WRONG_DOOR"
+  ) {
+    return 2;
+  }
   return 1;
 }

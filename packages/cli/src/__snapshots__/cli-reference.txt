@@ -17,36 +17,43 @@ Read
   model list [--all]
 
 Write
-  ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high] [--status <column>] [--label <name>]... [--project <p>] [--harness <h>] [--base <branch>] [--no-worktree]
-  ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>]
-  ticket move <id> --to <column>
-  ticket comment <id> [-m <text>|--file <path>]
+  ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high] [--status <column>] [--label <name>]... [--project <p>] [--harness <h>] [--base <branch>] [--no-worktree] [--dry-run]
+  ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>] [--dry-run]
+  ticket move <id> --to <column> [--dry-run]
+  ticket comment <id> [-m <text>|--file <path>] [--dry-run]
   ticket archive <id>
 
 Session
   session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
   session list [--project <p>] [--ticket <id>]
   session peek <id> [--lines <n>]
-  session done [--reason <text>]
-  session blocked [--reason <text>]
-  session link <id>
-  notify -m <text> [--title <text>]
+  session done [--reason <text>] [--dry-run]
+  session blocked [--reason <text>] [--dry-run]
+  session link <id> [--dry-run]
+  notify -m <text> [--title <text>] [--dry-run]
 
 App
   app launch [--timeout <n>]
   prompt baseline [--ticket <id>] [--project <p>]
-  doctor [--fix]
+  doctor [--fix] [--dry-run]
   help [<command> | <topic>]
 
+Agent Tool Surface
+  (no registry-projected tool-only verbs in this build)
+Session Role availability: not claimed outside a resolved Session.
+
 Context: --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd.
-Add --json to any command for structured output.
+Add --json to any command for structured output. Add --dry-run to a documented write to preview it.
 Ids: display ticket ids (VC-12); short session ids from session list.
-volli help <command> for detail. Topics: exit-codes, addressing, json, orchestration.
+volli help <command> for detail. Topics: concepts, changes, exit-codes, addressing, json, orchestration.
 
 ============================================================================
 volli help identify
 ============================================================================
 identify — Resolve and print the active project, ticket, session, and session environment.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli identify [options]
 
@@ -65,6 +72,9 @@ volli help board
 ============================================================================
 board — Show a project's board grouped by column.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli board [options]
 
 Options:
@@ -76,6 +86,9 @@ Example: volli board --project VC
 volli help ticket list
 ============================================================================
 ticket list — List a project's tickets, optionally filtered.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli ticket list [options]
 
@@ -93,6 +106,9 @@ volli help ticket show
 ============================================================================
 ticket show — Show one ticket with recent events and comments.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli ticket show <id> [options]
 
 Options:
@@ -106,6 +122,9 @@ volli help ticket events
 ============================================================================
 ticket events — Print a ticket's event log.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli ticket events <id> [options]
 
 Options:
@@ -118,6 +137,9 @@ volli help ticket brief
 ============================================================================
 ticket brief — Print the agent kickoff prompt for a ticket.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli ticket brief <id>
 
 Example: volli ticket brief VC-12
@@ -126,6 +148,9 @@ Example: volli ticket brief VC-12
 volli help worktree status
 ============================================================================
 worktree status — Show a ticket's worktree branch, base, and sync state.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli worktree status [<id>]
 
@@ -138,6 +163,9 @@ Notes:
 volli help worktree diff
 ============================================================================
 worktree diff — Summarize a ticket's diff (the PR range by default).
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli worktree diff [<id>] [options]
 
@@ -156,6 +184,9 @@ volli help project list
 ============================================================================
 project list — List all registered projects.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli project list
 
 Example: volli project list
@@ -164,6 +195,9 @@ Example: volli project list
 volli help label list
 ============================================================================
 label list — List a project's labels.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli label list [options]
 
@@ -176,6 +210,9 @@ Example: volli label list --project VC
 volli help model list
 ============================================================================
 model list — List signed-in providers, model ids, and reasoning levels.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli model list [options]
 
@@ -193,6 +230,9 @@ volli help ticket create
 ============================================================================
 ticket create — Create a ticket (defaults to Backlog).
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli ticket create --title <text> [options]
 
 Options:
@@ -206,6 +246,13 @@ Options:
   --harness <h>               Harness id. (valid: claude-code, codex, cursor, opencode, or a registered, trusted harness)
   --base <branch>             Base branch.
   --no-worktree               Skip worktree isolation.
+  --dry-run                   Validate and preview without side effects.
+
+Effects:
+- Durable write: Create one Ticket and its attributed Ticket creation event.
+- Human sees: The new Ticket appears on the board in the selected column.
+- Does not: Creating in Doing does not start a Session or submit a kickoff turn.
+- Does not: Worktree intent is recorded, but this command does not materialize a checkout.
 
 Example: volli ticket create --title "Fix auth" --label bug
 
@@ -217,6 +264,9 @@ Notes:
 volli help ticket update
 ============================================================================
 ticket update — Update a ticket's fields or body.
+
+Door: Agent CLI
+Verb tier: coordination
 
 Usage: volli ticket update <id> [options]
 
@@ -231,6 +281,12 @@ Options:
   --remove-label <name>       Remove label (repeatable).
   --harness <h>               Set the harness. (valid: claude-code, codex, cursor, opencode, or a registered, trusted harness)
   --base <branch>             Set the base branch.
+  --dry-run                   Validate and preview without side effects.
+
+Effects:
+- Durable write: Update the requested Ticket fields and append attributed Ticket events for changes.
+- Human sees: Updated fields appear on the Ticket card and in its Ticket workspace.
+- Does not: The Ticket does not move, no Session starts, and no worktree is materialized.
 
 Example: volli ticket update VC-12 --edit "old" "new"
 
@@ -243,10 +299,19 @@ volli help ticket move
 ============================================================================
 ticket move — Move a ticket to another column.
 
-Usage: volli ticket move <id> --to <column>
+Door: Agent CLI
+Verb tier: coordination
+
+Usage: volli ticket move <id> --to <column> [options]
 
 Options:
   --to <column>  Destination column. (valid: backlog, todo, doing, needs-review|review, done)
+  --dry-run      Validate and preview without side effects.
+
+Effects:
+- Durable write: Update the Ticket's board status and order and append one status-change Ticket event.
+- Human sees: The Ticket moves to the selected board column.
+- Does not: The move does not start a Session, submit a kickoff turn, or create a worktree.
 
 Example: volli ticket move VC-12 --to needs-review
 
@@ -258,11 +323,20 @@ volli help ticket comment
 ============================================================================
 ticket comment — Add a comment to a ticket.
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli ticket comment <id> [options]
 
 Options:
   -m <text>      Comment text.
   --file <path>  Read the comment from a file.
+  --dry-run      Validate and preview without side effects.
+
+Effects:
+- Durable write: Create one attributed Ticket comment and its Ticket activity event.
+- Human sees: The comment appears in the Ticket activity feed.
+- Does not: The Ticket does not move and no Session starts.
 
 Example: volli ticket comment VC-12 -m "Ready for review"
 
@@ -274,7 +348,15 @@ volli help ticket archive
 ============================================================================
 ticket archive — Archive a ticket (its worktree is preserved).
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli ticket archive <id>
+
+Effects:
+- Durable write: Mark the Ticket archived and append its attributed archive event.
+- Human sees: The Ticket leaves the active board and remains available as archived history.
+- Does not: The Ticket worktree is preserved and active Sessions are not ended.
 
 Example: volli ticket archive VC-12
 
@@ -283,6 +365,9 @@ volli help session start
 ============================================================================
 session start — Start an agent chat session on a ticket.
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli session start <id> [options]
 
 Options:
@@ -290,6 +375,12 @@ Options:
   --title <text>            Explicit session title.
   --model <provider/model>  Model override.
   --reasoning <level>       Reasoning level override. (valid: off, minimal, low, medium, high, xhigh, max)
+
+Effects:
+- Durable write: Create one durable Ticket Session, freeze its start inputs, and submit its kickoff turn after a ready attachment.
+- Human sees: The app raises an actionable in-app toast with Open session for an agent-originated start.
+- Does not: The Ticket does not move.
+- Does not: The app does not steal focus or navigate until the person uses Open session.
 
 Example: volli session start VC-12 -m "Fix the flaky auth test"
 
@@ -302,6 +393,9 @@ Notes:
 volli help session list
 ============================================================================
 session list — List a project's active terminal and chat sessions.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli session list [options]
 
@@ -318,6 +412,9 @@ Notes:
 volli help session peek
 ============================================================================
 session peek — Peek at what a session is doing: terminal output, or a chat's tail.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli session peek <id> [options]
 
@@ -337,10 +434,19 @@ volli help session done
 ============================================================================
 session done — Record that this session's work is finished.
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli session done [options]
 
 Options:
   --reason <text>  Human-readable reason.
+  --dry-run        Validate and preview without side effects.
+
+Effects:
+- Durable write: Append a completed done signal command and receipt to the current Session ledger.
+- Human sees: The done signal and optional reason appear in the Session's durable history.
+- Does not: No Ticket moves, the Session identity remains openable, and its worktree is not removed.
 
 Example: volli session done --reason "Tests pass"
 
@@ -353,10 +459,19 @@ volli help session blocked
 ============================================================================
 session blocked — Signal the current session is blocked and needs a person.
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli session blocked [options]
 
 Options:
   --reason <text>  Human-readable reason.
+  --dry-run        Validate and preview without side effects.
+
+Effects:
+- Durable write: Append a completed blocked signal command and receipt to the current Session ledger.
+- Human sees: The Session raises attention in the app and shows the optional reason.
+- Does not: No Ticket moves, and the Session is not archived or deleted.
 
 Example: volli session blocked --reason "Needs credentials"
 
@@ -369,7 +484,18 @@ volli help session link
 ============================================================================
 session link — Record the harness's own session id on the current Volli session.
 
-Usage: volli session link <id>
+Door: Agent CLI
+Verb tier: coordination
+
+Usage: volli session link <id> [options]
+
+Options:
+  --dry-run  Validate and preview without side effects.
+
+Effects:
+- Durable write: Record the harness-native resume identity on the current terminal attachment.
+- Human sees: Reopening or resuming the Session uses the recorded harness conversation.
+- Does not: No model turn starts, no Ticket moves, and no new Session is created.
 
 Example: volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c
 
@@ -382,11 +508,20 @@ volli help notify
 ============================================================================
 notify — Send a native notification to the user.
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli notify -m <text> [options]
 
 Options:
   -m <text>       Notification body.
   --title <text>  Notification title.
+  --dry-run       Validate and preview without side effects.
+
+Effects:
+- Durable writes: none.
+- Human sees: Electron raises a native macOS notification with the supplied title and body.
+- Does not: It is not an in-app Sonner toast and creates no Ticket row, Ticket event, or Session event.
 
 Example: volli notify -m "Needs input"
 
@@ -395,10 +530,18 @@ volli help app launch
 ============================================================================
 app launch — Launch the Volli app if it isn't already running.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli app launch [options]
 
 Options:
   --timeout <n>  Seconds to wait for readiness.
+
+Effects:
+- Durable writes: none.
+- Human sees: The Volli desktop app opens or remains running.
+- Does not: No Ticket or Session is created, moved, or signalled.
 
 Example: volli app launch
 
@@ -409,6 +552,9 @@ Notes:
 volli help prompt baseline
 ============================================================================
 prompt baseline — Measure the prompt baseline a fresh chat Session starts with, per section.
+
+Door: Agent CLI
+Verb tier: read
 
 Usage: volli prompt baseline [options]
 
@@ -429,10 +575,19 @@ volli help doctor
 ============================================================================
 doctor — Audit the harness integration and report what it is actually doing.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli doctor [options]
 
 Options:
-  --fix  Regenerate, re-run Session PATH adoption, then re-check.
+  --fix      Regenerate, re-run Session PATH adoption, then re-check.
+  --dry-run  Validate and preview --fix without side effects.
+
+Effects (--fix):
+- Durable write: Regenerate Volli-managed CLI links, wrappers, harness configuration, and shell integration, then refresh Session PATH adoption for future Sessions.
+- Human sees: The CLI prints the repair result and a fresh integration check.
+- Does not: The running Session keeps its startup environment; no Ticket, Session, model turn, or notification is created.
 
 Example: volli doctor --fix
 
@@ -440,88 +595,161 @@ Notes:
 - Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.
 - Run it inside a Volli terminal — several checks describe the shell it runs in.
 - --fix regenerates the wrappers, harness configs and shell integration, then re-runs both Session PATH adoption passes. It names the outcome and added directories for new Sessions; a Session already running keeps its startup environment.
+- --dry-run is valid only with --fix and previews the repair without inspecting or touching managed files.
 
 ============================================================================
 volli help help
 ============================================================================
 help — Show this reference, a command's help, or a topic.
 
+Door: Agent CLI
+Verb tier: read
+
 Usage: volli help [<command> | <topic>]
 
 Example: volli help ticket create
 
 Notes:
-- Topics: exit-codes, addressing, json, orchestration.
+- Topics: concepts, changes, exit-codes, addressing, json, orchestration.
 
 ============================================================================
 volli help ticket
 ============================================================================
 ticket subcommands:
-  ticket list     List a project's tickets, optionally filtered.
-  ticket show     Show one ticket with recent events and comments.
-  ticket events   Print a ticket's event log.
-  ticket brief    Print the agent kickoff prompt for a ticket.
-  ticket create   Create a ticket (defaults to Backlog).
-  ticket update   Update a ticket's fields or body.
-  ticket move     Move a ticket to another column.
-  ticket comment  Add a comment to a ticket.
-  ticket archive  Archive a ticket (its worktree is preserved).
+  ticket list     List a project's tickets, optionally filtered. [Agent CLI]
+  ticket show     Show one ticket with recent events and comments. [Agent CLI]
+  ticket events   Print a ticket's event log. [Agent CLI]
+  ticket brief    Print the agent kickoff prompt for a ticket. [Agent CLI]
+  ticket create   Create a ticket (defaults to Backlog). [Agent CLI]
+  ticket update   Update a ticket's fields or body. [Agent CLI]
+  ticket move     Move a ticket to another column. [Agent CLI]
+  ticket comment  Add a comment to a ticket. [Agent CLI]
+  ticket archive  Archive a ticket (its worktree is preserved). [Agent CLI]
 Run volli help ticket <subcommand> for detail.
 
 ============================================================================
 volli help worktree
 ============================================================================
 worktree subcommands:
-  worktree status  Show a ticket's worktree branch, base, and sync state.
-  worktree diff    Summarize a ticket's diff (the PR range by default).
+  worktree status  Show a ticket's worktree branch, base, and sync state. [Agent CLI]
+  worktree diff    Summarize a ticket's diff (the PR range by default). [Agent CLI]
 Run volli help worktree <subcommand> for detail.
 
 ============================================================================
 volli help project
 ============================================================================
 project subcommands:
-  project list  List all registered projects.
+  project list  List all registered projects. [Agent CLI]
 Run volli help project <subcommand> for detail.
 
 ============================================================================
 volli help label
 ============================================================================
 label subcommands:
-  label list  List a project's labels.
+  label list  List a project's labels. [Agent CLI]
 Run volli help label <subcommand> for detail.
 
 ============================================================================
 volli help model
 ============================================================================
 model subcommands:
-  model list  List signed-in providers, model ids, and reasoning levels.
+  model list  List signed-in providers, model ids, and reasoning levels. [Agent CLI]
 Run volli help model <subcommand> for detail.
 
 ============================================================================
 volli help session
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket.
-  session list     List a project's active terminal and chat sessions.
-  session peek     Peek at what a session is doing: terminal output, or a chat's tail.
-  session done     Record that this session's work is finished.
-  session blocked  Signal the current session is blocked and needs a person.
-  session link     Record the harness's own session id on the current Volli session.
+  session start    Start an agent chat session on a ticket. [Agent CLI]
+  session list     List a project's active terminal and chat sessions. [Agent CLI]
+  session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
+  session done     Record that this session's work is finished. [Agent CLI]
+  session blocked  Signal the current session is blocked and needs a person. [Agent CLI]
+  session link     Record the harness's own session id on the current Volli session. [Agent CLI]
 Run volli help session <subcommand> for detail.
 
 ============================================================================
 volli help app
 ============================================================================
 app subcommands:
-  app launch  Launch the Volli app if it isn't already running.
+  app launch  Launch the Volli app if it isn't already running. [Agent CLI]
 Run volli help app <subcommand> for detail.
 
 ============================================================================
 volli help prompt
 ============================================================================
 prompt subcommands:
-  prompt baseline  Measure the prompt baseline a fresh chat Session starts with, per section.
+  prompt baseline  Measure the prompt baseline a fresh chat Session starts with, per section. [Agent CLI]
 Run volli help prompt <subcommand> for detail.
+
+============================================================================
+volli help concepts
+============================================================================
+Volli operating model
+
+Session identity and attachments
+A Session is the durable identity and locally ordered history of one agentic conversation. Volli creates the Session before an executor attaches. The Session outlives a terminal pane, a structured-chat runtime, a model turn, and a restarted attachment. Reconnect and recovery can replace the live attachment without creating a different Session.
+Structured chat and terminal are venues or attachments, not separate Session types. A Session Role states the product scope: project, ticket, or subagent. Role controls context, the frozen Agent Tool Surface, and future authority policy; it is not the name of the UI or process attached to the Session.
+
+Chats, kickoff doors, and first turns
+A plain chat created in the app is durable immediately and attaches in the background. It sends no model turn until a person submits the first message. A kickoff door creates or resolves the Session and submits an opening turn immediately. The opening turn is the difference; neither door creates a second kind of Session.
+The app action Create & start is a composed human action. It creates a Ticket in Doing and starts a Session with a kickoff turn. The individual verbs stay independent so automation cannot acquire hidden consequences.
+- ticket.move changes the board and starts no Session.
+- ticket.create --status doing creates a Ticket in Doing and starts no Session.
+- session.start starts a Session and does not move or create a Ticket.
+- session.done and session.blocked record Session signals and do not move the board.
+
+Tickets, worktrees, and Project Sessions
+A worktree-scoped Ticket records the intent to use isolation before a checkout exists. Volli materializes or reuses the Ticket worktree when work starts. Ending a Session does not remove the checkout. Archiving a Ticket preserves its worktree; later retention or an explicit app action can remove disposable checkout state while the retained branch remains the source for recreation.
+A Project Session runs on the Main checkout, the project folder the person added to Volli. It has no Ticket worktree and no board effect. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.
+
+Board state, Session signals, and human effects
+Ticket state and Session state are separate ledgers. A Ticket comment appears in the Ticket activity feed. A Ticket move changes the board. A Session signal appears on that Session and can raise attention. Each write documents where a person sees the result and the important actions it does not imply.
+notify calls Electron's native Notification API. It raises a native macOS notification, not an in-app Sonner toast. A Session start received through the agent path raises an actionable in-app toast with Open session. It does not steal focus or navigate until the person uses that action.
+
+Actors and the current socket boundary
+An Actor is user, session, or automation. The app derives attribution from the door a mutation arrived through; callers do not declare themselves to be a user. Ticket events keep that attribution and may cite the originating Session.
+In this compiled baseline, the local socket attributes VOLLI_SESSION but does not authenticate it. No environment variable is treated as the user. Any process running as the signed-in macOS user can reach the socket, which is why operations that cannot tolerate that ambient caller belong on the Agent Tool Surface instead. A future authenticated actor seam can strengthen admission without changing these Actor names.
+
+The three product surfaces
+The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session's Role bundle. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role was or was not handed that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.
+Every agent-facing operation has one Verb Registry key everywhere. For example, session.start renders as volli session start in shell syntax and remains session.start as a named tool. Help names the right door. A wrong-door refusal redirects to that door; a no-door refusal means this build declares no such verb.
+
+Derived Verb Tiers
+A Verb Tier is derived from a registry entry's access modes and actor requirement. It is not a risk label stored beside the verb. Read tier means Agent CLI access for any local caller. Coordination tier means an Agent CLI write attributed to a Session actor. Control tier means a Role-gated named tool that is absent from the agent socket. A verb on no agent surface has no tier.
+Inside a resolved Session, help reports the Role and the exact frozen Agent Tool Surface the app recorded. If the app is stopped, the Session is stale, or this build cannot supply that read, static help still works and says availability is unknown. It never rebuilds bundle membership from current Settings or prompt prose.
+
+Attended runtime
+Volli's structured Agent Runtime is attended. The desktop app owns its local model loop, durable Session writes, notifications, and actionable UI. Closing or failing to start that runtime does not create a headless fallback. A command that requires it returns APP_UNREACHABLE; the safe recovery is to launch the app and retry once.
+Web Access is optional and may be absent from a Session's frozen tools. The managed Volli skill pack carries this operating model locally, so an agent never needs web access to discover how Volli works. The bundled volli help output remains the live authority if a managed file was user-edited and became stale.
+
+============================================================================
+volli help changes
+============================================================================
+Volli Agent CLI capability changes
+
+Bundle identity
+  CLI package: @volli/cli 0.0.1
+  Release promotion marker: 0.1.0
+  Source revision: 8e8a17c0+VC-91
+  Build id: reference-fixture
+  Running app: not reached (static help remains available)
+  Capability baseline: 8e8a17c0
+
+VC-91 (after 8e8a17c0)
+Added
+- volli help concepts and volli help changes as app-independent local topics.
+- Structured human-visible effects and explicit non-effects in command detail.
+- --dry-run previews for ticket create/update/move/comment, Session done/blocked/link, notify, and doctor --fix. The shared dryRun tool contract is ready for session.start when VC-162 supplies its tool seam.
+- Structured JSON error reason and next fields while stable error codes remain unchanged.
+Changed
+- Help discovers all declared Verb Registry doors and can report a resolved Session's frozen Agent Tool Surface.
+- Managed Volli skill files and the docs site project the same concepts, effects, recovery, and capability data.
+Fixed
+- Unknown help paths now fail with valid commands and topics instead of silently returning bare help.
+- A declared tool-only verb reached through the shell is a wrong-door refusal, distinct from an undeclared no-door name.
+Removed
+- None in this record.
 
 ============================================================================
 volli help exit-codes
@@ -530,198 +758,136 @@ Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable).
 
 Error codes:
   USAGE                2 usage
+    Why: The typed arguments do not match this verb's declared syntax.
+    Next: Run `volli help <command>` and retry with the documented arguments.
   INVALID_REQUEST      2 usage
+    Why: The request reached its verb but one value or value combination is invalid.
+    Next: Read `volli help <command>`, correct the named value, and retry.
   UNSUPPORTED_COMMAND  2 usage
+    Why: This build declares no verb matching the typed name.
+    Next: Run `volli help` and choose one of the commands or topics it lists.
+  WRONG_DOOR           2 usage
+    Why: The verb exists, but the shell is not the surface that executes it.
+    Next: Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.
   APP_UNREACHABLE      3 app unreachable (retryable)
+    Why: The local desktop host or one of its required runtimes could not answer.
+    Next: Run `volli app launch`, wait for readiness, then retry the same command once.
   DB_UNAVAILABLE       1 failure
+    Why: The app could not open the durable local database.
+    Next: Open the Volli app and inspect its database error before retrying the command.
   PROJECT_REQUIRED     1 failure
+    Why: The verb needs a Project, but the context ladder resolved none.
+    Next: Pass `--project <name|prefix|path>` or run from a registered Project directory.
   PROJECT_NOT_FOUND    1 failure
+    Why: The selected Project no longer exists or does not match a registered Project.
+    Next: Run `volli project list`, then retry with a printed Project name, prefix, or path.
   AMBIGUOUS_PROJECT    1 failure
+    Why: More than one registered Project matches the selector.
+    Next: Retry with the exact Project path printed in the refusal.
   TICKET_NOT_FOUND     1 failure
+    Why: No live Ticket matches the supplied Display ID in the resolved Project context.
+    Next: Run `volli ticket list` in the intended Project and retry with a printed Display ID.
   AMBIGUOUS_TICKET     1 failure
+    Why: The Display ID matches Tickets in more than one Project.
+    Next: Resolve the intended Project explicitly, then retry the Ticket verb.
   SESSION_NOT_FOUND    1 failure
+    Why: The supplied or attributed Session identity is stale, missing, or unresolved.
+    Next: Run `volli session list` and use a current printed handle; for current-Session verbs, start from a live Volli Session.
   AMBIGUOUS_CONTEXT    1 failure
+    Why: The context ladder found more than one equally valid target.
+    Next: Pass the exact Project or Ticket selector requested by the refusal.
   CONTEXT_REQUIRED     1 failure
+    Why: The verb needs Project, Ticket, or Session context that no safe fallback can infer.
+    Next: Run `volli identify`, then supply the missing explicit selector or use a live Volli Session.
   CONTEXT_MISMATCH     1 failure
+    Why: Explicit context conflicts with the Session or directory context Volli resolved.
+    Next: Run `volli identify` and retry from the intended Session or with matching explicit context.
   BODY_MATCH_FAILED    1 failure
+    Why: An exact Ticket Body edit found zero or multiple matches, so applying it could clobber newer prose.
+    Next: Read the fresh Ticket Body, choose text that appears exactly once, and retry the edit.
   INVALID_COLUMN       1 failure
+    Why: The supplied board column is outside the accepted column vocabulary.
+    Next: Use a column named in the refusal or in `volli help ticket move`.
   INVALID_PRIORITY     1 failure
+    Why: The supplied priority is outside the accepted priority vocabulary.
+    Next: Use `low`, `medium`, or `high` and retry.
   ARCHIVED_TICKET      1 failure
+    Why: The target Ticket is archived, so ordinary Ticket mutations are closed.
+    Next: Open the Ticket in the app and restore it before retrying, or choose a live Ticket.
   SESSION_ENDED        1 failure
+    Why: The target Session attachment has ended and cannot accept this live mutation.
+    Next: Open or start a live Session, then repeat the action against that Session.
   MODEL_REQUIRED       1 failure
+    Why: No runnable default model or explicit model was available for Session start.
+    Next: Configure a default in Model Access or pass a model printed by `volli model list`.
   MODEL_UNAVAILABLE    1 failure
+    Why: The requested model, provider sign-in, or reasoning level is not runnable now.
+    Next: Run `volli model list`, then retry with an available printed model and reasoning level.
   PREFIX_CONFLICT      1 failure
+    Why: A Project ticket prefix conflicts with another registered Project.
+    Next: Resolve the duplicate prefix in Project Settings before retrying.
   FILE_READ_FAILED     1 failure
+    Why: A CLI file argument could not be read safely before the request was sent.
+    Next: Check the named path and permissions, or pass the content inline, then retry.
   MUTATION_FAILED      1 failure
+    Why: The operation failed without enough durable outcome evidence for an automatic retry.
+    Next: No safe retry is known; inspect current durable state first.
   SOCKET_PROTOCOL      1 failure
+    Why: The CLI connected to the app but the versioned request or response exchange was invalid.
+    Next: Run `volli help changes` and confirm the CLI bundle and running app come from a compatible build before retrying.
   TIMEOUT              1 failure
+    Why: The app accepted the connection but did not produce an outcome within the command's bound.
+    Next: Inspect the current Ticket or Session state before deciding whether one retry is safe.
 
 ============================================================================
 volli help addressing
 ============================================================================
-Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error.
+Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error. VOLLI_SESSION attributes the current socket caller in this build; it does not authenticate that process.
 
 ============================================================================
 volli help json
 ============================================================================
-Pass --json to any command for stable structured JSON output.
+Pass --json to any command for stable structured JSON output. Failures keep a stable code and add reason plus next; next is null when Volli cannot name a safe action. Dry-run plans use one versioned object shape on CLI and tool doors.
 
 ============================================================================
 volli help orchestration
 ============================================================================
-Read before writing; work your own board unless instructed; do not chain-spawn agents.
+Read before writing; work your own board unless instructed; use comments and deliberate moves for coordination; do not drive another Session's terminal or chain-spawn work.
 
 ============================================================================
 volli help session harness
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket.
-  session list     List a project's active terminal and chat sessions.
-  session peek     Peek at what a session is doing: terminal output, or a chat's tail.
-  session done     Record that this session's work is finished.
-  session blocked  Signal the current session is blocked and needs a person.
-  session link     Record the harness's own session id on the current Volli session.
+  session start    Start an agent chat session on a ticket. [Agent CLI]
+  session list     List a project's active terminal and chat sessions. [Agent CLI]
+  session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
+  session done     Record that this session's work is finished. [Agent CLI]
+  session blocked  Signal the current session is blocked and needs a person. [Agent CLI]
+  session link     Record the harness's own session id on the current Volli session. [Agent CLI]
 Run volli help session <subcommand> for detail.
 
 ============================================================================
 volli help hook
 ============================================================================
-volli — self-documenting planning CLI for coding agents.
-
-Read
-  identify [--project <p>]
-  board [--project <p>]
-  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>]
-  ticket show <id> [--events <n>] [--comments <n>]
-  ticket events <id> [--limit <n>]
-  ticket brief <id>
-  worktree status [<id>]
-  worktree diff [<id>] [--working-tree]
-  project list
-  label list [--project <p>]
-  model list [--all]
-
-Write
-  ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high] [--status <column>] [--label <name>]... [--project <p>] [--harness <h>] [--base <branch>] [--no-worktree]
-  ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>]
-  ticket move <id> --to <column>
-  ticket comment <id> [-m <text>|--file <path>]
-  ticket archive <id>
-
-Session
-  session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
-  session list [--project <p>] [--ticket <id>]
-  session peek <id> [--lines <n>]
-  session done [--reason <text>]
-  session blocked [--reason <text>]
-  session link <id>
-  notify -m <text> [--title <text>]
-
-App
-  app launch [--timeout <n>]
-  prompt baseline [--ticket <id>] [--project <p>]
-  doctor [--fix]
-  help [<command> | <topic>]
-
-Context: --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd.
-Add --json to any command for structured output.
-Ids: display ticket ids (VC-12); short session ids from session list.
-volli help <command> for detail. Topics: exit-codes, addressing, json, orchestration.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-volli — self-documenting planning CLI for coding agents.
-
-Read
-  identify [--project <p>]
-  board [--project <p>]
-  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>]
-  ticket show <id> [--events <n>] [--comments <n>]
-  ticket events <id> [--limit <n>]
-  ticket brief <id>
-  worktree status [<id>]
-  worktree diff [<id>] [--working-tree]
-  project list
-  label list [--project <p>]
-  model list [--all]
-
-Write
-  ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high] [--status <column>] [--label <name>]... [--project <p>] [--harness <h>] [--base <branch>] [--no-worktree]
-  ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>]
-  ticket move <id> --to <column>
-  ticket comment <id> [-m <text>|--file <path>]
-  ticket archive <id>
-
-Session
-  session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
-  session list [--project <p>] [--ticket <id>]
-  session peek <id> [--lines <n>]
-  session done [--reason <text>]
-  session blocked [--reason <text>]
-  session link <id>
-  notify -m <text> [--title <text>]
-
-App
-  app launch [--timeout <n>]
-  prompt baseline [--ticket <id>] [--project <p>]
-  doctor [--fix]
-  help [<command> | <topic>]
-
-Context: --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd.
-Add --json to any command for structured output.
-Ids: display ticket ids (VC-12); short session ids from session list.
-volli help <command> for detail. Topics: exit-codes, addressing, json, orchestration.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-volli — self-documenting planning CLI for coding agents.
-
-Read
-  identify [--project <p>]
-  board [--project <p>]
-  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>]
-  ticket show <id> [--events <n>] [--comments <n>]
-  ticket events <id> [--limit <n>]
-  ticket brief <id>
-  worktree status [<id>]
-  worktree diff [<id>] [--working-tree]
-  project list
-  label list [--project <p>]
-  model list [--all]
-
-Write
-  ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high] [--status <column>] [--label <name>]... [--project <p>] [--harness <h>] [--base <branch>] [--no-worktree]
-  ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>]
-  ticket move <id> --to <column>
-  ticket comment <id> [-m <text>|--file <path>]
-  ticket archive <id>
-
-Session
-  session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
-  session list [--project <p>] [--ticket <id>]
-  session peek <id> [--lines <n>]
-  session done [--reason <text>]
-  session blocked [--reason <text>]
-  session link <id>
-  notify -m <text> [--title <text>]
-
-App
-  app launch [--timeout <n>]
-  prompt baseline [--ticket <id>] [--project <p>]
-  doctor [--fix]
-  help [<command> | <topic>]
-
-Context: --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd.
-Add --json to any command for structured output.
-Ids: display ticket ids (VC-12); short session ids from session list.
-volli help <command> for detail. Topics: exit-codes, addressing, json, orchestration.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
 ============================================================================
 ticket create — Create a ticket (defaults to Backlog).
+
+Door: Agent CLI
+Verb tier: coordination
 
 Usage: volli ticket create --title <text> [options]
 
@@ -736,6 +902,13 @@ Options:
   --harness <h>               Harness id. (valid: claude-code, codex, cursor, opencode, or a registered, trusted harness)
   --base <branch>             Base branch.
   --no-worktree               Skip worktree isolation.
+  --dry-run                   Validate and preview without side effects.
+
+Effects:
+- Durable write: Create one Ticket and its attributed Ticket creation event.
+- Human sees: The new Ticket appears on the board in the selected column.
+- Does not: Creating in Doing does not start a Session or submit a kickoff turn.
+- Does not: Worktree intent is recorded, but this command does not materialize a checkout.
 
 Example: volli ticket create --title "Fix auth" --label bug
 
@@ -748,6 +921,9 @@ volli help ticket create
 ============================================================================
 ticket create — Create a ticket (defaults to Backlog).
 
+Door: Agent CLI
+Verb tier: coordination
+
 Usage: volli ticket create --title <text> [options]
 
 Options:
@@ -761,6 +937,13 @@ Options:
   --harness <h>               Harness id. (valid: claude-code, codex, cursor, opencode, or a registered, trusted harness)
   --base <branch>             Base branch.
   --no-worktree               Skip worktree isolation.
+  --dry-run                   Validate and preview without side effects.
+
+Effects:
+- Durable write: Create one Ticket and its attributed Ticket creation event.
+- Human sees: The new Ticket appears on the board in the selected column.
+- Does not: Creating in Doing does not start a Session or submit a kickoff turn.
+- Does not: Worktree intent is recorded, but this command does not materialize a checkout.
 
 Example: volli ticket create --title "Fix auth" --label bug
 
@@ -771,7 +954,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-USAGE Expected a Volli command (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket archive, ticket brief, worktree status, worktree diff, project list, label list, model list, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -831,22 +1014,22 @@ USAGE Unknown option --not-an-option (options: --all) — see volli help model l
 ============================================================================
 volli ticket create --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --title, --body, --body-file, --priority, --status, --label, --project, --harness, --base, --no-worktree) — see volli help ticket create
+USAGE Unknown option --not-an-option (options: --title, --body, --body-file, --priority, --status, --label, --project, --harness, --base, --no-worktree, --dry-run) — see volli help ticket create
 
 ============================================================================
 volli ticket update ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --title, --body, --body-file, --append, --edit, --priority, --add-label, --remove-label, --harness, --base) — see volli help ticket update
+USAGE Unknown option --not-an-option (options: --title, --body, --body-file, --append, --edit, --priority, --add-label, --remove-label, --harness, --base, --dry-run) — see volli help ticket update
 
 ============================================================================
 volli ticket move ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --to) — see volli help ticket move
+USAGE Unknown option --not-an-option (options: --to, --dry-run) — see volli help ticket move
 
 ============================================================================
 volli ticket comment ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: -m, --message, --file) — see volli help ticket comment
+USAGE Unknown option --not-an-option (options: -m, --message, --file, --dry-run) — see volli help ticket comment
 
 ============================================================================
 volli ticket archive ORACLE-1 --not-an-option
@@ -871,22 +1054,22 @@ USAGE Unknown option --not-an-option (options: --lines) — see volli help sessi
 ============================================================================
 volli session done --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --reason) — see volli help session done
+USAGE Unknown option --not-an-option (options: --reason, --dry-run) — see volli help session done
 
 ============================================================================
 volli session blocked --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --reason) — see volli help session blocked
+USAGE Unknown option --not-an-option (options: --reason, --dry-run) — see volli help session blocked
 
 ============================================================================
 volli session link ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option — see volli help session link
+USAGE Unknown option --not-an-option (options: --dry-run) — see volli help session link
 
 ============================================================================
 volli notify --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: -m, --message, --title) — see volli help notify
+USAGE Unknown option --not-an-option (options: -m, --message, --title, --dry-run) — see volli help notify
 
 ============================================================================
 volli app launch --not-an-option
@@ -901,7 +1084,7 @@ USAGE Unknown option --not-an-option (options: --ticket, --project) — see voll
 ============================================================================
 volli doctor --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --fix) — see volli help doctor
+USAGE Unknown option --not-an-option (options: --fix, --dry-run) — see volli help doctor
 
 ============================================================================
 volli help --not-an-option
