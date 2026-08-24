@@ -62,6 +62,23 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "commented", commentId: "c1" })).toBeNull();
   });
 
+  it("reads a verdict back with its reason attached (VC-85)", () => {
+    // The detail rides the same line as the verdict. Splitting them is how the
+    // `VERDICT:` comment convention read — a stamp somewhere, the reason
+    // somewhere else — and the typed channel exists to keep them together.
+    expect(
+      describeEvent({
+        kind: "signaled",
+        signalKind: "review",
+        verdict: "fail",
+        detail: "Missing tests",
+      }),
+    ).toBe("signalled review: fail — Missing tests");
+    expect(
+      describeEvent({ kind: "signaled", signalKind: "merge", verdict: "pass", detail: null }),
+    ).toBe("signalled merge: pass");
+  });
+
   it("describes attachment add/remove events", () => {
     expect(describeEvent({ kind: "attachment_added", attachmentId: "a1", label: "spec.pdf" })).toBe(
       'attached "spec.pdf"',
@@ -202,6 +219,7 @@ describe("EVENT_KIND_PRIORITY", () => {
     const expected: TicketEventKind[] = [
       "worktree_failed",
       "status_changed",
+      "signaled",
       "pr_merged",
       "pr_opened",
       "created",
@@ -220,6 +238,16 @@ describe("EVENT_KIND_PRIORITY", () => {
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);
     expect(EVENT_KIND_PRIORITY).not.toContain("commented");
+  });
+
+  it("fronts a bunch with the verdict rather than the bookkeeping around it", () => {
+    const edited = event({ kind: "body_edited" }, 10);
+    const signalled = event(
+      { kind: "signaled", signalKind: "review", verdict: "fail", detail: null },
+      20,
+    );
+    const retagged = event({ kind: "labels_changed", added: ["api"], removed: [] }, 30);
+    expect(pickBunchLabel([edited, signalled, retagged]).id).toBe(signalled.id);
   });
 
   it("outranks a routine edit with a merged PR", () => {

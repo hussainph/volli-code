@@ -241,6 +241,16 @@ describe("renderCliSuccess", () => {
     expect(renderCliSuccess("ticket.comment", { comment: { ticket: "VC-1" } }, options)).toBe(
       "VC-1  comment added\n",
     );
+    // The receipt echoes the verdict rather than saying "signal added": what
+    // was recorded is the whole acknowledgement, and reading it back is how a
+    // mistyped --kind is caught one line later (VC-85).
+    expect(
+      renderCliSuccess(
+        "ticket.signal",
+        { signal: { ticket: "VC-1", kind: "review", verdict: "pass", detail: null } },
+        options,
+      ),
+    ).toBe("VC-1  review  pass\n");
     expect(renderCliSuccess("label.list", { labels: [{ name: "bug", tickets: 2 }] }, options)).toBe(
       "bug  2 tickets\n",
     );
@@ -376,6 +386,21 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("VC-2  Custom  Plain\n");
+    // Signals lead the three logs, because they are the only one that says
+    // where the ticket STANDS (VC-85) — and they print even when both counts
+    // are zero, which is what a cheap poll asks for.
+    expect(
+      renderCliSuccess(
+        "ticket.show",
+        {
+          ticket: { id: "VC-2", status: "doing", title: "Plain" },
+          signals: [{ kind: "review", verdict: "pass", detail: null }],
+          events: [],
+          comments: [],
+        },
+        options,
+      ),
+    ).toBe('VC-2  Doing  Plain\nsignal  {"kind":"review","verdict":"pass","detail":null}\n');
     expect(
       renderCliSuccess(
         "ticket.list",
@@ -539,6 +564,8 @@ describe("renderCliSuccess", () => {
       ["ticket.show", { ticket: {} }],
       ["ticket.archive", { ticket: { id: 1 } }],
       ["ticket.comment", { comment: { ticket: 1 } }],
+      ["ticket.signal", { signal: { ticket: 1 } }],
+      ["ticket.signal", {}],
       ["project.list", {}],
       ["label.list", {}],
       ["model.list", {}],

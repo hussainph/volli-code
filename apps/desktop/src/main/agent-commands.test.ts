@@ -32,6 +32,7 @@ import { listHarnessChannels } from "./db/harness-channel-repo";
 import { listComments } from "./db/comments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
+import { listLatestSignals } from "./db/signals-repo";
 import {
   endSession,
   getSession,
@@ -424,6 +425,185 @@ describe("agent command service", () => {
       ok: true,
       data: { project: { prefix: "VC" }, columns: { doing: [{ id: "VC-1" }] } },
     });
+  });
+
+  it("records a typed verdict, keeps the latest per kind, and never moves the board", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let timestamp = 100;
+    const onMutation = vi.fn();
+    const notify = vi.fn();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => timestamp++,
+      newId: () => "ticket-one",
+      onMutation,
+      notify,
+    });
+    const request = (cmd: AgentRequest["cmd"], args: Record<string, unknown>, session?: string) =>
+      service.execute({
+        v: 1,
+        cmd,
+        args,
+        ctx: { cwd: "/repo/volli", env: session ? { session, ticket: "VC-1" } : {} },
+      });
+
+    await request("ticket.create", { title: "Ship CLI" });
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+
+    const failed = await request(
+      "ticket.signal",
+      { id: "VC-1", kind: "review", verdict: "fail", detail: "Missing tests" },
+      sessionId,
+    );
+    const passed = await request(
+      "ticket.signal",
+      { id: "VC-1", kind: "review", verdict: "pass" },
+      sessionId,
+    );
+    await request("ticket.signal", { id: "VC-1", kind: "budget", verdict: "blocked" }, sessionId);
+    const shown = await request("ticket.show", { id: "VC-1", events: 0, comments: 0 });
+
+    expect(failed).toMatchObject({
+      ok: true,
+      data: {
+        signal: {
+          ticket: "VC-1",
+          kind: "review",
+          verdict: "fail",
+          detail: "Missing tests",
+          session: "abcdef12",
+        },
+      },
+    });
+    // No detail is null rather than "", so absence has one spelling.
+    expect(passed).toMatchObject({ ok: true, data: { signal: { detail: null } } });
+    // Latest per kind, in the order those surviving signals happened — and the
+    // superseded `fail` is gone from the answer without being gone from history.
+    expect(shown).toMatchObject({
+      ok: true,
+      data: {
+        ticket: { id: "VC-1", status: "backlog" },
+        signals: [
+          { ticket: "VC-1", kind: "review", verdict: "pass" },
+          { ticket: "VC-1", kind: "budget", verdict: "blocked" },
+        ],
+        events: [],
+        comments: [],
+      },
+    });
+    // Orthogonal by design (VC-85): the ticket sits where it sat, and nobody
+    // was notified that a machine wrote a row.
+    expect(notify).not.toHaveBeenCalled();
+    // Full ids never cross the socket, here as everywhere else.
+    expect(JSON.stringify({ failed, passed, shown })).not.toContain(sessionId);
+    expect(JSON.stringify({ failed, passed, shown })).not.toContain("ticket-one");
+    // The renderer is told, because a signal changes what a ticket surface shows.
+    expect(onMutation).toHaveBeenCalledWith({
+      ticketId: "ticket-one",
+      projectId: "project-one",
+      kind: "ticket",
+    });
+
+    const events = await request("ticket.events", { id: "VC-1", limit: 10 });
+    expect(events).toMatchObject({
+      ok: true,
+      data: {
+        events: [
+          { payload: { kind: "created" } },
+          {
+            actor: "session",
+            actorContext: { session: "abcdef12", ticket: "VC-1" },
+            payload: {
+              kind: "signaled",
+              signalKind: "review",
+              verdict: "fail",
+              detail: "Missing tests",
+            },
+          },
+          { payload: { kind: "signaled", signalKind: "review", verdict: "pass", detail: null } },
+          { payload: { kind: "signaled", signalKind: "budget", verdict: "blocked" } },
+        ],
+      },
+    });
+  });
+
+  it("refuses a signal with no session, an invented kind, or a verdict nobody defined", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    const request = (args: Record<string, unknown>, session?: string) =>
+      service.execute({
+        v: 1,
+        cmd: "ticket.signal",
+        args,
+        ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+      });
+    await service.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Ship CLI" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+
+    // A verdict is worth what its signer is, so an unattributed shell is
+    // refused rather than recorded as "user" (VC-92's ruling, VC-163's door).
+    expect(await request({ id: "VC-1", kind: "review", verdict: "pass" })).toMatchObject({
+      ok: false,
+      error: {
+        code: "CONTEXT_REQUIRED",
+        reason: expect.stringContaining("VOLLI_SESSION"),
+        next: expect.stringContaining("ticket comment"),
+      },
+    });
+    // Both refusals name the whole vocabulary: a fixed list is only cheap to
+    // live with if being wrong teaches you the right words.
+    expect(await request({ id: "VC-1", kind: "vibes", verdict: "pass" }, sessionId)).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        reason: expect.stringContaining("validate, implement, review, merge, human-gate, budget"),
+      },
+    });
+    expect(
+      await request({ id: "VC-1", kind: "review", verdict: "probably" }, sessionId),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", reason: expect.stringContaining("pass, fail, blocked") },
+    });
+    expect(
+      await request({ id: "VC-1", kind: "review", verdict: "pass", detail: 7 }, sessionId),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", reason: "The signal detail must be text." },
+    });
+    expect(
+      await request({ id: "VC-404", kind: "review", verdict: "pass" }, sessionId),
+    ).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
+
+    // Nothing was written by any of them.
+    expect(listLatestSignals(ctx.db, "ticket-one")).toEqual([]);
   });
 
   it("treats a same-column move as an idempotent no-op, preserving order", async () => {

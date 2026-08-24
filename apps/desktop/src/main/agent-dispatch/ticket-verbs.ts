@@ -1,5 +1,5 @@
 /**
- * The ticket write verbs: create, update, move, comment, archive.
+ * The ticket write verbs: create, update, move, comment, signal, archive.
  *
  * Coordination tier — every one of them wants an authenticated session actor,
  * every one commits through `ticket-commands.ts` rather than touching a repo
@@ -16,10 +16,14 @@ import {
   FIRST_CLASS_HARNESS_IDS,
   isFirstClassHarnessId,
   isTicketPriority,
+  isTicketSignalKind,
+  isTicketSignalVerdict,
   isTicketStatus,
   isValidBranchName,
   parseHarnessId,
   shortSessionId,
+  TICKET_SIGNAL_KINDS,
+  TICKET_SIGNAL_VERDICTS,
   TICKET_STATUS_LABELS,
 } from "@volli/shared";
 import type {
@@ -36,6 +40,7 @@ import {
   archiveTicketCommand,
   createTicketCommand,
   createTicketCommentCommand,
+  createTicketSignalCommand,
   interruptOnBackwardMove,
   moveTicketCommand,
   setTicketLabelsCommand,
@@ -453,6 +458,108 @@ export async function ticketCommentVerb(
           actor: comment.actor,
           session: comment.sessionId ? shortSessionId(comment.sessionId) : null,
           createdAt: comment.createdAt,
+        },
+      },
+    };
+  } catch (error) {
+    return failure("MUTATION_FAILED", errorMessage(error));
+  }
+}
+
+/**
+ * `volli ticket signal` — one typed verdict on a ticket (VC-85).
+ *
+ * The verb that replaces the `VERDICT: FIRST-LINE` comment convention, and the
+ * three refusals below are what a convention could not have. A kind outside the
+ * vocabulary is named with the vocabulary; a missing `VOLLI_SESSION` is refused
+ * outright rather than attributed to "user", because a verdict is worth what
+ * its signer is; and the board is not touched on any path.
+ *
+ * The session requirement is the one thing here that is not like
+ * `ticket.comment`, and it is deliberate (VC-92): comments are prose anybody
+ * may leave, signals are state a machine will act on. VC-163 turns the
+ * `VOLLI_SESSION` this reads from an attribution into an authentication; the
+ * shape of the refusal does not change when it does.
+ */
+export async function ticketSignalVerb(
+  context: AgentCommandContext,
+  request: AgentRequest,
+): Promise<AgentResponse> {
+  const { options, projects, envSession, now } = context;
+  const envSessionId = request.ctx.env.session;
+  if (!envSessionId) {
+    return failure(
+      "CONTEXT_REQUIRED",
+      "ticket signal requires VOLLI_SESSION context: a verdict records who reached it.",
+      "Run it from inside a Volli session, or use ticket comment to leave prose from an unattributed shell.",
+    );
+  }
+  const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
+  if (!resolved.ok) return resolved.response;
+  const actor = requestActor(request, envSession);
+  if (!actor.ok) return actor.response;
+  const kind = request.args["kind"];
+  if (!isTicketSignalKind(kind)) {
+    return failure(
+      "INVALID_REQUEST",
+      `Unknown signal kind ${JSON.stringify(kind ?? null)} (valid: ${TICKET_SIGNAL_KINDS.join(", ")})`,
+      "Retry with one of the named kinds; the vocabulary is fixed so signals stay queryable.",
+    );
+  }
+  const verdict = request.args["verdict"];
+  if (!isTicketSignalVerdict(verdict)) {
+    return failure(
+      "INVALID_REQUEST",
+      `Unknown verdict ${JSON.stringify(verdict ?? null)} (valid: ${TICKET_SIGNAL_VERDICTS.join(", ")})`,
+      "Retry with pass, fail, or blocked; anything more specific belongs in --detail.",
+    );
+  }
+  const detailValue = request.args["detail"];
+  if (detailValue !== undefined && typeof detailValue !== "string") {
+    return failure(
+      "INVALID_REQUEST",
+      "The signal detail must be text.",
+      "Pass --detail with one line of prose, or omit it.",
+    );
+  }
+  // Trimmed to null rather than stored as "": an empty detail is the absence of
+  // one, and two spellings of absence is a distinction every reader downstream
+  // would have to keep making.
+  const detail =
+    typeof detailValue === "string" && detailValue.trim().length > 0 ? detailValue : null;
+  const signalDisplayId = displayTicketId(
+    resolved.project.ticketPrefix,
+    resolved.ticket.ticketNumber,
+  );
+  try {
+    const signal = createTicketSignalCommand(
+      options.db,
+      {
+        ticketId: resolved.ticket.id,
+        kind,
+        verdict,
+        detail,
+        signalActor: "session",
+        sessionId: envSessionId,
+      },
+      { now: now(), actor: actor.actor },
+    );
+    options.onMutation?.({
+      ticketId: resolved.ticket.id,
+      projectId: resolved.project.id,
+      kind: "ticket",
+    });
+    return {
+      v: 1,
+      ok: true,
+      data: {
+        signal: {
+          ticket: signalDisplayId,
+          kind: signal.kind,
+          verdict: signal.verdict,
+          detail: signal.detail,
+          session: signal.sessionId ? shortSessionId(signal.sessionId) : null,
+          createdAt: signal.createdAt,
         },
       },
     };

@@ -4,12 +4,16 @@ import {
   HELP_TOPIC_NAMES,
   isSessionUsageGrouping,
   isTicketPriority,
+  isTicketSignalKind,
+  isTicketSignalVerdict,
   parseColumnToken,
   parseHarnessId,
   parseSessionUsageWindow,
   REASONING_LEVELS,
   SESSION_USAGE_GROUPINGS,
   TICKET_PRIORITIES,
+  TICKET_SIGNAL_KINDS,
+  TICKET_SIGNAL_VERDICTS,
   VERB_REGISTRY,
 } from "@volli/shared";
 import type { VerbEntry, VerbKey } from "@volli/shared";
@@ -107,6 +111,31 @@ const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);
   return result.ok ? { ok: true, value: result.status } : { ok: false, message: result.message };
 };
+
+/**
+ * The two halves of a verdict (VC-85), both closed vocabularies.
+ *
+ * Vetted here as well as in main, unlike `--harness`: a harness slug names
+ * something only the app's registry knows about, but a signal kind is a fixed
+ * word in `@volli/shared` that this process can read. Catching the typo before
+ * the socket is what makes the fixed vocabulary cheap to live with — the
+ * refusal names every valid word, from the same list the door checks against.
+ */
+const signalKindValue: ValueParser = (raw) =>
+  isTicketSignalKind(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown signal kind ${JSON.stringify(raw)} (valid: ${TICKET_SIGNAL_KINDS.join(", ")})`,
+      };
+
+const signalVerdictValue: ValueParser = (raw) =>
+  isTicketSignalVerdict(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown verdict ${JSON.stringify(raw)} (valid: ${TICKET_SIGNAL_VERDICTS.join(", ")})`,
+      };
 
 const positiveIntValue: ValueParser = (raw, token) => {
   const parsed = Number(raw);
@@ -339,6 +368,20 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "message" in args === "file" in args
         ? "ticket comment requires exactly one of -m or --file"
         : null,
+  },
+  "ticket.signal": {
+    options: {
+      "--kind": { kind: "value", key: "kind", parse: signalKindValue },
+      "--verdict": { kind: "value", key: "verdict", parse: signalVerdictValue },
+      "--detail": { kind: "value", key: "detail" },
+    },
+    // Both are required because a signal with either half missing is not a
+    // weaker signal, it is not one: "review" says nothing without a verdict,
+    // and "pass" says nothing without a stage.
+    required: {
+      kind: "ticket signal requires --kind",
+      verdict: "ticket signal requires --verdict",
+    },
   },
   "ticket.archive": { options: {} },
   "ticket.brief": { options: {} },

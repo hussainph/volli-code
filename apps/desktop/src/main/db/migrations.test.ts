@@ -1718,3 +1718,56 @@ describe("migration 027 — the Session usage projection", () => {
     db.close();
   });
 });
+
+describe("migration 028 — the typed verdict channel", () => {
+  it("creates ticket_signals with the latest-per-kind index", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "ticket_signals")).toBe(true);
+    expect(indexExists(db, "ticket_signals_latest")).toBe(true);
+    expect(columnNames(db, "ticket_signals")).toEqual([
+      "id",
+      "ticket_id",
+      "session_id",
+      "actor",
+      "kind",
+      "verdict",
+      "detail",
+      "created_at",
+    ]);
+    db.close();
+  });
+
+  /**
+   * The vocabulary is fixed in the schema, not merely at the door. A signal
+   * whose kind nobody can query is the `VERDICT:` comment convention again, so
+   * the last writer that could refuse an invented one does.
+   */
+  it("refuses a kind or verdict outside the fixed vocabulary", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    const insert = (kind: string, verdict: string) =>
+      db
+        .prepare(
+          `INSERT INTO ticket_signals (id, ticket_id, session_id, actor, kind, verdict, detail, created_at)
+             VALUES (?, 't1', NULL, 'session', ?, ?, NULL, 1)`,
+        )
+        .run(`${kind}-${verdict}`, kind, verdict);
+
+    expect(() => insert("gut-feel", "pass")).toThrow();
+    expect(() => insert("review", "probably")).toThrow();
+    expect(() => insert("review", "pass")).not.toThrow();
+    db.close();
+  });
+});

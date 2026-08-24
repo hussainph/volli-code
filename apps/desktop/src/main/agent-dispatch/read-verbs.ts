@@ -19,6 +19,7 @@ import { listMaterializableLinks } from "../db/blobs-repo";
 import { listComments } from "../db/comments-repo";
 import { listTicketEvents } from "../db/events-repo";
 import { listAllLabels } from "../db/labels-repo";
+import { listLatestSignals } from "../db/signals-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
 import { isInside } from "../worktree/paths";
 import { composeTicketBrief } from "./briefs";
@@ -289,10 +290,22 @@ export async function ticketShowVerb(
       updatedAt: comment.updatedAt,
     }),
   );
+  // Unconditional, and uncapped by either count: this is where the ticket
+  // STANDS, and it is at most one row per kind (VC-85). Capping it would be
+  // capping the answer rather than the history, and hiding it behind a flag
+  // would leave the cheapest poll unable to see the thing it polls for.
+  const signals = listLatestSignals(options.db, resolved.ticket.id).map((signal) => ({
+    ticket: displayId,
+    kind: signal.kind,
+    verdict: signal.verdict,
+    detail: signal.detail,
+    session: signal.sessionId ? shortSessionId(signal.sessionId) : null,
+    createdAt: signal.createdAt,
+  }));
   return {
     v: 1,
     ok: true,
-    data: { ticket: agentTicket(resolved.ticket, resolved.project), events, comments },
+    data: { ticket: agentTicket(resolved.ticket, resolved.project), signals, events, comments },
   };
 }
 

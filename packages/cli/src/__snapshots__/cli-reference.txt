@@ -7,7 +7,7 @@ Read
   identify [--project <p>]
   board [--project <p>]
   ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>]
-  ticket show <id> [--events <n>] [--comments <n>]
+  ticket show <id> [--events <n>] [--comments <n>] [--comments-only]
   ticket events <id> [--limit <n>]
   ticket brief <id>
   worktree status [<id>]
@@ -22,6 +22,7 @@ Write
   ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>] [--dry-run]
   ticket move <id> --to <column> [--dry-run]
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
+  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>]
   ticket archive <id>
 
 Session
@@ -113,10 +114,15 @@ Verb tier: read
 Usage: volli ticket show <id> [options]
 
 Options:
-  --events <n>    How many recent events to include.
-  --comments <n>  How many recent comments to include.
+  --events <n>     How many recent events to include; 0 for none.
+  --comments <n>   How many recent comments to include; 0 for none.
+  --comments-only  Drop the event log — sugar for --events 0.
 
-Example: volli ticket show VC-12 --comments 5
+Example: volli ticket show VC-12 --comments-only
+
+Notes:
+- Latest signal per kind is always printed: signals carry state, comments carry prose.
+- Either count takes 0, which drops that section entirely — a poll costs what it reads.
 
 ============================================================================
 volli help ticket events
@@ -371,6 +377,35 @@ Example: volli ticket comment VC-12 -m "Ready for review"
 
 Notes:
 - Exactly one of -m or --file.
+
+============================================================================
+volli help ticket signal
+============================================================================
+ticket signal — Record a typed verdict on a ticket: which stage, and how it went.
+
+Door: Agent CLI
+Verb tier: coordination
+
+Usage: volli ticket signal <id> --kind <kind> --verdict <verdict> [options]
+
+Options:
+  --kind <kind>        Which stage this verdict is about. (valid: validate, implement, review, merge, human-gate, budget)
+  --verdict <verdict>  How that stage went. (valid: pass, fail, blocked)
+  --detail <text>      One line of prose for a reader; the verdict is what machines read.
+
+Effects:
+- Durable write: Create one attributed Ticket signal and its signaled Ticket event, in one transaction.
+- Human sees: The verdict appears in the Ticket activity feed and in ticket show's latest-signal lines.
+- Does not: The Ticket does not move: signals are orthogonal to the board by design.
+- Does not: No Session starts, no notification fires, and no earlier signal is edited or erased.
+
+Example: volli ticket signal VC-12 --kind review --verdict pass --detail "Two nits, fixed"
+
+Notes:
+- Acts as this session; needs a Volli session, because a verdict is only worth what its signer is.
+- Signals carry state and comments carry prose — post both when a verdict needs an argument.
+- The board does not move. Use ticket move for that, deliberately.
+- Append-only: a later signal of the same kind supersedes an earlier one by being newer.
 
 ============================================================================
 volli help ticket archive
@@ -653,6 +688,7 @@ ticket subcommands:
   ticket update   Update a ticket's fields or body. [Agent CLI]
   ticket move     Move a ticket to another column. [Agent CLI]
   ticket comment  Add a comment to a ticket. [Agent CLI]
+  ticket signal   Record a typed verdict on a ticket: which stage, and how it went. [Agent CLI]
   ticket archive  Archive a ticket (its worktree is preserved). [Agent CLI]
 Run volli help ticket <subcommand> for detail.
 
@@ -883,7 +919,11 @@ Pass --json to any command for stable structured JSON output. Failures keep a st
 ============================================================================
 volli help orchestration
 ============================================================================
-Read before writing; work your own board unless instructed; use comments and deliberate moves for coordination; do not drive another Session's terminal or chain-spawn work.
+Read before writing; work your own board unless instructed; do not drive another Session's terminal or chain-spawn work.
+Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.
+A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.
+ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.
+No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.
 
 ============================================================================
 volli help session harness
@@ -900,17 +940,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -985,7 +1025,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket archive, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1005,7 +1045,7 @@ USAGE Unknown option --not-an-option (options: --status, --priority, --label, --
 ============================================================================
 volli ticket show ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --events, --comments) — see volli help ticket show
+USAGE Unknown option --not-an-option (options: --events, --comments, --comments-only) — see volli help ticket show
 
 ============================================================================
 volli ticket events ORACLE-1 --not-an-option
@@ -1066,6 +1106,11 @@ USAGE Unknown option --not-an-option (options: --to, --dry-run) — see volli he
 volli ticket comment ORACLE-1 --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option (options: -m, --message, --file, --dry-run) — see volli help ticket comment
+
+============================================================================
+volli ticket signal ORACLE-1 --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail) — see volli help ticket signal
 
 ============================================================================
 volli ticket archive ORACLE-1 --not-an-option

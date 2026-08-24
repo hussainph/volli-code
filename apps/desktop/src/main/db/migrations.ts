@@ -1109,6 +1109,42 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 028: `ticket_signals` — the typed verdict channel (VC-85).
+ *
+ * Shaped after `ticket_comments` (migration 003) because it is the same kind
+ * of thing: durable content about a ticket, written by one actor, paired with
+ * a ticket event recorded in the same transaction. What differs is what a
+ * reader may assume. A comment is prose and its meaning is whatever it says; a
+ * signal is a fact with a fixed vocabulary, and the whole reason it exists is
+ * that a machine can read it without parsing anybody's sentence.
+ *
+ * So the vocabulary is a CHECK, following `tickets.status` rather than
+ * `ticket_comments.actor`. A kind or verdict outside the fixed list is not a
+ * value this product has an opinion about — it is a writer disagreeing with the
+ * schema, and the database is the last place that can say no. Widening the
+ * vocabulary later costs one migration, which is the correct price for
+ * changing what a verdict can mean.
+ *
+ * No UPDATE or DELETE path exists and none is intended: signals are
+ * append-only, and a later signal of the same kind supersedes an earlier one by
+ * being newer. The index is what makes "latest per kind" one read rather than a
+ * fold over a ticket's whole signal history.
+ */
+const MIGRATION_028_TICKET_SIGNALS = `
+CREATE TABLE ticket_signals (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('validate','implement','review','merge','human-gate','budget')),
+  verdict    TEXT NOT NULL CHECK (verdict IN ('pass','fail','blocked')),
+  detail     TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX ticket_signals_latest ON ticket_signals(ticket_id, kind, created_at);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1243,6 +1279,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 27,
     name: "session_usage — the rebuildable index of what each model operation consumed",
     sql: MIGRATION_027_SESSION_USAGE,
+  },
+  {
+    version: 28,
+    name: "ticket_signals — typed verdicts, queryable where a comment convention was not",
+    sql: MIGRATION_028_TICKET_SIGNALS,
   },
 ];
 

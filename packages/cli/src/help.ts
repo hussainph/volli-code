@@ -116,7 +116,14 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
   if (topic === "addressing") {
     return "Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error. VOLLI_SESSION attributes the current socket caller in this build; it does not authenticate that process.\n";
   }
-  return "Read before writing; work your own board unless instructed; use comments and deliberate moves for coordination; do not drive another Session's terminal or chain-spawn work.\n";
+  return [
+    "Read before writing; work your own board unless instructed; do not drive another Session's terminal or chain-spawn work.",
+    "Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.",
+    "A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.",
+    "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
+    "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
+    "",
+  ].join("\n");
 }
 
 /** The value shape shown after an option name (`<text>`, `low|medium|high`); flags carry none. */

@@ -53,6 +53,7 @@ import {
   ticketCommentVerb,
   ticketCreateVerb,
   ticketMoveVerb,
+  ticketSignalVerb,
   ticketUpdateVerb,
 } from "./ticket-verbs";
 import { worktreeDiffVerb, worktreeStatusVerb } from "./worktree-verbs";
@@ -111,6 +112,10 @@ export const AGENT_VERB_TABLE: {
   "ticket.update": { handle: ticketUpdateVerb, projections: "load", envSession: "resolve" },
   "ticket.move": { handle: ticketMoveVerb, projections: "load", envSession: "resolve" },
   "ticket.comment": { handle: ticketCommentVerb, projections: "load", envSession: "resolve" },
+  // Identity is the whole requirement, exactly as it is for the two session
+  // signals below: a verdict needs a signer, not a terminal attachment, so the
+  // multi-project fold buys this verb nothing.
+  "ticket.signal": { handle: ticketSignalVerb, projections: "skip", envSession: "resolve" },
   "ticket.archive": { handle: ticketArchiveVerb, projections: "load", envSession: "resolve" },
   "ticket.brief": { handle: ticketBriefVerb, projections: "load", envSession: "resolve" },
   "worktree.status": { handle: worktreeStatusVerb, projections: "load", envSession: "resolve" },

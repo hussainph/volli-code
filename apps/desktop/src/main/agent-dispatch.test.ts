@@ -97,12 +97,14 @@ describe("the dispatch table (VC-167)", () => {
 
 describe("the preload policy each entry declares", () => {
   /**
-   * The verbs that take no Session snapshot. Six, exactly as the chain's
+   * The verbs that take no Session snapshot. Six were exactly what the chain's
    * ternary listed — this is the same policy, moved beside the handlers it
-   * governs rather than restated.
+   * governs rather than restated — and `ticket.signal` (VC-85) joined them by
+   * being the same shape: it needs a signer's identity, never a terminal.
    */
   const NO_PROJECTIONS = [
     "model.list",
+    "ticket.signal",
     "session.done",
     "session.blocked",
     "session.link",

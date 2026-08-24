@@ -21,7 +21,7 @@ import { parseCliArgs } from "./parser";
  * order itself, and a change to either has to be made here in the open.
  */
 
-/** The 28 listed commands, in the order the compact reference prints them. */
+/** The 29 listed commands, in the order the compact reference prints them. */
 const REFERENCE_COMMANDS = [
   "identify",
   "board",
@@ -39,6 +39,7 @@ const REFERENCE_COMMANDS = [
   "ticket update",
   "ticket move",
   "ticket comment",
+  "ticket signal",
   "ticket archive",
   "session start",
   "session list",
@@ -61,6 +62,7 @@ const TAKES_ID: ReadonlySet<string> = new Set([
   "ticket update",
   "ticket move",
   "ticket comment",
+  "ticket signal",
   "ticket archive",
   "session start",
   "session peek",
