@@ -70,7 +70,7 @@ import {
   ConversationScrollButton,
 } from "@renderer/components/ui/ai-elements/conversation";
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
-import { groupTurns } from "@renderer/chat/activity";
+import { groupTurns } from "@volli/session-presentation";
 import { ChatTurn, type TurnContext } from "@renderer/components/chat/chat-plane";
 import { holdList, sameMessages } from "@renderer/components/chat/chat-plane-model";
 import { ContentColumn } from "@renderer/components/layout/content-column";

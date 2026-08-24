@@ -19,7 +19,7 @@ import {
   formatTokens,
   type ContextSegmentId,
   type SessionContextUsage,
-} from "@renderer/chat/context-usage";
+} from "@volli/session-presentation";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";

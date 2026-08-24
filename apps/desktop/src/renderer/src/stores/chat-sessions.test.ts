@@ -6,14 +6,14 @@ import type {
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type {
-  ChatCommandRequest,
-  ChatSessionRpc,
-  ChatSessionTransport,
-  ChatStreamCursor,
-} from "@renderer/chat/client";
-import { getChatClient } from "@renderer/chat/registry";
-import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
+import {
+  EMPTY_TRANSCRIPT,
+  getChatClient,
+  type ChatCommandRequest,
+  type ChatSessionRpc,
+  type ChatSessionTransport,
+  type ChatStreamCursor,
+} from "@volli/session-presentation";
 import { createChatSessionsStore } from "./chat-sessions";
 import { useUiStore } from "./ui";
 
@@ -673,6 +673,74 @@ describe("the queue", () => {
     store.getState().dequeue("durable-9", "q9");
 
     expect(slice()).toBe(before);
+  });
+});
+
+describe("the deps attach() wires", () => {
+  // The notify and renameSession seams are desktop glue (VC-169): the client
+  // core names them, and THIS store is where the desktop answers with
+  // toastError and renameChatSession. Both are driven end-to-end through a
+  // registry client so the wrappers attach() builds are the thing tested.
+  async function adoptedDescribed() {
+    const edge = fixture();
+    edge.store.getState().adoptChatSession("durable-9");
+    await vi.waitFor(() => {
+      expect(edge.store.getState().sessions["durable-9"]?.projection).not.toBeNull();
+    });
+    return edge;
+  }
+
+  it("routes the client's auto-title through the shared rename path", async () => {
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    const { store } = await adoptedDescribed();
+
+    // Deliverable and untitled: a live executor, a recorded model, no title.
+    // The queued message releases, delivers, and the delivery's auto-title
+    // reaches the IPC rename door through the injected wrapper.
+    store.getState().setProjection("durable-9", {
+      ...projection,
+      session: { ...SESSION, title: null },
+      liveExecutor: { id: "attach-1" },
+      modelSelection: {
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+      },
+    });
+    store.getState().enqueue("durable-9", { id: "q1", text: "Fix the parser" });
+
+    await vi.waitFor(() => {
+      expect(renameMock).toHaveBeenCalledWith({
+        sessionId: "durable-9",
+        title: "Fix the parser",
+        refineFrom: "Fix the parser",
+      });
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("routes an event failure through the error toast — the notify seam", async () => {
+    const { state, store } = await adoptedDescribed();
+    state.answer = () => REFUSED;
+
+    await expect(
+      getChatClient("durable-9")!.selectModel({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+      }),
+    ).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Model not changed: Pi is unavailable",
+      expect.anything(),
+    );
+    // The failure is a moment, not a state: nothing latched on the slice.
+    expect(store.getState().sessions["durable-9"]).toMatchObject({
+      lifecycle: "ready",
+      sessionError: null,
+    });
   });
 });
 

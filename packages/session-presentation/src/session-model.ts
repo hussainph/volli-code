@@ -110,3 +110,14 @@ export function nextRelease(
   if (state.working || !state.ready) return null;
   return queue[0] ?? null;
 }
+
+/* ------------------------------------------------------------- the title */
+
+/**
+ * A new renderer chat has no durable title until its first delivered message.
+ * Any string, including a human-entered `Chat 1`, is an explicit title and is
+ * never eligible for automatic replacement.
+ */
+export function isUntitledChatSession(title: string | null): boolean {
+  return title === null;
+}

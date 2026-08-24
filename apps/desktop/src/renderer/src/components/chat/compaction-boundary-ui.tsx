@@ -22,8 +22,11 @@ import * as React from "react";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
-import { compactionBoundaryCopy } from "@renderer/chat/compaction-boundary";
-import type { LiveTranscriptCompaction, TranscriptCompaction } from "@renderer/chat/transcript";
+import {
+  compactionBoundaryCopy,
+  type LiveTranscriptCompaction,
+  type TranscriptCompaction,
+} from "@volli/session-presentation";
 import { Separator } from "@renderer/components/ui/separator";
 import { Spinner } from "@renderer/components/ui/spinner";
 

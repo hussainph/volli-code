@@ -12,7 +12,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { TranscriptCompaction } from "@renderer/chat/transcript";
+import type { TranscriptCompaction } from "@volli/session-presentation";
 
 import { CompactionBoundary, CompactionProgress } from "./compaction-boundary-ui";
 

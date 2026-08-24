@@ -23,12 +23,12 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { indexOpenedInteractions } from "@renderer/chat/interaction";
+import { indexOpenedInteractions } from "./interaction";
 import {
   layerTranscriptOverlay,
   projectTranscriptMessages,
   speaksInTranscript,
-} from "@renderer/chat/message-projection";
+} from "./message-projection";
 
 export interface ChatSessionFrame {
   sessionId: string;

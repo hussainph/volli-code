@@ -32,9 +32,12 @@ import {
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
-import { type BundleRow } from "@renderer/chat/activity";
-import { composerAnswerPrompt } from "@renderer/chat/interaction";
-import { enqueueMessage, type QueuedMessage } from "@renderer/chat/session-model";
+import {
+  composerAnswerPrompt,
+  enqueueMessage,
+  type BundleRow,
+  type QueuedMessage,
+} from "@volli/session-presentation";
 import { composerPress } from "@renderer/components/chat/chat-plane-model";
 import { ActivityBundle, AttentionReceipt, ToolRow } from "@renderer/components/chat/activity-ui";
 import { TurnRunningMark } from "@renderer/components/chat/chat-plane";

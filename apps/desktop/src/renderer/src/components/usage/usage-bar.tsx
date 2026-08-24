@@ -33,7 +33,7 @@ import * as React from "react";
 import type { SessionUsageSummary } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
-import { formatTokens } from "@renderer/chat/context-usage";
+import { formatTokens } from "@volli/session-presentation";
 import { usageBarSegments, type UsageClassId } from "@renderer/usage/usage-format";
 
 /** Semantic tokens, never raw palette — `check-design-tokens.mjs` bans the latter. */

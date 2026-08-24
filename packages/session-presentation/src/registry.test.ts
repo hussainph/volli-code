@@ -1,17 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type {
-  ChatSessionClientDeps,
-  ChatSessionRpc,
-  ChatSessionWrites,
-} from "@renderer/chat/client";
+import type { ChatSessionClientDeps, ChatSessionRpc, ChatSessionWrites } from "./client";
 import {
   disposeChatClient,
   getChatClient,
   getOrCreateChatClient,
   liveChatClients,
   onLiveChatClientsChanged,
-} from "@renderer/chat/registry";
+} from "./registry";
 
 const unreachable = () => {
   throw new Error("the registry must not touch the transport");
@@ -47,6 +43,8 @@ function deps(): ChatSessionClientDeps {
     newCommandId: () => "cmd",
     createSession: unreachable,
     attachSession: unreachable,
+    notify: () => undefined,
+    renameSession: () => undefined,
   };
 }
 

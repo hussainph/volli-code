@@ -129,6 +129,9 @@ importers:
       '@volli/session-engine':
         specifier: workspace:*
         version: link:../../packages/session-engine
+      '@volli/session-presentation':
+        specifier: workspace:*
+        version: link:../../packages/session-presentation
       '@volli/session-rpc':
         specifier: workspace:*
         version: link:../../packages/session-rpc
@@ -405,6 +408,28 @@ importers:
         specifier: workspace:*
         version: link:../shared
     devDependencies:
+      ai:
+        specifier: ^7.0.60
+        version: 7.0.60(zod@4.4.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.2.5(@opentelemetry/api@1.9.0)(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(typescript@7.0.2)(yaml@2.9.0)
+
+  packages/session-presentation:
+    dependencies:
+      '@volli/session-engine':
+        specifier: workspace:*
+        version: link:../session-engine
+      '@volli/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.2.0
       ai:
         specifier: ^7.0.60
         version: 7.0.60(zod@4.4.3)

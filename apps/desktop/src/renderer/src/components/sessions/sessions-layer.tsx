@@ -391,8 +391,8 @@ export function SessionsLayer({ visible, activeTabId, rail, plane = null }: Sess
           {/* The chat in front, in a column of its own: the box above is
               positioned, not a flex column, so the plane needs one to fill it.
               Keyed by Session — the client, the fold and the queue are resident
-              (chat/registry.ts), so a remount costs nothing and carries
-              nothing over. */}
+              (@volli/session-presentation's registry), so a remount costs
+              nothing and carries nothing over. */}
           {selected && activeChatSessionId !== null && plane === null && (
             <div className="absolute inset-0 flex min-h-0 flex-col">
               <ChatPlane

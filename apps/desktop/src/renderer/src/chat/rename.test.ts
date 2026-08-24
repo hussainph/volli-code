@@ -7,12 +7,11 @@ import {
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { type ChatSessionSlice } from "@renderer/chat/client";
-import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
+import { EMPTY_TRANSCRIPT, type ChatSessionSlice } from "@volli/session-presentation";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
-import { applyRemoteChatTitle, isUntitledChatSession, renameChatSession } from "./rename";
+import { applyRemoteChatTitle, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -261,13 +260,5 @@ describe("applyRemoteChatTitle", () => {
   it("trims, so a label never carries the model's stray whitespace", () => {
     applyRemoteChatTitle("chat-1", "  Parser fix  ");
     expect(cachedTitle("chat-1")).toBe("Parser fix");
-  });
-});
-
-describe("isUntitledChatSession", () => {
-  it("makes only a missing title eligible for auto-naming", () => {
-    expect(isUntitledChatSession(null)).toBe(true);
-    expect(isUntitledChatSession("Chat 1")).toBe(false);
-    expect(isUntitledChatSession("Migration plan")).toBe(false);
   });
 });

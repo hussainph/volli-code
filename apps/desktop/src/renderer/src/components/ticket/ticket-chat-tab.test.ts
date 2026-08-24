@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ChatSessionLifecycle } from "@renderer/chat/client";
+import type { ChatSessionLifecycle } from "@volli/session-presentation";
 
 import {
   chatTabId,

@@ -47,7 +47,7 @@ function blobLinkView(): BlobLinkView {
 }
 
 import { createChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
-import type { QueuedMessage } from "@renderer/chat/session-model";
+import type { QueuedMessage } from "@volli/session-presentation";
 
 import {
   answerInteraction,

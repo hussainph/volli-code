@@ -1,0 +1,27 @@
+{
+  "name": "@volli/session-presentation",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "@volli/session-engine": "workspace:*",
+    "@volli/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "ai": "^7.0.60",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   composerIntent,
   enqueueMessage,
+  isUntitledChatSession,
   nextRelease,
   removeQueued,
   takeQueued,
@@ -107,5 +108,13 @@ describe("composer delivery", () => {
     expect(nextRelease(queue, { working: true, ready: true })).toBeNull();
     expect(nextRelease(queue, { working: false, ready: false })).toBeNull();
     expect(nextRelease([], { working: false, ready: true })).toBeNull();
+  });
+});
+
+describe("isUntitledChatSession", () => {
+  it("makes only a missing title eligible for auto-naming", () => {
+    expect(isUntitledChatSession(null)).toBe(true);
+    expect(isUntitledChatSession("Chat 1")).toBe(false);
+    expect(isUntitledChatSession("Migration plan")).toBe(false);
   });
 });

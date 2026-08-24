@@ -27,7 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { UsageBar, UsageClassRows } from "@renderer/components/usage/usage-bar";
 import { UsageRankRow } from "@renderer/components/usage/project-usage-block";
-import { formatTokens } from "@renderer/chat/context-usage";
+import { formatTokens } from "@volli/session-presentation";
 import { cn } from "@renderer/lib/utils";
 import {
   formatCachedShare,
