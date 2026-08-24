@@ -5,6 +5,8 @@
 
 import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
 import type { SessionToolId } from "./authority";
+import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
+import type { SessionUsage, SessionUsageSummary } from "./session-usage";
 
 export interface Session {
   id: string;
@@ -517,6 +519,29 @@ export type SessionEventPayload =
       attachmentId: string | null;
       name: string;
       native: SessionNativeDetail | null;
+    }
+  /**
+   * One model operation, and what the provider said it consumed.
+   *
+   * A fact of its own rather than metadata on the message it produced, because
+   * most spend has no message: a tool-use-only reply, a reply that failed after
+   * the tokens were already billed, a Context Compaction, and the auto-title
+   * utility call all cost money and none of them settles a transcript row. A
+   * Session whose usage lived on its messages could only ever report the part
+   * of its bill that happened to say something.
+   *
+   * Immutable like every other fact here, and never re-priced: `costUsd` is
+   * what the operation cost when it ran, not what today's catalogue would
+   * charge for the same tokens. The rollups a reader wants — by Ticket, by
+   * model, by window — are a projection over these, never a mutable running
+   * total this event updates.
+   */
+  | {
+      kind: "usage.recorded";
+      attachmentId: string | null;
+      /** Null for spend outside a turn: compaction, and utility work. */
+      turnId: string | null;
+      usage: SessionUsage;
     };
 
 /** A failed attachment preserves adapter and venue metadata without pretending it ever opened. */
@@ -576,7 +601,8 @@ type ObservedSessionEventKind =
   | "interaction.resolved"
   | "interaction.cancelled"
   | "authority.denied"
-  | "adapter.observed";
+  | "adapter.observed"
+  | "usage.recorded";
 
 /**
  * Observed arms are the payload arms themselves under an observation envelope,
@@ -700,6 +726,13 @@ export function observationPayload(observation: SessionObservation): SessionEven
         attachmentId: observation.attachmentId ?? null,
         name: observation.name,
         native: observation.native,
+      };
+    case "usage.recorded":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId ?? null,
+        turnId: observation.turnId,
+        usage: observation.usage,
       };
   }
 }
@@ -932,6 +965,16 @@ export interface SessionProjection {
    * the runtime that sees both answers can know a run was broken.
    */
   authorityDenials: number;
+  /**
+   * What this Session has consumed, over every model operation it recorded.
+   *
+   * Folded here rather than queried, so the live Session read stays one pass
+   * over history a caller was already making. The cross-Session rollups — by
+   * Ticket, by model, by window — are a different question with a different
+   * shape, and belong to an indexed projection rather than to a fold of one
+   * Session's log.
+   */
+  usage: SessionUsageSummary;
   /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
   lastActivityAt: number;
   /**
@@ -967,6 +1010,7 @@ export function projectSession(
   let modelSelection: ModelSelection | null = null;
   let turnActive = false;
   let authorityDenials = 0;
+  const usage: SessionUsage[] = [];
   let lastActivityAt = session.createdAt;
   // Seeded from the live session row so a fold given no `session.created`
   // event (a degenerate/partial event list) still has an honest answer;
@@ -986,11 +1030,17 @@ export function projectSession(
     // is a lie about what is happening in it. Nothing is lost by skipping
     // them — a `message.submit` command is followed immediately by the
     // `turn.started` it caused, which does count.
+    //
+    // `usage.recorded` is skipped for a second reason: it is written by a
+    // backfill as well as by a live turn, and a repair that re-dated every
+    // historical Session would rewrite the user's sense of what they were
+    // last working on. The turn that spent the tokens already counted.
     if (
       event.payload.kind !== "command.recorded" &&
       event.payload.kind !== "command.receipt.recorded" &&
       event.payload.kind !== "session.input.recorded" &&
-      event.payload.kind !== "session.retitled"
+      event.payload.kind !== "session.retitled" &&
+      event.payload.kind !== "usage.recorded"
     ) {
       lastActivityAt = event.occurredAt;
     }
@@ -1145,6 +1195,12 @@ export function projectSession(
       case "transcript.referenced":
       case "adapter.observed":
         break;
+      // Collected rather than summed in place: `summarizeSessionUsage` owns
+      // what a mixed basis and a partial coverage mean, and a second addition
+      // written here would be a second opinion about the same money.
+      case "usage.recorded":
+        usage.push(event.payload.usage);
+        break;
       /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
       default: {
         const unhandled: never = event.payload;
@@ -1175,6 +1231,7 @@ export function projectSession(
     modelSelection,
     turnActive,
     authorityDenials,
+    usage: usage.length === 0 ? EMPTY_SESSION_USAGE_SUMMARY : summarizeSessionUsage(usage),
     lastActivityAt,
     bornTicketless,
   };

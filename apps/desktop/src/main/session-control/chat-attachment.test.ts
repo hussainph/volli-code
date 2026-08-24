@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { SESSION_ATTENTION_KINDS, SESSION_USER_BLOCKING_ATTENTION_KINDS } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  SESSION_ATTENTION_KINDS,
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
+} from "@volli/shared";
 import type {
   ChatWaitingReason,
   SessionAttachmentProjection,
@@ -33,6 +37,7 @@ function projectionWith(
     signal: null,
     turnActive: false,
     authorityDenials: 0,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
     bornTicketless: true,
     ...overrides,

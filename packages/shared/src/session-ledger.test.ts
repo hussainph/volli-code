@@ -31,6 +31,7 @@ import type {
   SessionInteractionPrompt,
   SessionObservation,
 } from "./session-ledger";
+import type { SessionUsage } from "./session-usage";
 
 const session: Session = {
   id: "session-1",
@@ -1135,6 +1136,62 @@ describe("projectSession authorityDenials", () => {
     ]);
 
     expect(projection.authorityDenials).toBe(3);
+  });
+});
+
+function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
+function recorded(sequence: number, usage: SessionUsage): SessionEvent {
+  return event(sequence, {
+    kind: "usage.recorded",
+    attachmentId: "attachment-1",
+    turnId: null,
+    usage,
+  });
+}
+
+describe("projectSession usage", () => {
+  it("reports a Session that ran no model as unmeasured, not as free", () => {
+    const { usage } = projectSession(session, []);
+    expect(usage.requestCount).toBe(0);
+    expect(usage.knownCostUsd).toBeNull();
+    expect(usage.costCoverage).toBe("unavailable");
+  });
+
+  it("adds every recorded model operation into one Session total", () => {
+    const { usage } = projectSession(session, [
+      recorded(1, metered({ costUsd: 0.25 })),
+      recorded(2, metered({ cause: "compaction", costUsd: 0.05 })),
+      recorded(3, metered({ cause: "utility", costUsd: 0.01 })),
+    ]);
+    expect(usage.requestCount).toBe(3);
+    expect(usage.knownCostUsd).toBe(0.31);
+    expect(usage.costCoverage).toBe("complete");
+    expect(usage.cachedInputShare).toBe(0.8);
+  });
+
+  // Telemetry arriving is not the agent doing something. A backfill or a
+  // reprojection that floated every old Session to the top of a recency-sorted
+  // listing would rewrite the user's sense of what they were last working on.
+  it("does not treat usage as activity", () => {
+    const projection = projectSession(session, [
+      event(2, { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" }),
+      recorded(9, metered()),
+    ]);
+    expect(projection.lastActivityAt).toBe(20);
   });
 });
 

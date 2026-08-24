@@ -331,6 +331,38 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       name: "message",
       native: { parts: [true, 1, "text"] },
     },
+    {
+      kind: "usage.recorded",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 412,
+        outputTokens: 1_204,
+        cacheReadTokens: 96_000,
+        cacheWriteTokens: 2_100,
+        costUsd: 0.418_23,
+        costBasis: "catalog-estimate",
+      },
+    },
+    {
+      kind: "usage.recorded",
+      attachmentId: null,
+      turnId: null,
+      usage: {
+        cause: "utility",
+        providerId: "openai",
+        modelId: "gpt-5",
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      },
+    },
   ];
 
   for (const payload of payloads) {
@@ -379,6 +411,27 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         command: withRoute,
       });
     }
+  });
+
+  it("keeps an unpriced usage record null rather than reading it back as free", () => {
+    const decoded = roundTrip({
+      kind: "usage.recorded",
+      attachmentId: null,
+      turnId: null,
+      usage: {
+        cause: "compaction",
+        providerId: "anthropic",
+        modelId: "claude-haiku-4-5",
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      },
+    });
+    expect(decoded.kind === "usage.recorded" && decoded.usage.costUsd).toBeNull();
+    expect(decoded.kind === "usage.recorded" && decoded.usage.cacheReadTokens).toBeNull();
   });
 
   it("keeps absent interaction prompts and resolution answers absent, not synthesized", () => {
@@ -564,6 +617,63 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.reason has an unsupported value");
+    const usage = {
+      cause: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-1",
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      costUsd: null,
+      costBasis: "unavailable",
+    };
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          usage: { ...usage, cause: "auto-title" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.cause has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          usage: { ...usage, costBasis: "guessed" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.costBasis has an unsupported value");
+    // A fractional token count is nothing any provider reports; it is corruption.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          usage: { ...usage, inputTokens: 12.5 },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.inputTokens must be an integer");
+    // A cost that is not a finite number would poison every total it enters.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          usage: { ...usage, costUsd: Number.NaN },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.costUsd must be a finite number");
   });
 
   it("rejects a malformed session entity inside session.created", () => {

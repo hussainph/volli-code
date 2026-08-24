@@ -9,6 +9,7 @@ import type {
   SessionStreamFrame,
   SessionStreamOverlay,
 } from "@volli/session-engine";
+import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
@@ -226,6 +227,7 @@ function snapshot(): SessionRuntimeSnapshot {
       modelSelection: null,
       turnActive: false,
       authorityDenials: 0,
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
       lastActivityAt: 10,
       bornTicketless: true,
     },

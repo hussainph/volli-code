@@ -45,6 +45,8 @@ import {
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
 } from "./session-ledger";
+import { COST_BASES, SESSION_USAGE_CAUSES } from "./session-usage";
+import type { SessionUsage } from "./session-usage";
 import type {
   CommandReceipt,
   CommandReceiptResult,
@@ -395,6 +397,23 @@ const codecs = {
       native: decodeNativeDetail(record.native, `${context}.native`),
     }),
     scrub: (payload) => ({ ...payload, native: null }),
+  },
+  // Every measured field is read as nullable, and a null is preserved rather
+  // than defaulted: absent is what an executor that reported nothing actually
+  // said, and a decoder that healed it to `0` would invent a free request.
+  // `cause` and `costBasis` are checked against Volli's own vocabulary because
+  // both ARE Volli's vocabulary — unlike an authority rule id, neither is a
+  // pack's word this build might have retired.
+  "usage.recorded": {
+    decode: (record, context) => ({
+      kind: "usage.recorded",
+      attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
+      turnId: readNullableString(record.turnId, `${context}.turnId`),
+      usage: decodeSessionUsage(record.usage, `${context}.usage`),
+    }),
+    // Usage is metadata about a request, never any part of its content: no
+    // prompt, no reply, no path, no account identity. It crosses whole.
+    scrub: (payload) => payload,
   },
 } satisfies { [Kind in SessionEventKind]: SessionEventKindCodec<Kind> };
 
@@ -1175,6 +1194,21 @@ function decodeInteractionResolution(
 
 /* ----------------------------------------------------------------- readers */
 
+function decodeSessionUsage(value: unknown, context: string): SessionUsage {
+  const row = asRecord(value, context);
+  return {
+    cause: enumValue(row.cause, SESSION_USAGE_CAUSES, `${context}.cause`),
+    providerId: readString(row.providerId, `${context}.providerId`),
+    modelId: readString(row.modelId, `${context}.modelId`),
+    inputTokens: readNullableInteger(row.inputTokens, `${context}.inputTokens`),
+    outputTokens: readNullableInteger(row.outputTokens, `${context}.outputTokens`),
+    cacheReadTokens: readNullableInteger(row.cacheReadTokens, `${context}.cacheReadTokens`),
+    cacheWriteTokens: readNullableInteger(row.cacheWriteTokens, `${context}.cacheWriteTokens`),
+    costUsd: readNullableFiniteNumber(row.costUsd, `${context}.costUsd`),
+    costBasis: enumValue(row.costBasis, COST_BASES, `${context}.costBasis`),
+  };
+}
+
 function decodeNativeDetail(value: unknown, context: string): SessionNativeDetail | null {
   assertJsonValue(value, context);
   return value as SessionNativeDetail;
@@ -1232,6 +1266,20 @@ function readInteger(value: unknown, context: string): number {
 
 function readNullableInteger(value: unknown, context: string): number | null {
   return value === null ? null : readInteger(value, context);
+}
+
+/**
+ * A money amount, which is the one durable number here that is not whole.
+ * NaN and the infinities are refused rather than carried: JSON writes NaN as
+ * `null`, so a poisoned cost would come back looking exactly like an honest
+ * absent one, and every total it entered afterwards would be NaN.
+ */
+function readNullableFiniteNumber(value: unknown, context: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a finite number`);
+  }
+  return value;
 }
 
 function enumValue<const T extends readonly string[]>(

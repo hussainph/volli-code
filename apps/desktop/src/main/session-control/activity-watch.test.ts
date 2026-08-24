@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { SessionEngine } from "@volli/session-engine";
+import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 
 import { watchSessionActivity } from "./activity-watch";
@@ -41,6 +42,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     signal: null,
     turnActive: false,
     authorityDenials: 0,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
     bornTicketless: false,
     modelSelection: null,
