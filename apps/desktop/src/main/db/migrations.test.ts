@@ -1379,3 +1379,107 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     db.close();
   });
 });
+
+/** A migrated db holding one project, one ticket, one session, one automation, one run (migration 025's suite). */
+function seededAutomationsDb(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath);
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+         VALUES ('s1', 'p1', 't1', 'Chat', 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automations (id, project_id, name, instructions, runtime, created_at, updated_at)
+         VALUES ('a1', 'p1', 'Review', '/review go', NULL, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automation_runs (id, automation_id, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+         VALUES ('r1', 'a1', 't1', 's1', 'anthropic', 'claude-opus', 'high', 0)`,
+  ).run();
+  return db;
+}
+
+describe("migration 025 — automations and automation_runs", () => {
+  it("creates both tables, refuses empty names/instructions and non-JSON runtime", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(tableExists(db, "automation_runs")).toBe(true);
+    expect(() => db.prepare("UPDATE automations SET name = '' WHERE id = 'a1'").run()).toThrow();
+    expect(() =>
+      db.prepare("UPDATE automations SET instructions = '' WHERE id = 'a1'").run(),
+    ).toThrow();
+    expect(() =>
+      db.prepare("UPDATE automations SET runtime = 'not json' WHERE id = 'a1'").run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare("UPDATE automations SET runtime = ? WHERE id = 'a1'")
+        .run('{"providerId":"anthropic","modelId":"opus","reasoningLevel":"high"}'),
+    ).not.toThrow();
+    db.close();
+  });
+
+  it("scopes a project Automation to its project (cascade) while a global one carries NULL", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, created_at, updated_at)
+         VALUES ('a2', NULL, 'Global', '/tdd', 0, 0)`,
+    ).run();
+
+    db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
+
+    const remaining = db.prepare("SELECT id FROM automations ORDER BY id").all();
+    expect(remaining).toEqual([{ id: "a2" }]);
+    db.close();
+  });
+
+  it("keeps a Run's history when its Automation or Ticket goes, but follows its Session", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    db.prepare("DELETE FROM automations WHERE id = 'a1'").run();
+    db.prepare("DELETE FROM tickets WHERE id = 't1'").run();
+    expect(
+      db.prepare("SELECT automation_id, ticket_id FROM automation_runs WHERE id = 'r1'").get(),
+    ).toEqual({
+      automation_id: null,
+      ticket_id: null,
+    });
+
+    db.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
+    db.close();
+  });
+
+  it("stores the resolved model as its own columns, never as a reference", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    expect(columnNames(db, "automation_runs")).toEqual([
+      "id",
+      "automation_id",
+      "ticket_id",
+      "session_id",
+      "provider_id",
+      "model_id",
+      "reasoning_level",
+      "created_at",
+    ]);
+    expect(() =>
+      db.prepare("UPDATE automation_runs SET provider_id = '' WHERE id = 'r1'").run(),
+    ).toThrow();
+    db.close();
+  });
+});

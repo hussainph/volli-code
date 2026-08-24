@@ -1,5 +1,6 @@
 import { USER_ACTOR } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { createAutomation, recordAutomationRun } from "./automations-repo";
 import { createComment } from "./comments-repo";
 import { recordTicketEvent } from "./events-repo";
 import {
@@ -83,6 +84,8 @@ describe("buildExportDocument — empty db", () => {
     expect(document.sessionCommandReceipts).toEqual([]);
     expect(document.ticketComments).toEqual([]);
     expect(document.appState).toEqual([]);
+    expect(document.automations).toEqual([]);
+    expect(document.automationRuns).toEqual([]);
   });
 
   it("schemaVersion tracks the db's own PRAGMA user_version, not a hardcoded constant", async () => {
@@ -189,6 +192,27 @@ describe("buildExportDocument — populated db", () => {
     ctx.db
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
       .run("ui:zoom", '{"level":0}', 50);
+
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review go",
+        runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      70,
+    );
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        ticketId: liveTicket.id,
+        sessionId: session.id,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      71,
+    );
 
     const document = await buildExportDocument(ctx.db, {
       appVersion: "9.9.9",
@@ -369,6 +393,36 @@ describe("buildExportDocument — populated db", () => {
 
     // app_state — value kept as its raw stored JSON string, unparsed
     expect(document.appState).toEqual([{ key: "ui:zoom", value: '{"level":0}', updatedAt: 50 }]);
+
+    // automations — the runtime pin rides as its STORED JSON string, and the
+    // run carries the RESOLVED model as flat fields beside its references.
+    expect(document.automations).toEqual([
+      {
+        id: automation.id,
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review go",
+        runtime: JSON.stringify({
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          reasoningLevel: "high",
+        }),
+        rowVersion: 1,
+        createdAt: 70,
+        updatedAt: 70,
+      },
+    ]);
+    expect(document.automationRuns).toMatchObject([
+      {
+        automationId: automation.id,
+        ticketId: liveTicket.id,
+        sessionId: session.id,
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+        createdAt: 71,
+      },
+    ]);
   });
 
   it("falls back to the raw project id as displayId prefix for a ticket with no matching project row", async () => {
