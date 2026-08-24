@@ -7,10 +7,11 @@
  * the client against.
  *
  * Listeners are notified SYNCHRONOUSLY after each write that changed state,
- * exactly as zustand notifies: the client's queue-release loop hangs off
- * `subscribe` from its constructor, and a store that batched or deferred
- * would strand a queued message behind the very write that made it
- * releasable.
+ * as zustand does: the client's queue-release loop hangs off `subscribe`
+ * from its constructor, and a store that batched or deferred would strand a
+ * queued message behind the very write that made it releasable. The walk
+ * itself differs from zustand's live-set iteration only at the margins —
+ * see `announce`.
  */
 import type {
   ChatSessionLifecycle,
@@ -47,7 +48,11 @@ export function createSurfaceStore(): SessionSurfaceStore {
   let state: SurfaceSessions;
   const listeners = new Set<() => void>();
   // A snapshot walk, for the registry's reason: a listener unsubscribing
-  // itself mid-walk must not skip its neighbour.
+  // itself mid-walk must not skip its neighbour. Two marginal departures
+  // from zustand's live-set forEach follow, neither observable through
+  // ChatSessionClient (its listener only re-reads state behind a guard): a
+  // listener some OTHER listener unsubscribed mid-walk still runs once, and
+  // one subscribed mid-walk waits for the next write.
   const announce = (): void => {
     const watchers = [...listeners];
     for (const listener of watchers) listener();
