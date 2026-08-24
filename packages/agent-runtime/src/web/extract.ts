@@ -52,13 +52,24 @@ export const WEB_EXTRACT_LIMITS = {
    * than this, so a document past the bound is read up to it rather than
    * refused — the prose is at the top, and a partial article beats no article.
    *
-   * Half a mebibyte rather than the two this started at, because the element
-   * bound below does not constrain a page built from few, very large elements
-   * and the parse itself was measured at ~2s for 2 MiB of prose. An article
-   * page is 50–200 KiB of markup; this is generous against that and cheap
-   * against the 25,000 characters any of it can become.
+   * Back to two mebibytes, from the half this had been tightened to. The
+   * tightening was aimed at a page "built from few, very large elements", which
+   * {@link maxElements} could not constrain — but that is the shape a document
+   * with diagrams has, and the bound was cutting real ones: sqlite.org's
+   * `lang_select.html` is 2 MB of inline SVG railroad diagrams around its prose,
+   * and half a mebibyte of it yielded 839 characters of a 37,269-character
+   * page.
+   *
+   * What makes the wider bound affordable is that the two expensive shapes are
+   * now bounded by something else. An element-dense document is cut by
+   * {@link maxElements} long before it reaches this, and the diagrams that make
+   * a document large without making it dense are stepped over by
+   * {@link SKIPPED_SUBTREES} rather than counted. What is left — 2 MiB of few,
+   * large elements — measured at 0.6-1.0s to parse, against the 2.4s that
+   * {@link maxElements} already permits at its own worst case. The ceiling on
+   * this module's cost did not move; only the number of real pages under it did.
    */
-  htmlChars: 512 * 1024,
+  htmlChars: 2 * 1024 * 1024,
   /**
    * How deep the tree may be before it is flattened.
    *
@@ -67,6 +78,13 @@ export const WEB_EXTRACT_LIMITS = {
    * elements are replaced by their own text rather than removed, so the words
    * survive and only the scaffolding is lost — a page cannot hide its article
    * from Volli by burying it, only its structure.
+   *
+   * The number is unchanged, but what it counts was wrong before: the pre-parse
+   * scan tracked depth as a counter that only came down on an explicit end tag,
+   * so on the minified markup most of the web serves it never came down at all.
+   * See {@link structureBoundOffset} — it now walks a stack of open elements,
+   * and 64 finally means sixty-four levels rather than sixty-four omitted end
+   * tags.
    */
   maxDepth: 64,
   /**
@@ -74,8 +92,7 @@ export const WEB_EXTRACT_LIMITS = {
    *
    * Depth alone is not enough — a shallow document made of very many small
    * elements is the same bill paid the other way round, and Readability's cost
-   * in element count is quadratic: measured here, 2,000 elements cost 256ms,
-   * 4,000 cost 709ms, 8,000 cost 2.5s and 16,000 cost 10.8s.
+   * climbs faster than the count does.
    *
    * Counted in document order, so what survives is the top of the page. That
    * is what sets the number, and it is not set from the output bound: chrome
@@ -85,10 +102,23 @@ export const WEB_EXTRACT_LIMITS = {
    * pins — is the case that decides this, and a tighter bound was measured
    * dropping that page's article on the floor.
    *
-   * So: generous enough for a real page's chrome plus its article, and no more.
-   * Past this the document is one a person would not have read either.
+   * Eight thousand rather than the three it started at, because three was
+   * cutting ordinary documentation and buying nothing for it. Measured against
+   * real pages: electronjs.org's `session` API returned 22,215 characters of a
+   * possible 84,489, undici.nodejs.org 6,526 of 32,456, and vitest.dev's
+   * `expect` page 21,895 of 64,128 — the last of those short of even the
+   * 25,000-character output bound, so the tighter limit was spending a budget
+   * it did not need to spend. Syntax highlighting is what does it: Shiki emits
+   * one `<span>` per token, so a page of code examples spends thousands of
+   * elements on a single article.
+   *
+   * The worst case did not move. Against the shapes Readability is slowest on,
+   * 8,000 elements cost 2.3s where 3,000 cost 2.5s — the expensive shape is
+   * deep nesting, which {@link maxDepth} bounds, not breadth. 12,000 was
+   * measured at 5.4s, which is past what this process should ever spend
+   * synchronously, so the bound sits here.
    */
-  maxElements: 3_000,
+  maxElements: 8_000,
 } as const;
 
 export type WebExtractLimits = { -readonly [K in keyof typeof WEB_EXTRACT_LIMITS]: number };
@@ -230,6 +260,143 @@ const VOID_ELEMENTS: ReadonlySet<string> = new Set([
 const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set(["script", "style", "textarea", "title"]);
 
 /**
+ * Subtrees the scan steps over instead of counting.
+ *
+ * {@link DISCARDED} deletes both of these outright once there is a tree, so
+ * every element inside one is an element the budget is spent measuring and then
+ * throws away. On a page with diagrams that is not a rounding error: sqlite.org
+ * draws its syntax as inline SVG, and `lang_select.html` holds 7,668 `<path>`
+ * and 4,000 `<polygon>` elements — more than the whole element budget — in front
+ * of prose that then never gets read. Skipping them is not a relaxation of the
+ * bound; it is the bound counting the thing it is actually there to limit.
+ *
+ * The subtree still counts as one element, so a page made of ten thousand empty
+ * `<svg>` tags is bounded exactly as before.
+ */
+const SKIPPED_SUBTREES: ReadonlySet<string> = new Set(["svg", "math"]);
+
+/**
+ * The offset just past this element's subtree, for a subtree being stepped over.
+ *
+ * Nesting-aware, because SVG may contain SVG, and stopping at the first `</svg`
+ * would resume the scan in the middle of a subtree that is still open. A
+ * subtree that never closes runs to the end of the document, which is the same
+ * answer the parser will reach.
+ */
+function endOfSubtree(html: string, name: string, from: number): number {
+  const lowered = html.toLowerCase();
+  let depth = 1;
+  let index = from;
+  while (depth > 0) {
+    const next = lowered.indexOf(`<${name}`, index);
+    const close = lowered.indexOf(`</${name}`, index);
+    if (close === -1) return html.length;
+    // A nested opening before the next close means one more level to unwind.
+    if (next !== -1 && next < close) {
+      const past = next + name.length + 1;
+      // Only a real start tag, not `<svgfoo`: the tag name ends where a name
+      // character stops, which is the same rule the main scan reads tags by.
+      // An empty slice — the tag ending the document — matches nothing and so
+      // counts as a real tag, which is what it is.
+      if (!/^[a-zA-Z0-9-]/.test(html.slice(past, past + 1))) depth += 1;
+      index = past;
+      continue;
+    }
+    depth -= 1;
+    index = close + name.length + 2;
+  }
+  return index;
+}
+
+/**
+ * Start tags that close an element the page never bothered to close.
+ *
+ * HTML makes these end tags optional, and this is not an obscure corner of the
+ * specification — it is what every minifier emits. `<ul><li>a<li>b<li>c</ul>`
+ * is three siblings, not three levels, and a scan that reads the second `<li>`
+ * as nesting inside the first has stopped measuring the document and started
+ * measuring how terse its author was.
+ *
+ * Each key is a start tag; the value is the set of currently-open elements it
+ * implicitly ends. The sets hold only siblings, never a container, which is
+ * what keeps the unwinding below self-limiting: a run of unclosed `<li>` pops
+ * back to the `<ul>` and stops there, because `ul` is not in any of them.
+ *
+ * Taken from the "optional tags" rules in the HTML standard, restricted to the
+ * ones that actually appear in served markup. It does not need to be complete:
+ * a rule this misses costs a slightly early truncation point on a page nobody
+ * minified, and never admits anything, because the scan admits nothing.
+ */
+const IMPLIED_END_TAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["li", new Set(["li", "p"])],
+  ["dt", new Set(["dt", "dd", "p"])],
+  ["dd", new Set(["dt", "dd", "p"])],
+  ["option", new Set(["option"])],
+  ["optgroup", new Set(["option", "optgroup"])],
+  ["td", new Set(["td", "th", "p"])],
+  ["th", new Set(["td", "th", "p"])],
+  ["tr", new Set(["td", "th", "tr", "p"])],
+  ["tbody", new Set(["td", "th", "tr", "thead", "tbody", "tfoot"])],
+  ["tfoot", new Set(["td", "th", "tr", "thead", "tbody", "tfoot"])],
+  ["thead", new Set(["td", "th", "tr", "thead", "tbody", "tfoot"])],
+  ["rt", new Set(["rt", "rp"])],
+  ["rp", new Set(["rt", "rp"])],
+]);
+
+/**
+ * Block-level starts that end an open `<p>`.
+ *
+ * `</p>` is the most commonly omitted end tag there is, and unlike the list and
+ * table rules above, what closes a paragraph is "almost any block element"
+ * rather than a short list of siblings. Kept separate for that reason.
+ */
+const CLOSES_PARAGRAPH: ReadonlySet<string> = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "details",
+  "div",
+  "dl",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hgroup",
+  "hr",
+  "main",
+  "menu",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "search",
+  "section",
+  "table",
+  "ul",
+]);
+
+/**
+ * How far back an unmatched `</x>` is allowed to look for its start tag.
+ *
+ * A close tag naming an element that was never opened is stray markup and is
+ * ignored, which means answering "is `x` open?" on every one of them. Scanning
+ * the whole stack each time is quadratic on a page that emits many stray closes
+ * — a cheap way to make this scan expensive — and a real `</x>` sits within a
+ * few levels of its start. Past this the close is treated as stray, which costs
+ * an early truncation point on a pathological page and nothing on a real one.
+ */
+const CLOSE_SEARCH_DEPTH = 64;
+
+/**
  * Where this markup first outgrows its structural bounds, if it ever does.
  *
  * A scan, not a parse, and the distinction is what makes it safe to write. It
@@ -245,43 +412,84 @@ const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set(["script", "style", "text
  * a crash no bound applied afterwards can catch; and removing a hundred
  * thousand elements one at a time costs more than parsing them did. Cutting the
  * string is the only bound that runs before all three.
+ *
+ * Depth is a *stack of open element names*, not a counter, and that is the
+ * whole difference between this measuring nesting and measuring punctuation.
+ * A counter decremented on `</x>` drifts upward forever on ordinary minified
+ * markup, because HTML lets a page omit most of its end tags: measured against
+ * real documentation sites, that drift cut electronjs.org at 5.2% of the
+ * document and nodejs.org at 31.2%, each inside a list or table whose end tags
+ * were merely absent. Popping by name — and applying the implied-end rules a
+ * browser applies — is what makes a flat sidebar of sixty-five links read as a
+ * flat sidebar of sixty-five links.
  */
 function structureBoundOffset(
   html: string,
   maxDepth: number,
   maxElements: number,
 ): number | undefined {
-  let depth = 0;
+  // The elements currently open, outermost first. Its length is the depth.
+  const open: string[] = [];
   let elements = 0;
   let index = 0;
+
+  /**
+   * Unwind the implied end tags a start tag brings with it.
+   *
+   * Stops at the first open element the rule does not name, which is the
+   * container: `ul` appears in no implied set, so unclosed `<li>`s pop back to
+   * their list and no further, and the same shape holds for table sections,
+   * definition lists and option groups.
+   */
+  const closeImplied = (starting: string): void => {
+    const implied = IMPLIED_END_TAGS.get(starting);
+    const closesParagraph = CLOSES_PARAGRAPH.has(starting);
+    if (implied === undefined && !closesParagraph) return;
+    while (open.length > 0) {
+      const top = open[open.length - 1]!;
+      if (implied?.has(top) !== true && !(closesParagraph && top === "p")) break;
+      open.pop();
+    }
+  };
+
   while (index < html.length) {
-    const open = html.indexOf("<", index);
-    if (open === -1) return undefined;
+    const start = html.indexOf("<", index);
+    if (start === -1) return undefined;
     // A comment or a doctype opens nothing; skip past it without counting.
-    if (html.startsWith("<!--", open)) {
-      const close = html.indexOf("-->", open + 4);
+    if (html.startsWith("<!--", start)) {
+      const close = html.indexOf("-->", start + 4);
       if (close === -1) return undefined;
       index = close + 3;
       continue;
     }
-    if (html.startsWith("<!", open) || html.startsWith("<?", open)) {
-      const close = html.indexOf(">", open);
+    if (html.startsWith("<!", start) || html.startsWith("<?", start)) {
+      const close = html.indexOf(">", start);
       if (close === -1) return undefined;
       index = close + 1;
       continue;
     }
-    const closing = html.startsWith("</", open);
-    const nameAt = open + (closing ? 2 : 1);
+    const closing = html.startsWith("</", start);
+    const nameAt = start + (closing ? 2 : 1);
     const name = /^[a-zA-Z][^\s/>]*/.exec(html.slice(nameAt, nameAt + 64))?.[0]?.toLowerCase();
     if (name === undefined) {
       // A bare `<` in text. Not a tag, and not a reason to stop reading.
-      index = open + 1;
+      index = start + 1;
       continue;
     }
-    const close = html.indexOf(">", open);
+    const close = html.indexOf(">", start);
     if (close === -1) return undefined;
     if (closing) {
-      depth = Math.max(0, depth - 1);
+      // Pop back to the element this actually closes, so the unclosed children
+      // it was holding go with it. A name that is not open at all is stray
+      // markup a browser would discard, and discarding it here keeps a page
+      // from popping its way out of the document.
+      const from = Math.max(0, open.length - CLOSE_SEARCH_DEPTH);
+      for (let level = open.length - 1; level >= from; level -= 1) {
+        if (open[level] === name) {
+          open.length = level;
+          break;
+        }
+      }
       index = close + 1;
       continue;
     }
@@ -291,11 +499,18 @@ function structureBoundOffset(
       continue;
     }
     elements += 1;
-    if (elements > maxElements) return open;
+    if (elements > maxElements) return start;
+    // A subtree the sanitiser is going to delete anyway: counted once, stepped
+    // over, and never allowed to spend the budget on its own contents.
+    if (SKIPPED_SUBTREES.has(name) && html[close - 1] !== "/") {
+      index = endOfSubtree(html, name, close + 1);
+      continue;
+    }
+    closeImplied(name);
     // `<br/>` and friends close themselves and never nest.
     if (!VOID_ELEMENTS.has(name) && html[close - 1] !== "/") {
-      depth += 1;
-      if (depth > maxDepth) return open;
+      open.push(name);
+      if (open.length > maxDepth) return start;
     }
     index = close + 1;
   }
@@ -440,6 +655,41 @@ function converter(): TurndownService {
   return turndown;
 }
 
+/**
+ * The page's own description of itself, taken before sanitising removes it.
+ *
+ * `<title>` and the description metas are the last thing left to say about a
+ * page whose body carries no prose — a client-rendered application shell, where
+ * the server sent a loading `<div>` and everything a reader wants arrives later
+ * from JavaScript Volli does not run. It is thin, but it is the page's own
+ * words about itself, and it is the difference between a short answer and an
+ * empty one.
+ *
+ * Read before {@link sanitize}, which removes `<meta>` outright and would
+ * otherwise leave nothing to find.
+ */
+interface PageMetadata {
+  title: string;
+  description: string;
+}
+
+/** One `<meta>` value by name or property, trimmed, or an empty string. */
+function meta(doc: Document, selector: string): string {
+  return (doc.querySelector(selector)?.getAttribute("content") ?? "").trim();
+}
+
+/** What the page says it is, from the head it served. */
+function readMetadata(doc: Document): PageMetadata {
+  return {
+    /* v8 ignore next -- jsdom's `title` is "" for a document without one, never nullish. */
+    title: (doc.title ?? "").trim(),
+    description:
+      meta(doc, 'meta[name="description" i]') ||
+      meta(doc, 'meta[property="og:description" i]') ||
+      meta(doc, 'meta[name="twitter:description" i]'),
+  };
+}
+
 /** What extraction produced, and how much of the page it stands for. */
 export interface ExtractedDocument {
   /** The article as Markdown, unbounded — the caller owns the character bound. */
@@ -516,37 +766,59 @@ export function extractReadableMarkdown(
 
   try {
     const doc = dom.window.document;
+    // Before sanitising, which removes the `<meta>` elements it reads.
+    const metadata = readMetadata(doc);
     sanitize(doc);
     // Before anything walks the tree for meaning. Readability's cost is a
     // function of the shape it is handed, so the shape is bounded first.
     const flattened = boundStructure(doc, limits);
     // jsdom always creates a body for a `text/html` document, so this is the
-    // parser's contract rather than a hope about the page. `body` is captured
-    // before Readability runs, because `parse()` mutates the document it is
-    // given and the fallback must convert what was there, not what it left.
+    // parser's contract rather than a hope about the page. Captured before
+    // Readability runs, because `parse()` mutates the document it is given and
+    // the fallback must convert what was there, not what it left.
     const body = doc.body!.innerHTML;
     const turndown = converter();
+    const cut = truncated || flattened;
 
     const article = new Readability(doc).parse();
     // `null` is Readability's own answer for "no article here"; an article
     // whose content is empty is the same answer in a different shape.
-    if (article === null || article.content == null || article.content.trim() === "") {
-      return {
-        text: turndown.turndown(body).trim(),
-        extracted: false,
-        truncated: truncated || flattened,
-      };
+    const content = article?.content ?? "";
+    if (content.trim() !== "") {
+      // Readability finds the title from `<title>`, then the page's own heading;
+      // either way it is the page's word for itself, not Volli's.
+      /* v8 ignore next -- the type permits a nullish title, but parse() synthesizes one from the document whenever it returns an article at all. */
+      const title = (article?.title ?? "").trim();
+      const heading = title === "" ? "" : `# ${title}\n\n`;
+      const text = `${heading}${turndown.turndown(content)}`.trim();
+      /* v8 ignore next -- unreachable today and kept anyway: Readability only returns an article once it has found several hundred characters of text, so the conversion of one cannot come back empty. That is a fact about the version of a third-party library this happens to be pinned to, not a property of the contract, and the cost of being wrong about it is the empty result the fallbacks below exist to prevent. */
+      if (text !== "") return { text, extracted: true, truncated: cut };
     }
-    // Readability finds the title from `<title>`, then the page's own heading;
-    // either way it is the page's word for itself, not Volli's.
-    /* v8 ignore next -- the type permits a nullish title, but parse() synthesizes one from the document whenever it returns an article at all. */
-    const title = (article.title ?? "").trim();
-    const heading = title === "" ? "" : `# ${title}\n\n`;
-    return {
-      text: `${heading}${turndown.turndown(article.content)}`.trim(),
-      extracted: true,
-      truncated: truncated || flattened,
-    };
+
+    // The two fallbacks below exist because the honest answer to "what does
+    // this page say" is almost never nothing, and an empty result is worse than
+    // a short one — it is indistinguishable from the fetch having failed, which
+    // is what sends a reader off to run the same request without this policy in
+    // front of it.
+
+    // The whole body as Markdown: no article, but a page that is genuinely a
+    // list of links, an index or a search result still has text on it.
+    const whole = turndown.turndown(body).trim();
+    if (whole !== "") return { text: whole, extracted: false, truncated: cut };
+
+    // Nothing in the body at all, which is a client-rendered shell: the server
+    // sent an empty mounting point and everything a reader wants arrives later
+    // from scripts this boundary does not run. The head is all the page sent,
+    // and the page's own word for itself beats returning nothing.
+    //
+    // There is no step between these two. Anything with text in the body
+    // reaches the converter as text, so a body Turndown empties is a body that
+    // was already empty — a visible-text pass here would be unreachable code
+    // pretending to be a safety net.
+    const described = [metadata.title === "" ? "" : `# ${metadata.title}`, metadata.description]
+      .filter((part) => part !== "")
+      .join("\n\n");
+    return { text: described, extracted: false, truncated: cut };
   } finally {
     // The window holds timers and a document; without this it stays alive until
     // the collector notices, once per fetch.

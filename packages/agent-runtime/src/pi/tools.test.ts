@@ -430,6 +430,34 @@ describe("web_fetch tool", () => {
     expect(text).not.toContain("stopped reading");
   });
 
+  it("says outside the content when a redirect moved the read somewhere else", async () => {
+    const tool = createWebFetchTool(async () =>
+      document({
+        requestedUrl: "https://vitejs.dev/guide/",
+        finalUrl: "https://vite.dev/guide/",
+        origin: "https://vite.dev",
+      }),
+    );
+
+    const text = resultText(await tool.execute("call-27", { url: "https://vitejs.dev/guide/" }));
+
+    // Which URL actually answered is the one piece of provenance the model
+    // cannot recover from the text, so Volli states it in Volli's half of the
+    // result — above the markers, where the page cannot reach it.
+    const provenance = text.slice(0, text.indexOf(marker("begin")));
+    expect(provenance).toContain("not the URL you asked for");
+    expect(provenance).toContain("https://vitejs.dev/guide/");
+    expect(provenance).toContain("https://vite.dev/guide/");
+  });
+
+  it("says nothing about redirects when the URL asked for is the one that answered", async () => {
+    const tool = createWebFetchTool(async () => document());
+
+    const text = resultText(await tool.execute("call-28", { url: "https://example.com/guide" }));
+
+    expect(text).not.toContain("not the URL you asked for");
+  });
+
   /**
    * A refused URL is a fact about that URL, and the model is the one who can do
    * something about it. Thrown, it would end the turn over a policy working

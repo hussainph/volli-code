@@ -101,8 +101,34 @@ export const WEB_FETCH_LIMITS = {
   textChars: 25_000,
   /** Connect, TLS and response headers. A host that has said nothing by here has stalled. */
   headerMs: 10_000,
-  /** The whole read, so a body delivered one byte at a time still ends. */
+  /**
+   * The whole read, redirects included, so a body delivered one byte at a time
+   * still ends and a chain of hops cannot renew its own deadline.
+   */
   totalMs: 20_000,
+  /**
+   * How many redirects one read may follow.
+   *
+   * Not following them at all was the single largest cause of this tool failing
+   * on ordinary URLs: measured across thirty real documentation and article
+   * pages, five were refused outright for a redirect, and every one of the five
+   * was benign — `vitejs.dev` to `vite.dev`, `docs.anthropic.com` to
+   * `platform.claude.com`, a `www.` strip, and two path canonicalisations. A
+   * boundary that refuses those does not protect anyone; it teaches the model
+   * to reach for a shell, which is the same read with none of this policy in
+   * front of it.
+   *
+   * Four, because real chains are short — http to https, apex to `www`, then a
+   * path canonicalisation is already the long case — and because each hop is a
+   * fresh admission, resolution and connection, all of it inside the one
+   * {@link totalMs} budget.
+   *
+   * Every hop is re-admitted from scratch, so a redirect can reach no target
+   * that the caller could not have named directly. What the destination may
+   * *not* do is downgrade a secure read onto plain http, which is a property of
+   * the move rather than of the destination and is enforced in the loop.
+   */
+  maxRedirects: 4,
 } as const;
 
 export type WebFetchLimits = { -readonly [K in keyof typeof WEB_FETCH_LIMITS]: number };
@@ -120,26 +146,142 @@ export const WEB_FETCH_USER_AGENT = "Volli/1.0 (+https://volli.app)";
 type ServedKind = "html" | "text" | "markdown";
 const READABLE_TYPES: ReadonlyMap<string, ServedKind> = new Map([
   ["text/html", "html"],
+  // Served by anything publishing XHTML — the IANA registries among them — and
+  // it is HTML as far as every step after this one is concerned.
+  ["application/xhtml+xml", "html"],
   ["text/plain", "text"],
   ["text/markdown", "markdown"],
+  ["text/x-markdown", "markdown"],
 ]);
 
 /**
- * The encodings this slice will decode, mapped to the label `TextDecoder` knows.
+ * Media types refused with a reason rather than guessed at.
  *
- * An allowlist because guessing is how a decoder becomes a parser: an encoding
- * Volli does not recognise is refused rather than read as UTF-8 and silently
- * mangled.
+ * These are the families whose bytes are not text in any encoding, so sniffing
+ * them would only be a slower way to reach the same answer. Refusing by family
+ * also gives the caller a sentence worth reading — "that is a PDF" — instead of
+ * a decoder's worth of replacement characters.
  */
-const READABLE_CHARSETS: ReadonlyMap<string, string> = new Map([
-  ["utf-8", "utf-8"],
-  ["utf8", "utf-8"],
-  ["us-ascii", "utf-8"],
-  ["ascii", "utf-8"],
-  ["iso-8859-1", "windows-1252"],
-  ["latin1", "windows-1252"],
-  ["windows-1252", "windows-1252"],
+const UNREADABLE_FAMILIES = ["image/", "audio/", "video/", "font/"];
+const UNREADABLE_TYPES: ReadonlySet<string> = new Set([
+  "application/pdf",
+  "application/zip",
+  "application/gzip",
+  "application/x-tar",
+  "application/x-7z-compressed",
+  "application/x-rar-compressed",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/msword",
+  "application/wasm",
+  "application/octet-stream",
 ]);
+
+/**
+ * How the served media type maps to the way this slice will read it.
+ *
+ * Exact match first, then the structured-syntax suffixes and the `text/*`
+ * family. The suffix rules are what make this hold up against the long tail:
+ * `application/atom+xml`, `application/ld+json` and `application/vnd.api+json`
+ * are all text a reader can use, and none of them can be listed in advance.
+ *
+ * A type nobody here recognises returns `undefined`, which sends the body to
+ * {@link sniffKind} rather than to a refusal. Refusing an unfamiliar label was
+ * the old behaviour and it was wrong in the common direction: a server that
+ * sends no `Content-Type`, or an idiosyncratic one, is far more often serving
+ * an ordinary page than serving something dangerous, and the bytes themselves
+ * settle it.
+ */
+function declaredKind(media: string): ServedKind | undefined {
+  const exact = READABLE_TYPES.get(media);
+  if (exact !== undefined) return exact;
+  if (media.endsWith("+xml")) return "text";
+  if (media.endsWith("+json")) return "text";
+  if (media === "application/json" || media === "application/xml") return "text";
+  // Everything else under `text/` is text by the registry's own definition:
+  // `text/csv`, `text/tab-separated-values`, `text/x-rst`, and whatever is
+  // registered next.
+  if (media.startsWith("text/")) return "text";
+  return undefined;
+}
+
+/**
+ * What the bytes look like, when the server would not say.
+ *
+ * Only ever reached for a type this module could not name, and it answers with
+ * the two things it can tell apart: markup, and not-markup. A body holding NUL
+ * bytes is binary in every encoding this decodes and is refused outright — that
+ * is the check standing between an unlabelled response and a decoder asked to
+ * read a PNG as prose.
+ *
+ * Deliberately shallow. It looks at the head of the body, matches the two
+ * openings that mean HTML, and otherwise says text; a sniffer that tried to be
+ * clever here would be a second content-type parser with its own disagreements.
+ */
+function sniffKind(body: Buffer): ServedKind | undefined {
+  const head = body.subarray(0, 1024);
+  if (head.includes(0)) return undefined;
+  const start = head.toString("latin1").trimStart().toLowerCase();
+  if (
+    start.startsWith("<!doctype html") ||
+    start.startsWith("<html") ||
+    start.startsWith("<?xml")
+  ) {
+    return "html";
+  }
+  return "text";
+}
+
+/**
+ * The label to decode a body under, and whether it was worth trusting.
+ *
+ * A charset allowlist used to guard this, and it refused every page outside a
+ * seven-label list — which is to say every page in Japanese, Chinese, Korean,
+ * Greek, Hebrew or Cyrillic that had not moved to UTF-8. That is a large part
+ * of the web answered with "Volli does not decode that" when the decoder in
+ * Node reads all of them: `TextDecoder` implements the WHATWG encoding set, and
+ * asking it is both more complete and more honest than a list maintained here.
+ *
+ * Unknown labels fall back to UTF-8 rather than refusing. Decoding is not
+ * parsing — whatever comes out is sanitised, extracted and bounded exactly like
+ * any other page — so the cost of guessing wrong is mojibake in the output, and
+ * the cost of refusing is the whole document.
+ */
+function decoderFor(label: string): TextDecoder {
+  try {
+    // Non-fatal so a byte that is not valid in the declared encoding becomes
+    // U+FFFD instead of throwing away the page around it.
+    return new TextDecoder(label, { fatal: false });
+  } catch {
+    return new TextDecoder("utf-8", { fatal: false });
+  }
+}
+
+/**
+ * The encoding a document is actually in, in the order the evidence counts.
+ *
+ * A byte-order mark is the document's own statement and outranks the header,
+ * which is often a server default nobody set. The header comes next. Failing
+ * both, an HTML document usually says so in its own `<meta>`, which is where
+ * the answer lives for the many pages served as bare `text/html`.
+ */
+function charsetFor(body: Buffer, declared: string | undefined, kind: ServedKind): string {
+  if (body.length >= 2) {
+    if (body[0] === 0xff && body[1] === 0xfe) return "utf-16le";
+    if (body[0] === 0xfe && body[1] === 0xff) return "utf-16be";
+  }
+  if (declared !== undefined && declared !== "") return declared;
+  if (kind === "html") {
+    // The head only: past this a `charset=` is page content rather than a
+    // declaration, and the declaration is required to be near the top.
+    const head = body.subarray(0, 2048).toString("latin1");
+    const found =
+      /<meta[^>]+charset\s*=\s*["']?\s*([a-zA-Z0-9_:.-]+)/i.exec(head)?.[1] ??
+      /<\?xml[^>]+encoding\s*=\s*["']([a-zA-Z0-9_:.-]+)/i.exec(head)?.[1];
+    if (found !== undefined) return found.toLowerCase();
+  }
+  return "utf-8";
+}
 
 /** One address a hostname resolved to, in the shape `node:dns` reports it. */
 export interface WebFetchAddress {
@@ -297,7 +439,12 @@ function requestOptions(
       // cannot serves the HTML it would have served anyway. Asking for HTML
       // first would make every negotiation return the one type that costs the
       // most to read.
-      accept: "text/markdown, text/plain;q=0.9, text/html;q=0.8",
+      //
+      // The catch-all on the end is not decoration. A server that honours
+      // `Accept` strictly and serves something outside this list — XHTML, an
+      // API's JSON, `text/x-rst` — answers 406 without it, which is a document
+      // Volli can read refused over a header Volli sent.
+      accept: "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1",
       // Identity only. A compressed body is a decompression bound this slice
       // has not written, and asking for one Volli cannot police is careless.
       "accept-encoding": "identity",
@@ -319,7 +466,7 @@ function header(response: IncomingMessage, name: string): string | undefined {
 }
 
 /** Split `text/html; charset=utf-8` into the two decisions it carries. */
-function contentType(response: IncomingMessage): { media: string; charset: string } {
+function contentType(response: IncomingMessage): { media: string; charset: string | undefined } {
   const raw = header(response, "content-type") ?? "";
   const [media = "", ...parameters] = raw.split(";");
   const charset = parameters
@@ -327,7 +474,10 @@ function contentType(response: IncomingMessage): { media: string; charset: strin
     .find((parameter) => parameter.startsWith("charset="))
     ?.slice("charset=".length)
     .replaceAll('"', "");
-  return { media: media.trim().toLowerCase(), charset: charset ?? "utf-8" };
+  // Absent rather than defaulted: "the server said nothing" is what sends
+  // `charsetFor` to the document's own declaration, and a default here would
+  // answer that question before it was asked.
+  return { media: media.trim().toLowerCase(), charset };
 }
 
 /**
@@ -342,6 +492,7 @@ function contentType(response: IncomingMessage): { media: string; charset: strin
  * site is a table of contents and nothing else.
  */
 function document(
+  requestedUrl: string,
   target: AdmittedWebTarget,
   url: URL,
   response: IncomingMessage,
@@ -349,21 +500,21 @@ function document(
   limits: WebFetchLimits,
 ): SafeWebFetchResult {
   const { media, charset } = contentType(response);
-  const kind = READABLE_TYPES.get(media);
+  if (UNREADABLE_TYPES.has(media) || UNREADABLE_FAMILIES.some((one) => media.startsWith(one))) {
+    throw new WebFetchRefusal(
+      "fetch.type",
+      `${target.hostname} served ${media}, which is not a document Volli reads as text.`,
+    );
+  }
+  // A type this module knows, or failing that whatever the bytes say they are.
+  const kind = declaredKind(media) ?? sniffKind(body);
   if (kind === undefined) {
     throw new WebFetchRefusal(
       "fetch.type",
       `${target.hostname} served a document Volli does not read as text.`,
     );
   }
-  const encoding = READABLE_CHARSETS.get(charset);
-  if (encoding === undefined) {
-    throw new WebFetchRefusal(
-      "fetch.charset",
-      `${target.hostname} served a character encoding Volli does not decode.`,
-    );
-  }
-  const decoded = new TextDecoder(encoding).decode(body);
+  const decoded = decoderFor(charsetFor(body, charset, kind)).decode(body);
 
   let text: string;
   let truncated: boolean;
@@ -394,8 +545,21 @@ function document(
     truncated = decoded.length > limits.textChars;
     returned = kind;
   }
+  // An empty document is the one answer that helps nobody. It reads as a broken
+  // tool rather than as a fact about the page, and a model that gets one
+  // reaches for the shell to run the same read without this policy in front of
+  // it — the exact failure this boundary exists to make unnecessary. Extraction
+  // already falls back through the whole body, its visible text and finally the
+  // page's own metadata, so arriving here means the response genuinely carried
+  // no text at all, and saying so is both true and actionable.
+  if (text.trim() === "") {
+    throw new WebFetchRefusal(
+      "fetch.unreadable",
+      `${target.hostname} served a page with no readable text in it; its content is probably rendered by scripts, which Volli does not run.`,
+    );
+  }
   return {
-    requestedUrl: target.url,
+    requestedUrl,
     finalUrl: target.url,
     origin: url.origin,
     contentType: returned,
@@ -404,11 +568,250 @@ function document(
   };
 }
 
+/**
+ * One hop's outcome: the document, or somewhere else to look.
+ *
+ * A redirect is returned rather than followed here, because following it is a
+ * policy decision and this function performs no policy. The loop above takes
+ * the location back through admission, resolution and pinning from the top.
+ */
+type HopResult =
+  | { outcome: "document"; document: SafeWebFetchResult }
+  | { outcome: "redirect"; location: string; status: number };
+
 /** Build the fetcher. */
 export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFetch {
   const resolve = options.resolve ?? resolveWebAddresses;
   const open = options.open ?? openWebRequest;
   const limits = options.limits ?? WEB_FETCH_LIMITS;
+
+  /**
+   * Admit, resolve and pin one URL, then read what is at the end of it.
+   *
+   * Every hop runs this whole function, and that is the property that makes
+   * following a redirect safe: a redirected target gets the same admission, the
+   * same address classification and the same pinned connection as a URL a
+   * person typed. Nothing is carried over from the previous hop but the
+   * deadline the caller is waiting on.
+   */
+  async function hop(
+    requestedUrl: string,
+    href: string,
+    signal: AbortSignal,
+    started: number,
+  ): Promise<HopResult> {
+    const admission = admitWebTarget(href);
+    if (admission.outcome === "refuse") {
+      throw new WebFetchRefusal(admission.rule, admission.reason);
+    }
+    const { target } = admission;
+    // A resolver that throws has said the same thing as one that answers
+    // nothing, and the caller gets Volli's word for it rather than a system
+    // error carrying a hostname and an errno through the transcript.
+    let answers: readonly WebFetchAddress[];
+    try {
+      answers = await resolve(target.hostname);
+    } catch {
+      throw new WebFetchRefusal("fetch.unresolvable", `${target.hostname} could not be resolved.`);
+    }
+    const addresses = pinAddresses(target.hostname, answers);
+    // Asked twice, because resolution takes real time and the listener that
+    // watches for a withdrawal is only installed once the request exists. A
+    // turn interrupted inside that window would otherwise still open a socket
+    // and still hand back a page — and an `abort` listener added to a signal
+    // that has already fired is never called, so without this check the
+    // withdrawal is not merely late, it is lost.
+    if (signal.aborted) {
+      throw new WebFetchRefusal(
+        "fetch.cancelled",
+        `The request to ${target.hostname} was cancelled before it was sent.`,
+      );
+    }
+    // Parsing the href admission produced, not the caller's string: this is
+    // the URL the policy accepted, already canonical, and re-reading it is
+    // how the path reaches the socket without a second interpretation of the
+    // original input.
+    const url = new URL(target.url);
+
+    return await new Promise<HopResult>((settle, refuse) => {
+      const request = open(target.scheme, requestOptions(target, url, addresses, limits));
+
+      // Two deadlines rather than an inactivity timer: a host that answers a
+      // byte at a time is never idle, and would hold a socket open forever
+      // under a timer that only watches for silence.
+      //
+      // The total one is measured from when the *caller's* read began rather
+      // than from this hop, so a chain of redirects cannot buy itself twenty
+      // fresh seconds per hop. Whatever is left of the budget is what this
+      // hop gets, and a chain that has already spent it stops here.
+      const remaining = Math.max(0, limits.totalMs - (Date.now() - started));
+      const deadlines = [
+        setTimeout(() => stop("before answering"), Math.min(limits.headerMs, remaining)),
+        setTimeout(() => stop("before finishing"), remaining),
+      ];
+      function stop(when: string): void {
+        abandon();
+        request.destroy();
+        refuse(new WebFetchRefusal("fetch.timeout", `${target.hostname} ran out of time ${when}.`));
+      }
+
+      // One cleanup for every way out, including the ordinary one: a deadline
+      // left armed keeps a process awake, and a listener left on a long-lived
+      // signal is a leak per fetch.
+      function abandon(): void {
+        for (const deadline of deadlines) clearTimeout(deadline);
+        signal.removeEventListener("abort", cancel);
+      }
+
+      function cancel(): void {
+        abandon();
+        request.destroy();
+        refuse(
+          new WebFetchRefusal(
+            "fetch.cancelled",
+            `The request to ${target.hostname} was cancelled.`,
+          ),
+        );
+      }
+
+      signal.addEventListener("abort", cancel, { once: true });
+      request.on("close", abandon);
+
+      request.on("error", (error) => {
+        // Node's own code for the failure — `ECONNRESET`, `HPE_HEADER_OVERFLOW`
+        // — which is generated here rather than chosen by the host, so it can
+        // be recorded without quoting the other end.
+        const code = (error as NodeJS.ErrnoException).code ?? error.name;
+        refuse(
+          new WebFetchRefusal(
+            "fetch.transport",
+            `Volli could not read ${target.hostname}: the connection failed (${code}).`,
+          ),
+        );
+      });
+
+      request.on("response", (response) => {
+        clearTimeout(deadlines[0]);
+        /* v8 ignore next -- a parsed response always carries a status; 0 refuses below rather than reading a headless answer as success. */
+        const status = response.statusCode ?? 0;
+        // A redirect is a new target, and a new target is a new policy
+        // decision — not something a response header gets to make on Volli's
+        // behalf. So it is handed back rather than followed here, and the loop
+        // puts it through admission, classification and pinning from the top.
+        if (status >= 300 && status <= 399) {
+          const location = header(response, "location")?.trim();
+          request.destroy();
+          if (location === undefined || location === "") {
+            refuse(
+              new WebFetchRefusal(
+                "fetch.redirect",
+                `${target.hostname} answered ${status} without saying where to look instead.`,
+              ),
+            );
+            return;
+          }
+          // Resolved against the URL this hop actually used, so a relative
+          // `Location` — which is most of them — becomes an absolute target
+          // the policy can judge. A `Location` that is not a URL at all is a
+          // refusal rather than a guess.
+          let next: string;
+          try {
+            next = new URL(location, url).href;
+          } catch {
+            refuse(
+              new WebFetchRefusal(
+                "fetch.redirect",
+                `${target.hostname} answered ${status} pointing somewhere Volli cannot read as a URL.`,
+              ),
+            );
+            return;
+          }
+          settle({ outcome: "redirect", location: next, status });
+          return;
+        }
+        // An error page is a page. It is written by the same host, arrives
+        // with the same content type, and saying "404" is more use to a
+        // caller than handing its body onward as though it were the document
+        // that was asked for.
+        if (status < 200 || status > 299) {
+          request.destroy();
+          refuse(
+            new WebFetchRefusal(
+              "fetch.status",
+              `${target.hostname} answered ${status} rather than serving the document.`,
+            ),
+          );
+          return;
+        }
+        // Volli asked for `identity`. A server that compresses anyway has
+        // handed back bytes whose decompressed size is its choice rather than
+        // this module's, and the byte bound below counts what arrives on the
+        // socket — which is the small half of a compression bomb.
+        const encoding = header(response, "content-encoding")?.trim().toLowerCase();
+        if (encoding !== undefined && encoding !== "" && encoding !== "identity") {
+          request.destroy();
+          refuse(
+            new WebFetchRefusal(
+              "fetch.encoding",
+              `${target.hostname} compressed its answer, which Volli cannot bound in this slice.`,
+            ),
+          );
+          return;
+        }
+        // `Content-Length` is a claim, and this is the only thing Volli does
+        // with it: refuse early when the server itself says the body is over
+        // the bound. It is never used to decide when reading is finished, and
+        // never believed in the other direction — the count below is what
+        // actually stops the read.
+        const declared = Number(header(response, "content-length"));
+        if (Number.isFinite(declared) && declared > limits.bodyBytes) {
+          request.destroy();
+          refuse(
+            new WebFetchRefusal(
+              "fetch.too-large",
+              `${target.hostname} declared a body over the ${limits.bodyBytes} byte bound.`,
+            ),
+          );
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        response.on("data", (chunk: Buffer) => {
+          bytes += chunk.length;
+          if (bytes > limits.bodyBytes) {
+            request.destroy();
+            refuse(
+              new WebFetchRefusal(
+                "fetch.too-large",
+                `${target.hostname} served more than ${limits.bodyBytes} bytes.`,
+              ),
+            );
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
+          try {
+            settle({
+              outcome: "document",
+              document: document(
+                requestedUrl,
+                target,
+                url,
+                response,
+                Buffer.concat(chunks),
+                limits,
+              ),
+            });
+          } catch (error) {
+            refuse(error);
+          }
+        });
+      });
+
+      request.end();
+    });
+  }
 
   return {
     async fetch(input) {
@@ -417,185 +820,55 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
       if (input.signal.aborted) {
         throw new WebFetchRefusal("fetch.cancelled", "The request was cancelled before it ran.");
       }
+      // The whole chain shares one clock, so redirects cannot extend the read
+      // past the deadline the caller agreed to.
+      const started = Date.now();
+      // The URL the caller asked for, canonical as admission normalized it,
+      // reported on the document however many hops it took to reach.
       const admission = admitWebTarget(input.url);
       if (admission.outcome === "refuse") {
         throw new WebFetchRefusal(admission.rule, admission.reason);
       }
-      const { target } = admission;
-      // A resolver that throws has said the same thing as one that answers
-      // nothing, and the caller gets Volli's word for it rather than a system
-      // error carrying a hostname and an errno through the transcript.
-      let answers: readonly WebFetchAddress[];
-      try {
-        answers = await resolve(target.hostname);
-      } catch {
-        throw new WebFetchRefusal(
-          "fetch.unresolvable",
-          `${target.hostname} could not be resolved.`,
-        );
+      const requestedUrl = admission.target.url;
+
+      // Every URL this read has already been sent to. A redirect back to one of
+      // them is a loop, and a loop that is merely bounded by the hop count
+      // spends the whole budget discovering what the first repeat already said.
+      const seen = new Set<string>([requestedUrl]);
+      let href = requestedUrl;
+      let scheme = admission.target.scheme;
+
+      for (let followed = 0; ; followed += 1) {
+        const result = await hop(requestedUrl, href, input.signal, started);
+        if (result.outcome === "document") return result.document;
+        if (followed >= limits.maxRedirects) {
+          throw new WebFetchRefusal(
+            "fetch.redirect",
+            `Reading ${requestedUrl} passed through ${limits.maxRedirects} redirects without reaching a document.`,
+          );
+        }
+        // Judged here rather than inside admission, because it is the one rule
+        // that is about the *move* rather than about the destination: an https
+        // URL that ends on a plain-http hop has been quietly downgraded, and the
+        // caller asked for a verified connection. The reverse is ordinary and
+        // permitted — http to https is every site's canonical redirect.
+        const destination = new URL(result.location);
+        if (scheme === "https" && destination.protocol === "http:") {
+          throw new WebFetchRefusal(
+            "fetch.redirect",
+            `${destination.hostname} redirected a secure request onto plain http, which Volli does not follow.`,
+          );
+        }
+        if (seen.has(destination.href)) {
+          throw new WebFetchRefusal(
+            "fetch.redirect",
+            `Reading ${requestedUrl} came back to ${destination.href}, so the redirects are a loop.`,
+          );
+        }
+        seen.add(destination.href);
+        href = destination.href;
+        scheme = destination.protocol === "https:" ? "https" : "http";
       }
-      const addresses = pinAddresses(target.hostname, answers);
-      // Asked twice, because resolution takes real time and the listener that
-      // watches for a withdrawal is only installed once the request exists. A
-      // turn interrupted inside that window would otherwise still open a socket
-      // and still hand back a page — and an `abort` listener added to a signal
-      // that has already fired is never called, so without this check the
-      // withdrawal is not merely late, it is lost.
-      if (input.signal.aborted) {
-        throw new WebFetchRefusal(
-          "fetch.cancelled",
-          `The request to ${target.hostname} was cancelled before it was sent.`,
-        );
-      }
-      // Parsing the href admission produced, not the caller's string: this is
-      // the URL the policy accepted, already canonical, and re-reading it is
-      // how the path reaches the socket without a second interpretation of the
-      // original input.
-      const url = new URL(target.url);
-
-      return await new Promise<SafeWebFetchResult>((settle, refuse) => {
-        const request = open(target.scheme, requestOptions(target, url, addresses, limits));
-
-        // Two deadlines rather than an inactivity timer: a host that answers a
-        // byte at a time is never idle, and would hold a socket open forever
-        // under a timer that only watches for silence.
-        const deadlines = [
-          setTimeout(() => stop("before answering"), limits.headerMs),
-          setTimeout(() => stop("before finishing"), limits.totalMs),
-        ];
-        function stop(when: string): void {
-          abandon();
-          request.destroy();
-          refuse(
-            new WebFetchRefusal("fetch.timeout", `${target.hostname} ran out of time ${when}.`),
-          );
-        }
-
-        // One cleanup for every way out, including the ordinary one: a deadline
-        // left armed keeps a process awake, and a listener left on a long-lived
-        // signal is a leak per fetch.
-        function abandon(): void {
-          for (const deadline of deadlines) clearTimeout(deadline);
-          input.signal.removeEventListener("abort", cancel);
-        }
-
-        function cancel(): void {
-          abandon();
-          request.destroy();
-          refuse(
-            new WebFetchRefusal(
-              "fetch.cancelled",
-              `The request to ${target.hostname} was cancelled.`,
-            ),
-          );
-        }
-
-        input.signal.addEventListener("abort", cancel, { once: true });
-        request.on("close", abandon);
-
-        request.on("error", (error) => {
-          // Node's own code for the failure — `ECONNRESET`, `HPE_HEADER_OVERFLOW`
-          // — which is generated here rather than chosen by the host, so it can
-          // be recorded without quoting the other end.
-          const code = (error as NodeJS.ErrnoException).code ?? error.name;
-          refuse(
-            new WebFetchRefusal(
-              "fetch.transport",
-              `Volli could not read ${target.hostname}: the connection failed (${code}).`,
-            ),
-          );
-        });
-
-        request.on("response", (response) => {
-          clearTimeout(deadlines[0]);
-          /* v8 ignore next -- a parsed response always carries a status; 0 refuses below rather than reading a headless answer as success. */
-          const status = response.statusCode ?? 0;
-          // A redirect is a new target, and a new target is a new policy
-          // decision — not something a response header gets to make on Volli's
-          // behalf. Reported, so a caller can ask for the new URL deliberately
-          // and have it admitted, resolved and pinned like any other.
-          if (status >= 300 && status <= 399) {
-            request.destroy();
-            refuse(
-              new WebFetchRefusal(
-                "fetch.redirect",
-                `${target.hostname} redirected the request (${status}); Volli does not follow redirects.`,
-              ),
-            );
-            return;
-          }
-          // An error page is a page. It is written by the same host, arrives
-          // with the same content type, and saying "404" is more use to a
-          // caller than handing its body onward as though it were the document
-          // that was asked for.
-          if (status < 200 || status > 299) {
-            request.destroy();
-            refuse(
-              new WebFetchRefusal(
-                "fetch.status",
-                `${target.hostname} answered ${status} rather than serving the document.`,
-              ),
-            );
-            return;
-          }
-          // Volli asked for `identity`. A server that compresses anyway has
-          // handed back bytes whose decompressed size is its choice rather than
-          // this module's, and the byte bound below counts what arrives on the
-          // socket — which is the small half of a compression bomb.
-          const encoding = header(response, "content-encoding")?.trim().toLowerCase();
-          if (encoding !== undefined && encoding !== "" && encoding !== "identity") {
-            request.destroy();
-            refuse(
-              new WebFetchRefusal(
-                "fetch.encoding",
-                `${target.hostname} compressed its answer, which Volli cannot bound in this slice.`,
-              ),
-            );
-            return;
-          }
-          // `Content-Length` is a claim, and this is the only thing Volli does
-          // with it: refuse early when the server itself says the body is over
-          // the bound. It is never used to decide when reading is finished, and
-          // never believed in the other direction — the count below is what
-          // actually stops the read.
-          const declared = Number(header(response, "content-length"));
-          if (Number.isFinite(declared) && declared > limits.bodyBytes) {
-            request.destroy();
-            refuse(
-              new WebFetchRefusal(
-                "fetch.too-large",
-                `${target.hostname} declared a body over the ${limits.bodyBytes} byte bound.`,
-              ),
-            );
-            return;
-          }
-          const chunks: Buffer[] = [];
-          let bytes = 0;
-          response.on("data", (chunk: Buffer) => {
-            bytes += chunk.length;
-            if (bytes > limits.bodyBytes) {
-              request.destroy();
-              refuse(
-                new WebFetchRefusal(
-                  "fetch.too-large",
-                  `${target.hostname} served more than ${limits.bodyBytes} bytes.`,
-                ),
-              );
-              return;
-            }
-            chunks.push(chunk);
-          });
-          response.on("end", () => {
-            try {
-              settle(document(target, url, response, Buffer.concat(chunks), limits));
-            } catch (error) {
-              refuse(error);
-            }
-          });
-        });
-
-        request.end();
-      });
     },
   };
 }
