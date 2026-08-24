@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   COMPACT_VERB,
   COMPOSER_VERBS,
+  COMPOSER_VERB_TABLE,
   COPY_VERB,
   LOGIN_VERB,
   MODEL_VERB,
@@ -28,6 +29,20 @@ describe("the verbs there are", () => {
       expect(isComposerVerbName(verb.name)).toBe(true);
     }
     expect(isComposerVerbName("review")).toBe(false);
+  });
+
+  it("keeps the Map keys, derived rows and row names in exact correspondence", () => {
+    const keys = [...COMPOSER_VERB_TABLE.keys()];
+    expect(keys).toEqual(COMPOSER_VERBS.map((verb) => verb.name));
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const verb of COMPOSER_VERBS) {
+      expect(COMPOSER_VERB_TABLE.get(verb.name)).toMatchObject({
+        description: verb.description,
+        takesInstructions: verb.takesInstructions,
+      });
+      expect(Object.isFrozen(verb)).toBe(true);
+    }
+    expect(Object.isFrozen(COMPOSER_VERBS)).toBe(true);
   });
 
   it("records which verbs read free text and which refuse it", () => {

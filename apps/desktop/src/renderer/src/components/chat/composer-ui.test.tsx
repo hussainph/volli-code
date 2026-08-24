@@ -632,6 +632,7 @@ function pickerState(overrides: Partial<ComposerPickerState> = {}): ComposerPick
         name: "review",
         label: "/review",
         detail: "Review a file",
+        heading: "Commands",
         template: TEMPLATES[0]!,
       },
     ],
@@ -708,6 +709,14 @@ describe("the picker card", () => {
     const html = renderPicker(pickerState({ rows: [] }));
 
     expect(html).toContain("No match");
+  });
+
+  it("takes an open source group's heading from its resolved row", () => {
+    const [command] = pickerState().rows;
+    if (command?.kind !== "command") throw new Error("expected the command fixture");
+    const html = renderPicker(pickerState({ rows: [{ ...command, heading: "Prompt templates" }] }));
+
+    expect(html).toContain(">Prompt templates<");
   });
 
   it("heads a verb row Actions, apart from the rows that only write text", () => {

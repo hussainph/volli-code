@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { IndexedFile, PromptTemplate, SkillReference } from "@volli/shared";
+import {
+  COMPACT_VERB,
+  COMPOSER_VERBS,
+  expandCommandInvocation,
+  resolveSlashNamespace,
+  type IndexedFile,
+  type PromptTemplate,
+  type SkillReference,
+} from "@volli/shared";
 
 import {
   activePickerRow,
@@ -9,13 +17,11 @@ import {
   composerPickerTarget,
   composerPickerToken,
   movePickerActive,
-  rankCommandCompletions,
-  rankSkillCompletions,
+  rankSlashCompletions,
   rankVerbCompletions,
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "./composer-picker";
-import { COMPACT_VERB, COMPOSER_VERBS, resolveSlashNamespace } from "@volli/shared";
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
@@ -78,11 +84,19 @@ describe("commandTokenAt", () => {
     expect(commandTokenAt({ text: "/rev", offset: 4 })).toEqual({ from: 0, to: 4, query: "rev" });
   });
 
-  it("stays open with the caret inside the name", () => {
+  it("stays open inside the name and replaces the whole token", () => {
     expect(commandTokenAt({ text: "/review", offset: 3 })).toEqual({
       from: 0,
-      to: 3,
+      to: 7,
       query: "re",
+    });
+  });
+
+  it("treats a qualifier separator as part of the same whole token", () => {
+    expect(commandTokenAt({ text: "/command:compact", offset: 8 })).toEqual({
+      from: 0,
+      to: 16,
+      query: "command",
     });
   });
 
@@ -134,79 +148,85 @@ describe("commandTokenAt", () => {
   });
 });
 
-/**
- * The template rows as the picker gets them — through the real resolver, so a
- * test cannot assert against a name the composer would never actually offer.
- */
-function commandEntries(
-  templates: readonly PromptTemplate[],
-  skills: readonly SkillReference[] = [],
-) {
-  return resolveSlashNamespace({ templates, skills }).templates;
+function slashRows(input: {
+  query: string;
+  templates?: readonly PromptTemplate[];
+  skills?: readonly SkillReference[];
+}): readonly ComposerPickerRow[] {
+  const namespace = resolveSlashNamespace({
+    templates: input.templates ?? [],
+    skills: input.skills ?? [],
+  });
+  return rankSlashCompletions({ query: input.query, entries: namespace.entries });
 }
 
-/** The skill rows as the picker gets them. See {@link commandEntries}. */
-function skillEntries(
-  skills: readonly SkillReference[],
-  templates: readonly PromptTemplate[] = [],
-) {
-  return resolveSlashNamespace({ templates, skills }).skills;
+function commandRows(input: {
+  query: string;
+  templates: readonly PromptTemplate[];
+  skills?: readonly SkillReference[];
+}) {
+  return slashRows(input).filter(
+    (row): row is Extract<ComposerPickerRow, { kind: "command" }> => row.kind === "command",
+  );
 }
 
-describe("rankCommandCompletions", () => {
+function skillRows(input: {
+  query: string;
+  skills: readonly SkillReference[];
+  templates?: readonly PromptTemplate[];
+}) {
+  return slashRows(input).filter(
+    (row): row is Extract<ComposerPickerRow, { kind: "skill" }> => row.kind === "skill",
+  );
+}
+
+describe("rankSlashCompletions", () => {
   it("offers every template for an empty query, name-sorted", () => {
-    const rows = rankCommandCompletions({ query: "", entries: commandEntries(TEMPLATES) });
+    const rows = commandRows({ query: "", templates: TEMPLATES });
 
     expect(rows.map((row) => row.value)).toEqual(["preview", "review", "ship"]);
   });
 
   it("labels a row with its slash and its description", () => {
-    const [row] = rankCommandCompletions({ query: "ship", entries: commandEntries(TEMPLATES) });
+    const [row] = commandRows({ query: "ship", templates: TEMPLATES });
 
     expect(row?.label).toBe("/ship");
     expect(row?.detail).toBe("Open a pull request");
   });
 
   it("puts a prefix match above one the name merely contains", () => {
-    const rows = rankCommandCompletions({ query: "rev", entries: commandEntries(TEMPLATES) });
+    const rows = commandRows({ query: "rev", templates: TEMPLATES });
 
     expect(rows.map((row) => row.value)).toEqual(["review", "preview"]);
   });
 
   it("still finds a template only its description explains", () => {
-    const rows = rankCommandCompletions({
-      query: "pull request",
-      entries: commandEntries(TEMPLATES),
-    });
+    const rows = commandRows({ query: "pull request", templates: TEMPLATES });
 
     expect(rows.map((row) => row.value)).toEqual(["ship"]);
   });
 
   it("is case-insensitive", () => {
-    expect(
-      rankCommandCompletions({ query: "SHIP", entries: commandEntries(TEMPLATES) }),
-    ).toHaveLength(1);
+    expect(commandRows({ query: "SHIP", templates: TEMPLATES })).toHaveLength(1);
   });
 
   it("is empty when nothing matches", () => {
-    expect(rankCommandCompletions({ query: "zzz", entries: commandEntries(TEMPLATES) })).toEqual(
-      [],
-    );
+    expect(commandRows({ query: "zzz", templates: TEMPLATES })).toEqual([]);
   });
 
-  it("caps a very long list", () => {
+  it("keeps every supplied match discoverable", () => {
     const many = Array.from({ length: 80 }, (_, index) =>
       template({ name: `cmd${String(index).padStart(2, "0")}` }),
     );
 
-    expect(rankCommandCompletions({ query: "", entries: commandEntries(many) })).toHaveLength(50);
+    expect(commandRows({ query: "", templates: many })).toHaveLength(80);
   });
 
   it("offers a template a verb shadowed, under the name that runs it", () => {
     // It used to be missing from this list entirely. The row is back, spelled
     // the way submit resolves it, and `name` is what a pick writes.
     const own = template({ name: "compact", description: "my own compaction prompt" });
-    const [row] = rankCommandCompletions({ query: "compact", entries: commandEntries([own]) });
+    const [row] = commandRows({ query: "compact", templates: [own] });
 
     expect(row?.label).toBe("/command:compact");
     expect(row?.kind === "command" ? row.name : null).toBe("command:compact");
@@ -275,7 +295,7 @@ describe("the picker, both halves composed", () => {
   });
 });
 
-describe("rankSkillCompletions", () => {
+describe("skill rows in the shared ranking pass", () => {
   const SKILLS: readonly SkillReference[] = [
     skill({ name: "svg-logo-designer" }),
     skill({ name: "review", description: "Shadowed by the review template" }),
@@ -283,7 +303,7 @@ describe("rankSkillCompletions", () => {
   ];
 
   it("offers skills by slug, keyed on the name the namespace resolved", () => {
-    const rows = rankSkillCompletions({ query: "svg", entries: skillEntries(SKILLS, TEMPLATES) });
+    const rows = skillRows({ query: "svg", skills: SKILLS, templates: TEMPLATES });
 
     expect(rows).toMatchObject([
       { kind: "skill", value: "svg-logo-designer", label: "/svg-logo-designer" },
@@ -291,7 +311,7 @@ describe("rankSkillCompletions", () => {
   });
 
   it("keeps a skill a template's name shadows, under the name that resolves to it", () => {
-    const rows = rankSkillCompletions({ query: "", entries: skillEntries(SKILLS, TEMPLATES) });
+    const rows = skillRows({ query: "", skills: SKILLS, templates: TEMPLATES });
 
     // The shadowed `review` skill used to be dropped here. It is offered now,
     // labelled `/skill:review` — a name submit resolves to this skill and
@@ -304,18 +324,15 @@ describe("rankSkillCompletions", () => {
   });
 
   it("matches on the description at the lowest tier, like a command", () => {
-    const rows = rankSkillCompletions({ query: "checklists", entries: skillEntries(SKILLS) });
+    const rows = skillRows({ query: "checklists", skills: SKILLS });
 
     expect(rows.map((row) => row.value)).toEqual(["audits"]);
   });
 
   it("ranks a slug that merely contains the query below a prefix match", () => {
-    const rows = rankSkillCompletions({
+    const rows = skillRows({
       query: "logo",
-      entries: skillEntries([
-        skill({ name: "logos", description: "" }),
-        skill({ name: "svg-logo-designer" }),
-      ]),
+      skills: [skill({ name: "logos", description: "" }), skill({ name: "svg-logo-designer" })],
     });
 
     expect(rows.map((row) => row.value)).toEqual(["logos", "svg-logo-designer"]);
@@ -324,9 +341,10 @@ describe("rankSkillCompletions", () => {
   it("keys a shadowed skill on its qualified name, which is still unique", () => {
     // The value used to carry a hand-written `skill:` prefix for uniqueness.
     // `resolveSlashNamespace` promises that now, so the value is just the name.
-    const rows = rankSkillCompletions({
+    const rows = skillRows({
       query: "review",
-      entries: skillEntries([skill({ name: "review" })], [template({ name: "review" })]),
+      skills: [skill({ name: "review" })],
+      templates: [template({ name: "review" })],
     });
 
     expect(rows.map((row) => row.value)).toEqual(["skill:review"]);
@@ -560,6 +578,7 @@ describe("applyPickerRow", () => {
       name: found.name,
       label: `/${found.name}`,
       detail: found.description,
+      heading: "Commands",
       template: found,
     };
   }
@@ -639,6 +658,31 @@ describe("applyPickerRow", () => {
     });
   });
 
+  it("round-trips a qualified row from an interior separator caret through submit", () => {
+    const own = template({ name: "compact", content: "Summarize $1 my way." });
+    const text = "/command:compact";
+    const token = commandTokenAt({ text, offset: 8 });
+    if (token === null) throw new Error("expected an open qualified token");
+    const rows = composerPickerRows({
+      mode: "command",
+      query: token.query,
+      templates: [own],
+      verbs: COMPOSER_VERBS,
+      files: FILES,
+    });
+    const row = rows.find((entry) => entry.kind === "command");
+    if (row === undefined) throw new Error("expected the qualified command row");
+
+    const applied = applyPickerRow({
+      text,
+      state: { mode: "command", ...token, rows },
+      row,
+    });
+
+    expect(applied.text).toBe("/command:compact ");
+    expect(expandCommandInvocation(`${applied.text}now`, [own]).text).toBe("Summarize now my way.");
+  });
+
   it("always stages `/name ` for a skill — the body expands at submit, never into the draft", () => {
     const state = pick("/svg");
     if (state === null) throw new Error("expected an open picker");
@@ -649,6 +693,7 @@ describe("applyPickerRow", () => {
       name: picked.name,
       label: `/${picked.name}`,
       detail: picked.description,
+      heading: "Skills",
       skill: picked,
     };
 
@@ -660,7 +705,7 @@ describe("applyPickerRow", () => {
 });
 
 describe("movePickerActive", () => {
-  const rows = rankCommandCompletions({ query: "", entries: commandEntries(TEMPLATES) });
+  const rows = commandRows({ query: "", templates: TEMPLATES });
 
   it("steps down the list", () => {
     expect(movePickerActive(rows, "preview", 1)).toBe("review");
@@ -684,7 +729,7 @@ describe("movePickerActive", () => {
 });
 
 describe("activePickerRow", () => {
-  const rows = rankCommandCompletions({ query: "", entries: commandEntries(TEMPLATES) });
+  const rows = commandRows({ query: "", templates: TEMPLATES });
 
   it("finds the named row", () => {
     expect(activePickerRow(rows, "ship")?.value).toBe("ship");

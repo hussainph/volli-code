@@ -47,6 +47,7 @@
  */
 import {
   formatPromptTemplateInvocation,
+  isSlashNameCharacter,
   promptTemplateTakesArgs,
   resolveSlashNamespace,
   type ComposerVerb,
@@ -57,12 +58,6 @@ import {
 } from "@volli/shared";
 
 import { fileRefTokenAt, rankFileRefCompletions, refInsertion } from "@renderer/editor/file-refs";
-
-/** The `/name` character class — what a template's basename may contain. */
-const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
-
-/** How many command rows one open shows. The file side has its own cap. */
-const MAX_COMMAND_RESULTS = 50;
 
 export type ComposerPickerMode = "command" | "file";
 
@@ -90,6 +85,8 @@ export type ComposerPickerRow =
       readonly name: string;
       readonly label: string;
       readonly detail: string;
+      /** Source-owned group copy from the slash adapter registry. */
+      readonly heading: string;
       readonly template: PromptTemplate;
     }
   | {
@@ -99,6 +96,8 @@ export type ComposerPickerRow =
       readonly name: string;
       readonly label: string;
       readonly detail: string;
+      /** Source-owned group copy from the slash adapter registry. */
+      readonly heading: string;
       readonly skill: SkillReference;
     }
   | {
@@ -116,7 +115,7 @@ export interface ComposerPickerState {
   readonly mode: ComposerPickerMode;
   /** Offset of the sigil — the start of the range a pick overwrites. */
   readonly from: number;
-  /** The caret. A pick never consumes text to its right. */
+  /** End of the token name. A pick replaces the whole token, not only its left half. */
   readonly to: number;
   /** What has been typed after the sigil. */
   readonly query: string;
@@ -138,46 +137,19 @@ export function commandTokenAt(input: {
   const { text } = input;
   if (input.offset < 1) return null;
   const offset = Math.min(input.offset, text.length);
-  // Walk left over name characters to where the name would start…
+  // Walk left over name characters to where the name starts…
   let start = offset;
-  while (start > 0 && COMMAND_NAME_CHAR.test(text.charAt(start - 1))) start -= 1;
+  while (start > 0 && isSlashNameCharacter(text.charAt(start - 1))) start -= 1;
   // …which must be a slash, itself at a word boundary. A caret past the name
   // walks back over whitespace or an argument first and lands on neither.
   if (start === 0 || text.charAt(start - 1) !== "/") return null;
   const slash = start - 1;
   if (slash > 0 && !/\s/.test(text.charAt(slash - 1))) return null;
-  return { from: slash, to: offset, query: text.slice(start, offset) };
-}
-
-/**
- * Rank templates for one `/` query.
- *
- * Prefix matches lead, then anything else the name contains, then a match that
- * only the description explains — the order you would guess, and the reason a
- * short query does not bury the command it obviously means. Ties break by name
- * so the list is stable while more characters arrive.
- */
-export function rankCommandCompletions(input: {
-  query: string;
-  entries: readonly SlashName<PromptTemplate>[];
-}): readonly ComposerPickerRow[] {
-  const query = input.query.toLowerCase();
-  return input.entries
-    .map((entry) => ({ entry, tier: matchTier(query, entry.name, entry.item.description) }))
-    .filter(
-      (ranked): ranked is { entry: SlashName<PromptTemplate>; tier: number } =>
-        ranked.tier !== null,
-    )
-    .toSorted((a, b) => a.tier - b.tier || a.entry.name.localeCompare(b.entry.name))
-    .slice(0, MAX_COMMAND_RESULTS)
-    .map(({ entry }) => ({
-      kind: "command" as const,
-      value: entry.name,
-      name: entry.name,
-      label: `/${entry.name}`,
-      detail: entry.item.description,
-      template: entry.item,
-    }));
+  // Complete the token to the right too. Otherwise picking with the caret at
+  // `/command|:compact` would preserve `:compact` and stage a duplicate tail.
+  let end = offset;
+  while (end < text.length && isSlashNameCharacter(text.charAt(end))) end += 1;
+  return { from: slash, to: end, query: text.slice(start, offset) };
 }
 
 /**
@@ -229,40 +201,53 @@ export function rankVerbCompletions(input: {
     }));
 }
 
-/**
- * Rank skills for the same `/` query — the same three tiers over the same two
- * fields, because a skill is invoked by the same grammar. A skill whose bare
- * name a command or a verb already owns is NOT missing from this list; it
- * arrives already qualified to `skill:<name>` (`resolveSlashNamespace`), which
- * is a name the submit-time lookup resolves to this skill and nothing else.
- *
- * Skill rows trail the command rows in the combined list rather than
- * interleaving with them. The two are different kinds of thing — a command is
- * a prompt you wrote, a skill is a document you installed — and the card
- * groups them under separate headings, so the flat row order has to agree
- * with the visual one or the arrow keys walk a different list than the eye.
- */
-export function rankSkillCompletions(input: {
-  query: string;
-  entries: readonly SlashName<SkillReference>[];
-}): readonly ComposerPickerRow[] {
-  const query = input.query.toLowerCase();
-  return input.entries
-    .map((entry) => ({ entry, tier: matchTier(query, entry.name, entry.item.description) }))
-    .filter(
-      (ranked): ranked is { entry: SlashName<SkillReference>; tier: number } =>
-        ranked.tier !== null,
-    )
-    .toSorted((a, b) => a.tier - b.tier || a.entry.name.localeCompare(b.entry.name))
-    .slice(0, MAX_COMMAND_RESULTS)
-    .map(({ entry }) => ({
-      kind: "skill" as const,
+/** One resolved namespace entry as the row its target needs. */
+function slashPickerRow(entry: SlashName): ComposerPickerRow {
+  if (entry.target.kind === "command") {
+    return {
+      kind: "command",
       value: entry.name,
       name: entry.name,
       label: `/${entry.name}`,
-      detail: entry.item.description,
-      skill: entry.item,
-    }));
+      detail: entry.description,
+      heading: entry.heading,
+      template: entry.target.template,
+    };
+  }
+  return {
+    kind: "skill",
+    value: entry.name,
+    name: entry.name,
+    label: `/${entry.name}`,
+    detail: entry.description,
+    heading: entry.heading,
+    skill: entry.target.skill,
+  };
+}
+
+/**
+ * Rank every open slash source in one pass.
+ *
+ * Source order leads the sort so keyboard order stays aligned with the card's
+ * groups; match tier and name rank rows within each source. No result cap lives
+ * here: every supplied row that matches remains discoverable, and the source
+ * adapters are the single place a future kind joins this pass.
+ */
+export function rankSlashCompletions(input: {
+  query: string;
+  entries: readonly SlashName[];
+}): readonly ComposerPickerRow[] {
+  const query = input.query.toLowerCase();
+  return input.entries
+    .map((entry) => ({ entry, tier: matchTier(query, entry.name, entry.description) }))
+    .filter((ranked): ranked is { entry: SlashName; tier: number } => ranked.tier !== null)
+    .toSorted(
+      (a, b) =>
+        a.entry.sourceOrder - b.entry.sourceOrder ||
+        a.tier - b.tier ||
+        a.entry.name.localeCompare(b.entry.name),
+    )
+    .map(({ entry }) => slashPickerRow(entry));
 }
 
 /** A trigger token under the caret, before anything is ranked against it. */
@@ -325,10 +310,10 @@ export function composerPickerToken(input: {
  * ## Why this is separate from {@link composerPickerRows}
  *
  * The two halves of an open picker have different urgencies, and one of them is
- * not negotiable. WHERE it writes — the mode and the `from`/`to` span
- * {@link applyPickerRow} overwrites — has to be exactly the caret's, because a
- * span one keystroke behind the text writes the completion over the wrong range
- * and leaves the characters typed since dangling on the right. WHAT it offers
+ * not negotiable. WHERE it writes — the current token and the `from`/`to` span
+ * {@link applyPickerRow} overwrites — has to come from the caret's current
+ * text, because a span one keystroke behind writes over the wrong range and
+ * leaves characters typed since dangling on the right. WHAT it offers
  * may trail: a list that catches up a frame later is a list, not a corruption.
  *
  * So this half is a few character-class tests and answers on the keystroke's own
@@ -377,29 +362,24 @@ export function composerPickerRows(input: {
   files: readonly IndexedFile[];
 }): readonly ComposerPickerRow[] {
   if (input.mode === "command") {
-    // One namespace, resolved once, for all three row kinds — the same
-    // resolution `expandCommandInvocation` performs at submit from the same two
-    // lists, which is what keeps the offer and the press agreed about which
-    // `/compact` is which. A verb owns its bare name outright; a template or
-    // skill that wanted it is offered here under its qualified name rather
-    // than dropped, so a row the user wrote is still reachable.
+    // One namespace, resolved once, for every registered open source — the
+    // same resolution `expandCommandInvocation` performs at submit from the
+    // same supplies, which keeps offer and press agreed about `/compact`.
+    // A verb owns its bare name; a source row that wanted it is qualified rather
+    // than dropped, and an unspellable basename is normalized into this grammar.
     //
     // It is also what lets every row's cmdk `value` be simply its name. Those
-    // values used to carry hand-written `verb:` and `skill:` prefixes, for a
-    // uniqueness the three lists could not otherwise promise each other — two
-    // rows answering to one value highlight together, because cmdk's "active"
-    // is a value lookup. `resolveSlashNamespace` seeds itself with every verb
-    // name and hands out no name twice, so that promise is now made once, by
-    // the same function that decides what a pick writes. A prefix on top of it
-    // would only be a second spelling of a name that is already unique.
+    // values used to carry hand-written `verb:` and `skill:` prefixes because
+    // the old parallel lists could not promise uniqueness. The resolver now
+    // hands out only unique, grammar-valid names, so cmdk's trimming cannot
+    // collapse two values and a second prefix would only duplicate the answer.
     const namespace = resolveSlashNamespace({
       templates: input.templates,
       skills: input.skills ?? [],
     });
     return [
       ...rankVerbCompletions({ query: input.query, verbs: input.verbs ?? [] }),
-      ...rankCommandCompletions({ query: input.query, entries: namespace.templates }),
-      ...rankSkillCompletions({ query: input.query, entries: namespace.skills }),
+      ...rankSlashCompletions({ query: input.query, entries: namespace.entries }),
     ];
   }
   // "Create artifact" is deliberately dropped: it is an intent that writes a

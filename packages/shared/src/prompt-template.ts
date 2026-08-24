@@ -37,6 +37,7 @@
 import type { PromptResource } from "./agent-runtime";
 import { isComposerVerbName } from "./composer-verb";
 import { resolveSlashNamespace, slashTargets } from "./slash-namespace";
+import { isSlashNameCharacter } from "./slash-name";
 import { skillPromptResource, type SkillReference } from "./skill";
 
 /**
@@ -63,9 +64,6 @@ export interface PromptTemplate {
 /** Longest description a body's first line may supply before it is elided. */
 const DERIVED_DESCRIPTION_LIMIT = 60;
 
-/** The `/name` character class — what a command name may contain. */
-const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
-
 /**
  * The names Volli will CREATE a template file for — a strict subset of the
  * names it can read and invoke.
@@ -73,7 +71,7 @@ const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
  * Two rules meet here, and the narrower one wins:
  *
  *  - **It has to be invokable whole.** {@link findCommandInvocations} reads a
- *    name up to the first character outside {@link COMMAND_NAME_CHAR}, so a
+ *    name up to the first character rejected by {@link isSlashNameCharacter}, so a
  *    file called `ship it.md` is reachable only as `/ship` — a command whose
  *    own name cannot summon it.
  *  - **It has to be a safe flat filename**, because the basename IS the
@@ -249,7 +247,7 @@ export function findCommandInvocations(text: string): readonly CommandInvocation
     // The slash must sit at a word boundary: a slash inside a word is prose.
     if (i > 0 && !/\s/.test(text.charAt(i - 1))) continue;
     let nameEnd = i + 1;
-    while (nameEnd < text.length && COMMAND_NAME_CHAR.test(text.charAt(nameEnd))) nameEnd += 1;
+    while (nameEnd < text.length && isSlashNameCharacter(text.charAt(nameEnd))) nameEnd += 1;
     // A bare slash names nothing, and a name must END at a boundary too.
     if (nameEnd === i + 1) continue;
     if (nameEnd < text.length && !/\s/.test(text.charAt(nameEnd))) continue;
@@ -349,8 +347,12 @@ export function expandCommandInvocation(
     } else {
       // The reference and its line stay verbatim; only the resource is new.
       result += text.slice(invocation.start, invocation.end);
-      if (!resources.has(target.skill.name)) {
-        resources.set(target.skill.name, skillPromptResource(target.skill));
+      // Deduplicate repeated use of THIS resolved row, not merely its bare
+      // skill name. Merged production input has one row per slug, while the
+      // public resolver also remains correct for duplicated/unmerged input:
+      // `/review` and `/skill:review` may then name two distinct resources.
+      if (!resources.has(invocation.name)) {
+        resources.set(invocation.name, skillPromptResource(target.skill));
       }
     }
     cursor = invocation.end;

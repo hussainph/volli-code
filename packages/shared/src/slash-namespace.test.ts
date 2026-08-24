@@ -3,7 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { COMPOSER_VERBS } from "./composer-verb";
 import { expandCommandInvocation, type PromptTemplate } from "./prompt-template";
 import type { SkillReference } from "./skill";
-import { resolveSlashNamespace, slashTargets } from "./slash-namespace";
+import { resolveSlashNamespace, SLASH_SOURCE_REGISTRY, slashTargets } from "./slash-namespace";
+import { isSlashInvocationName } from "./slash-name";
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
@@ -21,163 +22,171 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
   };
 }
 
-/** Every name the namespace hands out, in one list — what must never repeat. */
+/** Every name the namespace hands out, including the reserved verbs. */
 function allNames(input: {
   templates: readonly PromptTemplate[];
   skills: readonly SkillReference[];
 }): string[] {
-  const namespace = resolveSlashNamespace(input);
   return [
     ...COMPOSER_VERBS.map((verb) => verb.name),
-    ...namespace.templates.map((entry) => entry.name),
-    ...namespace.skills.map((entry) => entry.name),
+    ...resolveSlashNamespace(input).entries.map((entry) => entry.name),
   ];
 }
 
-describe("names nothing collides with", () => {
-  it("leaves an ordinary supply entirely alone", () => {
-    const templates = [template(), template({ name: "plan" })];
-    const skills = [skill()];
-    const namespace = resolveSlashNamespace({ templates, skills });
+describe("the source registry", () => {
+  it("holds the ordered command and skill adapters behind one iterable seam", () => {
+    expect([...SLASH_SOURCE_REGISTRY.keys()]).toEqual(["command", "skill"]);
+  });
 
-    // Nothing here wants a name anything else has, so nothing is qualified and
-    // every row is spelled the way its file is.
-    expect(namespace.templates.map((entry) => entry.name)).toEqual(["review", "plan"]);
-    expect(namespace.skills.map((entry) => entry.name)).toEqual(["logos"]);
-    for (const entry of [...namespace.templates, ...namespace.skills]) {
+  it("leaves an ordinary supply alone and keeps source order", () => {
+    const namespace = resolveSlashNamespace({
+      templates: [template(), template({ name: "plan" })],
+      skills: [skill()],
+    });
+
+    expect(namespace.entries.map((entry) => [entry.kind, entry.name])).toEqual([
+      ["command", "review"],
+      ["command", "plan"],
+      ["skill", "logos"],
+    ]);
+    for (const entry of namespace.entries) {
       expect(entry.shadowedBy).toBeNull();
+      expect(entry.syntaxQualified).toBe(false);
       expect(entry.name).toBe(entry.bareName);
+      expect(isSlashInvocationName(entry.name)).toBe(true);
     }
   });
 });
 
-describe("what happens to the name a verb owns", () => {
-  it("keeps the template, under a name that says which kind it is", () => {
+describe("verb reservation", () => {
+  it("keeps a shadowed template under a command-qualified name", () => {
     const own = template({ name: "compact", description: "my own compaction prompt" });
-    const namespace = resolveSlashNamespace({ templates: [own, template()], skills: [] });
+    const [entry] = resolveSlashNamespace({ templates: [own], skills: [] }).entries;
 
-    // THE CHANGE THIS MODULE EXISTS FOR. The verb still wins `/compact` — an
-    // operation must never silently become a message — but the file the user
-    // wrote is no longer deleted from the surface for having wanted the name.
-    // It is renamed, and it still runs.
-    expect(namespace.templates[0]).toEqual({
-      item: own,
+    expect(entry).toMatchObject({
+      kind: "command",
       name: "command:compact",
       bareName: "compact",
       shadowedBy: "verb",
+      syntaxQualified: false,
+      target: { kind: "command", template: own },
     });
-    expect(namespace.templates[1]?.name).toBe("review");
   });
 
-  it("qualifies a template spelled like any of the newer verbs, too", () => {
-    // `model` and `settings` are words a project plausibly used for a prompt
-    // before these verbs existed. Reservation covers every verb, not just the
-    // first one's — and now costs those projects a rename rather than the row.
-    const templates = [
-      template({ name: "model" }),
-      template({ name: "settings" }),
-      template({ name: "copy" }),
-    ];
-    const namespace = resolveSlashNamespace({ templates, skills: [] });
-    expect(namespace.templates.map((entry) => entry.name)).toEqual([
-      "command:model",
-      "command:settings",
-      "command:copy",
-    ]);
-  });
-
-  it("qualifies a skill a verb shadowed, and says the verb did it", () => {
-    const namespace = resolveSlashNamespace({
+  it("qualifies a skill a verb shadowed", () => {
+    const [entry] = resolveSlashNamespace({
       templates: [],
       skills: [skill({ name: "compact" })],
-    });
-    expect(namespace.skills[0]?.name).toBe("skill:compact");
-    expect(namespace.skills[0]?.shadowedBy).toBe("verb");
+    }).entries;
+
+    expect(entry).toMatchObject({ name: "skill:compact", shadowedBy: "verb" });
   });
 
-  it("reserves a verb's name even in a moment that would refuse the verb", () => {
-    // `/copy` is refused with nothing to copy and `/reload` with no project,
-    // but reservation does not consult `refusal` — a name that changed meaning
-    // as a Session progressed would be worse than a name that is taken.
-    const namespace = resolveSlashNamespace({
+  it("reserves verbs even when the current moment would refuse them", () => {
+    const entries = resolveSlashNamespace({
       templates: [template({ name: "copy" }), template({ name: "reload" })],
       skills: [],
-    });
-    expect(namespace.templates.map((entry) => entry.name)).toEqual([
-      "command:copy",
-      "command:reload",
+    }).entries;
+
+    expect(entries.map((entry) => entry.name)).toEqual(["command:copy", "command:reload"]);
+  });
+});
+
+describe("source precedence and truthful ownership", () => {
+  it("preserves template over skill for a shared bare name", () => {
+    const entries = resolveSlashNamespace({
+      templates: [template({ name: "review" })],
+      skills: [skill({ name: "review" })],
+    }).entries;
+
+    expect(entries.map((entry) => [entry.kind, entry.name, entry.shadowedBy])).toEqual([
+      ["command", "review", null],
+      ["skill", "skill:review", "command"],
+    ]);
+  });
+
+  it("sorts skills before assigning names", () => {
+    const entries = resolveSlashNamespace({
+      templates: [],
+      skills: [skill({ name: "beta" }), skill({ name: "alpha" })],
+    }).entries;
+
+    expect(entries.map((entry) => entry.name)).toEqual(["alpha", "beta"]);
+  });
+
+  it("reports a duplicate template as shadowed by a command, not a verb", () => {
+    const entries = resolveSlashNamespace({
+      templates: [template({ name: "review" }), template({ name: "review" })],
+      skills: [],
+    }).entries;
+
+    expect(entries.map((entry) => [entry.name, entry.shadowedBy])).toEqual([
+      ["review", null],
+      ["command:review", "command"],
+    ]);
+  });
+
+  it("reports a generated alias that takes a later skill name as a skill collision", () => {
+    const entries = resolveSlashNamespace({
+      templates: [],
+      skills: [skill({ name: "compact" }), skill({ name: "skill:compact" })],
+    }).entries;
+
+    expect(entries.map((entry) => [entry.name, entry.shadowedBy])).toEqual([
+      ["skill:compact", "verb"],
+      ["skill:skill:compact", "skill"],
     ]);
   });
 });
 
-describe("template over skill, still", () => {
-  it("renames the skill and leaves the command its bare name", () => {
-    const shadowed = skill({ name: "review" });
-    const namespace = resolveSlashNamespace({
-      templates: [template({ name: "review" })],
-      skills: [shadowed, skill()],
-    });
-
-    // Which of the two wins is unchanged — `expandCommandInvocation` has always
-    // resolved template-first. Only the loser's fate changed.
-    expect(namespace.templates[0]?.name).toBe("review");
-    expect(namespace.skills.find((entry) => entry.item === shadowed)).toEqual({
-      item: shadowed,
-      name: "skill:review",
-      bareName: "review",
-      shadowedBy: "command",
-    });
-  });
-
-  it("sorts skills by name so a directory read's order cannot decide", () => {
-    const namespace = resolveSlashNamespace({
-      templates: [],
-      skills: [skill({ name: "beta" }), skill({ name: "alpha" })],
-    });
-    expect(namespace.skills.map((entry) => entry.name)).toEqual(["alpha", "beta"]);
-  });
-});
-
-describe("one name means one thing", () => {
-  it("hands out no name twice, however the supply collides", () => {
+describe("fallback names", () => {
+  it("hands out no name twice however the supply collides", () => {
     const names = allNames({
       templates: [template({ name: "compact" }), template({ name: "review" })],
-      skills: [skill({ name: "compact" }), skill({ name: "review" }), skill({ name: "logos" })],
+      skills: [skill({ name: "compact" }), skill({ name: "review" }), skill()],
     });
+
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("suffixes when the qualified name is itself taken", () => {
-    // `:` is legal in a name, so a skill really can be called `skill:compact`
-    // and collide with the qualified form of another. Without the suffix one
-    // would overwrite the other and the picker would run the wrong thing.
-    const namespace = resolveSlashNamespace({
-      templates: [],
-      skills: [skill({ name: "compact" }), skill({ name: "skill:compact" })],
-    });
-    const names = namespace.skills.map((entry) => entry.name);
-    expect(new Set(names).size).toBe(2);
-    expect(names).toContain("skill:compact");
-    expect(names).toContain("skill:skill:compact");
+  it("executes the numeric suffix loop when a qualified base is already taken", () => {
+    const qualified = template({ name: "command:compact", content: "First $1." });
+    const shadowed = template({ name: "compact", content: "Second $1." });
+    const entries = resolveSlashNamespace({ templates: [qualified, shadowed], skills: [] }).entries;
+
+    expect(entries.map((entry) => entry.name)).toEqual(["command:compact", "command:compact1"]);
+    expect(expandCommandInvocation("/command:compact1 now", [qualified, shadowed]).text).toBe(
+      "Second now.",
+    );
+  });
+
+  it("normalizes an unspellable basename instead of offering a dead row", () => {
+    const spaced = template({ name: "ship it", content: "Ship $1." });
+    const punctuation = template({ name: "...", content: "Fallback." });
+    const entries = resolveSlashNamespace({ templates: [spaced, punctuation], skills: [] }).entries;
+
+    expect(entries.map((entry) => [entry.name, entry.syntaxQualified])).toEqual([
+      ["command:ship-it", true],
+      ["command:item", true],
+    ]);
+    expect(entries.every((entry) => isSlashInvocationName(entry.name))).toBe(true);
+    expect(expandCommandInvocation("/command:ship-it now", [spaced, punctuation]).text).toBe(
+      "Ship now.",
+    );
   });
 });
 
-describe("the qualified name actually runs the thing", () => {
-  it("expands a shadowed template at submit, where its bare name expands to nothing", () => {
+describe("submit resolution", () => {
+  it("expands a shadowed template while its verb-owned bare name passes through", () => {
     const own = template({ name: "compact", content: "Summarize $1 my way." });
 
-    // The bare name is the verb's: it expands to nothing and passes through
-    // verbatim, which is what leaves the press free to run the operation.
     expect(expandCommandInvocation("/compact now", [own]).text).toBe("/compact now");
-
-    // The qualified name is this template's, and it expands. This round-trip
-    // is the whole claim: a renamed row is reachable, not merely visible.
     expect(expandCommandInvocation("/command:compact now", [own]).text).toBe(
       "Summarize now my way.",
     );
   });
 
-  it("delivers a shadowed skill's body under its qualified name", () => {
+  it("delivers a shadowed skill under its qualified name", () => {
     const shadowed = skill({ name: "review", body: "# Review" });
     const expanded = expandCommandInvocation(
       "/skill:review please",
@@ -185,29 +194,45 @@ describe("the qualified name actually runs the thing", () => {
       [shadowed],
     );
 
-    // The reference stays verbatim and the body rides beside it, exactly as an
-    // unshadowed skill's does.
     expect(expanded.text).toBe("/skill:review please");
     expect(expanded.resources.map((resource) => resource.name)).toEqual(["review"]);
   });
 
-  it("still resolves the template that kept its bare name", () => {
-    const kept = template({ name: "review", content: "Review $1." });
-    const shadowed = skill({ name: "review" });
-    expect(expandCommandInvocation("/review a.ts", [kept], [shadowed]).text).toBe("Review a.ts.");
-  });
-});
+  it("keeps distinct duplicated skill rows distinct when both are invoked", () => {
+    const first = skill({ name: "review", body: "first", root: "first" });
+    const second = skill({ name: "review", body: "second", root: "second" });
+    const expanded = expandCommandInvocation("/review\n/skill:review", [], [first, second]);
 
-describe("slashTargets", () => {
-  it("maps every resolved name to what it runs, and holds no verb", () => {
-    const own = template({ name: "compact" });
-    const namespace = resolveSlashNamespace({ templates: [own], skills: [skill()] });
+    expect(expanded.resources.map((resource) => resource.text)).toEqual([
+      expect.stringContaining("first"),
+      expect.stringContaining("second"),
+    ]);
+  });
+
+  it("maps every resolved entry directly to its target and no verb", () => {
+    const namespace = resolveSlashNamespace({
+      templates: [template({ name: "compact" })],
+      skills: [skill()],
+    });
     const targets = slashTargets(namespace);
 
-    expect(targets.get("command:compact")).toEqual({ kind: "command", template: own });
+    expect(targets.get("command:compact")?.kind).toBe("command");
     expect(targets.get("logos")?.kind).toBe("skill");
-    // A verb expands to nothing, so it is deliberately absent rather than
-    // present-and-ignored.
     expect(targets.has("compact")).toBe(false);
+  });
+
+  it("resolves a qualified invocation mid-draft", () => {
+    const own = template({ name: "compact", content: "Summarize $1." });
+    expect(expandCommandInvocation("please /command:compact now", [own]).text).toBe(
+      "please Summarize now.",
+    );
+  });
+
+  it("leaves a qualified invocation inside another command's arguments as an argument", () => {
+    const review = template({ name: "review", content: "Review $1." });
+    const own = template({ name: "compact", content: "Never here $1." });
+    expect(expandCommandInvocation("/review /command:compact", [review, own]).text).toBe(
+      "Review /command:compact.",
+    );
   });
 });

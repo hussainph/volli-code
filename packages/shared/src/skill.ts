@@ -233,9 +233,11 @@ export function resolveSkillMode(modes: SkillModes, skill: SkillReference): Skil
  * about modes, which is why nothing downstream needed to change:
  * {@link skillsIndexResource} already withholds a `userInvokeOnly` skill from
  * the model, `resolveSlashNamespace` already offers it to the person, and
- * explicit resolution already ignores the flag. `off` is the only state that
- * removes a row — and it is now the ONLY thing that removes a row from the
- * picker at all, since a shadowed name is renamed rather than dropped.
+ * explicit resolution already ignores the flag. `off` is the only PROJECT
+ * MODE that removes a merged, successfully loaded skill from the renderer's
+ * picker supply; filesystem read limits and unreadable entries remain the
+ * loader's separate safety policy. A shadowed loaded name is renamed rather
+ * than dropped.
  *
  * Applied AFTER {@link mergeSkills}, so project-over-personal is already
  * resolved and a slug names exactly one surviving skill — a rule cannot mean

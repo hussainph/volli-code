@@ -35,6 +35,7 @@ export * from "./prompt-template";
 export * from "./prompt-resource";
 export * from "./composer-verb";
 export * from "./skill";
+export * from "./slash-name";
 export * from "./slash-namespace";
 export * from "./tag-color";
 export * from "./label";

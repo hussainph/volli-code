@@ -55,6 +55,12 @@
  * silently, the same bargain the whole-draft rule makes.
  */
 
+import {
+  isSlashInvocationName,
+  isSlashNameCharacter,
+  type CheckedSlashInvocationName,
+} from "./slash-name";
+
 /**
  * The Session facts an offer rule may read — everything a verb is allowed to
  * know about the moment it is being offered in.
@@ -107,48 +113,64 @@ export interface ComposerVerbSpec {
   readonly takesInstructions: boolean;
 }
 
+type ExactComposerVerbSpec<Spec extends ComposerVerbSpec> = Spec &
+  Record<Exclude<keyof Spec, keyof ComposerVerbSpec>, never>;
+
+type ComposerVerbDeclarationName<Name extends string> = Name extends "__proto__"
+  ? never
+  : CheckedSlashInvocationName<Name>;
+
 /**
- * EVERY VERB THERE IS. The one declaration — add a row here and nowhere else.
+ * One declaration row, checked more strictly than structural assignment.
  *
- * This table used to be three declarations: a `ComposerVerbName` union, a
- * `const` per verb, and an array collecting them. Two of the three were
- * enforced (the satellite `Record`s below fail to compile when the union
- * grows), but the array was not: a verb could sit in the union with a glyph
- * and an act and still be missing from the supply, which made it invisible in
- * the picker AND unreserved — `isComposerVerbName` would answer false, so a
- * user's `compact.md` would quietly win the name the verb was supposed to own.
- * Deriving the union and the array FROM this table closes that hole by
- * construction: there is no longer a second list to forget.
- *
- * Declaration order is the order a picker offers them in — `Object.entries`
- * preserves it for string keys, and {@link COMPOSER_VERBS} does nothing to
- * reorder it.
- *
- * The key is the name, and the closure is load-bearing: a verb has no generic
- * behaviour to fall back on — the whole point is that each runs a different
- * operation — so a new name must not be able to arrive anywhere silently. The
- * sites that answer per verb therefore key a `Record<ComposerVerbName, …>`
- * rather than switching: the act the press performs (`chat-plane.tsx`) and the
- * glyph the picker draws (`composer-picker-ui.tsx`). A `Record` on a closed key
- * type fails to compile with the MISSING NAME in the message, where a `switch`
- * in a void-returning function compiles happily with an arm missing and the
- * press quietly does nothing. Adding a row here breaks both sites, and each
- * error names the verb and the site.
- *
- * NOT a `ReadonlyMap` like `harness/core.ts`'s adapter registry, deliberately.
- * That registry is a Map because `HarnessId` is OPEN — a registered harness
- * joins it at runtime — and a `Record` cannot express an open key. This set is
- * closed and known at compile time, and a Map would throw away the exhaustive
- * checking that is the entire point here. The open half of the `/` surface
- * (a user's commands and skills) is not modelled here at all; it is data read
- * from disk, and `slash-namespace.ts` is where the two meet.
+ * `ComposerVerbSpec` deliberately has no `name`, and the `Exact…` intersection
+ * makes that true even when a row spreads another object — the excess-property
+ * loophole that can otherwise smuggle `name` back in. The key is checked
+ * against the parser grammar at compile time and again at runtime for callers
+ * that erased their literals. `__proto__` is excluded because the exhaustive
+ * renderer records are object literals; allowing that one magic property would
+ * turn their declaration into a prototype mutation rather than an own row.
  */
-export const COMPOSER_VERB_TABLE = {
-  /**
-   * Summarize the Session's history so the conversation can continue past the
-   * model's window — Context Compaction, asked for rather than triggered.
-   */
-  compact: {
+function composerVerbEntry<const Name extends string, const Spec extends ComposerVerbSpec>(
+  name: Name & ComposerVerbDeclarationName<Name>,
+  spec: ExactComposerVerbSpec<Spec>,
+): readonly [Name, Readonly<Spec>] {
+  /* v8 ignore next 3 -- this private builder only receives compile-time checked literals. */
+  if (!isSlashInvocationName(name) || name === "__proto__") {
+    throw new Error(`Invalid composer verb name: ${name}`);
+  }
+  return Object.freeze([name, Object.freeze(spec)] as const);
+}
+
+/** One closed registry, rejecting duplicate declarations before any consumer runs. */
+function composerVerbRegistry<
+  const Entries extends readonly (readonly [string, ComposerVerbSpec])[],
+>(...entries: Entries): Entries {
+  const names = new Set<string>();
+  for (const [name] of entries) {
+    /* v8 ignore next -- firing this declaration guard prevents the module from loading. */
+    if (names.has(name)) throw new Error(`Duplicate composer verb name: ${name}`);
+    names.add(name);
+  }
+  return Object.freeze(entries) as Entries;
+}
+
+/**
+ * EVERY VERB THERE IS. Add one entry here; the key is spelled exactly once.
+ *
+ * The tuple registry keeps the closed-key exhaustiveness of the old object and
+ * adopts the repo's `ReadonlyMap` registry idiom without relying on JavaScript
+ * object enumeration. That matters for integer-looking keys, prototype names,
+ * and spec objects with extra fields: declaration order stays declaration
+ * order, every row is an own Map entry, and the derived object writes `name`
+ * last so no spec can overwrite it at runtime.
+ *
+ * `ComposerVerbName` and {@link COMPOSER_VERBS} are derived from these entries.
+ * The renderer's glyph and act records remain exhaustive over that union, so a
+ * normal new entry fails both sites with the missing name in the error.
+ */
+const COMPOSER_VERB_ENTRIES = composerVerbRegistry(
+  composerVerbEntry("compact", {
     description: "Summarize the history so far to free up context",
     // Rewriting context under a running turn corrupts it. The runtime refuses
     // this too — and still owns the refusals only it can see, like a history
@@ -157,10 +179,9 @@ export const COMPOSER_VERB_TABLE = {
     // words the picker's silence means.
     refusal: (moment) => (moment.working ? "Compaction can't run while a turn is live" : null),
     takesInstructions: true,
-  },
+  }),
 
-  /** Put the Session's most recent reply on the clipboard, as plain text. */
-  copy: {
+  composerVerbEntry("copy", {
     description: "Copy the last reply to the clipboard",
     // Idle as well as answered: mid-turn the newest reply is still arriving, and
     // a clipboard holding half a sentence under a toast that says "Copied last
@@ -172,10 +193,9 @@ export const COMPOSER_VERB_TABLE = {
           ? null
           : "No reply to copy yet",
     takesInstructions: false,
-  },
+  }),
 
-  /** Open the model picker — the footer pill's own list, arriving by typing. */
-  model: {
+  composerVerbEntry("model", {
     description: "Switch the Session's model",
     // Both halves of the pill's own disabled rule, which is what this verb
     // opens: model policy is immutable mid-turn, and an empty catalog has no
@@ -189,77 +209,74 @@ export const COMPOSER_VERB_TABLE = {
           ? null
           : "No models to choose from — try /login",
     takesInstructions: false,
-  },
+  }),
 
-  /** Re-read the commands and skills directories, without leaving the Session. */
-  reload: {
+  composerVerbEntry("reload", {
     description: "Refresh commands and skills from disk",
     // The tiers this re-reads are project-scoped, so with no project there is
     // no directory to read and the press could only report a refresh of nothing.
     refusal: (moment) => (moment.hasProject ? null : "No project to read commands from"),
     takesInstructions: false,
-  },
+  }),
 
-  /** Open the app's Settings. */
-  settings: {
+  composerVerbEntry("settings", {
     description: "Open Settings",
     // App chrome: nothing about a Session can refuse it.
     refusal: () => null,
     takesInstructions: false,
-  },
+  }),
 
-  /** Open Settings on Model Access — where Volli keeps every credential. */
-  login: {
+  composerVerbEntry("login", {
     description: "Manage model access and sign-ins",
     // Always available on purpose: the Session with nothing configured is the
     // one that needs this door most.
     refusal: () => null,
     takesInstructions: false,
-  },
-} satisfies Record<string, ComposerVerbSpec>;
+  }),
+);
 
-/**
- * Every verb there is, as a closed union — the table's own keys.
- *
- * Derived rather than declared, so "the names there are" and "the verbs there
- * are" cannot disagree. See {@link COMPOSER_VERB_TABLE} for why the closure
- * matters and which sites it enforces.
- */
-export type ComposerVerbName = keyof typeof COMPOSER_VERB_TABLE;
+/** Every verb there is, as the registry entries' closed key union. */
+export type ComposerVerbName = (typeof COMPOSER_VERB_ENTRIES)[number][0];
+
+/** The immutable keyed registry, for consumers that need one row by name. */
+export const COMPOSER_VERB_TABLE: ReadonlyMap<ComposerVerbName, ComposerVerbSpec> = new Map<
+  ComposerVerbName,
+  ComposerVerbSpec
+>(COMPOSER_VERB_ENTRIES);
 
 /** One built-in verb: what it is called, and what the picker says it does. */
 export interface ComposerVerb extends ComposerVerbSpec {
-  /** What is typed after `/`. Spellable by the same grammar a template name is. */
+  /** What is typed after `/`. Spellable by the shared slash-name grammar. */
   readonly name: ComposerVerbName;
 }
 
-/**
- * Every built-in verb, in the order a picker offers them — the table, read out.
- *
- * Derived, so it cannot omit one. This is the list that used to be maintained
- * by hand beside the union; {@link COMPOSER_VERB_TABLE} says what that cost.
- */
-export const COMPOSER_VERBS: readonly ComposerVerb[] = Object.entries(COMPOSER_VERB_TABLE).map(
-  // `Object.assign` onto a fresh literal rather than a spread: it copies every
-  // field the spec has without naming them, so a field added to
-  // `ComposerVerbSpec` arrives here on its own rather than being silently
-  // dropped by a hand-written field list.
-  ([name, spec]) => Object.assign({ name: name as ComposerVerbName }, spec),
+/** Every built-in verb, derived without a second list or an overridable name. */
+export const COMPOSER_VERBS: readonly ComposerVerb[] = Object.freeze(
+  COMPOSER_VERB_ENTRIES.map(([name, spec]) => Object.freeze({ ...spec, name })),
 );
 
-/** The verb this name belongs to. Total on {@link ComposerVerbName}, so no null. */
-const VERB_BY_NAME = Object.fromEntries(COMPOSER_VERBS.map((verb) => [verb.name, verb])) as Record<
+/** The same closed registry with each row's derived name attached. */
+const VERB_BY_NAME: ReadonlyMap<ComposerVerbName, ComposerVerb> = new Map<
   ComposerVerbName,
   ComposerVerb
->;
+>(COMPOSER_VERBS.map((verb) => [verb.name, verb]));
+const VERB_NAMES: ReadonlySet<string> = new Set(VERB_BY_NAME.keys());
 
-/** {@link COMPOSER_VERB_TABLE}'s rows, addressable one at a time. */
-export const COMPACT_VERB: ComposerVerb = VERB_BY_NAME.compact;
-export const COPY_VERB: ComposerVerb = VERB_BY_NAME.copy;
-export const MODEL_VERB: ComposerVerb = VERB_BY_NAME.model;
-export const RELOAD_VERB: ComposerVerb = VERB_BY_NAME.reload;
-export const SETTINGS_VERB: ComposerVerb = VERB_BY_NAME.settings;
-export const LOGIN_VERB: ComposerVerb = VERB_BY_NAME.login;
+/** Total lookup on a compile-time verb name, defended at the runtime boundary. */
+function composerVerbNamed(name: ComposerVerbName): ComposerVerb {
+  const verb = VERB_BY_NAME.get(name);
+  /* v8 ignore next -- every accepted name and this Map derive from the same frozen entries. */
+  if (verb === undefined) throw new Error(`Missing composer verb: ${name}`);
+  return verb;
+}
+
+/** Stable row exports retained for call sites that name one existing verb. */
+export const COMPACT_VERB = composerVerbNamed("compact");
+export const COPY_VERB = composerVerbNamed("copy");
+export const MODEL_VERB = composerVerbNamed("model");
+export const RELOAD_VERB = composerVerbNamed("reload");
+export const SETTINGS_VERB = composerVerbNamed("settings");
+export const LOGIN_VERB = composerVerbNamed("login");
 
 /**
  * The verbs this moment offers — the one supply both the picker and the press
@@ -277,7 +294,7 @@ export function offeredComposerVerbs(moment: ComposerVerbMoment): readonly Compo
 
 /** Whether this `/name` is a verb's, and therefore nothing else's. */
 export function isComposerVerbName(name: string): name is ComposerVerbName {
-  return COMPOSER_VERBS.some((verb) => verb.name === name);
+  return VERB_NAMES.has(name);
 }
 
 /** A draft that is a verb: which one, and the free text handed to it. */
@@ -286,9 +303,6 @@ export interface ComposerVerbInvocation {
   /** Everything after the name, unparsed. Null when nothing followed it. */
   readonly instructions: string | null;
 }
-
-/** The `/name` character class — the template grammar's, so both read alike. */
-const VERB_NAME_CHAR = /[A-Za-z0-9_:-]/;
 
 /**
  * The verb this whole draft is, or null.
@@ -302,10 +316,10 @@ export function findComposerVerb(text: string): ComposerVerbInvocation | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return null;
   let nameEnd = 1;
-  while (nameEnd < trimmed.length && VERB_NAME_CHAR.test(trimmed.charAt(nameEnd))) nameEnd += 1;
+  while (nameEnd < trimmed.length && isSlashNameCharacter(trimmed.charAt(nameEnd))) nameEnd += 1;
   const name = trimmed.slice(1, nameEnd);
-  const verb = COMPOSER_VERBS.find((candidate) => candidate.name === name);
-  if (verb === undefined) return null;
+  if (!isComposerVerbName(name)) return null;
+  const verb = composerVerbNamed(name);
   const rest = trimmed.slice(nameEnd);
   if (rest !== "" && !/^\s/.test(rest)) return null;
   const instructions = rest.trim();
