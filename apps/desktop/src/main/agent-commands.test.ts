@@ -33,6 +33,7 @@ import { listComments } from "./db/comments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
 import { listLatestSignals } from "./db/signals-repo";
+import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import {
   endSession,
   getSession,
@@ -5563,5 +5564,72 @@ describe("volli cost", () => {
       data: { coverage: "partial", meteredFrom: 5_000 },
     });
     expect(recent).toMatchObject({ ok: true, data: { coverage: "complete", meteredFrom: 5_000 } });
+  });
+});
+
+/**
+ * The agent door feeds the ticket wake bus (VC-85 slice C).
+ *
+ * The half that matters most for orchestration: a delegated Session's verdict
+ * is exactly what an orchestrator parked on `ticket.await` is waiting for, and
+ * it arrives through this door.
+ */
+describe("the ticket wake bus", () => {
+  const unsubscribes: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const off of unsubscribes.splice(0)) off();
+  });
+
+  it("wakes on every committed ticket fact the socket writes", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let timestamp = 100;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => timestamp++,
+      newId: () => "ticket-one",
+    });
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    const request = (cmd: AgentRequest["cmd"], args: Record<string, unknown>, session?: string) =>
+      service.execute({
+        v: 1,
+        cmd,
+        args,
+        ctx: { cwd: "/repo/volli", env: session ? { session, ticket: "VC-1" } : {} },
+      });
+
+    const seen: TicketWake[] = [];
+    unsubscribes.push(subscribeTicketWake((wake) => seen.push(wake)));
+
+    await request("ticket.create", { title: "Ship CLI" });
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+    await request("ticket.move", { id: "VC-1", to: "doing" }, sessionId);
+    await request("ticket.comment", { id: "VC-1", message: "Working" }, sessionId);
+    await request("ticket.signal", { id: "VC-1", kind: "review", verdict: "pass" }, sessionId);
+    // A read wakes nobody, and neither does a move to the column it is in.
+    await request("ticket.show", { id: "VC-1" });
+    await request("ticket.move", { id: "VC-1", to: "doing" }, sessionId);
+
+    expect(seen.map((wake) => wake.event.payload.kind)).toEqual([
+      "created",
+      "status_changed",
+      "commented",
+      "signaled",
+    ]);
+    expect(seen.every((wake) => wake.projectId === "project-one")).toBe(true);
+    // The verdict travels whole, so a waiter can decide without a second read.
+    expect(seen[3]?.event.payload).toMatchObject({
+      kind: "signaled",
+      signalKind: "review",
+      verdict: "pass",
+    });
   });
 });

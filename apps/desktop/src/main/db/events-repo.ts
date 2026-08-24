@@ -175,6 +175,44 @@ export function recordSessionStartedOnce(
 }
 
 /**
+ * Where one ticket's log currently ends, as a `rowid` (VC-85).
+ *
+ * The mark `ticket-wake.ts` takes before a mutation so it can tell afterwards
+ * what that mutation appended. `rowid` rather than `created_at` because a
+ * command can write several events in one millisecond and an injected clock can
+ * repeat one outright; insertion order is the only thing that always
+ * distinguishes them. `0` for a ticket with no events — and for a ticket that
+ * does not exist yet, which is the same answer for the same reason.
+ */
+export function ticketEventCursor(db: Database.Database, ticketId: string): number {
+  const row = prepared<[string], { cursor: number | null }>(
+    db,
+    "SELECT MAX(rowid) AS cursor FROM ticket_events WHERE ticket_id = ?",
+  ).get(ticketId);
+  return row?.cursor ?? 0;
+}
+
+/**
+ * One ticket's events appended after a {@link ticketEventCursor} mark, in the
+ * order they were written.
+ *
+ * Insertion order, not timestamp order: these are read to announce what just
+ * happened, and a mutation whose events share a millisecond must still be
+ * announced in the order it wrote them.
+ */
+export function listTicketEventsAfter(
+  db: Database.Database,
+  ticketId: string,
+  cursor: number,
+): TicketEvent[] {
+  const rows = prepared<[string, number], TicketEventRow>(
+    db,
+    "SELECT * FROM ticket_events WHERE ticket_id = ? AND rowid > ? ORDER BY rowid ASC",
+  ).all(ticketId, cursor);
+  return rows.map(mapTicketEvent);
+}
+
+/**
  * A ticket's full event history, chronological (`created_at` ascending,
  * insertion-order/`rowid` tiebreak for events sharing a timestamp) — backs
  * the Activity feed (`api.tickets.events`).

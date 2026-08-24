@@ -116,6 +116,7 @@ import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
+import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
@@ -2338,5 +2339,87 @@ describe("attachments (VC-50)", () => {
       ok: false,
       error: "Attachments belong to a ticket or a session",
     });
+  });
+});
+
+/**
+ * The renderer door feeds the ticket wake bus (VC-85 slice C).
+ *
+ * A waiter cares that a ticket moved, not who moved it — a person dragging a
+ * card is as legitimate a wake as an agent signalling one. Without this door
+ * feeding the bus, an orchestrator parked on a ticket would sleep through
+ * every change a human made.
+ */
+describe("the ticket wake bus (VC-85)", () => {
+  const unsubscribes: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const off of unsubscribes.splice(0)) off();
+  });
+
+  function watch(): TicketWake[] {
+    const seen: TicketWake[] = [];
+    unsubscribes.push(subscribeTicketWake((wake) => seen.push(wake)));
+    return seen;
+  }
+
+  it("wakes on a create, a move, and a comment made from the app", () => {
+    const projectId = createProject();
+    const seen = watch();
+
+    const created = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      title: "Ship it",
+      status: "todo",
+      priority: "medium",
+      labels: [],
+    });
+    if (!created.ok) throw new Error(created.error);
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: created.ticket.id,
+      toStatus: "doing",
+      toIndex: 0,
+    });
+    invoke<TicketCommentResult>("volli:comment-create", {
+      ticketId: created.ticket.id,
+      body: "On it",
+    });
+
+    expect(seen.map((wake) => wake.event.payload.kind)).toEqual([
+      "created",
+      "status_changed",
+      "commented",
+    ]);
+    expect(seen.every((wake) => wake.projectId === projectId)).toBe(true);
+  });
+
+  it("stays silent for a same-column move, which writes no fact to wake on", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const seen = watch();
+
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: ticket.status,
+      toIndex: 0,
+    });
+
+    expect(seen).toEqual([]);
+  });
+
+  it("leaves the renderer's own fan-out exactly where it was", () => {
+    // The bus is additive (VC-85): `volli:data-changed` is what re-hydrates a
+    // window, and nothing here was rewired through the wake path.
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const seen = watch();
+    dataChangedSends.length = 0;
+
+    invoke<TicketResult>("volli:ticket-set-priority", { ticketId: ticket.id, priority: "high" });
+
+    expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["priority_changed"]);
+    expect(dataChangedSends).toEqual([]);
   });
 });

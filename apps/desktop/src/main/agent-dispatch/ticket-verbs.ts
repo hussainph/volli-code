@@ -47,6 +47,7 @@ import {
   setTicketPriorityCommand,
   updateTicketFieldsCommand,
 } from "../ticket-commands";
+import { emitTicketWakesSince, withTicketWake } from "../ticket-wake";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
@@ -190,6 +191,10 @@ export async function ticketCreateVerb(
       },
       { now: createdAt, actor: actor.actor },
     );
+    // The wake goes out after the create's transaction returned, and with no
+    // mark to take: a ticket that did not exist a moment ago has no events its
+    // creation did not write (VC-85).
+    emitTicketWakesSince(options.db, ticket.id, 0);
     options.onMutation?.({
       ticketId: ticket.id,
       projectId: resolved.project.id,
@@ -284,7 +289,10 @@ export async function ticketUpdateVerb(
       );
       return ticket;
     });
-    const updated = run();
+    // One command, up to three events (fields, priority, labels), and the wake
+    // carries each of them in the order they were written — after the
+    // transaction, never inside it.
+    const updated = withTicketWake(options.db, resolved.ticket.id, run);
     options.onMutation?.({
       ticketId: resolved.ticket.id,
       projectId: resolved.project.id,
@@ -350,15 +358,20 @@ export async function ticketMoveVerb(
     const movedAt = now();
     const before = listTicketsByProject(options.db, resolved.project.id);
     const toIndex = before.filter((ticket) => ticket.status === to).length;
-    const moved = moveTicketCommand(
-      options.db,
-      {
-        projectId: resolved.project.id,
-        ticketId: resolved.ticket.id,
-        toStatus: to,
-        toIndex,
-      },
-      { now: movedAt, actor: actor.actor },
+    // The wake fires here rather than after the interrupt below, because the
+    // move is what a waiter is waiting for and it is already durable — an
+    // interrupt that fails afterwards does not un-move the ticket.
+    const moved = withTicketWake(options.db, resolved.ticket.id, () =>
+      moveTicketCommand(
+        options.db,
+        {
+          projectId: resolved.project.id,
+          ticketId: resolved.ticket.id,
+          toStatus: to,
+          toIndex,
+        },
+        { now: movedAt, actor: actor.actor },
+      ),
     );
     const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
     // Backward-move interrupt (issue #78): the move committed above, so the
@@ -433,15 +446,17 @@ export async function ticketCommentVerb(
   });
   if (commentPreview !== null) return commentPreview;
   try {
-    const comment = createTicketCommentCommand(
-      options.db,
-      {
-        ticketId: resolved.ticket.id,
-        body: message,
-        commentActor: request.ctx.env.session ? "session" : "user",
-        sessionId: request.ctx.env.session ?? null,
-      },
-      { now: now(), actor: actor.actor },
+    const comment = withTicketWake(options.db, resolved.ticket.id, () =>
+      createTicketCommentCommand(
+        options.db,
+        {
+          ticketId: resolved.ticket.id,
+          body: message,
+          commentActor: request.ctx.env.session ? "session" : "user",
+          sessionId: request.ctx.env.session ?? null,
+        },
+        { now: now(), actor: actor.actor },
+      ),
     );
     options.onMutation?.({
       ticketId: resolved.ticket.id,
@@ -532,17 +547,21 @@ export async function ticketSignalVerb(
     resolved.ticket.ticketNumber,
   );
   try {
-    const signal = createTicketSignalCommand(
-      options.db,
-      {
-        ticketId: resolved.ticket.id,
-        kind,
-        verdict,
-        detail,
-        signalActor: "session",
-        sessionId: envSessionId,
-      },
-      { now: now(), actor: actor.actor },
+    // The wake a waiter is most likely parked on (VC-85): a verdict is the
+    // fact another Session delegated work to find out.
+    const signal = withTicketWake(options.db, resolved.ticket.id, () =>
+      createTicketSignalCommand(
+        options.db,
+        {
+          ticketId: resolved.ticket.id,
+          kind,
+          verdict,
+          detail,
+          signalActor: "session",
+          sessionId: envSessionId,
+        },
+        { now: now(), actor: actor.actor },
+      ),
     );
     options.onMutation?.({
       ticketId: resolved.ticket.id,
@@ -580,10 +599,12 @@ export async function ticketArchiveVerb(
   if (!actor.ok) return actor.response;
   try {
     const archivedAt = now();
-    archiveTicketCommand(options.db, resolved.ticket.id, {
-      now: archivedAt,
-      actor: actor.actor,
-    });
+    withTicketWake(options.db, resolved.ticket.id, () =>
+      archiveTicketCommand(options.db, resolved.ticket.id, {
+        now: archivedAt,
+        actor: actor.actor,
+      }),
+    );
     options.onMutation?.({
       ticketId: resolved.ticket.id,
       projectId: resolved.project.id,
