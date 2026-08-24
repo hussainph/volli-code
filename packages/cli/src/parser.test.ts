@@ -156,6 +156,29 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("types a zero count on ticket show, and spells --comments-only as that zero", () => {
+    // VC-85: the cheapest poll a read-tier verb can offer. `0` is a real count
+    // here, and the sugar lands on the SAME argument rather than a second one
+    // main would have to learn — which is what keeps the two from drifting.
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--events", "0"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", events: 0 }, json: false },
+    });
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--comments", "0"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", comments: 0 }, json: false },
+    });
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--comments-only"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", events: 0 }, json: false },
+    });
+    // Last one wins, like every other option the walker sets.
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--comments-only", "--events", "3"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", events: 3 }, json: false },
+    });
+  });
+
   it("routes comments, archive, lifecycle signals, and notifications", () => {
     expect(parseCliArgs(["ticket", "comment", "VC-12", "-m", "Ready for review"])).toEqual({
       ok: true,
@@ -428,7 +451,13 @@ describe("parseCliArgs", () => {
     [["ticket", "archive"], "ticket archive requires <id>"],
     [["ticket", "show"], "ticket show requires <id>"],
     [["ticket", "show", "VC-1", "--events"], "--events requires a value"],
-    [["ticket", "show", "VC-1", "--events", "0"], "--events requires a positive integer"],
+    // 0 is accepted (VC-85); what a count still refuses is a negative or a
+    // fraction, either of which would slice from the wrong end or not at all.
+    [["ticket", "show", "VC-1", "--events", "-1"], "--events requires a whole number, 0 or more"],
+    [
+      ["ticket", "show", "VC-1", "--comments", "1.5"],
+      "--comments requires a whole number, 0 or more",
+    ],
     [["ticket", "move"], "ticket move requires <id>"],
     [["ticket", "move", "VC-1"], "ticket move requires --to"],
     [["ticket", "comment"], "ticket comment requires <id>"],

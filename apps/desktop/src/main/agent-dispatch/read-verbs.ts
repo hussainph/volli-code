@@ -25,9 +25,11 @@ import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import {
+  countOr,
   invalidPriorityResponse,
   positiveIntOr,
   projectForCreate,
+  tail,
   ticketForDisplayId,
 } from "./resolution";
 import { agentTicket, boardData, publicEvent } from "./wire";
@@ -268,22 +270,25 @@ export async function ticketShowVerb(
   const { options, projects } = context;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const eventLimit = positiveIntOr(request.args["events"], 5);
-  const commentLimit = positiveIntOr(request.args["comments"], 5);
+  // Zero is a real count here, not an absent one: an orchestrator polling this
+  // ticket for a verdict wants neither log, and paying for one is the cost
+  // VC-85 measured at ~60% of an orchestration pass.
+  const eventLimit = countOr(request.args["events"], 5);
+  const commentLimit = countOr(request.args["comments"], 5);
   const displayId = displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber);
-  const events = listTicketEvents(options.db, resolved.ticket.id)
-    .slice(-eventLimit)
-    .map((event) => publicEvent(options.db, projects, event));
-  const comments = listComments(options.db, resolved.ticket.id)
-    .slice(-commentLimit)
-    .map((comment) => ({
+  const events = tail(listTicketEvents(options.db, resolved.ticket.id), eventLimit).map((event) =>
+    publicEvent(options.db, projects, event),
+  );
+  const comments = tail(listComments(options.db, resolved.ticket.id), commentLimit).map(
+    (comment) => ({
       ticket: displayId,
       body: comment.body,
       actor: comment.actor,
       session: comment.sessionId ? shortSessionId(comment.sessionId) : null,
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
-    }));
+    }),
+  );
   return {
     v: 1,
     ok: true,

@@ -867,7 +867,7 @@ describe("agent command service", () => {
     );
   });
 
-  it("clamps non-positive ticket.show limits to their defaults instead of slicing the whole history", async () => {
+  it("reads a zero ticket.show count as none, and a nonsense one as the default", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -892,13 +892,22 @@ describe("agent command service", () => {
       });
     }
 
-    // `--events 0` must fall back to the default of 5 (not `slice(-0)` = all).
-    const shown = await execute("ticket.show", { id: "VC-1", events: 0, comments: -3 });
+    await execute("ticket.comment", { id: "VC-1", message: "Prose" });
 
-    expect(shown.ok).toBe(true);
-    if (shown.ok) {
-      const data = shown.data as { events: unknown[] };
+    // VC-85: `events: 0` is the cheapest poll a read verb can answer, and it
+    // has to mean NONE. `slice(-0)` is `slice(0)` — the whole history — so the
+    // zero path is the one that must be read before it is sliced.
+    const quiet = await execute("ticket.show", { id: "VC-1", events: 0, comments: 0 });
+    // A negative or fractional count is not an answer at all; those still fall
+    // back to the command's default rather than slicing from the wrong end.
+    const nonsense = await execute("ticket.show", { id: "VC-1", events: -3, comments: 1.5 });
+
+    expect(quiet).toMatchObject({ ok: true, data: { events: [], comments: [] } });
+    expect(nonsense.ok).toBe(true);
+    if (nonsense.ok) {
+      const data = nonsense.data as { events: unknown[]; comments: unknown[] };
       expect(data.events).toHaveLength(5);
+      expect(data.comments).toHaveLength(1);
     }
   });
 

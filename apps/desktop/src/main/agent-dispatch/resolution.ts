@@ -48,12 +48,40 @@ export function invalidPriorityResponse(priority: unknown): AgentResponse | null
 }
 
 /**
- * A CLI count option (`--events`/`--comments`/`--limit`/`--lines`) is honored
- * only when it's a positive integer; 0, negatives, and NaN fall back to the
- * command's default — never `slice(-0)`, which would return the whole history.
+ * A CLI count option (`--limit`/`--lines`) is honored only when it's a positive
+ * integer; 0, negatives, and NaN fall back to the command's default — never
+ * `slice(-0)`, which would return the whole history.
  */
 export function positiveIntOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * The same reader for a count whose ZERO is a real answer (VC-85).
+ *
+ * `ticket show --events 0` asks for no event log at all — the cheapest read an
+ * orchestrator polling a ticket can make. It used to be rejected twice over:
+ * the CLI parser refused to type it, and this side silently read the 0 as
+ * "unset" and answered with five events anyway. A caller sending the raw
+ * request past the parser therefore got a number it never asked for, which is
+ * the half of the bug that no CLI fix would have reached.
+ *
+ * Negatives and non-integers still fall back, because {@link tail} would read a
+ * negative as a slice from the other end.
+ */
+export function countOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+/**
+ * The last `limit` items of a chronological list, and none of them at 0.
+ *
+ * `slice(-0)` is `slice(0)` — the WHOLE list — so a zero count read through the
+ * ordinary trailing slice returns the exact opposite of what it asks for. The
+ * one line that makes {@link countOr}'s zero mean what it says.
+ */
+export function tail<T>(items: readonly T[], limit: number): readonly T[] {
+  return limit === 0 ? [] : items.slice(-limit);
 }
 
 export type ProjectResolution =

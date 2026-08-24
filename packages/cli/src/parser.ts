@@ -116,6 +116,27 @@ const positiveIntValue: ValueParser = (raw, token) => {
 };
 
 /**
+ * A count whose zero is a real answer (VC-85).
+ *
+ * `ticket show --events 0` means "do not read the event log at all", which is
+ * the cheapest poll the read tier can offer and was refused here as a usage
+ * error until this parser existed. It is deliberately NOT the parser every
+ * count option uses: `--limit 0` on a listing verb asks for an empty answer,
+ * which is a question nobody means to ask, so those keep
+ * {@link positiveIntValue} and its refusal.
+ *
+ * The rejection is two-sided by construction — main's own count reader had to
+ * stop treating 0 as "unset" in the same change, or a request this parser now
+ * accepts would still come back with five events.
+ */
+const countValue: ValueParser = (raw, token) => {
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0
+    ? { ok: true, value: parsed }
+    : { ok: false, message: `${token} requires a whole number, 0 or more` };
+};
+
+/**
  * `--since`, kept as the two shapes a caller may write rather than resolved to
  * an instant here.
  *
@@ -230,8 +251,13 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   "ticket.show": {
     options: {
-      "--events": { kind: "value", key: "events", parse: positiveIntValue },
-      "--comments": { kind: "value", key: "comments", parse: positiveIntValue },
+      "--events": { kind: "value", key: "events", parse: countValue },
+      "--comments": { kind: "value", key: "comments", parse: countValue },
+      // Sugar, and literally so: it lands on the same argument the long form
+      // writes, so main answers one request shape and cannot drift from the
+      // shorthand. Last flag wins, like every other option the walker sets —
+      // `--comments-only --events 3` asks for three events, in that order.
+      "--comments-only": { kind: "flag", key: "events", value: 0 },
     },
   },
   "ticket.events": {
