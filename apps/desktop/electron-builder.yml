@@ -29,7 +29,9 @@ directories:
 # compiles every renderer dep into dist/. What the packaged main process
 # require()s from node_modules at runtime is therefore a tiny closed set:
 #   @trpc/server, better-sqlite3 (-> bindings -> file-uri-to-path), node-pty
-# (node-pty via a lazy `import("node-pty")`), yaml (prompt-template
+# (node-pty via a lazy `import("node-pty")`), sharp (and its platform-native
+# `@img` binary/libvips packages, loaded lazily by the read-image processor —
+# see the optionalDependencies note below), yaml (prompt-template
 # frontmatter), jsdom + its runtime tree (@asamuzakjp, @bramus, @csstools,
 # @exodus, bidi-js, css-tree, data-urls, decimal.js, entities,
 # html-encoding-sniffer, is-potential-custom-element-name, lru-cache, mdn-data,
@@ -53,7 +55,7 @@ files:
   - dist/**
   - dist-electron/**
   - "!dist-electron/*.map"
-  - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@exodus|@trpc|argparse|better-sqlite3|bidi-js|bindings|builder-util-runtime|css-tree|data-urls|debug|decimal.js|electron-updater|entities|file-uri-to-path|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|require-from-string|sax|saxes|semver|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
+  - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@exodus|@img|@trpc|argparse|better-sqlite3|bidi-js|bindings|builder-util-runtime|css-tree|data-urls|debug|decimal.js|detect-libc|electron-updater|entities|file-uri-to-path|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|require-from-string|sax|saxes|semver|sharp|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
   - "!node_modules/@trpc/!(server)/**"
   # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
   # SQLite source, prebuilds/ is the Node-ABI cache that cache-node-sqlite.mjs
@@ -67,11 +69,38 @@ files:
 # would fight the repo's Node-ABI/Electron-ABI coexistence scheme.
 npmRebuild: false
 
+# sharp reaches its native binding through a two-link chain of OPTIONAL
+# dependencies: sharp -> @img/sharp-darwin-arm64 (the .node addon) ->
+# @img/sharp-libvips-darwin-arm64 (the libvips-cpp dylib the addon dlopen()s by
+# @rpath). electron-builder's pnpm collector does not follow a transitive
+# optional platform package — its own log calls this "platform-specific optional
+# dependencies not bundled — add them to your project's optionalDependencies",
+# and pnpm 10+ does not preserve them across a lockfile regeneration either.
+# Whitelisting `@img` above is necessary but NOT sufficient. BOTH links are
+# therefore listed in apps/desktop/package.json's optionalDependencies, and both
+# must be bumped in lockstep with the `sharp` pin.
+#
+# Getting this wrong is quiet, which is why it is spelled out. Miss the first
+# link and the app ships sharp's JavaScript and no binary; miss the second and it
+# ships the addon but no dylib. Either way `require("sharp")` throws "Could not
+# load the sharp module using the darwin-arm64 runtime" — and because the
+# read-image processor catches that and degrades, the only symptom is that every
+# image read in the packaged app returns "[Image omitted]" while `pnpm start`,
+# which resolves through the pnpm store, keeps working perfectly.
+#
+# They are optionalDependencies rather than plain ones so Linux CI, which
+# installs the same workspace, skips them on `os`/`cpu` instead of failing.
+# arm64-only mirrors the mac target below; an Intel or universal target needs
+# `@img/sharp-darwin-x64` + `@img/sharp-libvips-darwin-x64` beside them.
+
 # Native modules cannot load from inside an asar; node-pty also exec()s its
-# sibling spawn-helper binary, so both packages stay unpacked wholesale.
+# sibling spawn-helper binary, and sharp loads native bindings plus libvips from
+# its `@img` packages, so all of those trees stay unpacked wholesale.
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/node-pty/**"
+  - "**/node_modules/sharp/**"
+  - "**/node_modules/@img/**"
 
 electronLanguages:
   - en

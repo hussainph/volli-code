@@ -48,6 +48,7 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import { sessionToolBindings, verbEntry } from "@volli/shared";
+import { processReadImage } from "./read-image-processor";
 import type {
   CodingToolId,
   NonCodingToolId,
@@ -89,7 +90,7 @@ type SessionToolInput = SessionToolSpec & Pick<SessionRuntimeSpec, "signal">;
 function createTool(tool: CodingToolId, env: ExecutionEnv): AgentTool {
   switch (tool) {
     case "read":
-      return bindContext(createReadTool(), env);
+      return bindContext(createReadTool({ imageProcessor: processReadImage }), env);
     case "edit":
       return bindContext(createEditTool(), env);
     case "write":
