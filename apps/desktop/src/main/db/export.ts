@@ -74,6 +74,8 @@ export interface ExportProject {
   skillModes: string | null;
   sessionHarness: string | null;
   sessionModel: string | null;
+  /** This project's authority departures (migration 025); NULL = inherit every default. */
+  authorityPolicy: string | null;
   /** Per-project skills auto-disclosure consent (migration 020), as the row's 0/1. */
   colorIndex: number;
   sortOrder: number;
@@ -208,6 +210,37 @@ export interface ExportAppState {
   updatedAt: number;
 }
 
+/**
+ * One `automations` projection row (migration 026). `runtime` rides as its STORED JSON
+ * string, unparsed — {@link ExportProject.themeCanvas}'s reason: a hand-edited
+ * pin that no longer parses must not take the rescue document down with it.
+ */
+export interface ExportAutomation {
+  id: string;
+  /** `null` is a global Automation — the Ownership axis. */
+  projectId: string | null;
+  name: string;
+  instructions: string;
+  runtime: string | null;
+  rowVersion: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One `automation_runs` projection row (migration 026): identity snapshot plus resolved model columns. */
+export interface ExportAutomationRun {
+  id: string;
+  automationId: string | null;
+  /** Bound Automation name snapshot, retained after record deletion. */
+  automationName: string | null;
+  ticketId: string | null;
+  sessionId: string;
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+  createdAt: number;
+}
+
 export interface ExportDocument {
   format: typeof EXPORT_FORMAT;
   schemaVersion: number;
@@ -226,6 +259,8 @@ export interface ExportDocument {
   sessionCommandReceipts: ExportSessionCommandReceipt[];
   ticketComments: ExportTicketComment[];
   appState: ExportAppState[];
+  automations: ExportAutomation[];
+  automationRuns: ExportAutomationRun[];
 }
 
 export interface BuildExportDocumentOptions {
@@ -252,6 +287,7 @@ interface ProjectRow {
   skill_modes: string | null;
   session_harness: string | null;
   session_model: string | null;
+  authority_policy: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -291,6 +327,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     skillModes: row.skill_modes,
     sessionHarness: row.session_harness,
     sessionModel: row.session_model,
+    authorityPolicy: row.authority_policy,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,
@@ -390,6 +427,61 @@ function exportTicketLabels(db: Database.Database): ExportTicketLabel[] {
     "SELECT * FROM ticket_labels ORDER BY ticket_id, label_id",
   ).all();
   return rows.map((row) => ({ ticketId: row.ticket_id, labelId: row.label_id }));
+}
+
+interface AutomationRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  instructions: string;
+  runtime: string | null;
+  row_version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function exportAutomations(db: Database.Database): ExportAutomation[] {
+  const rows = prepared<[], AutomationRow>(db, "SELECT * FROM automations ORDER BY id").all();
+  return rows.map((row) => ({
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    instructions: row.instructions,
+    runtime: row.runtime,
+    rowVersion: row.row_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+interface AutomationRunRow {
+  id: string;
+  automation_id: string | null;
+  automation_name: string | null;
+  ticket_id: string | null;
+  session_id: string;
+  provider_id: string;
+  model_id: string;
+  reasoning_level: string;
+  created_at: number;
+}
+
+function exportAutomationRuns(db: Database.Database): ExportAutomationRun[] {
+  const rows = prepared<[], AutomationRunRow>(
+    db,
+    "SELECT * FROM automation_runs ORDER BY id",
+  ).all();
+  return rows.map((row) => ({
+    id: row.id,
+    automationId: row.automation_id,
+    automationName: row.automation_name,
+    ticketId: row.ticket_id,
+    sessionId: row.session_id,
+    providerId: row.provider_id,
+    modelId: row.model_id,
+    reasoningLevel: row.reasoning_level,
+    createdAt: row.created_at,
+  }));
 }
 
 interface TicketEventRow {
@@ -630,6 +722,8 @@ export function buildExportDocument(
     sessionCommandReceipts: exportSessionCommandReceipts(db),
     ticketComments: exportTicketComments(db),
     appState: exportAppState(db),
+    automations: exportAutomations(db),
+    automationRuns: exportAutomationRuns(db),
   };
 }
 

@@ -35,6 +35,7 @@
  */
 
 import { REASONING_LEVELS } from "./agent-runtime";
+import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
 
@@ -96,6 +97,25 @@ export type VerbGroup = "Read" | "Write" | "Session" | "App";
  */
 export type VerbTier = "read" | "coordination" | "control";
 
+/** One durable write a voluntary verb intends. */
+export interface VerbDurableWrite {
+  readonly resource: string;
+  readonly operation: "create" | "update" | "append";
+  readonly summary: string;
+}
+
+/**
+ * Human-facing side-effect contract. Detailed help, previews, managed skill
+ * docs, and docs-site projections all read these exact fields.
+ */
+export interface VerbEffects {
+  readonly durableWrites: readonly VerbDurableWrite[];
+  readonly humanVisible: readonly string[];
+  readonly nonEffects: readonly string[];
+  /** Limits a mixed read/write verb's effects to the named option (`doctor --fix`). */
+  readonly when?: string;
+}
+
 /** Help/schema metadata every declared option carries, whatever its kind. */
 export interface VerbOptionCommon {
   /** The literal argv token the CLI accepts (`--title`, `-m`). */
@@ -143,6 +163,8 @@ export interface VerbEntry {
   readonly example?: string;
   /** Short lines for semantics the option table cannot express. */
   readonly notes?: readonly string[];
+  /** Structured writes and person-visible effects; the canonical side-effect contract. */
+  readonly effects?: VerbEffects;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
   /** Rendered after `<id>` for positionals the option table cannot express. */
@@ -295,6 +317,20 @@ export const VERB_REGISTRY = [
       "Defaults to Backlog unless --status is set.",
       "--body and --body-file are mutually exclusive.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "create",
+          summary: "Create one Ticket and its attributed Ticket creation event.",
+        },
+      ],
+      humanVisible: ["The new Ticket appears on the board in the selected column."],
+      nonEffects: [
+        "Creating in Doing does not start a Session or submit a kickoff turn.",
+        "Worktree intent is recorded, but this command does not materialize a checkout.",
+      ],
+    },
     options: [
       {
         name: "--title",
@@ -335,6 +371,7 @@ export const VERB_REGISTRY = [
       },
       { name: "--base", kind: "value", placeholder: "<branch>", help: "Base branch." },
       { name: "--no-worktree", kind: "flag", help: "Skip worktree isolation." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -348,6 +385,18 @@ export const VERB_REGISTRY = [
     summary: "Update a ticket's fields or body.",
     example: 'volli ticket update VC-12 --edit "old" "new"',
     notes: ["At most one body mutation per call.", "--edit needs exactly one match for <old>."],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary:
+            "Update the requested Ticket fields and append attributed Ticket events for changes.",
+        },
+      ],
+      humanVisible: ["Updated fields appear on the Ticket card and in its Ticket workspace."],
+      nonEffects: ["The Ticket does not move, no Session starts, and no worktree is materialized."],
+    },
     positionalId: "required",
     options: [
       { name: "--title", kind: "value", placeholder: "<text>", help: "Replace the title." },
@@ -400,6 +449,7 @@ export const VERB_REGISTRY = [
         help: "Set the harness.",
       },
       { name: "--base", kind: "value", placeholder: "<branch>", help: "Set the base branch." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -413,6 +463,20 @@ export const VERB_REGISTRY = [
     summary: "Move a ticket to another column.",
     example: "volli ticket move VC-12 --to needs-review",
     notes: ["Moving to the current column is a no-op."],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary:
+            "Update the Ticket's board status and order and append one status-change Ticket event.",
+        },
+      ],
+      humanVisible: ["The Ticket moves to the selected board column."],
+      nonEffects: [
+        "The move does not start a Session, submit a kickoff turn, or create a worktree.",
+      ],
+    },
     positionalId: "required",
     options: [
       {
@@ -423,6 +487,7 @@ export const VERB_REGISTRY = [
         required: true,
         help: "Destination column.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -436,6 +501,17 @@ export const VERB_REGISTRY = [
     summary: "Add a comment to a ticket.",
     example: 'volli ticket comment VC-12 -m "Ready for review"',
     notes: ["Exactly one of -m or --file."],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-comment",
+          operation: "create",
+          summary: "Create one attributed Ticket comment and its Ticket activity event.",
+        },
+      ],
+      humanVisible: ["The comment appears in the Ticket activity feed."],
+      nonEffects: ["The Ticket does not move and no Session starts."],
+    },
     positionalId: "required",
     options: [
       {
@@ -460,6 +536,7 @@ export const VERB_REGISTRY = [
         group: "message",
         help: "Read the comment from a file.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -476,6 +553,19 @@ export const VERB_REGISTRY = [
     group: "Write",
     summary: "Archive a ticket (its worktree is preserved).",
     example: "volli ticket archive VC-12",
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary: "Mark the Ticket archived and append its attributed archive event.",
+        },
+      ],
+      humanVisible: [
+        "The Ticket leaves the active board and remains available as archived history.",
+      ],
+      nonEffects: ["The Ticket worktree is preserved and active Sessions are not ended."],
+    },
     positionalId: "required",
     options: [],
   },
@@ -646,6 +736,23 @@ export const VERB_REGISTRY = [
       "Submits a kickoff turn; -m replaces the default kickoff text and names the session.",
       "--title sets a permanent title; --model/--reasoning override the app default.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session",
+          operation: "create",
+          summary:
+            "Create one durable Ticket Session, freeze its start inputs, and submit its kickoff turn after a ready attachment.",
+        },
+      ],
+      humanVisible: [
+        "The app raises an actionable in-app toast with Open session for an agent-originated start.",
+      ],
+      nonEffects: [
+        "The Ticket does not move.",
+        "The app does not steal focus or navigate until the person uses Open session.",
+      ],
+    },
     positionalId: "required",
     options: [
       {
@@ -693,8 +800,25 @@ export const VERB_REGISTRY = [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a completed done signal command and receipt to the current Session ledger.",
+        },
+      ],
+      humanVisible: [
+        "The done signal and optional reason appear in the Session's durable history.",
+      ],
+      nonEffects: [
+        "No Ticket moves, the Session identity remains openable, and its worktree is not removed.",
+      ],
+    },
     options: [
       { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -711,8 +835,21 @@ export const VERB_REGISTRY = [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Raises attention on this session; --reason is the text a person sees.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a completed blocked signal command and receipt to the current Session ledger.",
+        },
+      ],
+      humanVisible: ["The Session raises attention in the app and shows the optional reason."],
+      nonEffects: ["No Ticket moves, and the Session is not archived or deleted."],
+    },
     options: [
       { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -729,8 +866,21 @@ export const VERB_REGISTRY = [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Seeds resume-on-re-entry; usually run from the harness's session-start hook.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-attachment",
+          operation: "update",
+          summary: "Record the harness-native resume identity on the current terminal attachment.",
+        },
+      ],
+      humanVisible: ["Reopening or resuming the Session uses the recorded harness conversation."],
+      nonEffects: ["No model turn starts, no Ticket moves, and no new Session is created."],
+    },
     positionalId: "required",
-    options: [],
+    options: [
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
   },
   {
     // The other involuntary one: a harness's own PATH-shim wrapper announcing
@@ -772,6 +922,15 @@ export const VERB_REGISTRY = [
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "Electron raises a native macOS notification with the supplied title and body.",
+      ],
+      nonEffects: [
+        "It is not an in-app Sonner toast and creates no Ticket row, Ticket event, or Session event.",
+      ],
+    },
     options: [
       {
         name: "-m",
@@ -790,6 +949,7 @@ export const VERB_REGISTRY = [
         help: "Alias for -m.",
       },
       { name: "--title", kind: "value", placeholder: "<text>", help: "Notification title." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -825,13 +985,30 @@ export const VERB_REGISTRY = [
       "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
       "Run it inside a Volli terminal — several checks describe the shell it runs in.",
       "--fix regenerates the wrappers, harness configs and shell integration, then re-runs both Session PATH adoption passes. It names the outcome and added directories for new Sessions; a Session already running keeps its startup environment.",
+      "--dry-run is valid only with --fix and previews the repair without inspecting or touching managed files.",
     ],
+    effects: {
+      when: "--fix",
+      durableWrites: [
+        {
+          resource: "harness-integration",
+          operation: "update",
+          summary:
+            "Regenerate Volli-managed CLI links, wrappers, harness configuration, and shell integration, then refresh Session PATH adoption for future Sessions.",
+        },
+      ],
+      humanVisible: ["The CLI prints the repair result and a fresh integration check."],
+      nonEffects: [
+        "The running Session keeps its startup environment; no Ticket, Session, model turn, or notification is created.",
+      ],
+    },
     options: [
       {
         name: "--fix",
         kind: "flag",
         help: "Regenerate, re-run Session PATH adoption, then re-check.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview --fix without side effects." },
     ],
   },
   {
@@ -887,6 +1064,11 @@ export const VERB_REGISTRY = [
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
     notes: ["Retry the failed command once the app is up."],
+    effects: {
+      durableWrites: [],
+      humanVisible: ["The Volli desktop app opens or remains running."],
+      nonEffects: ["No Ticket or Session is created, moved, or signalled."],
+    },
     options: [
       {
         name: "--timeout",
@@ -906,7 +1088,7 @@ export const VERB_REGISTRY = [
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
-    notes: ["Topics: exit-codes, addressing, json, orchestration."],
+    notes: [`Topics: ${HELP_TOPIC_NAMES.join(", ")}.`],
     extraUsage: "[<command> | <topic>]",
     options: [],
   },
@@ -1033,22 +1215,24 @@ export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbT
   return "control";
 }
 
-/**
- * The CLI reference projection: listed verbs carrying a `cli` access mode,
- * ordered by data on the entries themselves. Takes its entries as an argument
- * so future tool-only verbs can be proven absent without changing the real
- * registry.
- */
-export function referenceVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
-  const referenceEntries = entries.filter(
-    (entry) => entry.listed && entry.accessModes.includes("cli"),
-  );
-  for (const entry of referenceEntries) {
+/** Every listed verb on any agent surface, ordered for zero-cost discovery. */
+export function discoverableVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  const listed = entries.filter((entry) => entry.listed);
+  for (const entry of listed) {
     if (!Number.isFinite(entry.referenceOrder)) {
-      throw new Error(`Listed CLI verb ${entry.key} requires referenceOrder`);
+      throw new Error(`Listed verb ${entry.key} requires referenceOrder`);
     }
   }
-  return referenceEntries.toSorted((left, right) => left.referenceOrder! - right.referenceOrder!);
+  return listed.toSorted((left, right) => left.referenceOrder! - right.referenceOrder!);
+}
+
+/**
+ * The executable CLI reference projection: discoverable verbs carrying a
+ * `cli` access mode. Tool-only verbs remain in {@link DISCOVERABLE_VERBS} so
+ * help can name their real door without pretending the shell executes them.
+ */
+export function referenceVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  return discoverableVerbsFrom(entries).filter((entry) => entry.accessModes.includes("cli"));
 }
 
 const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
@@ -1060,9 +1244,8 @@ export function verbEntry(key: string): VerbEntry | undefined {
   return ENTRY_BY_KEY.get(key);
 }
 
-/**
- * The CLI reference projection: the listed verbs, in reference order. `volli
- * help` groups these by {@link VerbEntry.group}; the involuntary verbs (`hook`,
- * `session.harness`) are absent because nothing should type them.
- */
+/** Every listed registry verb, including a tool-only or app-only door. */
+export const DISCOVERABLE_VERBS: readonly VerbEntry[] = discoverableVerbsFrom(VERB_REGISTRY);
+
+/** The listed verbs this build executes through the Agent CLI. */
 export const REFERENCE_VERBS: readonly VerbEntry[] = referenceVerbsFrom(VERB_REGISTRY);

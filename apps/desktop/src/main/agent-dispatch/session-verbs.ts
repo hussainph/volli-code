@@ -36,6 +36,7 @@ import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { StructuredSessionsError } from "../session-runtime/sessions";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
+import { dryRunResponse } from "./preview";
 import {
   actorSessionTicketDisplay,
   positiveIntOr,
@@ -471,6 +472,12 @@ async function recordSessionSignal(
     return failure("INVALID_REQUEST", "The lifecycle reason must be text.");
   }
   const reason = typeof reasonValue === "string" ? reasonValue : null;
+  const preview = dryRunResponse(request, {
+    kind: "session",
+    id: shortSessionId(envSession.id),
+    label: `Session ${shortSessionId(envSession.id)}`,
+  });
+  if (preview !== null) return preview;
   const submitted = await sessionEngine.submit({
     commandId: newId(),
     sessionId: envSession.id,

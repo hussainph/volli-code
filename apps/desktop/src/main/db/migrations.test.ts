@@ -247,6 +247,42 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
+  it("adds projects.authority_policy as a nullable JSON column (migration 025)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "projects")).toContain("authority_policy");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    // NULL is the default and means "inherit every built-in default", so an
+    // existing project needs no backfill to be governed correctly.
+    expect(db.prepare("SELECT authority_policy FROM projects WHERE id = 'p1'").get()).toEqual({
+      authority_policy: null,
+    });
+    db.close();
+  });
+
+  it("refuses an authority_policy that is not JSON (migration 025)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    // A column whose whole contract is "this is JSON" fails at the write, not
+    // several layers up in a parser that would then have to invent a policy for
+    // the corpse.
+    expect(() =>
+      db.prepare("UPDATE projects SET authority_policy = 'enforce' WHERE id = 'p1'").run(),
+    ).toThrow();
+    db.close();
+  });
+
   it("adds tickets.pr_url as a nullable column (migration 009)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
@@ -1340,6 +1376,254 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
 
     expect(db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 0 });
+    db.close();
+  });
+});
+
+/** A migrated db holding one project, one ticket, one session, one automation, one run (migration 026's suite). */
+function seededAutomationsDb(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath);
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+         VALUES ('s1', 'p1', 't1', 'Chat', 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automations (id, project_id, name, instructions, runtime, created_at, updated_at)
+         VALUES ('a1', 'p1', 'Review', '/review go', NULL, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automation_runs
+      (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+     VALUES ('r1', 'a1', 'Review', 't1', 's1', 'anthropic', 'claude-opus', 'high', 0)`,
+  ).run();
+  return db;
+}
+
+/** The schema on current main: migration 025 is authority policy, not Automations. */
+function buildCurrentV25Db(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  const throughCurrentMain = MIGRATIONS.filter((candidate) => candidate.version <= 25);
+  for (const migration of throughCurrentMain) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.pragma("user_version = 25");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p25', 'Current main', '/repo/current', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  return db;
+}
+
+/**
+ * The short-lived VC-126 branch originally used version 025 for Automations
+ * before main assigned that number to `projects.authority_policy`. A developer
+ * who ran that branch has both Automation tables and `user_version = 25`, but
+ * no authority column — this fixture makes migration 026 converge that lineage.
+ */
+function buildLegacyAutomationV25Db(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 24)) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.exec(`
+    CREATE TABLE automations (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name         TEXT NOT NULL CHECK (name <> ''),
+      instructions TEXT NOT NULL CHECK (instructions <> ''),
+      runtime      TEXT CHECK (runtime IS NULL OR json_valid(runtime)),
+      row_version  INTEGER NOT NULL DEFAULT 1,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX idx_automations_project ON automations(project_id, name);
+    CREATE TABLE automation_runs (
+      id              TEXT PRIMARY KEY,
+      automation_id   TEXT REFERENCES automations(id) ON DELETE SET NULL,
+      ticket_id       TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+      session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      provider_id     TEXT NOT NULL CHECK (provider_id <> ''),
+      model_id        TEXT NOT NULL CHECK (model_id <> ''),
+      reasoning_level TEXT NOT NULL CHECK (reasoning_level <> ''),
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX idx_automation_runs_ticket ON automation_runs(ticket_id, created_at);
+    CREATE INDEX idx_automation_runs_automation ON automation_runs(automation_id, created_at);
+    CREATE INDEX idx_automation_runs_session ON automation_runs(session_id);
+  `);
+  db.pragma("user_version = 25");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('legacy-project', 'Legacy', '/repo/legacy', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('legacy-ticket', 'legacy-project', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('legacy-session', 'legacy-project', 'legacy-ticket', 'Chat', 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automations (id, project_id, name, instructions, runtime, created_at, updated_at)
+       VALUES ('legacy-automation', 'legacy-project', 'Review', '/review', NULL, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automation_runs
+      (id, automation_id, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+     VALUES ('legacy-run', 'legacy-automation', 'legacy-ticket', 'legacy-session', 'anthropic', 'opus', 'high', 0)`,
+  ).run();
+  return db;
+}
+
+describe("migration 026 — Automations command ledger and projections", () => {
+  it("upgrades a database at current main's user_version 25 instead of skipping Automations", () => {
+    const dbPath = tempDbPath();
+    const db = buildCurrentV25Db(dbPath);
+    expect(tableExists(db, "automations")).toBe(false);
+    expect(tableExists(db, "automation_runs")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(26);
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(tableExists(db, "automation_runs")).toBe(true);
+    expect(tableExists(db, "automation_commands")).toBe(true);
+    expect(db.prepare("SELECT authority_policy FROM projects WHERE id = 'p25'").get()).toEqual({
+      authority_policy: null,
+    });
+    db.close();
+  });
+
+  it("converges the branch-local Automation 025 lineage with main's authority policy", () => {
+    const dbPath = tempDbPath();
+    const db = buildLegacyAutomationV25Db(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(26);
+    expect(columnNames(db, "projects")).toContain("authority_policy");
+    expect(tableExists(db, "automation_commands")).toBe(true);
+    expect(
+      db
+        .prepare(
+          "SELECT automation_id, automation_name, ticket_id, session_id FROM automation_runs WHERE id = 'legacy-run'",
+        )
+        .get(),
+    ).toEqual({
+      automation_id: "legacy-automation",
+      automation_name: "Review",
+      ticket_id: "legacy-ticket",
+      session_id: "legacy-session",
+    });
+    db.close();
+  });
+
+  it("creates both tables, refuses empty names/instructions and non-JSON runtime", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(tableExists(db, "automation_runs")).toBe(true);
+    expect(tableExists(db, "automation_commands")).toBe(true);
+    expect(tableExists(db, "automation_events")).toBe(true);
+    expect(tableExists(db, "automation_command_receipts")).toBe(true);
+    expect(tableExists(db, "automation_run_deliveries")).toBe(true);
+    db.prepare(
+      "INSERT INTO automation_commands (id, intent, created_at) VALUES ('c1', '{}', 0)",
+    ).run();
+    db.prepare(
+      "INSERT INTO automation_events (id, command_id, kind, payload, created_at) VALUES ('e1', 'c1', 'command.recorded', '{}', 0)",
+    ).run();
+    expect(() =>
+      db.prepare("UPDATE automation_events SET kind = 'edited' WHERE id = 'e1'").run(),
+    ).toThrow();
+    expect(() => db.prepare("DELETE FROM automation_commands WHERE id = 'c1'").run()).toThrow();
+    expect(() => db.prepare("UPDATE automations SET name = '' WHERE id = 'a1'").run()).toThrow();
+    expect(() =>
+      db.prepare("UPDATE automations SET instructions = '' WHERE id = 'a1'").run(),
+    ).toThrow();
+    expect(() =>
+      db.prepare("UPDATE automations SET runtime = 'not json' WHERE id = 'a1'").run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare("UPDATE automations SET runtime = ? WHERE id = 'a1'")
+        .run('{"providerId":"anthropic","modelId":"opus","reasoningLevel":"high"}'),
+    ).not.toThrow();
+    db.close();
+  });
+
+  it("scopes a project Automation to its project (cascade) while a global one carries NULL", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, created_at, updated_at)
+         VALUES ('a2', NULL, 'Global', '/tdd', 0, 0)`,
+    ).run();
+
+    db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
+
+    const remaining = db.prepare("SELECT id FROM automations ORDER BY id").all();
+    expect(remaining).toEqual([{ id: "a2" }]);
+    db.close();
+  });
+
+  it("keeps a Run's Automation id/name provenance when its Automation goes, but follows its Session", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    db.prepare("DELETE FROM automations WHERE id = 'a1'").run();
+    db.prepare("DELETE FROM tickets WHERE id = 't1'").run();
+    expect(
+      db
+        .prepare(
+          "SELECT automation_id, automation_name, ticket_id FROM automation_runs WHERE id = 'r1'",
+        )
+        .get(),
+    ).toEqual({
+      automation_id: "a1",
+      automation_name: "Review",
+      ticket_id: null,
+    });
+
+    db.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
+    db.close();
+  });
+
+  it("stores the resolved model as its own columns, never as a reference", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    expect(columnNames(db, "automation_runs")).toEqual([
+      "id",
+      "automation_id",
+      "automation_name",
+      "ticket_id",
+      "session_id",
+      "provider_id",
+      "model_id",
+      "reasoning_level",
+      "created_at",
+    ]);
+    expect(() =>
+      db.prepare("UPDATE automation_runs SET provider_id = '' WHERE id = 'r1'").run(),
+    ).toThrow();
     db.close();
   });
 });

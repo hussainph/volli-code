@@ -1,7 +1,11 @@
-import type { ChatSessionRecord, Project, Ticket } from "@volli/shared";
+import type { Automation, ChatSessionRecord, Project, Ticket } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildCommandPaletteItems } from "./command-palette-model";
+import {
+  buildAutomationRunItems,
+  buildCommandPaletteItems,
+  paletteRunContext,
+} from "./command-palette-model";
 import { projectScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
 
 function project(id: string, name: string, ticketPrefix: string): Project {
@@ -175,5 +179,69 @@ describe("buildCommandPaletteItems", () => {
       alpha.id,
     );
     expect(result.sessions).toEqual([]);
+  });
+});
+
+function automation(overrides: Partial<Automation> = {}): Automation {
+  return {
+    id: "automation-1",
+    projectId: "p1",
+    name: "Review",
+    instructions: "/review go",
+    runtime: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
+describe("paletteRunContext", () => {
+  it("resolves the open Ticket against the live board, with its display id", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const open = ticket("t1", "p1", 12, "Live ticket", 0);
+    expect(paletteRunContext("t1", alpha, [open])).toEqual({
+      ticketId: "t1",
+      displayId: "ALP-12",
+    });
+  });
+
+  it("offers nothing without an open Ticket, a project, or a live board row for it", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const foreign = ticket("t2", "other", 3, "Foreign", 0);
+    expect(paletteRunContext(null, alpha, [])).toBeNull();
+    expect(paletteRunContext("t1", null, [])).toBeNull();
+    expect(paletteRunContext("t1", alpha, [])).toBeNull();
+    expect(paletteRunContext("t2", alpha, [foreign])).toBeNull();
+  });
+});
+
+describe("buildAutomationRunItems", () => {
+  it("offers every listed Automation against the open Ticket, keeping main's order", () => {
+    const rows = buildAutomationRunItems(
+      [automation(), automation({ id: "automation-2", projectId: null, name: "Global TDD" })],
+      { ticketId: "t1", displayId: "ALP-12" },
+    );
+    expect(rows).toEqual([
+      {
+        kind: "automation-run",
+        automationId: "automation-1",
+        name: "Review",
+        ownership: "project",
+        ticketId: "t1",
+        ticketDisplayId: "ALP-12",
+      },
+      {
+        kind: "automation-run",
+        automationId: "automation-2",
+        name: "Global TDD",
+        ownership: "global",
+        ticketId: "t1",
+        ticketDisplayId: "ALP-12",
+      },
+    ]);
+  });
+
+  it("offers no run rows without a target Ticket", () => {
+    expect(buildAutomationRunItems([automation()], null)).toEqual([]);
   });
 });

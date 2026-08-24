@@ -59,6 +59,7 @@ function attachment(sessionId: string, id = "attachment-1"): SessionAttachment {
     venue: localVenue,
     continuity: "fresh",
     native: { id: "native-1", detail: { native: true } },
+    authority: null,
   };
 }
 

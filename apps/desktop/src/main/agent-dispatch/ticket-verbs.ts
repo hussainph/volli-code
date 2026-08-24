@@ -44,6 +44,7 @@ import {
 } from "../ticket-commands";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
+import { dryRunResponse } from "./preview";
 import {
   actorSessionTicketDisplay,
   invalidPriorityResponse,
@@ -83,6 +84,7 @@ function resolveRequestedHarness(
       response: failure(
         "INVALID_REQUEST",
         `Invalid harness ${JSON.stringify(value)} (valid: ${FIRST_CLASS_HARNESS_IDS.join(", ")}, or a registered, trusted harness)`,
+        "Use a built-in id or the exact slug of a registered, trusted harness, then retry.",
       ),
     };
   }
@@ -94,6 +96,7 @@ function resolveRequestedHarness(
       response: failure(
         "INVALID_REQUEST",
         `Unknown harness ${JSON.stringify(value)} — no harness by that name is registered (built in: ${FIRST_CLASS_HARNESS_IDS.join(", ")})`,
+        "Register that harness through the app or use one of the built-in ids named in the refusal.",
       ),
     };
   }
@@ -103,6 +106,7 @@ function resolveRequestedHarness(
       response: failure(
         "INVALID_REQUEST",
         `Harness ${JSON.stringify(value)} is registered but not trusted, so nothing can launch on it.`,
+        "Review and trust that harness in the app, or choose a trusted harness, before retrying.",
       ),
     };
   }
@@ -150,11 +154,17 @@ export async function ticketCreateVerb(
   ) {
     return failure("INVALID_REQUEST", "Invalid ticket create arguments.");
   }
+  const actor = requestActor(request, envSession);
+  if (!actor.ok) return actor.response;
+  const createPreview = dryRunResponse(request, {
+    kind: "project",
+    id: resolved.project.ticketPrefix,
+    label: `${resolved.project.name} (${resolved.project.ticketPrefix})`,
+  });
+  if (createPreview !== null) return createPreview;
 
   try {
     const createdAt = now();
-    const actor = requestActor(request, envSession);
-    if (!actor.ok) return actor.response;
     const ticket = createTicketCommand(
       options.db,
       {
@@ -225,6 +235,16 @@ export async function ticketUpdateVerb(
   if (nextBody && !nextBody.ok) {
     return failure(nextBody.code, nextBody.message);
   }
+  const updateDisplayId = displayTicketId(
+    resolved.project.ticketPrefix,
+    resolved.ticket.ticketNumber,
+  );
+  const updatePreview = dryRunResponse(request, {
+    kind: "ticket",
+    id: updateDisplayId,
+    label: updateDisplayId,
+  });
+  if (updatePreview !== null) return updatePreview;
   try {
     const updatedAt = now();
     const run = options.db.transaction((): Ticket => {
@@ -289,16 +309,38 @@ export async function ticketMoveVerb(
   if (!isTicketStatus(to)) {
     return failure("INVALID_REQUEST", "ticket move requires a valid destination column.");
   }
+  const moveDisplayId = displayTicketId(
+    resolved.project.ticketPrefix,
+    resolved.ticket.ticketNumber,
+  );
   // A CLI move carries column semantics only (no drop index), so a move to
   // the column the ticket already occupies is an idempotent no-op — never
   // a reorder to the bottom, and no status event. Returned unchanged.
   if (resolved.ticket.status === to) {
+    const noOpPreview = dryRunResponse(
+      request,
+      { kind: "ticket", id: moveDisplayId, label: moveDisplayId },
+      {
+        durableWrites: [],
+        humanVisibleEffects: [],
+        nonEffects: [
+          `The Ticket is already in ${TICKET_STATUS_LABELS[to]}; no row, event, Session, or notification would be created.`,
+        ],
+      },
+    );
+    if (noOpPreview !== null) return noOpPreview;
     return {
       v: 1,
       ok: true,
       data: { ticket: agentTicket(resolved.ticket, resolved.project) },
     };
   }
+  const movePreview = dryRunResponse(request, {
+    kind: "ticket",
+    id: moveDisplayId,
+    label: moveDisplayId,
+  });
+  if (movePreview !== null) return movePreview;
   try {
     const movedAt = now();
     const before = listTicketsByProject(options.db, resolved.project.id);
@@ -379,6 +421,12 @@ export async function ticketCommentVerb(
   if (typeof message !== "string" || message.trim().length === 0) {
     return failure("INVALID_REQUEST", "ticket comment requires a message.");
   }
+  const commentPreview = dryRunResponse(request, {
+    kind: "ticket",
+    id: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
+    label: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
+  });
+  if (commentPreview !== null) return commentPreview;
   try {
     const comment = createTicketCommentCommand(
       options.db,

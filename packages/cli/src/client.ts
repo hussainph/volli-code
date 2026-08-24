@@ -1,6 +1,6 @@
 import { createConnection } from "node:net";
 
-import { AGENT_ERROR_CODES } from "@volli/shared";
+import { AGENT_ERROR_CODES, makeAgentError } from "@volli/shared";
 import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared";
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -51,8 +51,33 @@ function parseResponse(line: string): AgentResponse {
   ) {
     throw new AgentClientError("SOCKET_PROTOCOL", "The app returned an invalid error response.");
   }
-  const typedError = error as { code: AgentErrorCode; message: string };
-  return { v: 1, ok: false, error: { code: typedError.code, message: typedError.message } };
+  const typedError = error as {
+    code: AgentErrorCode;
+    message: string;
+    reason?: unknown;
+    next?: unknown;
+  };
+  if (
+    (typedError.reason !== undefined && typeof typedError.reason !== "string") ||
+    (typedError.next !== undefined &&
+      typedError.next !== null &&
+      typeof typedError.next !== "string")
+  ) {
+    throw new AgentClientError("SOCKET_PROTOCOL", "The app returned invalid error guidance.");
+  }
+  const normalized = makeAgentError(
+    typedError.code,
+    typedError.message,
+    typedError.next === undefined ? undefined : (typedError.next as string | null),
+  );
+  return {
+    v: 1,
+    ok: false,
+    error:
+      typeof typedError.reason === "string"
+        ? { ...normalized, reason: typedError.reason }
+        : normalized,
+  };
 }
 
 export interface AgentClientOptions {

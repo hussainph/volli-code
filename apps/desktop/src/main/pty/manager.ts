@@ -386,6 +386,12 @@ export class PtyManager {
             venue: TERMINAL_VENUE,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(detail),
+            // A terminal companion carries no Authority Snapshot, and never
+            // will: the gate is a property of the Agent Runtime's own tool
+            // calls, and a TUI harness in a PTY makes none of them. `null` is
+            // the true statement here, not a placeholder — nothing judged this
+            // attachment because nothing was ever offered to be judged.
+            authority: null,
           },
           failure: {
             code: "terminal_start_failed",
@@ -608,6 +614,9 @@ export class PtyManager {
             venue: TERMINAL_VENUE,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(terminalDetail),
+            // No Snapshot, for the reason spelled out on the failure path above:
+            // a terminal companion makes no gated tool calls.
+            authority: null,
           },
         });
       } catch (error) {

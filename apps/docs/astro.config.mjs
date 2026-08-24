@@ -101,6 +101,10 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "CLI", slug: "reference/cli" },
+            {
+              label: "Agent capability changes",
+              slug: "reference/agent-capability-changes",
+            },
             { label: "Keyboard shortcuts", slug: "reference/keyboard-shortcuts" },
             { label: "Troubleshooting", slug: "reference/troubleshooting" },
           ],

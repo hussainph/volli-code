@@ -16,6 +16,7 @@
 
 import type Database from "better-sqlite3";
 import type { SessionEngine, SessionTranscriptArtifact } from "@volli/session-engine";
+import { makeAgentError } from "@volli/shared";
 import type {
   AgentErrorCode,
   AgentRequest,
@@ -280,6 +281,6 @@ export type AgentVerbHandler = (
   request: AgentRequest,
 ) => Promise<AgentResponse>;
 
-export function failure(code: AgentErrorCode, message: string): AgentResponse {
-  return { v: 1, ok: false, error: { code, message } };
+export function failure(code: AgentErrorCode, reason: string, next?: string | null): AgentResponse {
+  return { v: 1, ok: false, error: makeAgentError(code, reason, next) };
 }

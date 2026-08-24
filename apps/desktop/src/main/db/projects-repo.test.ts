@@ -3,10 +3,13 @@ import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
 import { testProject, testSession, testTicket, openTestDb } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
+import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import {
   deleteProject,
+  getProjectAuthorityPolicy,
   getProjectById,
   insertProject,
+  updateProjectAuthorityPolicy,
   updateProjectSkillModes,
   updateProjectSessionDefaults,
 } from "./projects-repo";
@@ -144,5 +147,164 @@ describe("per-project agent configuration (migration 023)", () => {
       skillModes: {},
       sessionModel: null,
     });
+  });
+});
+
+describe("getProjectAuthorityPolicy", () => {
+  it("governs a project that recorded nothing by the built-in defaults", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+
+    expect(getProjectAuthorityPolicy(ctx.db, "p1")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+
+  it("applies the project's departures and inherits the rest", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    ctx.db
+      .prepare("UPDATE projects SET authority_policy = ? WHERE id = 'p1'")
+      .run(JSON.stringify({ enforcement: "enforce" }));
+
+    const policy = getProjectAuthorityPolicy(ctx.db, "p1");
+    expect(policy.enforcement).toBe("enforce");
+    // Everything unsaid still comes from the defaults, which is what lets a
+    // changed default reach every project that never disagreed with it.
+    expect(policy.judgmentMode).toBe(DEFAULT_AUTHORITY_POLICY.judgmentMode);
+    expect(policy.actors).toEqual(DEFAULT_AUTHORITY_POLICY.actors);
+  });
+
+  it("splices a project's extra coordination verb onto the defaults", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    ctx.db
+      .prepare("UPDATE projects SET authority_policy = ? WHERE id = 'p1'")
+      .run(JSON.stringify({ actors: { session: { coordinationVerbs: ["$defaults", "x.y"] } } }));
+
+    expect(getProjectAuthorityPolicy(ctx.db, "p1").actors.session.coordinationVerbs).toEqual([
+      ...DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs,
+      "x.y",
+    ]);
+  });
+
+  it("inherits rather than throwing when the column was edited into nonsense", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    // Valid JSON, so the CHECK passes; not the shape the document means.
+    ctx.db.prepare("UPDATE projects SET authority_policy = '[1,2]' WHERE id = 'p1'").run();
+
+    // This runs on the attach path, where a throw costs a Session its
+    // attachment. Degrading to the defaults is the only honest answer.
+    expect(getProjectAuthorityPolicy(ctx.db, "p1")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+
+  it("answers the defaults for a project that does not exist", () => {
+    ctx = openTestDb();
+
+    expect(getProjectAuthorityPolicy(ctx.db, "missing")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+});
+
+/**
+ * The write migration 025 was owed (VC-172). Every case here used to require
+ * raw SQL, which is the whole reason the ticket exists.
+ */
+describe("updateProjectAuthorityPolicy", () => {
+  it("records a departure and resolves it through the reader beside it", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+
+    const saved = updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "enforce" }, 1000);
+
+    // The row carries the DEPARTURE, unresolved — what the editing surface needs.
+    expect(saved?.authorityPolicy).toEqual({ enforcement: "enforce" });
+    // The attach path gets it resolved, with everything unsaid still inherited.
+    const policy = getProjectAuthorityPolicy(ctx.db, "p1");
+    expect(policy.enforcement).toBe("enforce");
+    expect(policy.judgmentMode).toBe(DEFAULT_AUTHORITY_POLICY.judgmentMode);
+    expect(policy.actors).toEqual(DEFAULT_AUTHORITY_POLICY.actors);
+  });
+
+  it("stores an empty override as NULL, indistinguishable from never having spoken", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "enforce" }, 1000);
+
+    updateProjectAuthorityPolicy(ctx.db, "p1", {}, 2000);
+
+    // `updateProjectSkillModes`'s rule for this column. Two spellings of one
+    // state is a difference something eventually depends on by accident.
+    expect(ctx.db.prepare("SELECT authority_policy FROM projects WHERE id = 'p1'").get()).toEqual({
+      authority_policy: null,
+    });
+    expect(getProjectById(ctx.db, "p1")?.authorityPolicy).toBeNull();
+    expect(getProjectAuthorityPolicy(ctx.db, "p1")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+
+  it("clears every departure on null, returning the project to the defaults", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "off" }, 1000);
+
+    const cleared = updateProjectAuthorityPolicy(ctx.db, "p1", null, 2000);
+
+    expect(cleared?.authorityPolicy).toBeNull();
+    expect(getProjectAuthorityPolicy(ctx.db, "p1")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+
+  it("normalises rather than trusting, so an unknown key never reaches the column", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+
+    // The IPC handler validates and would have refused this. The repo still
+    // does not store it: a caller that skipped the check must not be able to
+    // park a key in the column for the reader to drop forever after.
+    const saved = updateProjectAuthorityPolicy(
+      ctx.db,
+      "p1",
+      { enforcement: "enforce", enforcment: "off" } as never,
+      1000,
+    );
+
+    expect(saved?.authorityPolicy).toEqual({ enforcement: "enforce" });
+  });
+
+  it("survives the round trip that the $defaults splice depends on", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "p1",
+      { actors: { session: { coordinationVerbs: ["$defaults", "deploy.run"] } } },
+      1000,
+    );
+
+    // The additive-inheritance design, finally exercisable without raw SQL.
+    expect(getProjectAuthorityPolicy(ctx.db, "p1").actors.session.coordinationVerbs).toEqual([
+      ...DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs,
+      "deploy.run",
+    ]);
+  });
+
+  it("bumps row_version so a concurrent reader sees the row changed", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    const before = ctx.db.prepare("SELECT row_version FROM projects WHERE id = 'p1'").get() as {
+      row_version: number;
+    };
+
+    updateProjectAuthorityPolicy(ctx.db, "p1", { enforcement: "enforce" }, 1000);
+
+    const after = ctx.db
+      .prepare("SELECT row_version, updated_at FROM projects WHERE id = 'p1'")
+      .get() as { row_version: number; updated_at: number };
+    expect(after.row_version).toBe(before.row_version + 1);
+    expect(after.updated_at).toBe(1000);
+  });
+
+  it("answers undefined for a project that does not exist", () => {
+    ctx = openTestDb();
+
+    expect(updateProjectAuthorityPolicy(ctx.db, "missing", {}, 1000)).toBeUndefined();
   });
 });

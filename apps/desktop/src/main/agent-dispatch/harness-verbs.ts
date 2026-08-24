@@ -47,6 +47,7 @@ import {
 } from "../session-control";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
+import { dryRunResponse } from "./preview";
 
 /**
  * The harness session id an event carries, trimmed — `null` when the event
@@ -248,6 +249,12 @@ export async function sessionLinkVerb(
   if (harnessSessionId.length > 200) {
     return failure("INVALID_REQUEST", "The harness session id is too long (max 200 chars).");
   }
+  const preview = dryRunResponse(request, {
+    kind: "session",
+    id: shortSessionId(session.id),
+    label: `Session ${shortSessionId(session.id)}`,
+  });
+  if (preview !== null) return preview;
   const updated = await updateTerminalNative(
     terminalUpdateLocks,
     sessionEngine,

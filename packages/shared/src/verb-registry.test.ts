@@ -267,7 +267,7 @@ describe("CLI reference projection", () => {
       options: [],
     };
     expect(() => referenceVerbsFrom([unordered])).toThrow(
-      "Listed CLI verb unordered.verb requires referenceOrder",
+      "Listed verb unordered.verb requires referenceOrder",
     );
   });
 });
@@ -320,6 +320,35 @@ describe("verbTier", () => {
   it("is the only way to get a tier — no entry stores one", () => {
     for (const entry of VERB_REGISTRY) {
       expect(Object.keys(entry)).not.toContain("tier");
+    }
+  });
+
+  /**
+   * VC-44's non-negotiable, held here because this table is what would break it.
+   *
+   * The agent must not be able to author the policy that governs it. Authority
+   * policy is app-owned state written through one IPC channel
+   * (`volli:project-authority-policy`) with no verb behind it, and that has to
+   * stay true as the registry grows — a `volli authority set` added later would
+   * hand the agent its own permissions back, and would do it quietly.
+   *
+   * The check is a floor, not a proof: it catches a verb NAMED for the write.
+   * What actually enforces the rule is `verbTier` refusing a `cli` access mode
+   * on a role actor, which is tested above and cannot be worked around — any
+   * such verb must be `tool`-only, and a tool bundle is not the agent socket.
+   */
+  it("puts no authority-policy WRITE on the agent surface", () => {
+    const authorityWrites = VERB_REGISTRY.filter(
+      (entry) => entry.key.startsWith("authority") && entry.actor !== "any",
+    );
+    expect(authorityWrites).toEqual([]);
+
+    // Reads would be legitimate on the socket — VC-44's `authority
+    // defaults|effective` are two read verbs. If one lands, it stays read tier.
+    for (const entry of VERB_REGISTRY.filter((candidate) =>
+      candidate.key.startsWith("authority"),
+    )) {
+      expect(verbTier(entry)).toBe("read");
     }
   });
 });
@@ -376,6 +405,36 @@ describe("the registry table", () => {
         expect(option.help.length).toBeGreaterThan(0);
         expect("placeholder" in option).toBe(option.kind !== "flag");
       }
+    }
+  });
+
+  it("keeps the ratified preview matrix on the verbs themselves", () => {
+    const previewed = VERB_REGISTRY.filter((entry) =>
+      entry.options.some((option) => option.name === "--dry-run"),
+    ).map((entry) => entry.key);
+    expect(previewed).toEqual([
+      "ticket.create",
+      "ticket.update",
+      "ticket.move",
+      "ticket.comment",
+      "session.done",
+      "session.blocked",
+      "session.link",
+      "notify",
+      "doctor",
+    ]);
+  });
+
+  it("pins human-visible effects and explicit non-effects on every voluntary write", () => {
+    const voluntaryWrites = VERB_REGISTRY.filter((entry) => entry.listed && entry.actor !== "any");
+    for (const entry of voluntaryWrites) {
+      expect(entry.effects, entry.key).toBeDefined();
+      expect(entry.effects!.humanVisible.length, entry.key).toBeGreaterThan(0);
+      expect(entry.effects!.nonEffects.length, entry.key).toBeGreaterThan(0);
+    }
+
+    for (const key of ["doctor", "app.launch"] as const) {
+      expect(verbEntry(key)?.effects, key).toBeDefined();
     }
   });
 

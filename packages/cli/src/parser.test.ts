@@ -9,6 +9,7 @@ import {
   VERB_REGISTRY,
   verbEntry,
 } from "@volli/shared";
+import type { VerbEntry } from "@volli/shared";
 
 import { CLI_MECHANICS, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
 
@@ -557,13 +558,114 @@ describe("parseCliArgs", () => {
     },
   );
 
-  it("lists the whole command vocabulary when no command matches", () => {
+  it("answers an empty argv as a no-door refusal rather than crashing", () => {
+    const result = parseCliArgs([]);
+    if (result.ok) throw new Error("expected a no-door refusal");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message).toContain('No Volli verb matches "(empty)"');
+  });
+
+  it("distinguishes an undeclared no-door name and lists valid verbs plus topics", () => {
     const result = parseCliArgs(["frobnicate"]);
-    if (result.ok) throw new Error("expected a usage error");
-    expect(result.code).toBe("USAGE");
-    expect(result.message.startsWith("Expected a Volli command (commands:")).toBe(true);
+    if (result.ok) throw new Error("expected a no-door refusal");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message).toContain('No Volli verb matches "frobnicate"');
+    expect(result.message).toContain("topics: concepts, changes");
     for (const name of PUBLISHED_COMMANDS) {
       expect(result.message).toContain(name);
+    }
+  });
+
+  it("distinguishes a declared tool-only wrong door without inventing Role policy", () => {
+    const toolOnly: VerbEntry = {
+      key: "session.stop",
+      accessModes: ["tool"],
+      actor: "role",
+      handler: { site: "main", id: "session.stop" },
+      listed: true,
+      referenceOrder: 1,
+      group: "Session",
+      summary: "Stop a Session.",
+      options: [],
+    };
+    expect(parseCliArgs(["session", "stop", "abcd"], [toolOnly])).toEqual({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "session.stop",
+      message:
+        "volli session stop exists on the Agent Tool Surface as session.stop; the Agent CLI does not execute it.",
+    });
+
+    // The other declared non-shell doors redirect the same way: an app-only
+    // verb names the app, and any future non-CLI access mode names itself.
+    const appOnly: VerbEntry = {
+      ...toolOnly,
+      key: "ticket.discard",
+      accessModes: [],
+      handler: { site: "main", id: "ticket.discard" },
+    };
+    expect(parseCliArgs(["ticket", "discard", "VC-1"], [appOnly])).toMatchObject({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "ticket.discard",
+      message: "volli ticket discard exists in the app only; no agent surface executes it.",
+    });
+    const hostApiOnly: VerbEntry = {
+      ...toolOnly,
+      key: "review.fetch",
+      accessModes: ["hostApi"],
+      handler: { site: "main", id: "review.fetch" },
+    };
+    expect(parseCliArgs(["review", "fetch"], [hostApiOnly])).toMatchObject({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "review.fetch",
+      message: "volli review fetch exists on hostApi, not on the Agent CLI.",
+    });
+  });
+
+  it("parses the ratified side-effect preview matrix into one dryRun argument", () => {
+    const calls = [
+      ["ticket", "create", "--title", "T", "--dry-run"],
+      ["ticket", "update", "VC-1", "--dry-run"],
+      ["ticket", "move", "VC-1", "--to", "doing", "--dry-run"],
+      ["ticket", "comment", "VC-1", "-m", "note", "--dry-run"],
+      ["session", "done", "--dry-run"],
+      ["session", "blocked", "--dry-run"],
+      ["session", "link", "native-id", "--dry-run"],
+      ["notify", "-m", "hello", "--dry-run"],
+      ["doctor", "--fix", "--dry-run"],
+    ];
+    for (const argv of calls) {
+      expect(parseCliArgs(argv)).toMatchObject({
+        ok: true,
+        invocation: { args: { dryRun: true } },
+      });
+    }
+  });
+
+  it("requires a repair intent for a doctor preview", () => {
+    expect(parseCliArgs(["doctor", "--dry-run"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "doctor --dry-run requires --fix",
+    });
+  });
+
+  // Reading the body a real call would send is a read. Refusing it would make a
+  // preview validate different input than the operation it previews, which is
+  // the one thing the preview contract cannot afford; the non-effect it owes is
+  // that nothing is WRITTEN.
+  it("previews a file-sourced body instead of refusing to read it", () => {
+    for (const argv of [
+      ["ticket", "create", "--title", "T", "--body-file", "/tmp/body", "--dry-run"],
+      ["ticket", "update", "VC-1", "--body-file", "/tmp/body", "--dry-run"],
+      ["ticket", "comment", "VC-1", "--file", "/tmp/note", "--dry-run"],
+    ]) {
+      expect(parseCliArgs(argv)).toMatchObject({
+        ok: true,
+        invocation: { args: { dryRun: true } },
+      });
     }
   });
 
@@ -751,7 +853,7 @@ describe("registry ↔ argv mechanics", () => {
     for (const name of PUBLISHED_COMMANDS) {
       const result = parseCliArgs(name.split(" "));
       const message = result.ok ? "" : result.message;
-      expect(message.startsWith("Expected a Volli command"), name).toBe(false);
+      expect(message.startsWith("No Volli verb matches"), name).toBe(false);
     }
   });
 
@@ -759,8 +861,9 @@ describe("registry ↔ argv mechanics", () => {
   // the parser, and must stay unroutable here however it is typed.
   it("leaves the parser-bypassing verb unroutable", () => {
     const result = parseCliArgs(["hook", "SessionStart"]);
-    if (result.ok) throw new Error("expected a usage error");
-    expect(result.message.startsWith("Expected a Volli command")).toBe(true);
+    if (result.ok) throw new Error("expected a no-door error");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message.startsWith("No Volli verb matches")).toBe(true);
   });
 
   // Mechanics for a verb that is on no agent surface would be a route to

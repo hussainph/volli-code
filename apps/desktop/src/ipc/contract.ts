@@ -16,6 +16,10 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   Appearance,
   ArchivedTicket,
+  Automation,
+  AutomationCommandReceipt,
+  AutomationRun,
+  AutomationRunRefusalCode,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -104,6 +108,42 @@ export interface ProjectSkillModesInput {
   /** Slug → `"manual"` / `"off"`. Only departures; an empty map clears the column. */
   modes: Record<string, string>;
 }
+
+/**
+ * One project's authority departures (VC-172, migration 025).
+ *
+ * The WHOLE override every time and `null` to state nothing, matching
+ * `ProjectSkillModesInput`: the Authority pane holds every control on screen at
+ * once, so a per-field channel would turn one visible state into N writes that
+ * can land out of order and half-fail.
+ *
+ * Typed `unknown` on the wire ON PURPOSE. This is the one project write whose
+ * payload is a nested document rather than a flat row, and the renderer is not
+ * the thing that gets to say it is well-formed — `validateAuthorityPolicyOverride`
+ * in main is. Declaring it as `AuthorityPolicyOverride` here would let a
+ * compile-time claim stand in for the runtime check on the surface whose entire
+ * job is to be the trustworthy door to policy.
+ */
+export interface ProjectAuthorityPolicyInput {
+  id: string;
+  /** An `AuthorityPolicyOverride`-shaped document, or `null` to inherit everything. */
+  override: unknown;
+}
+
+/**
+ * A policy write that was refused, with every reason.
+ *
+ * Distinct from `ProjectUpdateResult` because this is the one project write a
+ * person can get WRONG rather than merely unlucky: `error` carries the summary
+ * and `errors` the per-field detail, so any caller that can show per-field
+ * refusals may. Every reason at once — fixing one field to be told about the
+ * next is the interaction this avoids. (The Authority pane itself routes
+ * through `writeThrough`, which toasts the summary; its controls are all
+ * constrained, so it cannot produce the document `errors` describes.)
+ */
+export type ProjectAuthorityPolicyResult =
+  | { ok: true; project: Project }
+  | { ok: false; error: string; errors?: readonly string[] };
 
 /**
  * One project's defaults for new Sessions (VC-111, migration 023). Both fields
@@ -446,6 +486,21 @@ export interface VolliDataIpcContract {
   "volli:project-session-defaults": {
     args: [input: ProjectSessionDefaultsInput];
     result: ProjectUpdateResult;
+  };
+  /**
+   * Replaces this project's authority departures wholesale (VC-172).
+   *
+   * APP-ONLY, and that is the security property rather than an oversight. There
+   * is no agent verb behind this channel and there must not be: writing the
+   * policy that governs a Session is control tier, `verb-registry.ts` refuses a
+   * `cli` access mode on control-tier verbs outright, and the socket attributes
+   * its caller without authenticating one. The agent must not be able to author
+   * the policy that governs it — VC-44's non-negotiable. Reads may go on the
+   * socket; this does not.
+   */
+  "volli:project-authority-policy": {
+    args: [input: ProjectAuthorityPolicyInput];
+    result: ProjectAuthorityPolicyResult;
   };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
@@ -1248,6 +1303,93 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- automations (VC-112, tracer VC-126) -----------------------------------
+
+/** What a create carries. `projectId: null` is global Ownership. */
+export interface AutomationCreateInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string | null;
+  name: string;
+  instructions: string;
+  /** The pinned selection, whole, or `null` to inherit. */
+  runtime: ModelSelection | null;
+}
+
+/** An update rewrites the editable fields; Ownership is identity and never moves. */
+export interface AutomationUpdateInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  name: string;
+  instructions: string;
+  runtime: ModelSelection | null;
+}
+
+export interface AutomationIdInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+}
+
+export interface AutomationRunInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  ticketId: string;
+}
+
+export type AutomationsResult = Result<{ automations: Automation[] }>;
+export type AutomationResult = Result<{
+  automation: Automation;
+  receipt: AutomationCommandReceipt;
+}>;
+export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
+export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+
+/**
+ * A run's answer: the durable Run (holding the fresh Session's id and the
+ * RESOLVED model), or a coded refusal the caller classifies without string
+ * matching. The Session boots detached — VC-16's optimistic open — so an ok
+ * here means "durable and addressable", never "attached and delivered".
+ */
+export type AutomationRunStartResult =
+  | { ok: true; run: AutomationRun; projectId: string; receipt: AutomationCommandReceipt }
+  // `code` is absent only when the shared guard/throw envelope produced the
+  // failure; every handler-authored refusal carries one.
+  | {
+      ok: false;
+      error: string;
+      code?: AutomationRunRefusalCode;
+      receipt?: AutomationCommandReceipt;
+    };
+
+/**
+ * The Automations planning surface (VC-126): the record's CRUD plus the one
+ * Run door. Same stance as the rest of the planning data — typed channels,
+ * JSON-safe payloads (docs/BOUNDARIES.md rule 3: no Date, no Map, no
+ * undefined-bearing shapes), main-owned writes, `volli:data-changed` fan-out.
+ */
+export interface VolliAutomationIpcContract {
+  /** A project's own Automations plus every global one — the Offered universe for its surfaces. */
+  "volli:automation-list": { args: [input: ProjectIdInput]; result: AutomationsResult };
+  /** Creates one Automation. Main re-validates the draft and any Runtime pin before writing. */
+  "volli:automation-create": { args: [input: AutomationCreateInput]; result: AutomationResult };
+  /** Rewrites one Automation's editable fields, under the same validation as create. */
+  "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
+  /** A record delete — Runs retain their Automation id/name snapshot. */
+  "volli:automation-delete": { args: [input: AutomationIdInput]; result: AutomationDeleteResult };
+  /** Runs an Automation by hand on a Ticket: one fresh chat Session, one Run row. */
+  "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
+  /** A Ticket's Runs, newest first. */
+  "volli:automation-runs-for-ticket": {
+    args: [input: TicketIdInput];
+    result: AutomationRunsResult;
+  };
+}
+
+export type AutomationIpcChannel = keyof VolliAutomationIpcContract;
+
 /**
  * Type-only entries for every remaining invoke channel — these live outside
  * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
@@ -1444,6 +1586,7 @@ export interface VolliInvokeContract
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
     VolliUpdateIpcContract {}

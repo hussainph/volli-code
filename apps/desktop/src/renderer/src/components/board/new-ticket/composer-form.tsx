@@ -148,10 +148,12 @@ export function ComposerForm({
   );
 
   const canSubmit = title.trim() !== "" && !submitting;
-  // What Create & start will run: the Ticket purpose's configured default,
-  // read per open, overridable for this ticket alone (`composer-run.tsx`).
-  // Deliberately NOT part of the draft above — see that module's header.
-  const run = useComposerRun();
+  // What Create & start will run: the target project's own runtime preference
+  // when it holds one, else the Ticket purpose's configured default — the same
+  // rung order main resolves — read per open, overridable for this ticket
+  // alone (`composer-run.tsx`). Deliberately NOT part of the draft above — see
+  // that module's header.
+  const run = useComposerRun(target.sessionModel ?? null);
 
   const currentFields = React.useCallback(
     (): ComposerFields => ({

@@ -1,0 +1,19 @@
+---
+import { AGENT_ERROR_CODES, ERROR_RECOVERY } from "@volli/shared";
+---
+
+{
+  AGENT_ERROR_CODES.map((code) => {
+    const guidance = ERROR_RECOVERY[code];
+    return (
+      <section>
+        <h3><code>{code}</code></h3>
+        <p>{guidance.why}</p>
+        <p>
+          <strong>Safe next action:</strong>{" "}
+          {guidance.next ?? "Unknown. Inspect current durable state before deciding whether a retry is safe."}
+        </p>
+      </section>
+    );
+  })
+}

@@ -304,6 +304,7 @@ describe("observationPayload", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: { id: "native-1", detail: { model: "local" } },
+      authority: null,
     };
     const provenance = {
       source: { kind: "adapter" as const, id: "opencode", detail: { plugin: "hook" } },
@@ -619,6 +620,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "native_resume" as const,
       native: null,
+      authority: null,
     };
     const native = { id: "native-continuation", detail: { cursor: ["opaque", 3] } };
 
@@ -665,6 +667,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "native_resume" as const,
       native: null,
+      authority: null,
     };
     const projection = projectSession({ ...session, title: "Seeded" }, [
       event(0, { kind: "attachment.closed", attachmentId: "unknown", outcome: "failed" }),
@@ -697,6 +700,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "context_replay" as const,
       native: { id: null, detail: null },
+      authority: null,
     };
     const projection = projectSession(session, [
       { ...event(0, { kind: "session.created", session }), sessionId: "other-session" },
@@ -761,6 +765,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: null,
+      authority: null,
     };
     const projection = projectSession(session, [
       event(1, {
@@ -809,6 +814,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: null,
+      authority: null,
     };
     const command = {
       id: "command-ordered",
@@ -873,6 +879,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: null,
+      authority: null,
     };
     const pending = projectSession(session, [
       event(1, { kind: "command.recorded", command: first }),
@@ -939,6 +946,7 @@ describe("projectSession turn activity", () => {
     venue: localVenue,
     continuity: "fresh" as const,
     native: null,
+    authority: null,
   };
 
   it("opens on a started turn and closes on the completed one", () => {

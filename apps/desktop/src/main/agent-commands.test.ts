@@ -4,7 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  DEFAULT_KICKOFF_MESSAGE,
+  makeAgentError,
+  MUTATION_PLAN_CONTRACT,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -23,6 +28,7 @@ import { StructuredSessionsError, type SessionStartInput } from "./session-runti
 import { importBlob } from "./blob-import";
 import { blobsRoot } from "./blob-store";
 import { listHarnessChannels } from "./db/harness-channel-repo";
+import { listComments } from "./db/comments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
 import {
@@ -31,7 +37,7 @@ import {
   insertSession,
   setActiveHarnessId,
 } from "./session-control/test-support";
-import { archiveTicket, getTicket, insertTicket } from "./db/tickets-repo";
+import { archiveTicket, getTicket, insertTicket, listTicketsByProject } from "./db/tickets-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -125,6 +131,139 @@ describe("agent command service", () => {
       },
     });
     expect(JSON.stringify(response)).not.toContain("internal-uuid");
+  });
+
+  it("previews every independent write with zero durable or external side effects, then real calls mutate once", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: "ticket-one",
+        ticketNumber: 1,
+        title: "Before",
+        status: "todo",
+      }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+
+    let idSequence = 0;
+    const newId = vi.fn(() => `durable-id-${++idSequence}`);
+    const notify = vi.fn();
+    const onMutation = vi.fn();
+    const interruptTicketSessions = vi.fn(() => [] as string[]);
+    const doctorRepair = vi.fn(async () => ({
+      path: "/managed/bin:/usr/bin",
+      provenance: "adopted" as const,
+      added: ["/managed/bin"],
+      interactiveProvenance: "already-complete" as const,
+      interactiveAdded: [],
+    }));
+    const doctorFacts = vi.fn(async () => ({
+      binDir: "/managed/bin",
+      wrappers: {},
+      refused: [],
+      shellInitDir: null,
+      shellInitPresent: false,
+      shimPath: "/managed/bin/volli",
+      liveSessionIds: [],
+      reporting: [],
+      skillConflicts: [],
+    }));
+    const engine = createDesktopSessionEngine(ctx.db);
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      sessionEngine: engine,
+      now: () => 100,
+      newId,
+      notify,
+      onMutation,
+      interruptTicketSessions,
+      doctorRepair,
+      doctorFacts,
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>, inSession = false) =>
+      service.execute({
+        v: 1,
+        cmd,
+        args,
+        ctx: {
+          cwd: "/repo/volli",
+          env: inSession ? { session: sessionId, ticket: "VC-1" } : {},
+        },
+      });
+
+    const before = Buffer.from(ctx.db.serialize());
+    const previews = await Promise.all([
+      execute("ticket.create", { title: "Preview create", dryRun: true }),
+      execute("ticket.update", { id: "VC-1", title: "After", dryRun: true }),
+      execute("ticket.move", { id: "VC-1", to: "doing", dryRun: true }),
+      execute("ticket.comment", { id: "VC-1", message: "Preview comment", dryRun: true }),
+      execute("session.done", { reason: "Preview done", dryRun: true }, true),
+      execute("session.blocked", { reason: "Preview blocked", dryRun: true }, true),
+      execute("session.link", { id: "native-conversation", dryRun: true }, true),
+      execute("notify", { title: "Preview", message: "Hello", dryRun: true }),
+      execute("doctor", { fix: true, dryRun: true }),
+    ]);
+
+    for (const response of previews) {
+      expect(response).toMatchObject({
+        ok: true,
+        data: { v: 1, kind: "mutation-plan", dryRun: true },
+      });
+    }
+    expect(JSON.stringify(previews)).not.toContain("project-one");
+    expect(JSON.stringify(previews)).not.toContain("ticket-one");
+    expect(JSON.stringify(previews)).not.toContain(sessionId);
+    expect(Buffer.from(ctx.db.serialize())).toEqual(before);
+    expect(newId).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(onMutation).not.toHaveBeenCalled();
+    expect(interruptTicketSessions).not.toHaveBeenCalled();
+    expect(doctorRepair).not.toHaveBeenCalled();
+    expect(doctorFacts).not.toHaveBeenCalled();
+
+    // The same validated paths still perform their one intended mutation when
+    // dryRun is absent. Existing behavior tests cover each output in detail;
+    // this tracer proves preview did not fork a second execution meaning.
+    await execute("ticket.create", { title: "Real create" });
+    await execute("ticket.update", { id: "VC-1", title: "After" });
+    await execute("ticket.move", { id: "VC-1", to: "doing" });
+    await execute("ticket.comment", { id: "VC-1", message: "Real comment" });
+    await execute("session.done", { reason: "Real done" }, true);
+    await execute("session.blocked", { reason: "Real blocked" }, true);
+    await execute("session.link", { id: "native-conversation" }, true);
+    await execute("notify", { title: "Real", message: "Hello" });
+    await execute("doctor", {
+      fix: true,
+      pathEntries: ["/managed/bin", "/usr/bin"],
+      zdotDir: null,
+      resolved: {},
+      volliPath: "/managed/bin/volli",
+    });
+
+    expect(listTicketsByProject(ctx.db, "project-one")).toHaveLength(2);
+    expect(getTicket(ctx.db, "ticket-one")).toMatchObject({ title: "After", status: "doing" });
+    expect(listComments(ctx.db, "ticket-one")).toHaveLength(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(doctorRepair).toHaveBeenCalledTimes(1);
+    expect(doctorFacts).toHaveBeenCalledTimes(1);
+    expect(interruptTicketSessions).not.toHaveBeenCalled();
+    expect(newId).toHaveBeenCalledTimes(3);
+    expect(onMutation).toHaveBeenCalledTimes(6);
   });
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
@@ -515,6 +654,7 @@ describe("agent command service", () => {
         worktreePath: "/tmp/worktrees/VC-1",
         socket: "/tmp/volli.sock",
         appVersion: "1.2.3",
+        previewContract: MUTATION_PLAN_CONTRACT,
       },
     });
     expect(JSON.stringify(response)).not.toContain("project-one");
@@ -537,7 +677,137 @@ describe("agent command service", () => {
         worktreePath: "/repo/volli/packages/shared",
         socket: "/tmp/volli.sock",
         appVersion: "1.2.3",
+        previewContract: MUTATION_PLAN_CONTRACT,
       },
+    });
+  });
+
+  it("reads Role-aware help data from the Session's frozen Agent Tool Surface without backfilling", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+    const engine = createDesktopSessionEngine(ctx.db);
+    const provenance = {
+      source: { kind: "system" as const, id: "test", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await engine.getOrRecordSessionInput({
+      sessionId,
+      input: { kind: "tool-surface", tools: ["read", "edit", "ask_user"] },
+      provenance,
+    });
+    const beforeEvents = await engine.listEvents({ sessionId });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      sessionEngine: engine,
+    });
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: { agentSurface: true },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        agentSurface: { role: "ticket", tools: ["read", "edit", "ask_user"] },
+      },
+    });
+    expect(await engine.listEvents({ sessionId })).toEqual(beforeEvents);
+
+    // Reading the frozen list folds the whole Session ledger, and identify
+    // already folds it once. Only role-aware help wants it, so only role-aware
+    // help asks — the command agents are told to run first does not pay.
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      }),
+    ).not.toHaveProperty("data.agentSurface");
+  });
+
+  // The `--dry-run` preflight asks whether this build understands a preview at
+  // all. An ordinary identify resolves a Project and Session first, so a
+  // context-shaped probe made `volli notify --dry-run` fail with
+  // PROJECT_REQUIRED from any unregistered directory while plain `volli notify`
+  // worked — the confident-but-irrelevant refusal this ticket exists to remove.
+  it("answers the preview-capability probe without resolving project or session context", async () => {
+    ctx = openTestDb();
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
+    const probe = (env: Record<string, string>) =>
+      service.execute({
+        v: 1,
+        cmd: "identify",
+        args: { capabilities: true },
+        ctx: { cwd: "/somewhere/unregistered", env },
+      });
+
+    const capabilities = {
+      v: 1,
+      ok: true,
+      data: { appVersion: "1.2.3", previewContract: MUTATION_PLAN_CONTRACT },
+    };
+    // No registered project for this cwd, and a session id that resolves to
+    // nothing: both refuse a context identify, neither is the probe's question.
+    expect(await probe({})).toEqual(capabilities);
+    expect(await probe({ session: "00000000-0000-0000-0000-000000000000" })).toEqual(capabilities);
+
+    // The same request without the probe argument is exactly the refusal a
+    // preview used to inherit.
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/somewhere/unregistered", env: {} },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  // The bundled parser refuses this, but the socket is a public door and a
+  // registry-projected tool builds its own arguments. Silently ignoring dryRun
+  // on the way to a real write is the one outcome a preview cannot allow.
+  it("refuses a preview for a verb that declares none instead of writing anyway", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+    await execute("ticket.create", { title: "Ship CLI" });
+
+    expect(await execute("ticket.archive", { id: "VC-1", dryRun: true })).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        reason: expect.stringContaining("ticket.archive declares no side-effect preview"),
+        next: expect.stringContaining("volli help ticket archive"),
+      },
+    });
+    // Still on the board: the refusal happened instead of the archive, not
+    // after it.
+    expect(await execute("board", {})).toMatchObject({
+      data: { columns: { backlog: [{ id: "VC-1" }] } },
     });
   });
 
@@ -688,10 +958,10 @@ describe("agent command service", () => {
     expect(staleEdit).toEqual({
       v: 1,
       ok: false,
-      error: {
-        code: "BODY_MATCH_FAILED",
-        message: 'Body edit expected exactly one match for "Old section".',
-      },
+      error: makeAgentError(
+        "BODY_MATCH_FAILED",
+        'Body edit expected exactly one match for "Old section".',
+      ),
     });
     expect(shown).toMatchObject({ data: { ticket: { title: "Ship CLI" } } });
   });
@@ -1042,10 +1312,10 @@ describe("agent command service", () => {
     expect(create).toEqual({
       v: 1,
       ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: 'Invalid priority "urgent" (valid: low, medium, high)',
-      },
+      error: makeAgentError(
+        "INVALID_REQUEST",
+        'Invalid priority "urgent" (valid: low, medium, high)',
+      ),
     });
 
     const list = await service.execute({
@@ -1160,11 +1430,11 @@ describe("agent command service", () => {
       expect(await create("aider")).toEqual({
         v: 1,
         ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message:
-            'Unknown harness "aider" — no harness by that name is registered (built in: claude-code, codex, cursor, opencode)',
-        },
+        error: makeAgentError(
+          "INVALID_REQUEST",
+          'Unknown harness "aider" — no harness by that name is registered (built in: claude-code, codex, cursor, opencode)',
+          "Register that harness through the app or use one of the built-in ids named in the refusal.",
+        ),
       });
     });
 
@@ -1537,6 +1807,7 @@ describe("agent command service", () => {
           venue: { id: "local", kind: "local" },
           continuity: "fresh",
           native: { id: "pi-1", detail: null },
+          authority: null,
         },
       });
       await sessionEngine.observe({

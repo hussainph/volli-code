@@ -295,6 +295,8 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
   const authority: AuthoritySnapshot = {
     mode: "auto",
     location: "worktree",
+    enforcement: "enforce",
+    judgmentMode: "ask",
     tools: [],
     rulePackId: BUILTIN_RULE_PACK_ID,
     rulePackHash: BUILTIN_RULE_PACK_HASH,

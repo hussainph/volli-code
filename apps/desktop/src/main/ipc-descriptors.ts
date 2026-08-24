@@ -28,6 +28,7 @@ import {
 import { isExternalAppId } from "./external-apps";
 import type {
   AgentObservabilityIpcChannel,
+  AutomationIpcChannel,
   CliIpcChannel,
   DataIpcChannel,
   FileIpcChannel,
@@ -230,6 +231,27 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       );
     },
     invalidError: "Invalid session defaults",
+  },
+  "volli:project-authority-policy": {
+    /**
+     * Shape only — an id and a slot that is an object or `null`. The document
+     * itself is judged by `validateAuthorityPolicyOverride` in the handler,
+     * NOT here, and the split is deliberate: a guard can only refuse, and a
+     * refused policy write has to come back saying which field was wrong. A
+     * duplicate structural check here would be a second validator to keep in
+     * agreement with the first, which is how the two drift apart.
+     */
+    guard: (args): args is IpcArgs<"volli:project-authority-policy"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["id"] !== "string") return false;
+      const override = input["override"];
+      // `isRecord` admits an array (`typeof [] === "object"`), and an array is
+      // not a policy document. The handler's validator refuses one too, so this
+      // is the cheap half of a check that exists on both sides.
+      return override === null || (isRecord(override) && !Array.isArray(override));
+    },
+    invalidError: "Invalid authority policy",
   },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
@@ -966,6 +988,105 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
 
 /** Every channel the theme-IPC surface owns, derived — never hand-synced. */
 export const THEME_CHANNELS = Object.keys(THEME_IPC) as readonly ThemeIpcChannel[];
+
+// ---- automations descriptor table (VC-126) ---------------------------------
+
+/**
+ * A stored-shape guard for a Runtime pin: the exact `ModelSelection` fields
+ * and a reasoning level from Volli's own scale. Whether the pair is one the
+ * catalog can actually run is judged in the handler against Model Access —
+ * that is a fact about accounts, not about the request's shape.
+ */
+function isModelSelectionShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["providerId"] === "string" &&
+    value["providerId"].length > 0 &&
+    typeof value["modelId"] === "string" &&
+    value["modelId"].length > 0 &&
+    (REASONING_LEVELS as readonly unknown[]).includes(value["reasoningLevel"])
+  );
+}
+
+/**
+ * Automation commands are durable retry identities, not an IPC-local counter.
+ * The renderer mints UUIDs, so a retry can carry the exact same intent through
+ * another host without deriving an id from this machine.
+ */
+function isAutomationCommandId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+/** The editable fields every automation write carries, shape-checked once. */
+function isAutomationDraftShape(value: Record<string, unknown>): boolean {
+  return (
+    typeof value["name"] === "string" &&
+    typeof value["instructions"] === "string" &&
+    (value["runtime"] === null || isModelSelectionShape(value["runtime"]))
+  );
+}
+
+export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:automation-list": {
+    guard: (args): args is IpcArgs<"volli:automation-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation list request",
+  },
+  "volli:automation-create": {
+    guard: (args): args is IpcArgs<"volli:automation-create"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || !isAutomationCommandId(input["commandId"])) return false;
+      const projectId = input["projectId"];
+      if (projectId !== null && typeof projectId !== "string") return false;
+      return isAutomationDraftShape(input);
+    },
+    invalidError: "Invalid automation",
+  },
+  "volli:automation-update": {
+    guard: (args): args is IpcArgs<"volli:automation-update"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (
+        !isRecord(input) ||
+        !isAutomationCommandId(input["commandId"]) ||
+        typeof input["automationId"] !== "string"
+      ) {
+        return false;
+      }
+      return isAutomationDraftShape(input);
+    },
+    invalidError: "Invalid automation",
+  },
+  "volli:automation-delete": {
+    guard: (args): args is IpcArgs<"volli:automation-delete"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string",
+    invalidError: "Invalid automation delete request",
+  },
+  "volli:automation-run": {
+    guard: (args): args is IpcArgs<"volli:automation-run"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string" &&
+      typeof args[0]["ticketId"] === "string",
+    invalidError: "Invalid automation run request",
+  },
+  "volli:automation-runs-for-ticket": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-ticket"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["ticketId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+};
+
+/** Every channel the automations surface owns, derived — never hand-synced. */
+export const AUTOMATION_CHANNELS = Object.keys(AUTOMATION_IPC) as readonly AutomationIpcChannel[];
 
 // ---- harness-trust descriptor table ---------------------------------------
 // A manifest declares a command line Volli will execute, so this is the one

@@ -7,8 +7,13 @@
  * composes out of them.
  */
 
-import { displayTicketId, isTicketStatus, shortSessionId } from "@volli/shared";
-import type { AgentRequest, AgentResponse } from "@volli/shared";
+import {
+  displayTicketId,
+  isTicketStatus,
+  MUTATION_PLAN_CONTRACT,
+  shortSessionId,
+} from "@volli/shared";
+import type { AgentRequest, AgentResponse, SessionEvent } from "@volli/shared";
 
 import { listMaterializableLinks } from "../db/blobs-repo";
 import { listComments } from "../db/comments-repo";
@@ -57,6 +62,19 @@ function worktreeMisalignment(
   return `You are working in ${cwd}, which is outside ${displayId}'s worktree at ${worktreePath}. Move your work there before continuing.`;
 }
 
+/** Reads VC-164's frozen list without backfilling or consulting current Settings. */
+function recordedAgentToolSurface(events: readonly SessionEvent[]): readonly string[] | null {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.tools;
+    }
+  }
+  return null;
+}
+
 /**
  * `volli identify` — the project, ticket, session and session environment the
  * caller is standing in.
@@ -65,7 +83,7 @@ export async function identifyVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, sessions, envSession } = context;
+  const { options, projects, sessions, envSession, sessionEngine } = context;
   const envSessionId = request.ctx.env.session;
   // Measured at the moment the agent asks, like the worktree-
   // misalignment warning above: main adopted the PATH once at boot, and
@@ -89,6 +107,19 @@ export async function identifyVerb(
       ticket && displayId
         ? worktreeMisalignment(displayId, ticket.worktreePath, request.ctx.cwd)
         : null;
+    // Read-only, opt-in, and deliberately nullable for Sessions that
+    // predate VC-164. Help must never freeze or reconstruct a bundle as a
+    // side effect of asking what this Session already recorded.
+    //
+    // Only the caller that needs it pays for it. Reading the frozen list
+    // means folding this Session's whole ledger, and `identify` already
+    // folds it once through `getSession` — doing it twice on the command
+    // agents are told to run first would be a real cost for a fact only
+    // role-aware `volli help` consumes.
+    const frozenTools =
+      request.args["agentSurface"] === true
+        ? recordedAgentToolSurface(await sessionEngine.listEvents({ sessionId: envSession.id }))
+        : null;
     return {
       v: 1,
       ok: true,
@@ -100,6 +131,18 @@ export async function identifyVerb(
         ...(warning === null ? {} : { warning }),
         socket: request.ctx.env.socket ?? null,
         appVersion: options.appVersion,
+        // Declared, not implied by a version: a CLI refuses to send a
+        // dryRun request to a build that does not answer this marker,
+        // because an older build would run the real write instead.
+        previewContract: MUTATION_PLAN_CONTRACT,
+        ...(frozenTools === null
+          ? {}
+          : {
+              agentSurface: {
+                role: envSession.ticketId === null ? "project" : "ticket",
+                tools: frozenTools,
+              },
+            }),
         ...(env === undefined ? {} : { env }),
       },
     };
@@ -129,6 +172,7 @@ export async function identifyVerb(
       worktreePath: request.ctx.cwd,
       socket: request.ctx.env.socket ?? null,
       appVersion: options.appVersion,
+      previewContract: MUTATION_PLAN_CONTRACT,
       ...(env === undefined ? {} : { env }),
     },
   };

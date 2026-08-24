@@ -35,6 +35,7 @@ import { PI_TOOLS } from "../session-runtime/pi-adapter";
 import { composeProjectBrief, composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
+import { dryRunResponse } from "./preview";
 import { projectForCreate, ticketForDisplayId } from "./resolution";
 
 /** See {@link AgentCommandServiceOptions.modelAccessTimeoutMs}. */
@@ -155,6 +156,12 @@ export async function notifyVerb(
   ) {
     return failure("INVALID_REQUEST", "notify requires a message and optional title.");
   }
+  const preview = dryRunResponse(request, {
+    kind: "notification",
+    id: null,
+    label: `Native notification ${JSON.stringify(title.trim())}`,
+  });
+  if (preview !== null) return preview;
   options.notify?.(title, message);
   return { v: 1, ok: true, data: { notified: true } };
 }
@@ -167,6 +174,19 @@ export async function doctorVerb(
   const { options } = context;
   if (!options.doctorFacts) {
     return failure("APP_UNREACHABLE", "The harness runtime is not available this launch.");
+  }
+  if (request.args["dryRun"] === true) {
+    if (request.args["fix"] !== true) {
+      return failure("INVALID_REQUEST", "doctor dry-run requires fix intent.");
+    }
+    if (!options.doctorRepair) {
+      return failure("APP_UNREACHABLE", "The harness repair runtime is not available this launch.");
+    }
+    return dryRunResponse(request, {
+      kind: "integration",
+      id: null,
+      label: "Volli-managed harness integration for future Sessions",
+    })!;
   }
   // The caller reports what it sees from inside the environment under
   // test; main supplies only what it alone knows. Keeping those apart is

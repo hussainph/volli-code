@@ -23,6 +23,7 @@ import type { AgentResponse } from "@volli/shared";
 
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
+import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturing } from "./worktree";
@@ -63,6 +64,11 @@ export function createAgentCommandService(
 
   return {
     async execute(request): Promise<AgentResponse> {
+      // Both answers below precede every read: a preview must be refused before
+      // the work that would perform it, and a capability probe must not be able
+      // to fail for a reason that has nothing to do with the capability.
+      const preflight = agentCommandPreflight(options.appVersion, request);
+      if (preflight !== null) return preflight;
       // The registry's declaration DRIVING the dispatch, rather than being
       // checked against it: the wire name resolves to the binding id its entry
       // declares, and that id resolves to the one handler bound to it. There is
