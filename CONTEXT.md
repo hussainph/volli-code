@@ -178,8 +178,10 @@ _Avoid_: MCP surface (as a synonym for the Agent Tool Surface)
 
 **Verb Registry**:
 The single enumerable declaration of every agent-facing verb: its name, what it
-does, and which surfaces project it. Each surface exposes a projection of the
-registry; no surface owns verbs of its own.
+does, which surfaces project it, and the one handler binding that answers it —
+where that handler lives, and which handler it is. Each surface exposes a
+projection of the registry; no surface owns verbs of its own, and the socket's
+dispatch is a table keyed by the binding rather than a chain checked against it.
 _Avoid_: command list, tool list (when meaning the declaration rather than one
 surface's projection)
 
