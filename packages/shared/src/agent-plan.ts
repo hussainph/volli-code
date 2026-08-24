@@ -3,6 +3,21 @@ import type { VerbDurableWrite, VerbEntry } from "./verb-registry";
 export const MUTATION_PLAN_CAVEAT =
   "Preview only: no state changed. A later real call repeats validation and can lose a race.";
 
+/**
+ * The preview contract an app build declares on `identify`. A CLI must refuse
+ * to send a `dryRun` request to an app that does not declare at least this
+ * version: an older build would ignore the unknown argument and execute the
+ * real write, which is the one outcome a preview promises can never happen.
+ */
+export const MUTATION_PLAN_CONTRACT = 1;
+
+/** The preview contract version an `identify` response declares, or null. */
+export function declaredPreviewContract(data: unknown): number | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const contract = (data as Record<string, unknown>)["previewContract"];
+  return typeof contract === "number" ? contract : null;
+}
+
 /** A resolved target named only by the public identity the Agent CLI already exposes. */
 export interface MutationPlanTarget {
   kind: "project" | "ticket" | "session" | "notification" | "integration";

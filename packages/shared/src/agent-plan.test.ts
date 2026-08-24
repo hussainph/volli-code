@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildMutationPlan, isAgentMutationPlan, verbEntry } from "./index";
+import {
+  buildMutationPlan,
+  declaredPreviewContract,
+  isAgentMutationPlan,
+  MUTATION_PLAN_CONTRACT,
+  verbEntry,
+} from "./index";
 
 describe("side-effect preview contract", () => {
   it("builds one host-neutral plan shape from a verb's canonical effects", () => {
@@ -55,5 +61,16 @@ describe("side-effect preview contract", () => {
   it("rejects values that only resemble a plan", () => {
     expect(isAgentMutationPlan({ kind: "mutation-plan", dryRun: true })).toBe(false);
     expect(isAgentMutationPlan(null)).toBe(false);
+  });
+
+  it("reads a declared preview contract only from a well-formed identify answer", () => {
+    expect(declaredPreviewContract({ previewContract: MUTATION_PLAN_CONTRACT })).toBe(
+      MUTATION_PLAN_CONTRACT,
+    );
+    expect(declaredPreviewContract({ appVersion: "0.1.1" })).toBeNull();
+    expect(declaredPreviewContract({ previewContract: "1" })).toBeNull();
+    expect(declaredPreviewContract(null)).toBeNull();
+    expect(declaredPreviewContract([1])).toBeNull();
+    expect(declaredPreviewContract("previewContract")).toBeNull();
   });
 });

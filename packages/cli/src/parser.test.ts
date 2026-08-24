@@ -558,6 +558,13 @@ describe("parseCliArgs", () => {
     },
   );
 
+  it("answers an empty argv as a no-door refusal rather than crashing", () => {
+    const result = parseCliArgs([]);
+    if (result.ok) throw new Error("expected a no-door refusal");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message).toContain('No Volli verb matches "(empty)"');
+  });
+
   it("distinguishes an undeclared no-door name and lists valid verbs plus topics", () => {
     const result = parseCliArgs(["frobnicate"]);
     if (result.ok) throw new Error("expected a no-door refusal");
@@ -587,6 +594,23 @@ describe("parseCliArgs", () => {
       verb: "session.stop",
       message:
         "volli session stop exists on the Agent Tool Surface as session.stop; the Agent CLI does not execute it.",
+    });
+
+    // The other declared non-shell doors redirect the same way: an app-only
+    // verb names the app, and any future non-CLI access mode names itself.
+    const appOnly: VerbEntry = { ...toolOnly, key: "ticket.discard", accessModes: [] };
+    expect(parseCliArgs(["ticket", "discard", "VC-1"], [appOnly])).toMatchObject({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "ticket.discard",
+      message: "volli ticket discard exists in the app only; no agent surface executes it.",
+    });
+    const hostApiOnly: VerbEntry = { ...toolOnly, key: "review.fetch", accessModes: ["hostApi"] };
+    expect(parseCliArgs(["review", "fetch"], [hostApiOnly])).toMatchObject({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "review.fetch",
+      message: "volli review fetch exists on hostApi, not on the Agent CLI.",
     });
   });
 

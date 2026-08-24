@@ -130,6 +130,50 @@ describe("requestAgent", () => {
     );
   });
 
+  it("keeps app-authored guidance verbatim and rejects malformed guidance", async () => {
+    const guided = {
+      v: 1,
+      ok: false,
+      error: {
+        code: "MUTATION_FAILED",
+        message: "The write failed.",
+        reason: "The write failed mid-transaction.",
+        next: null,
+      },
+    } as const;
+    await withSocketServer(
+      (socket) => socket.end(`${JSON.stringify(guided)}\n`),
+      async (socketPath) => {
+        await expect(requestAgent(socketPath, request, { timeoutMs: 500 })).resolves.toEqual({
+          v: 1,
+          ok: false,
+          error: {
+            code: "MUTATION_FAILED",
+            message: "The write failed.",
+            reason: "The write failed mid-transaction.",
+            next: null,
+          },
+        });
+      },
+    );
+    for (const error of [
+      { code: "MUTATION_FAILED", message: "m", reason: 42 },
+      { code: "MUTATION_FAILED", message: "m", next: 42 },
+    ]) {
+      await withSocketServer(
+        (socket) => socket.end(`${JSON.stringify({ v: 1, ok: false, error })}\n`),
+        async (socketPath) => {
+          await expect(requestAgent(socketPath, request, { timeoutMs: 500 })).rejects.toMatchObject(
+            {
+              code: "SOCKET_PROTOCOL",
+              message: "The app returned invalid error guidance.",
+            },
+          );
+        },
+      );
+    }
+  });
+
   it("rejects oversized and missing responses", async () => {
     await withSocketServer(
       // Two UTF-16 code units but four UTF-8 bytes: this stays below a

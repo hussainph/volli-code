@@ -10,6 +10,7 @@ import {
   applyTicketBodyMutation,
   autoTitleFromKickoff,
   buildMutationPlan,
+  MUTATION_PLAN_CONTRACT,
   blobsSectionInput,
   composeAttachmentsSection,
   composeTicketPrompt,
@@ -1404,6 +1405,10 @@ export function createAgentCommandService(
               ...(warning === null ? {} : { warning }),
               socket: request.ctx.env.socket ?? null,
               appVersion: options.appVersion,
+              // Declared, not implied by a version: a CLI refuses to send a
+              // dryRun request to a build that does not answer this marker,
+              // because an older build would run the real write instead.
+              previewContract: MUTATION_PLAN_CONTRACT,
               ...(frozenTools === null
                 ? {}
                 : {
@@ -1441,6 +1446,7 @@ export function createAgentCommandService(
             worktreePath: request.ctx.cwd,
             socket: request.ctx.env.socket ?? null,
             appVersion: options.appVersion,
+            previewContract: MUTATION_PLAN_CONTRACT,
             ...(env === undefined ? {} : { env }),
           },
         };

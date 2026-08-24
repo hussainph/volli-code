@@ -741,6 +741,7 @@ Added
 - volli help concepts and volli help changes as app-independent local topics.
 - Structured human-visible effects and explicit non-effects in command detail.
 - --dry-run previews for ticket create/update/move/comment, Session done/blocked/link, notify, and doctor --fix. The shared dryRun tool contract is ready for session.start when VC-162 supplies its tool seam.
+- A preview is refused up front unless the running app declares the preview contract on identify, so --dry-run can never execute as a real write on an older app build.
 - Structured JSON error reason and next fields while stable error codes remain unchanged.
 Changed
 - Help discovers all declared Verb Registry doors and can report a resolved Session's frozen Agent Tool Surface.

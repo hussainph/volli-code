@@ -1,9 +1,12 @@
 import { existsSync } from "node:fs";
 
 import {
+  declaredPreviewContract,
   errorMessage,
+  isAgentMutationPlan,
   makeAgentError,
   memoizedPathExists,
+  MUTATION_PLAN_CONTRACT,
   verbEntry,
   requiredSessionEnvTools,
   SESSION_ENV_TOOLS,
@@ -134,6 +137,38 @@ function omitFix(args: Readonly<Record<string, unknown>>): Record<string, unknow
   return rest;
 }
 
+/**
+ * Why a `dryRun` request may not be sent yet, or null when it is safe. An app
+ * that predates the preview contract ignores the unknown argument and executes
+ * the real write — the one outcome a preview promises can never happen — so
+ * the CLI confirms the running build declares the contract before sending. The
+ * preflight is fail-closed: an unreadable or silent `identify` refuses the
+ * preview rather than gambling a durable write on it.
+ */
+async function previewContractRefusal(
+  socketPath: string,
+  request: AgentRequest,
+  dependencies: RunCliDependencies,
+): Promise<AgentError | null> {
+  const response = await dependencies.request(socketPath, {
+    v: 1,
+    cmd: "identify",
+    args: {},
+    ctx: request.ctx,
+  });
+  if (!response.ok) return response.error;
+  if ((declaredPreviewContract(response.data) ?? 0) >= MUTATION_PLAN_CONTRACT) return null;
+  const data =
+    typeof response.data === "object" && response.data !== null
+      ? (response.data as Record<string, unknown>)
+      : {};
+  const appVersion = typeof data["appVersion"] === "string" ? ` ${data["appVersion"]}` : "";
+  return makeAgentError(
+    "SOCKET_PROTOCOL",
+    `The running app${appVersion} does not declare the side-effect preview contract, so --dry-run was refused before an older build could execute it as a real write.`,
+  );
+}
+
 function parsedHelpSurface(value: unknown, sessionId: string): AgentHelpSurface | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const surface = value as Record<string, unknown>;
@@ -247,6 +282,22 @@ export function teachingErrorForParseResult(
   );
 }
 
+/**
+ * Renders one parse refusal. A wrong door alone pays for the optional Role
+ * read, because it is the one refusal whose teaching depends on live facts;
+ * every other parse error stays local and instant.
+ */
+export async function renderParseRefusal(
+  parsed: Extract<ReturnType<typeof parseCliArgs>, { ok: false }>,
+  argv: readonly string[],
+  dependencies: RunCliDependencies,
+): Promise<0 | 1 | 2 | 3> {
+  const runtime = parsed.code === "WRONG_DOOR" ? await readHelpRuntime(dependencies) : null;
+  const error = teachingErrorForParseResult(parsed, runtime);
+  dependencies.stderr(renderCliError(error, { json: argv.includes("--json") }));
+  return exitCodeForError(error.code);
+}
+
 /** Runs one CLI invocation and returns its process exit code. */
 export async function runCli(
   argv: readonly string[],
@@ -259,12 +310,7 @@ export async function runCli(
     return 2;
   }
   const parsed = parseCliArgs(argv);
-  if (!parsed.ok) {
-    const runtime = parsed.code === "WRONG_DOOR" ? await readHelpRuntime(dependencies) : null;
-    const error = teachingErrorForParseResult(parsed, runtime);
-    dependencies.stderr(renderCliError(error, { json: argv.includes("--json") }));
-    return exitCodeForError(error.code);
-  }
+  if (!parsed.ok) return renderParseRefusal(parsed, argv, dependencies);
   if (parsed.invocation.command === "help") {
     const runtime = await readHelpRuntime(dependencies);
     const resolved = resolveHelp(parsed.invocation.args["path"] as string[], undefined, {
@@ -346,6 +392,13 @@ export async function runCli(
         },
       },
     };
+    if (args["dryRun"] === true) {
+      const refusal = await previewContractRefusal(socketPath, request, dependencies);
+      if (refusal !== null) {
+        dependencies.stderr(renderCliError(refusal, { json: invocation.json }));
+        return exitCodeForError(refusal.code);
+      }
+    }
     const first = await dependencies.request(socketPath, request);
     // `doctor --fix` is two requests, and it has to be. An observation is
     // measured before it is sent, so the one that travelled with the repair
@@ -380,6 +433,18 @@ export async function runCli(
     if (!response.ok) {
       dependencies.stderr(renderCliError(response.error, { json: invocation.json }));
       return exitCodeForError(response.error.code);
+    }
+    // Belt and braces behind the preflight: a preview that came back as
+    // anything but the shared plan means the app may have run the real write,
+    // and rendering it as a success would launder that into a preview.
+    if (args["dryRun"] === true && !isAgentMutationPlan(response.data)) {
+      const error = makeAgentError(
+        "SOCKET_PROTOCOL",
+        `The app answered a --dry-run ${command} without the shared preview plan, so durable state may have changed despite the preview intent.`,
+        null,
+      );
+      dependencies.stderr(renderCliError(error, { json: invocation.json }));
+      return exitCodeForError(error.code);
     }
     dependencies.stdout(
       renderCliSuccess(invocation.command, response.data, { json: invocation.json }),

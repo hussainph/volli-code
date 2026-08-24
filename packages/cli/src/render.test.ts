@@ -87,6 +87,34 @@ describe("renderCliSuccess", () => {
     expect(JSON.parse(renderCliSuccess("notify", plan, { json: true }))).toEqual(plan);
   });
 
+  it("fills guidance for a pre-VC-91 error envelope without inventing a reason", () => {
+    // An older app sends only code and message: the renderer falls back to the
+    // message and this CLI's own recovery table for that stable code.
+    const legacy = renderCliError({ code: "TIMEOUT", message: "Timed out." } as never);
+    expect(legacy).toContain("error[TIMEOUT] Timed out.");
+    expect(legacy).toContain("Next: Inspect the current Ticket or Session state");
+    // An explicit but empty `next` means the producer decided none is safe.
+    const decided = renderCliError({
+      code: "TIMEOUT",
+      message: "Timed out.",
+      next: undefined,
+    } as never);
+    expect(decided).toContain("none is safe from this evidence");
+  });
+
+  it("lists each planned durable write and an explicit none for empty human effects", () => {
+    const plan = buildMutationPlan(
+      verbEntry("ticket.comment")!,
+      { kind: "ticket", id: "VC-1", label: "VC-1" },
+      { humanVisibleEffects: [] },
+    );
+    const text = renderCliSuccess("ticket.comment", plan, { json: false });
+    expect(text).toContain(
+      "Durable writes:\n  - Create one attributed Ticket comment and its Ticket activity event.",
+    );
+    expect(text).toContain("Human-visible effects:\n  - none");
+  });
+
   it("neutralizes terminal control and bidi sequences in every text-mode output path", () => {
     const hostile = "safe\u001b]52;c;YXR0YWNr\u0007\rspoof\u202Etxt\u2066isolate";
     const rendered = renderCliSuccess(

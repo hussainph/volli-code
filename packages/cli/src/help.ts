@@ -197,7 +197,9 @@ function doorLabel(entry: VerbEntry): string {
   if (cli && tool) return "Agent CLI and Agent Tool Surface";
   if (cli) return "Agent CLI";
   if (tool) return "Agent Tool Surface (named tool; not shell-executable)";
-  if (entry.accessModes.includes("hostApi")) return "External Agent Surface";
+  // `hostApi` needs no door word yet: `verbTier` refuses a hostApi-only entry
+  // until the External Agent Surface defines its governance, so command detail
+  // cannot render one. The surface that lifts that refusal names its own door.
   return "app only (no agent door)";
 }
 
@@ -346,13 +348,13 @@ function matchCommand(path: readonly string[], entries: readonly VerbEntry[]): V
   return best;
 }
 
+/** Only reachable with a non-empty path: `resolveHelp` answers `[]` with bare help. */
 function unknownHelpError(path: readonly string[], entries: readonly VerbEntry[]): AgentError {
   const commands = entries.map((entry) => cliVerbName(entry.key)).join(", ");
   const topics = HELP_TOPIC_NAMES.join(", ");
-  const rendered = path.length === 0 ? "(empty)" : path.join(" ");
   return makeAgentError(
     "USAGE",
-    `Unknown help path ${JSON.stringify(rendered)} (commands: ${commands}; topics: ${topics}).`,
+    `Unknown help path ${JSON.stringify(path.join(" "))} (commands: ${commands}; topics: ${topics}).`,
     "Run `volli help`, then ask for one listed command or topic.",
   );
 }

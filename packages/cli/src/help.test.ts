@@ -249,6 +249,73 @@ describe("renderHelp over a supplied entry list", () => {
     expect(detail).toContain("Role availability: not claimed outside a resolved Session");
   });
 
+  it("names an app-only verb's door honestly instead of hiding it", () => {
+    const appOnly: VerbEntry = {
+      ...toolOnly,
+      key: "ticket.discard",
+      accessModes: [],
+      actor: "any",
+    };
+    const detail = renderHelp(["ticket", "discard"], [appOnly]);
+    expect(detail).toContain("Door: app only (no agent door)");
+    expect(detail).toContain("Verb tier: none");
+    // Bare help lists the same verb under its own section rather than a shell group.
+    expect(bareHelpText([appOnly])).toContain("App-only verbs\n  ticket discard");
+  });
+
+  it("labels a verb on both agent surfaces with both doors", () => {
+    const dual: VerbEntry = {
+      ...toolOnly,
+      key: "vault.list",
+      accessModes: ["cli", "tool"],
+      actor: "any",
+      group: "Read",
+    };
+    expect(renderHelp(["vault", "list"], [dual])).toContain(
+      "Door: Agent CLI and Agent Tool Surface",
+    );
+  });
+
+  it("reports a resolved but empty frozen surface as empty, not unknown", () => {
+    const text = bareHelpText([shellOnly], {
+      runtime: {
+        appVersion: null,
+        surface: { sessionId: "session-1", role: "subagent", tools: [] },
+        surfaceUnknownReason: null,
+      },
+    });
+    expect(text).toContain("Resolved Session Role: subagent");
+    expect(text).toContain("Frozen Agent Tool Surface: (empty)");
+  });
+
+  it("marks a tool-only verb's availability unknown when the optional read failed", () => {
+    const detail = renderHelp(["vault", "rotate"], [toolOnly], {
+      runtime: {
+        appVersion: null,
+        surface: null,
+        surfaceUnknownReason: "the app is stopped",
+      },
+    });
+    expect(detail).toContain("Role availability: unknown (the app is stopped).");
+  });
+
+  it("throws from renderHelp on an unknown path so projections cannot silently degrade", () => {
+    expect(() => renderHelp(["nonsense"])).toThrow(/Unknown help path/);
+  });
+
+  it("reports an unknown frozen surface on bare help when the optional read failed", () => {
+    const text = bareHelpText([shellOnly], {
+      runtime: {
+        appVersion: null,
+        surface: null,
+        surfaceUnknownReason: "the app is stopped",
+      },
+    });
+    expect(text).toContain(
+      "Session Role and frozen Agent Tool Surface: unknown (the app is stopped)",
+    );
+  });
+
   it("reports whether the resolved Role's frozen bundle carries a tool-only verb", () => {
     const carried: AgentHelpRuntime = {
       appVersion: "0.1.1",

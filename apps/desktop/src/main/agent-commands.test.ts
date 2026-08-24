@@ -4,7 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY, DEFAULT_KICKOFF_MESSAGE, makeAgentError } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  DEFAULT_KICKOFF_MESSAGE,
+  makeAgentError,
+  MUTATION_PLAN_CONTRACT,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -649,6 +654,7 @@ describe("agent command service", () => {
         worktreePath: "/tmp/worktrees/VC-1",
         socket: "/tmp/volli.sock",
         appVersion: "1.2.3",
+        previewContract: MUTATION_PLAN_CONTRACT,
       },
     });
     expect(JSON.stringify(response)).not.toContain("project-one");
@@ -671,6 +677,7 @@ describe("agent command service", () => {
         worktreePath: "/repo/volli/packages/shared",
         socket: "/tmp/volli.sock",
         appVersion: "1.2.3",
+        previewContract: MUTATION_PLAN_CONTRACT,
       },
     });
   });
