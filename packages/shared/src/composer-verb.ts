@@ -57,23 +57,6 @@
 import type { PromptTemplate } from "./prompt-template";
 
 /**
- * Every verb there is, as a closed union.
- *
- * Closed on purpose, and the closure is load-bearing: a verb has no generic
- * behaviour to fall back on — the whole point is that each runs a different
- * operation — so a new name must not be able to arrive anywhere silently.
- *
- * The sites that answer per verb therefore key a `Record<ComposerVerbName, …>`
- * rather than switching: the act the press performs (`chat-plane.tsx`) and the
- * glyph the picker draws (`composer-picker-ui.tsx`). A `Record` on a closed key
- * type fails to compile with the MISSING NAME in the message, where a `switch`
- * in a void-returning function compiles happily with an arm missing and the
- * press quietly does nothing. Adding a verb here should break both sites, and
- * the error should say which verb and which site.
- */
-export type ComposerVerbName = "compact" | "copy" | "model" | "reload" | "settings" | "login";
-
-/**
  * The Session facts an offer rule may read — everything a verb is allowed to
  * know about the moment it is being offered in.
  *
@@ -94,10 +77,17 @@ export interface ComposerVerbMoment {
   readonly hasProject: boolean;
 }
 
-/** One built-in verb: what it is called, and what the picker says it does. */
-export interface ComposerVerb {
-  /** What is typed after `/`. Spellable by the same grammar a template name is. */
-  readonly name: ComposerVerbName;
+/**
+ * Everything a verb declares EXCEPT its name — the name is the key it is
+ * declared under, so the two cannot drift.
+ *
+ * This is the whole reason the registry below is a keyed table rather than an
+ * array of self-naming records: a `name` field beside a key is a second place
+ * to spell the same thing, and the compiler cannot object to `copy: { name:
+ * "kopy" }`. Deriving the name from the key removes that bug class instead of
+ * catching it.
+ */
+export interface ComposerVerbSpec {
   /** The picker's second column. A phrase, because the row is a control. */
   readonly description: string;
   /**
@@ -119,93 +109,154 @@ export interface ComposerVerb {
 }
 
 /**
- * Summarize the Session's history so the conversation can continue past the
- * model's window — Context Compaction, asked for rather than triggered.
+ * EVERY VERB THERE IS. The one declaration — add a row here and nowhere else.
+ *
+ * This table used to be three declarations: a `ComposerVerbName` union, a
+ * `const` per verb, and an array collecting them. Two of the three were
+ * enforced (the satellite `Record`s below fail to compile when the union
+ * grows), but the array was not: a verb could sit in the union with a glyph
+ * and an act and still be missing from the supply, which made it invisible in
+ * the picker AND unreserved — `isComposerVerbName` would answer false, so a
+ * user's `compact.md` would quietly win the name the verb was supposed to own.
+ * Deriving the union and the array FROM this table closes that hole by
+ * construction: there is no longer a second list to forget.
+ *
+ * Declaration order is the order a picker offers them in — `Object.entries`
+ * preserves it for string keys, and {@link COMPOSER_VERBS} does nothing to
+ * reorder it.
+ *
+ * The key is the name, and the closure is load-bearing: a verb has no generic
+ * behaviour to fall back on — the whole point is that each runs a different
+ * operation — so a new name must not be able to arrive anywhere silently. The
+ * sites that answer per verb therefore key a `Record<ComposerVerbName, …>`
+ * rather than switching: the act the press performs (`chat-plane.tsx`) and the
+ * glyph the picker draws (`composer-picker-ui.tsx`). A `Record` on a closed key
+ * type fails to compile with the MISSING NAME in the message, where a `switch`
+ * in a void-returning function compiles happily with an arm missing and the
+ * press quietly does nothing. Adding a row here breaks both sites, and each
+ * error names the verb and the site.
+ *
+ * NOT a `ReadonlyMap` like `harness/core.ts`'s adapter registry, deliberately.
+ * That registry is a Map because `HarnessId` is OPEN — a registered harness
+ * joins it at runtime — and a `Record` cannot express an open key. This set is
+ * closed and known at compile time, and a Map would throw away the exhaustive
+ * checking that is the entire point here. The open half of the `/` surface
+ * (a user's commands and skills) is not modelled here at all; it is data read
+ * from disk, and `slash-namespace.ts` is where the two meet.
  */
-export const COMPACT_VERB: ComposerVerb = {
-  name: "compact",
-  description: "Summarize the history so far to free up context",
-  // Rewriting context under a running turn corrupts it. The runtime refuses
-  // this too — and still owns the refusals only it can see, like a history
-  // with nothing left to summarize — but a turn being live is a fact the
-  // client holds already, so it is answered here, immediately and in the same
-  // words the picker's silence means.
-  refusal: (moment) => (moment.working ? "Compaction can't run while a turn is live" : null),
-  takesInstructions: true,
-};
+export const COMPOSER_VERB_TABLE = {
+  /**
+   * Summarize the Session's history so the conversation can continue past the
+   * model's window — Context Compaction, asked for rather than triggered.
+   */
+  compact: {
+    description: "Summarize the history so far to free up context",
+    // Rewriting context under a running turn corrupts it. The runtime refuses
+    // this too — and still owns the refusals only it can see, like a history
+    // with nothing left to summarize — but a turn being live is a fact the
+    // client holds already, so it is answered here, immediately and in the same
+    // words the picker's silence means.
+    refusal: (moment) => (moment.working ? "Compaction can't run while a turn is live" : null),
+    takesInstructions: true,
+  },
 
-/** Put the Session's most recent reply on the clipboard, as plain text. */
-export const COPY_VERB: ComposerVerb = {
-  name: "copy",
-  description: "Copy the last reply to the clipboard",
-  // Idle as well as answered: mid-turn the newest reply is still arriving, and
-  // a clipboard holding half a sentence under a toast that says "Copied last
-  // reply" is a copy that looked right and pasted wrong.
-  refusal: (moment) =>
-    moment.working
-      ? "Wait for the reply to finish"
-      : moment.hasReply
-        ? null
-        : "No reply to copy yet",
-  takesInstructions: false,
-};
+  /** Put the Session's most recent reply on the clipboard, as plain text. */
+  copy: {
+    description: "Copy the last reply to the clipboard",
+    // Idle as well as answered: mid-turn the newest reply is still arriving, and
+    // a clipboard holding half a sentence under a toast that says "Copied last
+    // reply" is a copy that looked right and pasted wrong.
+    refusal: (moment) =>
+      moment.working
+        ? "Wait for the reply to finish"
+        : moment.hasReply
+          ? null
+          : "No reply to copy yet",
+    takesInstructions: false,
+  },
 
-/** Open the model picker — the footer pill's own list, arriving by typing. */
-export const MODEL_VERB: ComposerVerb = {
-  name: "model",
-  description: "Switch the Session's model",
-  // Both halves of the pill's own disabled rule, which is what this verb
-  // opens: model policy is immutable mid-turn, and an empty catalog has no
-  // list to show. The second is the reachable one — a Session with no model
-  // access is exactly the Session someone types `/model` in — and it must not
-  // be reported as the first.
-  refusal: (moment) =>
-    moment.working
-      ? "The model can't change mid-turn"
-      : moment.hasModels
-        ? null
-        : "No models to choose from — try /login",
-  takesInstructions: false,
-};
+  /** Open the model picker — the footer pill's own list, arriving by typing. */
+  model: {
+    description: "Switch the Session's model",
+    // Both halves of the pill's own disabled rule, which is what this verb
+    // opens: model policy is immutable mid-turn, and an empty catalog has no
+    // list to show. The second is the reachable one — a Session with no model
+    // access is exactly the Session someone types `/model` in — and it must not
+    // be reported as the first.
+    refusal: (moment) =>
+      moment.working
+        ? "The model can't change mid-turn"
+        : moment.hasModels
+          ? null
+          : "No models to choose from — try /login",
+    takesInstructions: false,
+  },
 
-/** Re-read the commands and skills directories, without leaving the Session. */
-export const RELOAD_VERB: ComposerVerb = {
-  name: "reload",
-  description: "Refresh commands and skills from disk",
-  // The tiers this re-reads are project-scoped, so with no project there is
-  // no directory to read and the press could only report a refresh of nothing.
-  refusal: (moment) => (moment.hasProject ? null : "No project to read commands from"),
-  takesInstructions: false,
-};
+  /** Re-read the commands and skills directories, without leaving the Session. */
+  reload: {
+    description: "Refresh commands and skills from disk",
+    // The tiers this re-reads are project-scoped, so with no project there is
+    // no directory to read and the press could only report a refresh of nothing.
+    refusal: (moment) => (moment.hasProject ? null : "No project to read commands from"),
+    takesInstructions: false,
+  },
 
-/** Open the app's Settings. */
-export const SETTINGS_VERB: ComposerVerb = {
-  name: "settings",
-  description: "Open Settings",
-  // App chrome: nothing about a Session can refuse it.
-  refusal: () => null,
-  takesInstructions: false,
-};
+  /** Open the app's Settings. */
+  settings: {
+    description: "Open Settings",
+    // App chrome: nothing about a Session can refuse it.
+    refusal: () => null,
+    takesInstructions: false,
+  },
 
-/** Open Settings on Model Access — where Volli keeps every credential. */
-export const LOGIN_VERB: ComposerVerb = {
-  name: "login",
-  description: "Manage model access and sign-ins",
-  // Always available on purpose: the Session with nothing configured is the
-  // one that needs this door most.
-  refusal: () => null,
-  takesInstructions: false,
-};
+  /** Open Settings on Model Access — where Volli keeps every credential. */
+  login: {
+    description: "Manage model access and sign-ins",
+    // Always available on purpose: the Session with nothing configured is the
+    // one that needs this door most.
+    refusal: () => null,
+    takesInstructions: false,
+  },
+} satisfies Record<string, ComposerVerbSpec>;
 
-/** Every built-in verb, in the order a picker offers them. */
-export const COMPOSER_VERBS: readonly ComposerVerb[] = [
-  COMPACT_VERB,
-  COPY_VERB,
-  MODEL_VERB,
-  RELOAD_VERB,
-  SETTINGS_VERB,
-  LOGIN_VERB,
-];
+/**
+ * Every verb there is, as a closed union — the table's own keys.
+ *
+ * Derived rather than declared, so "the names there are" and "the verbs there
+ * are" cannot disagree. See {@link COMPOSER_VERB_TABLE} for why the closure
+ * matters and which sites it enforces.
+ */
+export type ComposerVerbName = keyof typeof COMPOSER_VERB_TABLE;
+
+/** One built-in verb: what it is called, and what the picker says it does. */
+export interface ComposerVerb extends ComposerVerbSpec {
+  /** What is typed after `/`. Spellable by the same grammar a template name is. */
+  readonly name: ComposerVerbName;
+}
+
+/**
+ * Every built-in verb, in the order a picker offers them — the table, read out.
+ *
+ * Derived, so it cannot omit one. This is the list that used to be maintained
+ * by hand beside the union; {@link COMPOSER_VERB_TABLE} says what that cost.
+ */
+export const COMPOSER_VERBS: readonly ComposerVerb[] = Object.entries(COMPOSER_VERB_TABLE).map(
+  ([name, spec]) => ({ name: name as ComposerVerbName, ...spec }),
+);
+
+/** The verb this name belongs to. Total on {@link ComposerVerbName}, so no null. */
+const VERB_BY_NAME = Object.fromEntries(COMPOSER_VERBS.map((verb) => [verb.name, verb])) as Record<
+  ComposerVerbName,
+  ComposerVerb
+>;
+
+/** {@link COMPOSER_VERB_TABLE}'s rows, addressable one at a time. */
+export const COMPACT_VERB: ComposerVerb = VERB_BY_NAME.compact;
+export const COPY_VERB: ComposerVerb = VERB_BY_NAME.copy;
+export const MODEL_VERB: ComposerVerb = VERB_BY_NAME.model;
+export const RELOAD_VERB: ComposerVerb = VERB_BY_NAME.reload;
+export const SETTINGS_VERB: ComposerVerb = VERB_BY_NAME.settings;
+export const LOGIN_VERB: ComposerVerb = VERB_BY_NAME.login;
 
 /**
  * The verbs this moment offers — the one supply both the picker and the press
