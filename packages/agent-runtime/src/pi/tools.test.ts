@@ -833,7 +833,7 @@ describe("createVerbTool", () => {
 
     expect(tool.name).toBe("ticket_await");
     const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(properties)).toEqual(["tickets", "for", "timeoutSeconds"]);
+    expect(Object.keys(properties)).toEqual(["tickets", "for", "timeoutSeconds", "sinceMs"]);
     expect((tool.parameters as { required?: string[] }).required).toEqual(["tickets"]);
     // The number field arrives as a number schema, not a string to parse.
     expect((properties.timeoutSeconds as { type?: string }).type).toBe("number");
