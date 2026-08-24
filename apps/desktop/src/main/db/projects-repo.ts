@@ -7,12 +7,15 @@ import type Database from "better-sqlite3";
 import {
   isAppearance,
   isProjectThemeOverrideEmpty,
+  parseAuthorityPolicyOverride,
   parseCanvas,
   parseSessionModel,
   parseSkillModes,
+  resolveAuthorityPolicy,
 } from "@volli/shared";
 import type {
   Appearance,
+  AuthorityPolicy,
   Canvas,
   ModelSelection,
   Project,
@@ -40,6 +43,8 @@ interface ProjectRow {
   skill_modes: string | null;
   session_harness: string | null;
   session_model: string | null;
+  /** Migration 025 — this project's authority departures; NULL = inherit every default. */
+  authority_policy: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -161,6 +166,35 @@ export function findProjectByPath(db: Database.Database, path: string): Project 
 export function getProjectById(db: Database.Database, id: string): Project | undefined {
   const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE id = ?").get(id);
   return row ? mapProject(row) : undefined;
+}
+
+/**
+ * The authority policy one project is governed by (VC-44).
+ *
+ * Read apart from {@link mapProject} rather than added to `Project`, and that is
+ * deliberate. `Project` is the renderer's shape and rides the data bootstrap
+ * payload to every window; authority is host-side policy with no surface to show
+ * it yet, and putting it on the domain object would publish a contract before
+ * anything renders it. It is read on the attach path by
+ * `resolveRuntimeContext`, which is the one caller that needs it.
+ *
+ * A project that does not exist resolves to the defaults rather than throwing.
+ * This runs where a throw costs a Session its attachment, and "no project row"
+ * and "a project that states nothing" are the same policy either way — the
+ * built-in defaults, which are the safe answer and the only one this layer could
+ * honestly give.
+ */
+export function getProjectAuthorityPolicy(
+  db: Database.Database,
+  projectId: string,
+): AuthorityPolicy {
+  const row = prepared<[string], Pick<ProjectRow, "authority_policy">>(
+    db,
+    "SELECT authority_policy FROM projects WHERE id = ?",
+  ).get(projectId);
+  return resolveAuthorityPolicy(
+    parseAuthorityPolicyOverride(parseJsonColumn(row?.authority_policy ?? null)),
+  );
 }
 
 /** Updates the pinned automation base branch and returns the authoritative row. */

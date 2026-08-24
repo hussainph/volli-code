@@ -494,20 +494,23 @@ export interface SessionRuntimeSpec {
    * The policy every tool call is checked against — when the Session was given
    * one at all.
    *
-   * Optional, and absent throughout the product: Volli runs Pi ungated, and the
-   * desktop adapter supplies no Snapshot. Absence is not a Snapshot that allows
-   * everything. With no Snapshot the runtime installs no `beforeToolCall`, so
-   * the rule pack, the fallback thresholds and {@link ask} are structurally
-   * unreachable rather than merely permissive — which is why this is an absent
-   * field and not an `ungated` member on {@link AuthoritySnapshot}. A Snapshot
-   * that meant "do not consult me" would still have to carry a pack id, a pack
-   * hash and two thresholds describing rules nobody will ever run, and the one
-   * path that must not reach the gate would depend on every caller remembering
-   * to check.
+   * Optional, and the optionality carries meaning that a value could not.
+   * Absence is not a Snapshot that allows everything: with no Snapshot the
+   * runtime installs no `beforeToolCall`, so the rule pack, the fallback
+   * thresholds and {@link ask} are structurally unreachable rather than merely
+   * permissive. A Snapshot that meant "do not consult me" would still have to
+   * carry a pack id, a pack hash and two thresholds describing rules nobody will
+   * ever run, and the one path that must not reach the gate would depend on
+   * every caller remembering to check.
    *
-   * The machinery is kept whole for
-   * `docs/plans/authority-two-axis-rearchitecture.md`, which changes the policy
-   * the mechanism carries rather than the mechanism.
+   * The desktop adapter fills it from the attaching project's `AuthorityPolicy`
+   * (VC-44), and fills it only when that policy says `enforce`. The two other
+   * postures both arrive here as absence, for different reasons: `off` builds no
+   * Snapshot at all, and `observe` builds one, records it on the attachment, and
+   * deliberately does not hand it over. So a Session whose policy is `observe`
+   * has a durable Snapshot and an unreachable gate at the same time — which is
+   * the state slice 7 wanted, and the reason this field is the seam rather than
+   * a flag inside the Snapshot.
    */
   authority?: AuthoritySnapshot;
   brief: RuntimeBrief;

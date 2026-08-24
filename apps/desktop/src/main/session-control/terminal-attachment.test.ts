@@ -50,6 +50,7 @@ const terminalAttachment: SessionAttachmentProjection = {
     placement: "tab",
     exitCode: null,
   }),
+  authority: null,
   status: "failed",
   openedAt: null,
   closedAt: 42,

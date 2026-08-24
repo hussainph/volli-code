@@ -3,8 +3,10 @@ import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
 import { testProject, testSession, testTicket, openTestDb } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
+import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import {
   deleteProject,
+  getProjectAuthorityPolicy,
   getProjectById,
   insertProject,
   updateProjectSkillModes,
@@ -144,5 +146,59 @@ describe("per-project agent configuration (migration 023)", () => {
       skillModes: {},
       sessionModel: null,
     });
+  });
+});
+
+describe("getProjectAuthorityPolicy", () => {
+  it("governs a project that recorded nothing by the built-in defaults", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+
+    expect(getProjectAuthorityPolicy(ctx.db, "p1")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+
+  it("applies the project's departures and inherits the rest", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    ctx.db
+      .prepare("UPDATE projects SET authority_policy = ? WHERE id = 'p1'")
+      .run(JSON.stringify({ enforcement: "enforce" }));
+
+    const policy = getProjectAuthorityPolicy(ctx.db, "p1");
+    expect(policy.enforcement).toBe("enforce");
+    // Everything unsaid still comes from the defaults, which is what lets a
+    // changed default reach every project that never disagreed with it.
+    expect(policy.judgmentMode).toBe(DEFAULT_AUTHORITY_POLICY.judgmentMode);
+    expect(policy.actors).toEqual(DEFAULT_AUTHORITY_POLICY.actors);
+  });
+
+  it("splices a project's extra coordination verb onto the defaults", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    ctx.db
+      .prepare("UPDATE projects SET authority_policy = ? WHERE id = 'p1'")
+      .run(JSON.stringify({ actors: { session: { coordinationVerbs: ["$defaults", "x.y"] } } }));
+
+    expect(getProjectAuthorityPolicy(ctx.db, "p1").actors.session.coordinationVerbs).toEqual([
+      ...DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs,
+      "x.y",
+    ]);
+  });
+
+  it("inherits rather than throwing when the column was edited into nonsense", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1" }));
+    // Valid JSON, so the CHECK passes; not the shape the document means.
+    ctx.db.prepare("UPDATE projects SET authority_policy = '[1,2]' WHERE id = 'p1'").run();
+
+    // This runs on the attach path, where a throw costs a Session its
+    // attachment. Degrading to the defaults is the only honest answer.
+    expect(getProjectAuthorityPolicy(ctx.db, "p1")).toEqual(DEFAULT_AUTHORITY_POLICY);
+  });
+
+  it("answers the defaults for a project that does not exist", () => {
+    ctx = openTestDb();
+
+    expect(getProjectAuthorityPolicy(ctx.db, "missing")).toEqual(DEFAULT_AUTHORITY_POLICY);
   });
 });

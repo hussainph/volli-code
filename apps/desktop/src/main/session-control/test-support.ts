@@ -210,6 +210,8 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native,
+        // A terminal companion runs no gate; see `pty/manager.ts`.
+        authority: null,
         status: closed ? "closed" : attachment.observed_kind === "failed" ? "failed" : "open",
         openedAt: attachment.observed_kind === "opened" ? session.created_at : null,
         closedAt: closed?.occurred_at ?? null,

@@ -1,8 +1,11 @@
 import "vite-plus/test/config";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
+import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 
@@ -34,6 +37,37 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // `verify-packed-requires.mjs` is what catches getting this wrong.
 const bundleWorkspacePackages = (id: string): boolean =>
   id.startsWith("@volli/") || id.startsWith("@opentelemetry/");
+
+function sourceFilesUnder(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    return entry.isDirectory() ? sourceFilesUnder(path) : [path];
+  });
+}
+
+const preloadSourceDir = fileURLToPath(new URL("./src/preload", import.meta.url));
+
+const definePackConfig = (config: PackUserConfig): PackUserConfig => config;
+
+const packedElectronDeps = {
+  alwaysBundle: bundleWorkspacePackages,
+  // `electron` lives in devDependencies (electron-builder refuses to package
+  // otherwise), which tsdown would bundle by default — inlining the npm
+  // package's binary-path shim over the runtime-provided module. The real
+  // `electron` API only exists as a require() left for Electron itself to
+  // resolve.
+  //
+  // jsdom is unbundleable: its computed-style helper, css-tree's data module,
+  // and the sync-XHR worker all read files relative to their own package layout
+  // at MODULE LOAD (`__dirname`-relative stylesheet,
+  // `require("mdn-data/css/*.json")`, `require.resolve("./xhr-sync-worker.js")`
+  // + that worker's own `require("../../../..")`). Bundled into main.cjs every
+  // one of those resolves against dist-electron/ and the app crashed at boot.
+  // It must stay a runtime require() of the real package — the same treatment
+  // electron gets — which is why apps/desktop declares it directly and
+  // electron-builder.yml whitelists its tree.
+  neverBundle: ["electron", "jsdom"],
+};
 
 export default defineConfig(({ mode }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
@@ -293,43 +327,51 @@ export default defineConfig(({ mode }) => ({
     assetsInlineLimit: 0,
   },
 
-  // Electron main + preload are packed as CJS with tsdown. ONE config with two
-  // entries: object entry keys become the output filenames (main.cjs,
-  // preload.cjs), and the single watcher covers both module graphs, so a
-  // preload edit re-runs onSuccess (relaunching Electron) just like a main
-  // edit. tsdown aborts (tree-kills) the previous onSuccess run before
-  // re-running it after every successful rebuild.
-  // CAUTION: the preload runs sandboxed (Electron ≥20 default) and cannot
-  // require() sibling chunk files — keep the two entries dependency-disjoint
-  // so rolldown never splits a shared chunk out of preload.cjs.
-  pack: {
-    entry: { main: "src/main/index.ts", preload: "src/preload/index.ts" },
-    format: "cjs",
-    outDir: "dist-electron",
-    sourcemap: true,
-    outExtensions: () => ({ js: ".cjs" }),
-    clean: true,
-    deps: {
-      alwaysBundle: bundleWorkspacePackages,
-      // `electron` lives in devDependencies (electron-builder refuses to
-      // package otherwise), which tsdown would bundle by default — inlining
-      // the npm package's binary-path shim over the runtime-provided module.
-      // The real `electron` API only exists as a require() left for Electron
-      // itself to resolve.
-      //
-      // jsdom is unbundleable: its computed-style helper, css-tree's data
-      // module, and the sync-XHR worker all read files relative to their own
-      // package layout at MODULE LOAD (`__dirname`-relative stylesheet,
-      // `require("mdn-data/css/*.json")`, `require.resolve("./xhr-sync-
-      // worker.js")` + that worker's own `require("../../../..")`). Bundled
-      // into main.cjs every one of those resolves against dist-electron/ and
-      // the app crashed at boot. It must stay a runtime require() of the real
-      // package — the same treatment electron gets — which is why apps/desktop
-      // declares it directly and electron-builder.yml whitelists its tree.
-      neverBundle: ["electron", "jsdom"],
-    },
-    ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
-  },
+  // Electron main + preload are packed as CJS with two tsdown configs. The
+  // preload runs sandboxed (Electron ≥20 default) and cannot require() sibling
+  // chunks, so its single-entry build disables code splitting and inlines every
+  // Rolldown runtime helper. Main keeps code splitting — including VC-119's
+  // bundled OpenTelemetry graph and its platform chunks.
+  //
+  // Both configs write to dist-electron. Main owns the initial clean; preload
+  // emits only its fixed-name entry + map, so it cannot collide with main's
+  // chunks. In watch mode main also watches the preload source directory: its
+  // one onSuccess owner therefore relaunches Electron after either graph
+  // changes, without starting competing app processes from two configs.
+  pack: [
+    definePackConfig({
+      name: "electron-main",
+      entry: { main: "src/main/index.ts" },
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      clean: true,
+      plugins: [
+        {
+          name: "volli:watch-preload-for-electron-relaunch",
+          buildStart() {
+            for (const sourceFile of sourceFilesUnder(preloadSourceDir)) {
+              this.addWatchFile(sourceFile);
+            }
+          },
+        },
+      ],
+      deps: packedElectronDeps,
+      ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
+    }),
+    definePackConfig({
+      name: "electron-preload",
+      entry: { preload: "src/preload/index.ts" },
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      clean: false,
+      outputOptions: { codeSplitting: false },
+      deps: packedElectronDeps,
+    }),
+  ],
 
   run: {
     tasks: {

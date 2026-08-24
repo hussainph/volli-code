@@ -562,6 +562,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: null,
           },
         },
+        authority: null,
       },
     });
 
@@ -747,6 +748,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: { locator: "native" },
           },
         },
+        authority: null,
       },
     });
     opened.adapter.reconcileReceipts = [
@@ -981,6 +983,7 @@ describe("SessionRuntime durable boundary invariants", () => {
           id: "missing-native",
           detail: { kind: "volli.native-binding.v1", profileId: "native", locator: null },
         },
+        authority: null,
       },
     });
     await expect(
@@ -1047,6 +1050,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: null,
           },
         },
+        authority: null,
       },
     });
     const originalAttach = first.adapter.attach.bind(first.adapter);
@@ -1095,6 +1099,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: null,
           },
         },
+        authority: null,
       },
     });
 

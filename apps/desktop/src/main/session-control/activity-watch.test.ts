@@ -14,6 +14,7 @@ function openAttachment(): SessionAttachmentProjection {
     venue: { id: "local", kind: "local" },
     continuity: "fresh",
     native: null,
+    authority: null,
     status: "open",
     openedAt: 1,
     closedAt: null,

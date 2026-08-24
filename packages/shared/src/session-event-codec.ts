@@ -38,7 +38,8 @@
 import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
 import { SESSION_TOOL_IDS } from "./authority";
-import type { SessionToolId } from "./authority";
+import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
 import {
   SESSION_ATTACHMENT_CONTINUITIES,
@@ -443,7 +444,20 @@ export interface RendererSessionNativeReference {
 }
 
 /** An attachment without executor routing identity or its recovery locator. */
-export type RendererSessionAttachment = Omit<SessionAttachment, "adapterId" | "native">;
+/**
+ * `authority` is scrubbed with the two host-only fields rather than projected.
+ *
+ * Not because a Snapshot is a secret — it is policy, and a person is entitled to
+ * read the policy their Session runs under. It is withheld because no surface
+ * renders it yet, and the renderer's attachment shape is a contract: putting a
+ * field there before something displays it invites a client to depend on a shape
+ * that has never been designed. VC-44 makes the Snapshot durable; showing it is
+ * a later, deliberate act.
+ */
+export type RendererSessionAttachment = Omit<
+  SessionAttachment,
+  "adapterId" | "native" | "authority"
+>;
 
 export type RendererSessionAttachmentFailure = Omit<SessionAttachmentFailure, "diagnostic"> & {
   diagnostic: null;
@@ -526,7 +540,12 @@ export function scrubSessionEventProvenance(
 }
 
 export function scrubSessionAttachment(attachment: SessionAttachment): RendererSessionAttachment {
-  const { adapterId: _adapterId, native: _native, ...presentation } = attachment;
+  const {
+    adapterId: _adapterId,
+    native: _native,
+    authority: _authority,
+    ...presentation
+  } = attachment;
   return presentation;
 }
 
@@ -1035,11 +1054,78 @@ function decodeAttachment(value: unknown, context: string): SessionAttachment {
     },
     continuity: enumValue(row.continuity, SESSION_ATTACHMENT_CONTINUITIES, `${context}.continuity`),
     native: row.native === null ? null : decodeNative(row.native, `${context}.native`),
+    // Absent reads as null, and must: every attachment written before VC-44 has
+    // no `authority` key at all, and history that refused to decode without one
+    // would make those Sessions unopenable rather than merely quiet about the
+    // policy they ran under.
+    authority:
+      row.authority === undefined || row.authority === null
+        ? null
+        : decodeAuthoritySnapshot(row.authority, `${context}.authority`),
   };
   if (!attachment.id || !attachment.sessionId || !attachment.adapterId || !attachment.venue.id) {
     throw new Error(`${context} is not a valid Session attachment`);
   }
   return attachment;
+}
+
+/**
+ * One durably recorded Authority Snapshot, read back.
+ *
+ * The tool list and the rule pack strings are read as written rather than
+ * validated against today's vocabulary, for the reason `authority.denied`'s
+ * `cause` is a bare string: history outlives the pack and the tool surface that
+ * produced it, and a decoder that rejected a retired tool name or an unknown
+ * pack id would make an old Session unreadable in exactly the case the record
+ * exists to serve — reading a denial back long after the pack changed.
+ *
+ * The enums are the exception and are validated, because each names a branch
+ * this codebase still switches on; a value outside them is not a record from an
+ * older vocabulary but a corrupt one.
+ */
+function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnapshot {
+  const row = asRecord(value, context);
+  const fallback = asRecord(row.fallback, `${context}.fallback`);
+  return {
+    mode: enumValue(row.mode, ["auto"] as const, `${context}.mode`),
+    location: enumValue(
+      row.location,
+      ["worktree", "main-checkout"] as const,
+      `${context}.location`,
+    ),
+    enforcement: enumValue(
+      row.enforcement,
+      ["observe", "enforce"] as const,
+      `${context}.enforcement`,
+    ),
+    judgmentMode: enumValue(row.judgmentMode, JUDGMENT_MODES, `${context}.judgmentMode`),
+    tools: readToolIds(row.tools, `${context}.tools`),
+    rulePackId: readString(row.rulePackId, `${context}.rulePackId`),
+    rulePackHash: readString(row.rulePackHash, `${context}.rulePackHash`),
+    classifierModel: readNullableString(row.classifierModel, `${context}.classifierModel`),
+    fallback: {
+      consecutiveDenials: readInteger(
+        fallback.consecutiveDenials,
+        `${context}.fallback.consecutiveDenials`,
+      ),
+      sessionDenials: readInteger(fallback.sessionDenials, `${context}.fallback.sessionDenials`),
+    },
+  };
+}
+
+/**
+ * The recorded Agent Tool Surface, read as written.
+ *
+ * Not checked against {@link SessionToolId}, deliberately. A Snapshot naming a
+ * tool this build no longer offers is the normal shape of old history, and the
+ * record is most valuable precisely then — it is how a reader learns that the
+ * Session which made a call held a tool that has since been retired.
+ */
+function readToolIds(value: unknown, context: string): AuthoritySnapshot["tools"] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) =>
+    readString(item, `${context}[${index}]`),
+  ) as AuthoritySnapshot["tools"];
 }
 
 function decodeNative(value: unknown, context: string): SessionNativeReference {

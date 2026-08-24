@@ -868,7 +868,7 @@ CREATE TABLE secrets (
 `;
 
 /**
- * Migration 025: `session_usage` — the read model for what Sessions consumed.
+ * Migration 026: `session_usage` — the read model for what Sessions consumed.
  *
  * A fact INDEX, not an aggregate. One row per metered model operation, keyed
  * by the `usage.recorded` event that proves it, so the table can be dropped
@@ -887,7 +887,7 @@ CREATE TABLE secrets (
  * The Session reference does cascade: a Session that is gone has no history for
  * these rows to index.
  */
-const MIGRATION_025_SESSION_USAGE = `
+const MIGRATION_026_SESSION_USAGE = `
 CREATE TABLE session_usage (
   event_id           TEXT PRIMARY KEY,
   session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -909,6 +909,47 @@ CREATE INDEX session_usage_project_time ON session_usage(project_id, occurred_at
 CREATE INDEX session_usage_ticket_time ON session_usage(ticket_id, occurred_at);
 CREATE INDEX session_usage_session_time ON session_usage(session_id, occurred_at);
 CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, occurred_at);
+`;
+
+/**
+ * Migration 025: the durable authority policy store (VC-44, slice 7 of
+ * `docs/plans/authority-two-axis-rearchitecture.md`).
+ *
+ * One nullable JSON column, `NULL` = inherit every built-in default, taking
+ * 019's shape for 019's reason: the payload is a variable-shaped document, no
+ * column set describes it, and nobody asks `WHERE authority_policy = ?`.
+ *
+ * **The column stores DEPARTURES, never the resolved policy.** That is the one
+ * decision here worth reading twice, and it is the opposite of what migration
+ * 019 chose — 019 stores the full observed record because a project's picker had
+ * to stay answerable against a global snapshot that might no longer contain its
+ * model. Authority has no such coupling and the opposite hazard: a project that
+ * stored its resolved policy would freeze today's defaults into every project
+ * that ever opened a settings pane, so tightening a default later would silently
+ * skip exactly the projects someone had touched. `resolveAuthorityPolicy` splices
+ * the defaults in at read time, which is what makes a changed default reach
+ * every project that never disagreed with it.
+ *
+ * **Why the database and not a file in the repo.** This is the ticket's
+ * non-negotiable. A policy store the agent can write is a privilege-escalation
+ * loop: the thing being governed would author its own permissions. Claude Code's
+ * classifier refuses to read `autoMode` out of repo-local settings for exactly
+ * this reason, because a checked-in file — or a build step that writes one —
+ * arrives with the repository. The database is under Electron's `userData`,
+ * outside every Session workspace and outside every worktree, so no file tool
+ * reaches it. Say the limit honestly: the capability axis is off and no rule
+ * judges command operands, so a Session's `execute` tool can still reach this
+ * file through an ordinary shell command. `writableRoots` in VC-45 is what
+ * closes that. What this placement buys today is that policy is never *sourced*
+ * from the tree the agent is editing.
+ *
+ * `json_valid` follows 019 and 024: a column whose whole contract is "this is
+ * JSON" should fail at the write, not several layers up inside a parser that
+ * then has to invent a policy for the corpse.
+ */
+const MIGRATION_025_PROJECT_AUTHORITY_POLICY = `
+ALTER TABLE projects ADD COLUMN authority_policy TEXT
+  CHECK (authority_policy IS NULL OR json_valid(authority_policy));
 `;
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -1027,8 +1068,17 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 25,
+    name: "projects.authority_policy — the per-project authority departures, app-owned",
+    sql: MIGRATION_025_PROJECT_AUTHORITY_POLICY,
+  },
+  // Renumbered from 025 when VC-44's authority policy store landed on main
+  // first. A version is a position in an ordered, already-applied history, not
+  // a name — two migrations claiming 025 would leave whichever profile ran the
+  // other one silently missing this table.
+  {
+    version: 26,
     name: "session_usage — the rebuildable index of what each model operation consumed",
-    sql: MIGRATION_025_SESSION_USAGE,
+    sql: MIGRATION_026_SESSION_USAGE,
   },
 ];
 

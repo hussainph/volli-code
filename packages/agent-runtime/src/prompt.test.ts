@@ -28,6 +28,8 @@ function spec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntimeSpec {
     authority: {
       mode: "auto",
       location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
       tools: ["read", "edit", "write", "execute"],
       rulePackId: BUILTIN_RULE_PACK_ID,
       rulePackHash: BUILTIN_RULE_PACK_HASH,
