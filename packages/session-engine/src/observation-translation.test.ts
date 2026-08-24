@@ -166,6 +166,104 @@ describe("live observation translation", () => {
     ]);
   });
 
+  it("records what one model operation consumed, under the executor's own entry id", async () => {
+    const { translate, sink } = composition();
+
+    await translate({
+      kind: "usage",
+      entryId: "entry-4",
+      turnId: "turn-1",
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 412,
+        outputTokens: 1_204,
+        cacheReadTokens: 96_000,
+        cacheWriteTokens: 2_100,
+        costUsd: 0.418_23,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    expect(sink.observations).toEqual([
+      {
+        // Pi's entry id, not a counter: a Session that reattaches replays the
+        // same operation and must land on the same durable id, or the ledger
+        // gains a second copy of a bill it already paid.
+        id: "pi:usage:entry-4",
+        kind: "usage.recorded",
+        occurredAt: 1000,
+        turnId: "turn-1",
+        usage: {
+          cause: "assistant",
+          providerId: "anthropic",
+          modelId: "claude-opus-4-1",
+          inputTokens: 412,
+          outputTokens: 1_204,
+          cacheReadTokens: 96_000,
+          cacheWriteTokens: 2_100,
+          costUsd: 0.418_23,
+          costBasis: "catalog-estimate",
+        },
+      },
+    ]);
+  });
+
+  it("gives a replayed operation the id it already had", async () => {
+    const { translate, sink } = composition();
+    const observation: RuntimeObservation = {
+      kind: "usage",
+      entryId: "entry-4",
+      turnId: "turn-1",
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: 0.01,
+        costBasis: "catalog-estimate",
+      },
+    };
+
+    await translate(observation);
+    await translate(observation);
+
+    expect(sink.observations.map((entry) => entry.id)).toEqual([
+      "pi:usage:entry-4",
+      "pi:usage:entry-4",
+    ]);
+  });
+
+  it("names spend outside a turn without inventing one", async () => {
+    const { translate, sink } = composition();
+
+    await translate({
+      kind: "usage",
+      entryId: "compaction-3",
+      turnId: null,
+      usage: {
+        cause: "compaction",
+        providerId: "anthropic",
+        modelId: "claude-haiku-4-5",
+        inputTokens: 190_000,
+        outputTokens: 900,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      },
+    });
+
+    const [recorded] = sink.of("usage.recorded");
+    expect(recorded?.turnId).toBeNull();
+    expect(recorded?.usage.cause).toBe("compaction");
+    expect(recorded?.usage.costUsd).toBeNull();
+  });
+
   it("records a compaction that produced nothing as its own fact", async () => {
     const { translate, sink } = composition();
 

@@ -1808,10 +1808,12 @@ describe("startSession", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "activity",
       "authority",
       "activity",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
       "attachment:closed",
@@ -2193,10 +2195,12 @@ describe("startSession", () => {
       "turn:started",
       "delta",
       "delta",
+      "usage",
       "message-settled",
       "activity",
       "activity",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -2317,6 +2321,86 @@ describe("startSession", () => {
     for (const observation of settled) {
       expect(sidecar).toContain(observation.message.entryId);
     }
+  });
+
+  it("meters every model call in a turn, including the one that only called a tool", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("Reading the file.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("The token is volli-marker-42.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("Read MARKER.txt and report the token.");
+
+    const usage = observations.filter((observation) => observation.kind === "usage");
+    // Two provider calls, so two bills — even though the first reply carries a
+    // tool call and the transcript shows one exchange.
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({
+      kind: "usage",
+      turnId: expect.any(String),
+      usage: {
+        cause: "assistant",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: 100,
+        outputTokens: 20,
+        costUsd: 0.003,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    // Each is named by the sidecar entry it belongs to, so a reattach that
+    // replays the same history cannot double the Session's bill.
+    const entryIds = usage.flatMap((observation) =>
+      observation.kind === "usage" ? [observation.entryId] : [],
+    );
+    expect(new Set(entryIds).size).toBe(2);
+
+    const ref = handle.recovery;
+    const replay = await handle.reconcile(null);
+    const replayed = replay.observations.flatMap((observation) =>
+      observation.kind === "usage" ? [observation.entryId] : [],
+    );
+    expect(replayed).toEqual(entryIds);
+
+    await handle.close();
+    const sidecar = readFileSync(ref?.sessionFilePath as string, "utf8");
+    for (const entryId of entryIds) expect(sidecar).toContain(entryId);
+  });
+
+  it("meters a reply the provider billed before it failed", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail("The model run failed.")])),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("Do the work.");
+    await handle.close();
+
+    // Nothing settled and nothing was said, but the prompt was already paid
+    // for. Reading spend off the transcript alone would lose this entirely.
+    expect(settledTexts(observations)).toEqual([]);
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "usage" ? [observation.usage.costUsd] : [],
+      ),
+    ).toEqual([0.003]);
   });
 
   it("keeps an actual Pi read turn inside the Ticket worktree", async () => {
@@ -2522,6 +2606,7 @@ describe("startSession", () => {
     const firstReplay = await firstHandle.reconcile(null);
     expect(kinds([...firstReplay.observations])).toEqual([
       "turn:started",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -2644,7 +2729,7 @@ describe("startSession", () => {
     await firstDelivery;
     const recovery = firstHandle.recovery;
     const replay = await firstHandle.reconcile(null);
-    expect(kinds([...replay.observations])).toEqual(["turn:started", "turn:interrupted"]);
+    expect(kinds([...replay.observations])).toEqual(["turn:started", "usage", "turn:interrupted"]);
     const durableEntries = readFileSync(recovery!.sessionFilePath, "utf8")
       .trimEnd()
       .split("\n")
@@ -2724,11 +2809,12 @@ describe("startSession", () => {
 
     expect(kinds([...replay.observations])).toEqual([
       "turn:started",
+      "usage",
       "message-settled",
       "attention",
       "turn:interrupted",
     ]);
-    expect(replay.observations[2]).toMatchObject({
+    expect(replay.observations[3]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "partial-turn",
@@ -3609,6 +3695,7 @@ describe("startSession", () => {
       "attachment:started",
       "turn:started",
       "delta",
+      "usage",
       "turn:interrupted",
     ]);
 
@@ -4007,10 +4094,11 @@ describe("startSession", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "attention",
       "turn:interrupted",
     ]);
-    expect(observations[2]).toMatchObject({
+    expect(observations[3]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "auth",
@@ -4215,10 +4303,15 @@ describe("auto-retrying a dropped transport", () => {
       delivery: "prompt",
     });
 
+    // Two bills for one turn: the dropped attempt was metered before the
+    // socket died, and the resumed one was metered when it succeeded. This is
+    // what makes a retry storm legible in a cost report rather than invisible.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -4241,9 +4334,12 @@ describe("auto-retrying a dropped transport", () => {
     await handle.submitUserMessage("go");
 
     expect(attempts).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Eleven metered attempts for one turn that produced nothing. An owner
+    // asking why a quiet pass was expensive has to be able to see this.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      ...Array.from({ length: 11 }, () => "usage"),
       "attention",
       "turn:interrupted",
     ]);
@@ -4323,7 +4419,12 @@ describe("auto-retrying a dropped transport", () => {
     await handle.interrupt();
     await delivery;
 
-    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
     await handle.close();
   });
 
@@ -4348,6 +4449,7 @@ describe("auto-retrying a dropped transport", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "turn:interrupted",
       "attachment:closed",
     ]);
@@ -4381,7 +4483,12 @@ describe("auto-retrying a dropped transport", () => {
     await delivery;
 
     expect(calls).toBe(1);
-    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
     await handle.close();
   });
 

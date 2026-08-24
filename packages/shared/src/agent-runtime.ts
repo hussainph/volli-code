@@ -36,6 +36,7 @@ import {
   type SessionInteractionOption,
   type SessionInteractionResolution,
 } from "./session-ledger";
+import type { SessionUsage } from "./session-usage";
 
 export type SessionRole = "project" | "ticket" | "subagent";
 
@@ -742,6 +743,7 @@ export type RuntimeObservation =
   | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
+  | UsageObservation
   | RuntimeActivityObservation
   | AuthorityObservation
   | AttentionObservation
@@ -892,6 +894,32 @@ export interface SettledMessageObservation {
   kind: "message-settled";
   turnId: string;
   message: SettledAssistantMessage;
+  occurredAt?: number;
+  recoveryCursor?: string;
+}
+
+/**
+ * One model operation was metered.
+ *
+ * Deliberately not folded into {@link SettledMessageObservation}, and the split
+ * is the point. A settled message is a message worth showing; a metered
+ * operation is money worth counting, and most agentic spend is the second
+ * without being the first — a reply that only called tools, a reply that failed
+ * after its prompt had been billed, a Context Compaction, a utility completion
+ * with no transcript at all. Usage carried on the settled arm could only ever
+ * report the fraction of a turn that happened to say something out loud.
+ *
+ * `entryId` is the executor's own durable identity for the operation, and it is
+ * what the durable fact is named after. A counter would re-mint a different id
+ * on every replay and give the ledger a second copy of a bill it already has.
+ */
+export interface UsageObservation {
+  kind: "usage";
+  /** The executor's durable entry identity for the operation that spent this. */
+  entryId: string;
+  /** Null for spend outside a turn: compaction, and utility work. */
+  turnId: string | null;
+  usage: SessionUsage;
   occurredAt?: number;
   recoveryCursor?: string;
 }

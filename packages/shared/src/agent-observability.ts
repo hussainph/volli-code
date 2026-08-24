@@ -379,6 +379,14 @@ export class ObservabilityReducer {
       case "compaction-progress":
       case "interaction":
         return null;
+      // Usage is a Session Semantic Fact and reaches the ledger on its own
+      // path. It is not reduced here even though it could be: this exporter is
+      // opt-in, best-effort and droppable, and every token it would carry is
+      // already on the neighbouring `provider-attempt` event, which measures
+      // the same call from the transport's side. A second copy would only give
+      // two channels something to disagree about.
+      case "usage":
+        return null;
       /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
       default: {
         const unhandled: never = observation;

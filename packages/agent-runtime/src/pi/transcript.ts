@@ -8,12 +8,14 @@
  * model.
  */
 
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, KnownApi, Usage } from "@earendil-works/pi-ai";
 import type {
   AttentionObservation,
+  CostBasis,
   RuntimeFailure,
   RuntimeRecoveryRef,
   SanitizedUsage,
+  SessionUsage,
   SettledAssistantMessage,
 } from "@volli/shared";
 
@@ -129,6 +131,101 @@ function usageOf(usage: {
     ...(Number.isFinite(usage.cacheRead) ? { cacheReadTokens: usage.cacheRead } : {}),
     ...(Number.isFinite(usage.cacheWrite) ? { cacheWriteTokens: usage.cacheWrite } : {}),
     ...(Number.isFinite(usage.cost.total) ? { costUsd: usage.cost.total } : {}),
+  };
+}
+
+/**
+ * Which of Pi's API families price a request themselves, and which one is
+ * merely repeating what a backend told it.
+ *
+ * Keyed by {@link KnownApi} rather than written as a condition, so a Pi upgrade
+ * that adds an API family fails to compile here — which is the only place that
+ * failure is cheap. The alternative is a new adapter silently inheriting
+ * whichever basis the fallthrough happened to pick, and a report calling a
+ * guess a bill.
+ *
+ * All nine of the direct adapters call Pi's own `calculateCost(model, usage)`,
+ * multiplying provider token counts by the local model catalogue. That number
+ * is right about consumption and only an estimate of the invoice — most
+ * sharply for subscription-backed models, where the list-price value can be
+ * calculated for traffic the person is not marginally billed for at all.
+ * `pi-messages` is the exception: it copies the backend's own usage event
+ * through untouched.
+ */
+const COST_BASIS_BY_API: Record<KnownApi, CostBasis> = {
+  "openai-completions": "catalog-estimate",
+  "mistral-conversations": "catalog-estimate",
+  "openai-responses": "catalog-estimate",
+  "azure-openai-responses": "catalog-estimate",
+  "openai-codex-responses": "catalog-estimate",
+  "anthropic-messages": "catalog-estimate",
+  "bedrock-converse-stream": "catalog-estimate",
+  "google-generative-ai": "catalog-estimate",
+  "google-vertex": "catalog-estimate",
+  "pi-messages": "provider-reported",
+};
+
+/**
+ * How much to trust a cost from this API family. An unrecognised family — a
+ * custom `models.json` provider, or an adapter newer than this build — is
+ * `unavailable` rather than a guessed basis: a report that says it does not
+ * know is recoverable, and one that quietly assumes is not.
+ */
+export function costBasisForApi(api: string): CostBasis {
+  return COST_BASIS_BY_API[api as KnownApi] ?? "unavailable";
+}
+
+/** A measured count, or null when the provider reported nothing usable. */
+function measured(value: number): number | null {
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * What one model operation consumed, from any assistant message — settled,
+ * tool-use-only, or failed.
+ *
+ * Deliberately separate from {@link classifyAssistantMessage}, which answers a
+ * different question: whether the message says anything worth putting in a
+ * transcript. Most agentic spend answers no. A turn is often several tool-use
+ * replies and one short sentence, and usage read off the settled message alone
+ * would report the sentence and lose the turn. A reply that failed has usually
+ * been billed for its prompt before it failed.
+ *
+ * Null means the provider metered nothing at all. That is different from a
+ * request that cost nothing, and different again from one whose price this
+ * build cannot vouch for — those come back as a record with `costUsd: null`.
+ */
+export function assistantUsage(message: AssistantMessage): SessionUsage | null {
+  const usage: Usage = message.usage;
+  const inputTokens = measured(usage.input);
+  const outputTokens = measured(usage.output);
+  const cacheReadTokens = measured(usage.cacheRead);
+  const cacheWriteTokens = measured(usage.cacheWrite);
+  const costUsd = measured(usage.cost.total);
+  // Pi seeds every assistant message with an all-zero usage placeholder and
+  // fills it when the provider answers. A message still carrying the seed was
+  // never metered, and recording it would pad every request count with
+  // requests nobody made. A request with real tokens and a zero price is a
+  // different thing and is kept: free is a measurement.
+  const metered =
+    (inputTokens ?? 0) !== 0 ||
+    (outputTokens ?? 0) !== 0 ||
+    (cacheReadTokens ?? 0) !== 0 ||
+    (cacheWriteTokens ?? 0) !== 0 ||
+    (costUsd ?? 0) !== 0;
+  if (!metered) return null;
+  return {
+    cause: "assistant",
+    providerId: message.provider,
+    modelId: message.model,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    costUsd,
+    // A cost that did not survive the finite check has no basis to report. The
+    // tokens beside it are still true and still worth keeping.
+    costBasis: costUsd === null ? "unavailable" : costBasisForApi(message.api),
   };
 }
 

@@ -29,11 +29,13 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   COMPACTION_REASONS,
+  COST_BASES,
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
+  SESSION_USAGE_CAUSES,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
@@ -52,6 +54,7 @@ import {
   type RuntimeSessionIdentity,
   type SessionRuntimeSpec,
   type TurnObservation,
+  type UsageObservation,
   type UtilityCompletion,
 } from "@volli/shared";
 import { authorityVerdict } from "../authority/gate";
@@ -80,6 +83,7 @@ import {
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { createSessionTools } from "./tools";
 import {
+  assistantUsage,
   attentionReasonFor,
   classifyAssistantMessage,
   isTransientTransportFailure,
@@ -369,6 +373,7 @@ type RecoverableObservation =
   | TurnObservation
   | CompactionObservation
   | SettledMessageObservation
+  | UsageObservation
   | RuntimeActivityObservation
   | AttentionObservation;
 
@@ -453,6 +458,12 @@ function isRecoverableObservation(value: unknown): boolean {
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
+    case "usage":
+      return (
+        typeof value["entryId"] === "string" &&
+        (value["turnId"] === null || typeof value["turnId"] === "string") &&
+        isSessionUsage(value["usage"])
+      );
     case "compaction":
       if (!isOneOf(value["reason"], COMPACTION_REASON_VALUES)) return false;
       // Whole numbers, because the durable ledger reads them as integers and a
@@ -500,6 +511,30 @@ function isRecoverableObservation(value: unknown): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * The durable usage shape, checked with the ledger's own strictness.
+ *
+ * Whole token counts and a finite cost, because the Session Event codec reads
+ * them that way: a marker this accepted and the ledger refused would be a
+ * Session that recovers and then cannot be read — the VC-155 shape, re-laid
+ * one field at a time. `null` is accepted everywhere a number is, and only
+ * `null`: absent is what an unmetered field honestly says, and `undefined`
+ * would not survive the JSON round trip this validator guards.
+ */
+function isSessionUsage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const tokens = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
+  return (
+    isOneOf(value["cause"], SESSION_USAGE_CAUSES) &&
+    typeof value["providerId"] === "string" &&
+    typeof value["modelId"] === "string" &&
+    tokens.every((key) => value[key] === null || wholeNumber(value[key])) &&
+    (value["costUsd"] === null ||
+      (typeof value["costUsd"] === "number" && Number.isFinite(value["costUsd"]))) &&
+    isOneOf(value["costBasis"], COST_BASES)
+  );
 }
 
 function isPersistedUserMessage(value: unknown): value is UserMessage {
@@ -1643,6 +1678,17 @@ async function attachSession(
         }
         /* v8 ignore next -- acceptedUserMessages only contains user messages. */
         if (entryId === null) throw new Error("Pi assistant message was not persisted.");
+        // Metering happens BEFORE classification, and that ordering is the
+        // whole point. Classification asks whether the message said anything;
+        // most agentic spend answers no — a reply that only called tools, a
+        // reply that failed after its prompt was billed — and usage read off
+        // the settled arm alone would report a fraction of the bill.
+        const metered = assistantUsage(event.message as AssistantMessage);
+        if (metered !== null) {
+          await commitObservation(
+            await persistObservation({ kind: "usage", entryId, turnId, usage: metered }),
+          );
+        }
         const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
         if (outcome.kind === "settled") {
           await commitObservation(
