@@ -825,6 +825,20 @@ describe("createVerbTool", () => {
     expect((properties.model as { type?: string }).type).toBe("object");
   });
 
+  it("compiles ticket.await's schema, including the number field (VC-85)", () => {
+    const tool = createVerbTool({
+      verb: "ticket.await",
+      port: async () => ({ text: "" }),
+    });
+
+    expect(tool.name).toBe("ticket_await");
+    const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    expect(Object.keys(properties)).toEqual(["tickets", "for", "timeoutSeconds"]);
+    expect((tool.parameters as { required?: string[] }).required).toEqual(["tickets"]);
+    // The number field arrives as a number schema, not a string to parse.
+    expect((properties.timeoutSeconds as { type?: string }).type).toBe("number");
+  });
+
   it("refuses to build a tool for a verb this build does not project", () => {
     // Unreachable from a resolved surface, which is why it is a throw rather
     // than a fallback: the alternative is a nameless tool reaching a provider,

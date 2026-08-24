@@ -149,9 +149,9 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
 /**
  * One registry field as a schema node.
  *
- * The registry's field vocabulary is closed (`string`, `enum`, `object`), so
- * this switch is total and there is no "unknown type" branch to leave
- * untested. That closure is the whole reason the schema is neutral data in
+ * The registry's field vocabulary is closed (`string`, `number`, `enum`,
+ * `object`), so this switch is total and there is no "unknown type" branch to
+ * leave untested. That closure is the whole reason the schema is neutral data in
  * `@volli/shared` instead of a TypeBox value: the registry stays free of a
  * schema library, and exactly one module knows how a field becomes one.
  */
@@ -159,6 +159,8 @@ function verbFieldSchema(field: VerbToolField): TSchema {
   switch (field.type) {
     case "string":
       return Type.String({ description: field.description });
+    case "number":
+      return Type.Number({ description: field.description });
     case "enum":
       return Type.Union(
         field.values.map((value) => Type.Literal(value)),
