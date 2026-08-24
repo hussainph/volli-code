@@ -96,7 +96,18 @@ function groupUsage(
   }
   return [...collected.values()]
     .map((bucket) => ({ key: bucket.key, usage: summarizeSessionUsage(bucket.entries) }))
-    .toSorted((left, right) => (right.usage.knownCostUsd ?? 0) - (left.usage.knownCostUsd ?? 0));
+    .toSorted((left, right) => rank(right.usage) - rank(left.usage));
+}
+
+/**
+ * Where a group sits in the order, which is not a claim about what it cost.
+ *
+ * A group nothing could price sorts as if it were free, because there is no
+ * other number to sort it by. Its own summary still says `unavailable`, and
+ * the ordering must never be read back as a total.
+ */
+function rank(usage: SessionUsageSummary): number {
+  return usage.knownCostUsd ?? 0;
 }
 
 function groupKey(entry: SessionUsageEntry, groupBy: SessionUsageGrouping): string | null {

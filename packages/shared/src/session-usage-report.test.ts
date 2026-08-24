@@ -119,6 +119,22 @@ describe("reportSessionUsage", () => {
     expect(report.total.costCoverage).toBe("partial");
   });
 
+  // A wholly unpriced group has no number to rank by. It sorts as if it cost
+  // nothing, which is an ordering choice and not a claim: its own summary
+  // still reads `unavailable`, never `$0.00`.
+  it("ranks a group nothing could price below every group that has a number", () => {
+    const report = reportSessionUsage(
+      [
+        entry({ sessionId: "unpriced", costUsd: null, costBasis: "unavailable" }),
+        entry({ sessionId: "priced", costUsd: 2 }),
+      ],
+      { groupBy: "session" },
+    );
+    expect(report.groups.map((group) => group.key)).toEqual(["priced", "unpriced"]);
+    expect(report.groups[1]?.usage.costCoverage).toBe("unavailable");
+    expect(report.groups[1]?.usage.knownCostUsd).toBeNull();
+  });
+
   it("reports the whole window without groups when none is asked for", () => {
     const report = reportSessionUsage([entry({ costUsd: 3 })], {});
     expect(report.groups).toEqual([]);

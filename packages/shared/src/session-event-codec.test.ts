@@ -1004,6 +1004,30 @@ describe("the renderer-safe scrub", () => {
     });
   });
 
+  // Usage is metadata about a request, never any of its content. There is no
+  // prompt, reply, path, credential or account identity in it to strip, so it
+  // crosses whole — and a scrub that dropped the cost would leave the renderer
+  // unable to say what a Session had spent.
+  it("lets a metered operation cross the product edge whole", () => {
+    const payload: SessionEventPayload = {
+      kind: "usage.recorded",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 412,
+        outputTokens: 1_204,
+        cacheReadTokens: 96_000,
+        cacheWriteTokens: 2_100,
+        costUsd: 0.418_23,
+        costBasis: "catalog-estimate",
+      },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(payload);
+  });
+
   it("nulls native references, attention diagnostics, and adapter observations", () => {
     expect(
       scrubSessionEventPayload({

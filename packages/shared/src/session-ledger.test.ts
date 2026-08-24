@@ -230,6 +230,21 @@ describe("observationPayload", () => {
     });
   });
 
+  it("canonicalizes an omitted usage attachment id to null", () => {
+    const usage = metered();
+    expect(
+      observationPayload({
+        id: "usage-omitted-attachment",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance: systemProvenance,
+        kind: "usage.recorded",
+        turnId: null,
+        usage,
+      } as SessionObservation),
+    ).toEqual({ kind: "usage.recorded", attachmentId: null, turnId: null, usage });
+  });
+
   it("round-trips an authority.denied observation into its matching payload", () => {
     const observation: SessionObservation = {
       id: "authority-denied-1",

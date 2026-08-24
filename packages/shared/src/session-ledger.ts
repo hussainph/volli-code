@@ -1342,9 +1342,13 @@ export interface SessionLedgerTransaction {
    * Metered operations in scope, newest first, from the usage projection.
    *
    * Rows, not a total. Selecting them cheaply is what the projection's indexes
-   * are for; adding them up is {@link reportSessionUsage}'s job, and an
-   * adapter that returned a pre-summed answer would be a second opinion about
-   * what a partial total means.
+   * are for; adding them up is `reportSessionUsage`'s job, and an adapter that
+   * returned a pre-summed answer would be a second opinion about what a
+   * partial total means.
+   *
+   * An order, not a total order: a report sums the whole set, so an adapter
+   * need not settle ties within a millisecond. A caller that ever needs paging
+   * needs a documented total order first.
    */
   listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[];
   /**

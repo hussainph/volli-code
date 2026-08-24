@@ -355,6 +355,22 @@ function compactions(observations: RuntimeObservation[]): CompactionObservation[
   return observations.filter((observation) => observation.kind === "compaction");
 }
 
+/** A well-formed durable usage marker, so a malformed case names one broken field. */
+function meteredMarker(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: MODEL_ID,
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    costUsd: 0.003,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
 /**
  * Whether an unreadable marker of this shape stops a Session from opening.
  *
@@ -3186,6 +3202,44 @@ describe("startSession", () => {
         tokensAfter: 1,
       },
       { kind: "compaction", state: "failed", reason: "threshold" },
+      // Usage shapes the durable ledger would refuse. A marker accepted here
+      // and rejected there is a Session that recovers and then cannot be read,
+      // which is the VC-155 failure re-laid one field at a time.
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: null },
+      { kind: "usage", entryId: 1, turnId: null, usage: meteredMarker() },
+      { kind: "usage", entryId: "entry-1", turnId: 7, usage: meteredMarker() },
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: meteredMarker({ cause: "cron" }) },
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ providerId: 1 }),
+      },
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: meteredMarker({ modelId: 1 }) },
+      // Fractional tokens, which no provider reports and the codec reads as
+      // integers.
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ inputTokens: 1.5 }),
+      },
+      // No NaN case here, and deliberately: `JSON.stringify` writes NaN as
+      // `null`, so a poisoned cost arrives back looking exactly like an honest
+      // absent one and is rightly accepted. The codec refuses NaN where it can
+      // still be seen — at the write, before the round trip.
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ costUsd: "free" }),
+      },
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ costBasis: "guessed" }),
+      },
     ];
 
     const secondRuntime = createPiAgentRuntime({

@@ -55,9 +55,9 @@ import {
   type ProvisionedEntry,
   type Session,
 } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Models, Usage } from "@earendil-works/pi-ai";
+import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
-import { costBasisForApi, sanitizeDiagnostic } from "./transcript";
+import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
 
 /**
  * A model's usable window, or nothing when the catalog does not report one.
@@ -288,30 +288,16 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     kind: "compacted",
     entry,
     messages: contextMessages([...input.path, entry]),
-    usage: compactionUsage(compacted.usage, input.model),
-  };
-}
-
-/**
- * The summary call's usage, in Volli's own vocabulary.
- *
- * `CompactResult` carries a provider usage block but no API family, so the
- * basis comes from the model the summary was generated on — which is the same
- * model, and therefore the same adapter, that priced it.
- */
-function compactionUsage(usage: Usage | undefined, model: Model<Api>): SessionUsage | null {
-  if (usage === undefined) return null;
-  const costUsd = Number.isFinite(usage.cost.total) ? usage.cost.total : null;
-  return {
-    cause: "compaction",
-    providerId: model.provider,
-    modelId: model.id,
-    inputTokens: Number.isFinite(usage.input) ? usage.input : null,
-    outputTokens: Number.isFinite(usage.output) ? usage.output : null,
-    cacheReadTokens: Number.isFinite(usage.cacheRead) ? usage.cacheRead : null,
-    cacheWriteTokens: Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : null,
-    costUsd,
-    costBasis: costUsd === null ? "unavailable" : costBasisForApi(model.api),
+    // `CompactResult` carries a provider usage block but no API family, so the
+    // basis comes from the model the summary was generated on — the same
+    // model, and therefore the same adapter, that priced it. Everything else
+    // is `sessionUsageFrom`'s, so a summary and a reply cannot end up measured
+    // by two different rules.
+    usage: sessionUsageFrom(
+      compacted.usage,
+      { provider: input.model.provider, model: input.model.id, api: input.model.api },
+      "compaction",
+    ),
   };
 }
 

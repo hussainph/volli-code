@@ -771,6 +771,42 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.authorityDenials).toBe(1);
   });
 
+  it("records what an operation consumed, and folds it into the Session's own total", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const usage = {
+      cause: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-1",
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 0,
+      costUsd: 0.25,
+      costBasis: "catalog-estimate",
+    } as const;
+
+    await adapter.emit({ kind: "usage", entryId: "pi-entry-4", turnId: "turn-1", usage });
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    const recorded = snapshot.frames.find(({ event }) => event.payload.kind === "usage.recorded");
+    expect(recorded?.event.attachmentId).toBe(attachmentId);
+    expect(recorded?.event.payload).toEqual({
+      kind: "usage.recorded",
+      attachmentId,
+      turnId: "turn-1",
+      usage,
+    });
+    expect(snapshot.projection.usage).toMatchObject({
+      requestCount: 1,
+      knownCostUsd: 0.25,
+      costCoverage: "complete",
+      costBasis: "catalog-estimate",
+      cachedInputShare: 0.8,
+    });
+  });
+
   it("records both halves of a compaction as durable Session Events", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

@@ -152,7 +152,8 @@ class InMemorySessionLedger implements SessionLedger {
     for (const event of this.#events.values()) {
       if (event.payload.kind !== "usage.recorded") continue;
       const session = this.#sessions.get(event.sessionId);
-      if (session === undefined) continue;
+      /* v8 ignore next -- `#appendEvent` refuses an event whose Session is absent, and nothing here deletes one. */
+      if (session === undefined) throw new Error(`Session ${event.sessionId} was not found`);
       if (query.since !== undefined && event.occurredAt < query.since) continue;
       if (query.until !== undefined && event.occurredAt >= query.until) continue;
       if (!inUsageScope(query.scope, session)) continue;
@@ -164,10 +165,10 @@ class InMemorySessionLedger implements SessionLedger {
         occurredAt: event.occurredAt,
       });
     }
-    return entries.toSorted(
-      (left, right) =>
-        right.occurredAt - left.occurredAt || (left.sessionId < right.sessionId ? 1 : -1),
-    );
+    // Newest first, and no tie-break. The port promises an order, not a total
+    // order: a report is a sum over the whole set, so two operations sharing a
+    // millisecond cannot change any answer derived from it.
+    return entries.toSorted((left, right) => right.occurredAt - left.occurredAt);
   }
 
   #getSession(sessionId: string): Session | null {

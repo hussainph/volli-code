@@ -180,6 +180,57 @@ function measured(value: number): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+/** Which model was billed, from whichever Pi shape happens to be at hand. */
+export interface BilledModel {
+  provider: string;
+  model: string;
+  api: string;
+}
+
+/**
+ * One Pi usage block, read as a Volli measurement.
+ *
+ * The single definition of that conversion, and it is single on purpose:
+ * assistant replies and Context Compaction both produce one, and two spellings
+ * would be one rule until the first time they disagreed about a NaN.
+ *
+ * Null means the provider metered nothing at all. Pi seeds every assistant
+ * message with an all-zero usage placeholder and fills it when the provider
+ * answers, so a block still carrying the seed describes a request nobody made
+ * — recording it would pad every request count in every report. A request with
+ * real tokens and a zero price is a different thing and is kept: free is a
+ * measurement, and only an absent number is an absence.
+ *
+ * The block itself is optional because Pi's compaction result declares it so.
+ * An absent block and an empty one mean the same thing here, which is why both
+ * are answered in one place rather than guarded separately by each caller.
+ */
+export function sessionUsageFrom(
+  usage: Usage | undefined,
+  model: BilledModel,
+  cause: SessionUsage["cause"],
+): SessionUsage | null {
+  if (usage === undefined) return null;
+  const costUsd = measured(usage.cost.total);
+  const measurements = {
+    inputTokens: measured(usage.input),
+    outputTokens: measured(usage.output),
+    cacheReadTokens: measured(usage.cacheRead),
+    cacheWriteTokens: measured(usage.cacheWrite),
+    costUsd,
+  };
+  if (Object.values(measurements).every((value) => value === null || value === 0)) return null;
+  return {
+    cause,
+    providerId: model.provider,
+    modelId: model.model,
+    ...measurements,
+    // A cost that did not survive the finite check has no basis to report. The
+    // tokens beside it are still true and still worth keeping.
+    costBasis: costUsd === null ? "unavailable" : costBasisForApi(model.api),
+  };
+}
+
 /**
  * What one model operation consumed, from any assistant message — settled,
  * tool-use-only, or failed.
@@ -190,43 +241,13 @@ function measured(value: number): number | null {
  * replies and one short sentence, and usage read off the settled message alone
  * would report the sentence and lose the turn. A reply that failed has usually
  * been billed for its prompt before it failed.
- *
- * Null means the provider metered nothing at all. That is different from a
- * request that cost nothing, and different again from one whose price this
- * build cannot vouch for — those come back as a record with `costUsd: null`.
  */
 export function assistantUsage(message: AssistantMessage): SessionUsage | null {
-  const usage: Usage = message.usage;
-  const inputTokens = measured(usage.input);
-  const outputTokens = measured(usage.output);
-  const cacheReadTokens = measured(usage.cacheRead);
-  const cacheWriteTokens = measured(usage.cacheWrite);
-  const costUsd = measured(usage.cost.total);
-  // Pi seeds every assistant message with an all-zero usage placeholder and
-  // fills it when the provider answers. A message still carrying the seed was
-  // never metered, and recording it would pad every request count with
-  // requests nobody made. A request with real tokens and a zero price is a
-  // different thing and is kept: free is a measurement.
-  const metered =
-    (inputTokens ?? 0) !== 0 ||
-    (outputTokens ?? 0) !== 0 ||
-    (cacheReadTokens ?? 0) !== 0 ||
-    (cacheWriteTokens ?? 0) !== 0 ||
-    (costUsd ?? 0) !== 0;
-  if (!metered) return null;
-  return {
-    cause: "assistant",
-    providerId: message.provider,
-    modelId: message.model,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    costUsd,
-    // A cost that did not survive the finite check has no basis to report. The
-    // tokens beside it are still true and still worth keeping.
-    costBasis: costUsd === null ? "unavailable" : costBasisForApi(message.api),
-  };
+  return sessionUsageFrom(
+    message.usage,
+    { provider: message.provider, model: message.model, api: message.api },
+    "assistant",
+  );
 }
 
 /**
