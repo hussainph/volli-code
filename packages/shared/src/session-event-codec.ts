@@ -37,7 +37,8 @@
 
 import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
-import type { AuthoritySnapshot } from "./authority";
+import { SESSION_TOOL_IDS } from "./authority";
+import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
 import {
@@ -165,19 +166,19 @@ const codecs = {
       const input = asRecord(record.input, `${context}.input`);
       const kind = enumValue(
         input.kind,
-        ["runtime-brief", "prompt-resources"],
+        ["runtime-brief", "prompt-resources", "tool-surface"],
         `${context}.input.kind`,
       );
-      return {
-        kind: "session.input.recorded",
-        input:
-          kind === "runtime-brief"
-            ? { kind, text: readString(input.text, `${context}.input.text`) }
-            : {
+      const decoded =
+        kind === "runtime-brief"
+          ? { kind, text: readString(input.text, `${context}.input.text`) }
+          : kind === "prompt-resources"
+            ? {
                 kind,
                 resources: decodePromptResources(input.resources, `${context}.input.resources`),
-              },
-      };
+              }
+            : { kind, tools: decodeSessionToolIds(input.tools, `${context}.input.tools`) };
+      return { kind: "session.input.recorded", input: decoded };
     },
     scrub: (payload) => payload,
   },
@@ -1005,6 +1006,11 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
       text: readString(row.text, `${context}[${index}].text`),
     };
   });
+}
+
+function decodeSessionToolIds(value: unknown, context: string): readonly SessionToolId[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((tool, index) => enumValue(tool, SESSION_TOOL_IDS, `${context}[${index}]`));
 }
 
 function decodeModelSelection(value: unknown, context: string): ModelSelection {

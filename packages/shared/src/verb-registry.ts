@@ -826,6 +826,7 @@ export const VERB_REGISTRY = [
     example: "volli prompt baseline",
     notes: [
       "Token counts are estimates at 4 characters/token; the provider's own meter is the count of record.",
+      "Each section names a cache class — how often its bytes are bought again, claimed rather than measured; message-side sections are marked, and never invalidate the Cache Prefix.",
       "Excludes tool definitions, the user's first message, and provider overhead, which ride on top of everything counted here.",
       "--ticket prices a Ticket Session instead, including that ticket's Brief.",
     ],

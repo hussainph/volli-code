@@ -23,7 +23,17 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 
 // Bundle workspace TS source (`@volli/shared` exports raw .ts) into the CJS
 // main/preload artifacts instead of leaving a runtime require() behind.
-const bundleWorkspacePackages = (id: string): boolean => id.startsWith("@volli/");
+//
+// OpenTelemetry rides along for a different reason (VC-119). It is main-only,
+// pure JavaScript, and reads no file relative to its own package layout — the
+// property that makes jsdom unbundleable and forced it into `neverBundle` — so
+// inlining it is safe, and it is the cheaper of the two ways to make the
+// packaged app able to resolve it. The alternative is adding every direct and
+// transitive OpenTelemetry package to electron-builder.yml's node_modules
+// whitelist and keeping that list in sync as their dependency graph moves.
+// `verify-packed-requires.mjs` is what catches getting this wrong.
+const bundleWorkspacePackages = (id: string): boolean =>
+  id.startsWith("@volli/") || id.startsWith("@opentelemetry/");
 
 export default defineConfig(({ mode }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
@@ -127,6 +137,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
+        "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
@@ -217,6 +228,17 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
+        // The agent-observability export boundary (VC-119). The mapping module
+        // is the ONLY place Volli's metadata-only vocabulary becomes somebody
+        // else's attribute names, and the sink is the bound that stops a
+        // collector from reaching a turn — both are enrolled here for the same
+        // reason the IPC handlers are: a missed branch is a privacy or a
+        // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
+        // `index.ts`: it is transport bootstrap around an SDK.
+        "**/src/main/observability/genai.ts",
+        "**/src/main/observability/ipc.ts",
+        "**/src/main/observability/settings.ts",
+        "**/src/main/observability/sink.ts",
         "**/src/main/project-roots.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",

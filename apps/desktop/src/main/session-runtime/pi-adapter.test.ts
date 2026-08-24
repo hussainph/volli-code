@@ -59,6 +59,7 @@ const context: PiRuntimeContext = {
     modelId: "gpt-5.6-sol",
     reasoningLevel: "high",
   },
+  toolSurface: ["read", "edit", "write", "execute", "ask_user"],
   promptResources: [],
 };
 
@@ -439,10 +440,14 @@ describe("Pi native adapter authority snapshot", () => {
 
   it("records the Agent Tool Surface the Session actually holds, interaction tools included", async () => {
     // VC-3's guarantee, held in the product rather than only in tests: the
-    // Snapshot is built by `sessionToolIds` over the same spec Pi builds its
-    // tool array from, so it cannot under-report by the three tools that used to
-    // trip `tool.not-bundled`.
+    // Snapshot is the Session's FROZEN tool surface, and `runtimeSpec` asserts
+    // the array Pi resolves against re-derives to that same list. So it cannot
+    // under-report by the three tools that used to trip `tool.not-bundled`.
     const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+      }),
       resolveWebPorts: () => ({
         webFetch: async () => {
           throw new Error("unused");
@@ -465,9 +470,10 @@ describe("Pi native adapter authority snapshot", () => {
     expect(binding.authority?.tools).toEqual(sessionToolIds(runtime.spec));
   });
 
-  it("omits a web tool from the Snapshot when the Session was handed no port", async () => {
+  it("omits a web tool from the Snapshot when the Session's surface never named one", async () => {
     // A tool the Session was never offered must not appear in the durable record
-    // of what it was allowed to do.
+    // of what it was allowed to do. The frozen surface is what decides that, so
+    // resolving no port cannot add one and could not silently drop one either.
     const { binding } = await attached({ resolveWebPorts: () => ({}) });
 
     expect(binding.authority?.tools).toEqual(["read", "edit", "write", "execute", "ask_user"]);
@@ -517,6 +523,51 @@ describe("Pi native adapter authority snapshot", () => {
     });
 
     expect(runtime.spec.priorAuthorityDenials).toBe(19);
+  });
+
+  it("replays a rehydrated attachment's own Snapshot instead of today's policy", async () => {
+    // Pinning is a claim about the attachment's whole life, not about one
+    // process. A relaunch rebuilds the binding from history, and the project's
+    // policy may have changed in between; re-resolving it here would leave the
+    // live gate and the durable record disagreeing about one `attachmentId` —
+    // and `authority.denied` resolves through exactly that id, so the durable
+    // half would be the wrong one.
+    const opened = await attached();
+    const pinned = opened.binding.authority;
+    expect(pinned?.enforcement).toBe("observe");
+
+    const { binding, runtime } = await attached(
+      // The project turned enforcement on after this attachment opened.
+      policy({ enforcement: "enforce" }),
+      attachmentSpec({
+        continuity: "native_resume",
+        native: opened.binding.native,
+        pinnedAuthority: pinned,
+      }),
+    );
+
+    expect(binding.authority).toEqual(pinned);
+    // And the posture rides with it: the replayed Snapshot still observes, so
+    // the gate stays uninstalled for the attachment that opened without it.
+    expect("authority" in runtime.spec).toBe(false);
+  });
+
+  it("keeps a rehydrated attachment ungoverned when it opened with no Snapshot", async () => {
+    // `null` is a real answer, distinct from absence: the attachment opened
+    // under `off` (or predates VC-44), and a policy edit made afterwards must
+    // not retroactively hand it a Snapshot it never ran under.
+    const opened = await attached();
+    const { binding, runtime } = await attached(
+      policy({ enforcement: "enforce" }),
+      attachmentSpec({
+        continuity: "native_resume",
+        native: opened.binding.native,
+        pinnedAuthority: null,
+      }),
+    );
+
+    expect(binding.authority).toBeNull();
+    expect("authority" in runtime.spec).toBe(false);
   });
 
   it("records the tree the Session runs in, so policy can tell a worktree from a Main checkout", async () => {
@@ -597,6 +648,10 @@ describe("Pi native adapter attach", () => {
   it("hands a configured profile's ports to the Session, calls and all", async () => {
     const asked: unknown[] = [];
     const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+      }),
       resolveWebPorts: () => ({
         webFetch: async (input) => {
           asked.push({ fetch: input.url });
@@ -634,6 +689,99 @@ describe("Pi native adapter attach", () => {
 
     expect(runtime.specs).toHaveLength(1);
     expect(resolutions).toBe(1);
+  });
+
+  it("keeps the durable tool surface when Web Access is enabled before recovery reattach", async () => {
+    let webEnabled = false;
+    const { adapter, runtime } = composition({
+      resolveWebPorts: () =>
+        webEnabled
+          ? {
+              webFetch: async (input) => ({
+                requestedUrl: input.url,
+                finalUrl: input.url,
+                origin: new URL(input.url).origin,
+                contentType: "text" as const,
+                text: "page",
+                truncated: false,
+              }),
+              webSearch: async (input) => ({
+                provider: "brave",
+                query: input.query,
+                references: [],
+                truncated: false,
+              }),
+            }
+          : {},
+    });
+    const first = await adapter.attach(attachmentSpec(), new RecordingSink());
+    await first.release("requested");
+
+    webEnabled = true;
+    await adapter.attach(
+      attachmentSpec({
+        attachmentId: "attachment-2",
+        continuity: "native_resume",
+        native: first.native,
+      }),
+      new RecordingSink(),
+    );
+
+    expect(runtime.specs.map((spec) => sessionToolIds(spec))).toEqual([
+      ["read", "edit", "write", "execute", "ask_user"],
+      ["read", "edit", "write", "execute", "ask_user"],
+    ]);
+    expect("webFetch" in runtime.specs[1]!).toBe(false);
+    expect("webSearch" in runtime.specs[1]!).toBe(false);
+  });
+
+  it("refuses recovery rather than shrinking a frozen Web Access surface", async () => {
+    let webEnabled = true;
+    const frozenWebContext: PiRuntimeContext = {
+      ...context,
+      toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+    };
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => frozenWebContext,
+      resolveWebPorts: () =>
+        webEnabled
+          ? {
+              webFetch: async (input) => ({
+                requestedUrl: input.url,
+                finalUrl: input.url,
+                origin: new URL(input.url).origin,
+                contentType: "text" as const,
+                text: "page",
+                truncated: false,
+              }),
+              webSearch: async (input) => ({
+                provider: "brave",
+                query: input.query,
+                references: [],
+                truncated: false,
+              }),
+            }
+          : {},
+    });
+    const first = await adapter.attach(attachmentSpec(), new RecordingSink());
+    await first.release("requested");
+    webEnabled = false;
+
+    const recovery = adapter.attach(
+      attachmentSpec({
+        attachmentId: "attachment-2",
+        continuity: "native_resume",
+        native: first.native,
+      }),
+      new RecordingSink(),
+    );
+
+    await expect(recovery).rejects.toMatchObject({
+      code: "PI_RECOVERY_FAILED",
+      attentionKind: "adapter_unrecoverable",
+    });
+    await expect(recovery).rejects.toThrow(/Restore a working Web Access configuration/);
+    expect(runtime.specs).toHaveLength(1);
   });
 
   it("passes the injected model collection and session directory to the runtime factory", async () => {
@@ -697,6 +845,7 @@ describe("Pi native adapter attach", () => {
           rootThreadId: sessionRootThreadId(SESSION_ID),
           brief: "A project-scoped chat Session.",
           model: context.model,
+          toolSurface: context.toolSurface,
           promptResources: [],
         }),
       },

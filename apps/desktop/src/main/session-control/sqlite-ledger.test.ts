@@ -208,6 +208,31 @@ describe("SqliteSessionLedger", () => {
     ).toEqual([expect.objectContaining({ payload: { kind: "session.input.recorded", input } })]);
   });
 
+  it("round-trips the immutable Agent Tool Surface without credential data", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-tool-surface",
+      projectId,
+      ticketId: null,
+      title: "Tools",
+      provenance,
+    });
+    const input = {
+      kind: "tool-surface" as const,
+      tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"] as const,
+    };
+
+    await expect(
+      control.getOrRecordSessionInput({ sessionId: created.session.id, input, provenance }),
+    ).resolves.toEqual(input);
+
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).filter(
+        (event) => event.payload.kind === "session.input.recorded",
+      ),
+    ).toEqual([expect.objectContaining({ payload: { kind: "session.input.recorded", input } })]);
+  });
+
   it("round-trips durable model selection through SQLite", async () => {
     const { control, projectId } = setup();
     const created = await control.createSession({

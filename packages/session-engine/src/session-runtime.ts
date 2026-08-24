@@ -2260,6 +2260,14 @@ class DefaultSessionRuntime implements SessionRuntime {
       // provider id fails honestly in the adapter; it must never create fresh.
       continuity: "native_resume",
       native: binding.native,
+      // The Snapshot this attachment opened under, replayed rather than
+      // re-resolved (VC-44). `#openAttachment` reads the handle's Snapshot and
+      // writes it onto `attachment.opened`; this is the same fact travelling the
+      // other way, so an attachment rebuilt after a relaunch is governed by the
+      // policy history says governed it. Without this the durable record and the
+      // live gate drift apart the first time anyone edits policy, and the record
+      // is the half that would be wrong.
+      pinnedAuthority: attachment.authority,
     };
     const { translator, sink } = this.#pipeline(adapter, spec, attachment.venue);
     let handle: BindingHandle;

@@ -52,7 +52,8 @@ export type WorkLocationKind = "worktree" | "main-checkout";
  * never load, so an unlisted tool is not merely absent — it is a tool the Agent
  * Tool Surface never carried, and Pi refuses the name before any policy runs.
  */
-export type CodingToolId = "read" | "edit" | "write" | "execute";
+export const CODING_TOOL_IDS = ["read", "edit", "write", "execute"] as const;
+export type CodingToolId = (typeof CODING_TOOL_IDS)[number];
 
 /**
  * The tools a Session can be offered that are not coding tools.
@@ -85,6 +86,9 @@ export const NON_CODING_TOOL_IDS = [
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
+
+/** The complete durable Agent Tool Surface vocabulary, in canonical order. */
+export const SESSION_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as const;
 
 /**
  * Every name the Agent Tool Surface can carry, whatever kind of tool it is.
@@ -299,8 +303,9 @@ export type PolicyDecision =
  * from it, so adding, removing, or reordering a rule changes the hash. Renaming
  * a rule's behaviour without renaming the rule does not, which is the honest
  * limit of pinning by id — it tightens when per-project packs arrive and the
- * pack becomes data rather than code. Note that no Session persists the hash it
- * ran under yet, so today a changed pack is undetectable in either direction.
+ * pack becomes data rather than code. Every attachment now records the hash it
+ * ran under (VC-44), so a changed pack is visible between two attachments; what
+ * stays invisible is a rule that kept its id and changed its meaning.
  *
  * Nine rules, and the missing tenth is the reason to read this list carefully.
  * `tool.not-bundled` used to lead it: it refused any name outside
@@ -386,6 +391,14 @@ export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable";
  * `docs/plans/authority-two-axis-rearchitecture.md` replaces the question with
  * one coherent read policy for both layers (VC-45). Until then a person can say
  * yes, which is the honest state of a boundary with nothing underneath it.
+ *
+ * On the blast radius of moving them, because this is a security-relevant edit
+ * inside a slice that is otherwise about storage: today it changes nothing that
+ * runs. Membership here is read only when a rule has already refused a call, and
+ * the day-one posture is `observe`, which installs no gate — so no call reaches
+ * this list until a project chooses `enforce`. At that point the change is the
+ * difference between a refusal a person may lift and one nobody can, over reads
+ * `execute` was never refused in the first place.
  */
 export const OVERRIDABLE_AUTHORITY_RULES = [
   "path.outside-workspace",

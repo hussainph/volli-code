@@ -133,6 +133,13 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       },
     },
     { kind: "session.input.recorded", input: { kind: "prompt-resources", resources: [] } },
+    {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+      },
+    },
     { kind: "session.signaled", signal: "done", reason: null },
     { kind: "session.signaled", signal: "blocked", reason: "stuck" },
     { kind: "attachment.opened", attachment },
@@ -494,6 +501,21 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.resources[0].name must be a string");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.input.recorded", input: { kind: "tool-surface", tools: {} } },
+        "payload",
+      ),
+    ).toThrow("payload.input.tools must be an array");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["read", "credential-value"] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.tools[1] has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },

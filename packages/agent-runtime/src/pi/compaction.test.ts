@@ -13,11 +13,13 @@ import {
   createModels,
   fauxProvider,
   type AssistantMessage,
+  type Context,
   type Model,
   type Models,
   type Usage,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
+import { composeFirstUserMessage } from "../prompt";
 import {
   compactionDue,
   compactSession,
@@ -97,8 +99,8 @@ const reader: ConversationReader = {
     entry.message.role !== "assistant" || (entry.message as AssistantMessage).stopReason === "stop",
 };
 
-/** Scripts one reply per provider call, in order. */
-function scriptedModels(replies: readonly string[]): Models {
+/** Scripts one reply per provider call, in order, retaining what each was sent. */
+function scriptedModels(replies: readonly string[], sent: Context[] = []): Models {
   const faux = fauxProvider({
     api: "anthropic-messages",
     provider: PROVIDER_ID,
@@ -108,7 +110,8 @@ function scriptedModels(replies: readonly string[]): Models {
   let call = 0;
   models.setProvider({
     ...faux.provider,
-    streamSimple: ((model: Model<string>) => {
+    streamSimple: ((model: Model<string>, context: Context) => {
+      sent.push(context);
       const stream = createAssistantMessageEventStream();
       const text = replies[call++];
       const message: AssistantMessage = {
@@ -281,6 +284,51 @@ describe("contextMessages", () => {
       user("third"),
     ]);
   });
+
+  it("elides the Brief and the Turn Reminder the first message carried", () => {
+    // "Everything before the last compaction entry" includes the first message,
+    // and the first message is where Volli puts everything volatile it has to
+    // say (VC-164): the Runtime Brief, and any Turn Reminder the Session's
+    // measured facts earn. Both therefore end at the first compaction — the
+    // Brief always did, and VC-156's dependency fact now shares its fate,
+    // having moved out of the system prompt where it would have survived
+    // forever. That is deliberate; `runtime.test.ts` carries the reasoning and
+    // pins the same behaviour end to end.
+    const opening = composeFirstUserMessage(
+      {
+        identity: { role: "ticket" },
+        brief: { text: "VC-12 — read the marker." },
+        workspaceEnvironment: { dependencies: "absent", installCommand: "pnpm install" },
+      },
+      "start here",
+    );
+    // The real bytes, not a stand-in: this test fails the day a reminder is
+    // given a delivery that outlives compaction without anyone saying so.
+    expect(opening).toContain("BEGIN TICKET BRIEF");
+    expect(opening).toContain("BEGIN WORKSPACE ENVIRONMENT");
+
+    const path: Entry[] = [
+      messageEntry(user(opening)),
+      messageEntry(assistant("working on it")),
+      {
+        type: "compaction",
+        id: "c1",
+        seq: 0,
+        parentId: null,
+        timestamp: 0,
+        summary: "read the marker, then report the token",
+        retainedTail: [assistant("working on it")],
+        tokensBefore: 200_000,
+      },
+      messageEntry(user("carry on")),
+    ];
+
+    const admitted = JSON.stringify(contextMessages(path));
+
+    expect(admitted).not.toContain("BEGIN TICKET BRIEF");
+    expect(admitted).not.toContain("BEGIN WORKSPACE ENVIRONMENT");
+    expect(admitted).toContain("read the marker, then report the token");
+  });
 });
 
 describe("compactSession", () => {
@@ -317,6 +365,35 @@ describe("compactSession", () => {
     // The early exchange is summarized away; the recent tail survives verbatim.
     expect(JSON.stringify(outcome.messages)).not.toContain("a long early answer");
     expect(JSON.stringify(outcome.messages)).toContain("the recent answer");
+  });
+
+  it("summarizes through a request that shares no prefix with the Session", async () => {
+    // Why VC-164's "the compaction request itself reuses the parent's exact
+    // prefix" was struck rather than implemented, pinned at the boundary where
+    // it would have had to be implemented. Pi builds the summarization request
+    // itself, and builds it to be standalone: its own system prompt, no tools,
+    // and the history flattened into one <conversation> blob instead of the
+    // message array — so there is no prefix here to share, and obtaining one
+    // would mean reimplementing `compact()`, which is the single thing this
+    // module exists to forbid.
+    //
+    // Failing this test means Pi changed its mind about that. It is then worth
+    // re-reading the struck clause, not worth working around here.
+    const sidecar = await memorySession();
+    const sent: Context[] = [];
+    const models = scriptedModels(["## Goal\nfinish the ticket"], sent);
+    const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+
+    await compactSession({ sidecar, path: longPath(), models, model, settings });
+
+    expect(sent).toHaveLength(1);
+    const [summarization] = sent;
+    expect(summarization?.tools ?? []).toEqual([]);
+    // Pi's own, and nothing this runtime composed or could compose: the module
+    // hands `compact()` a model and a path, never a prompt.
+    expect(summarization?.systemPrompt).toContain("summarization");
+    expect(summarization?.messages).toHaveLength(1);
+    expect(JSON.stringify(summarization?.messages)).toContain("<conversation>");
   });
 
   it("writes nothing when Pi finds nothing to compact", async () => {

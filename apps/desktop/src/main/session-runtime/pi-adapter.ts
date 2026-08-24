@@ -101,10 +101,10 @@ import {
   type RuntimeWorkspaceEnvironment,
   type SessionInteractionOption,
   type SessionInteractionResolution,
+  type SessionToolId,
   type SessionNativeDetail,
   type SessionNativeReference,
   type SessionRuntimeSpec,
-  type SessionToolSpec,
   type UIMessageLike,
   type WorkLocationKind,
 } from "@volli/shared";
@@ -161,19 +161,26 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
  * real attach names.
  */
 export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
+type PiCodingToolId = (typeof PI_TOOLS.tools)[number];
+
+function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
+  return (PI_TOOLS.tools as readonly SessionToolId[]).includes(tool);
+}
 
 /**
  * The Authority Snapshot for one attachment, or `null` when the gate is off.
  *
- * Built from the spec rather than beside it, and that is the whole point of
- * taking a {@link SessionToolSpec}: `sessionToolIds` is the one derivation of a
- * Session's Agent Tool Surface, and the Pi tool array is built from the same
- * call. A hand-written list here would compile, would look right, and would
- * under-report the surface by exactly the three tools that tripped VC-3 — and it
- * would no longer be caught, because `tool.not-bundled` was deleted once the two
- * lists had one source. What is left of that failure is quieter and worse for
- * being durable: a Snapshot recorded here is read back months later to interpret
- * a denial, and a tool list that was never the Session's is a record that lies.
+ * Handed the Session's FROZEN Agent Tool Surface rather than deriving one, and
+ * that is the whole point of taking `toolSurface`: it is durable data recorded
+ * once for the Session (VC-164), and `runtimeSpec` asserts the array Pi resolves
+ * against re-derives to exactly it. So the list history records and the list the
+ * model can call are the same list by construction. A hand-written list here
+ * would compile, would look right, and would under-report the surface by exactly
+ * the three tools that tripped VC-3 — and it would no longer be caught, because
+ * `tool.not-bundled` was deleted once the lists had one source. What is left of
+ * that failure is quieter and worse for being durable: a Snapshot recorded here
+ * is read back months later to interpret a denial, and a tool list that was
+ * never the Session's is a record that lies.
  *
  * `null` for `enforcement: "off"` — the Session then runs at Pi's own defaults
  * with no Snapshot to pin, which is what every Session did before VC-44 and what
@@ -183,7 +190,7 @@ export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const
 function piAuthoritySnapshot(
   policy: AuthorityPolicy,
   location: WorkLocationKind,
-  spec: SessionToolSpec,
+  toolSurface: readonly SessionToolId[],
 ): AuthoritySnapshot | null {
   if (policy.enforcement === "off") return null;
   return {
@@ -191,7 +198,7 @@ function piAuthoritySnapshot(
     location,
     enforcement: policy.enforcement,
     judgmentMode: policy.judgmentMode,
-    tools: sessionToolIds(spec),
+    tools: [...toolSurface],
     rulePackId: BUILTIN_RULE_PACK_ID,
     rulePackHash: BUILTIN_RULE_PACK_HASH,
     classifierModel: policy.classifierModel,
@@ -216,6 +223,11 @@ interface PiRuntimeContextFields {
   brief: string;
   /** Durable product policy selected before this attachment starts. */
   model: ModelSelection;
+  /**
+   * Names and order frozen at Session start. No ports or credentials: this is
+   * the durable Cache Prefix shape, which an attachment must rebind honestly.
+   */
+  toolSurface: readonly SessionToolId[];
   /**
    * Which tree the Session runs in. Not derivable from the Role here: a Ticket
    * that never took a worktree is bound to the project's Main checkout by
@@ -305,8 +317,10 @@ export interface PiAdapterOptions {
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /**
-   * The web ports this profile's Web Access setting amounts to, resolved once
-   * per attachment.
+   * The web ports this profile can honestly bind now, resolved once per
+   * attachment. Membership comes from the Session's durable tool surface, not
+   * from this answer: extra ports are ignored and a missing required port
+   * rejects reattachment instead of changing the provider tool array.
    *
    * Optional, and its absence means a Session is offered no web tool — the same
    * thing an answer of `{}` means, because a profile that configured no
@@ -314,9 +328,8 @@ export interface PiAdapterOptions {
    * model's side. Main implements it over the settings owner, which is the only
    * thing in the app that reads the stored credential.
    *
-   * Called at attach, not per turn: what a Session may reach is pinned when it
-   * starts, exactly as its Authority Snapshot would be, so a Settings change
-   * never lands mid-turn.
+   * Called at attach, not per turn. Credential values stay inside the returned
+   * closures and are never captured in durable Session data.
    *
    * It must not throw. This runs on the attach path, so a failure to work out
    * what web access amounts to would cost the Session its attachment rather
@@ -330,6 +343,21 @@ export interface PiAdapterOptions {
    * the settings change that retunes it.
    */
   compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
+  /**
+   * Where the runtime's metadata-only observability events go (VC-119).
+   *
+   * Passed straight through, and absent means the runtime's own default: the
+   * no-op sink, which is what every caller that has never heard of telemetry
+   * gets. Main supplies the owner of the opt-in Settings switch, which is a
+   * stable reference for the life of the process — turning export on or off
+   * swaps what is behind it rather than replacing this, so a Session started
+   * before the switch was flipped is still observed after it.
+   *
+   * This module never constructs one. An exporter is Electron-main's to own,
+   * and building one here would put OpenTelemetry into the plain-Node graph
+   * these tests run in.
+   */
+  observability?: PiRuntimeHostOptions["observability"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -444,6 +472,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.compactionPolicy === undefined
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
+    ...(options.observability === undefined ? {} : { observability: options.observability }),
   });
 
   return {
@@ -625,42 +654,27 @@ class PiBinding implements BindingHandle {
     this.#web = options.web;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
-    // Last, and over `#toolSpec()` rather than over a list written here: every
-    // field it reads must already be set, and the Snapshot's tool list must come
-    // from the same derivation the runtime's tool array does.
-    this.#authority = piAuthoritySnapshot(
-      options.context.authorityPolicy,
-      options.context.location,
-      this.#toolSpec(),
-    );
-  }
-
-  /**
-   * This Session's Agent Tool Surface, as the one thing that describes it.
-   *
-   * Both readers go through here — the spec Pi builds its tool array from, and
-   * the Snapshot's durable `tools` list — so the two cannot disagree. That is
-   * VC-3's guarantee held structurally rather than by a caller remembering: the
-   * rule that used to catch a mismatch (`tool.not-bundled`) is deleted, so a
-   * second list written here would not be refused, it would simply be wrong on
-   * disk forever.
-   *
-   * `askUser` is always wired, which is what puts the ask tool in front of the
-   * model: a desktop Session always has somewhere to put a question, because the
-   * chat surface asking it is the same surface that started the turn.
-   *
-   * The web ports are spread rather than assigned, so a profile with no Web
-   * Access configured produces a spec with no `webFetch` and no `webSearch`
-   * FIELD — not one set to undefined. Membership is decided by the port's
-   * presence, so absence is what keeps the network out of a Session's vocabulary
-   * entirely, and out of its Snapshot.
-   */
-  #toolSpec(): SessionToolSpec {
-    return {
-      tools: { tools: [...PI_TOOLS.tools] },
-      askUser: (request, signal) => this.#askUser(request, signal),
-      ...this.#web,
-    };
+    // Last, because every field it reads must already be set.
+    //
+    // A rehydrated attachment REPLAYS the Snapshot it opened under; only a fresh
+    // one resolves current policy (VC-44). Pinning is a claim about the
+    // attachment's whole life, not about one process, so an attachment that
+    // outlives a relaunch and a policy edit must keep answering with the pack it
+    // was judged against — otherwise `authority.denied`, which resolves through
+    // `attachmentId`, would cite a pack that never saw the call.
+    //
+    // Tested for PRESENCE, not for truthiness: a rehydrated attachment that
+    // opened under `off` pins `null`, and `??` would read that as "nobody said"
+    // and resolve today's policy — handing a Snapshot to the one attachment that
+    // is entitled to run without one.
+    this.#authority =
+      "pinnedAuthority" in options.spec
+        ? (options.spec.pinnedAuthority ?? null)
+        : piAuthoritySnapshot(
+            options.context.authorityPolicy,
+            options.context.location,
+            options.context.toolSurface,
+          );
   }
 
   /**
@@ -701,7 +715,18 @@ class PiBinding implements BindingHandle {
       attachmentId: this.#spec.attachmentId,
       projectId: context.projectId,
     };
-    return {
+    const wantsAskUser = context.toolSurface.includes("ask_user");
+    const wantsWebFetch = context.toolSurface.includes("web_fetch");
+    const wantsWebSearch = context.toolSurface.includes("web_search");
+    if (
+      (wantsWebFetch && this.#web.webFetch === undefined) ||
+      (wantsWebSearch && this.#web.webSearch === undefined)
+    ) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes Web Access, but the current profile cannot bind it. Restore a working Web Access configuration and retry the attachment.",
+      );
+    }
+    const runtimeSpec: SessionRuntimeSpec = {
       identity:
         context.role === "ticket"
           ? { ...identity, role: "ticket", ticketId: context.ticketId }
@@ -748,17 +773,24 @@ class PiBinding implements BindingHandle {
       // with no resources is a spec with no resources field — same shape the
       // runtime's own tests pin.
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
+      tools: { tools: context.toolSurface.filter(isPiCodingTool) },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
       ask: (request, signal) => this.#ask(request, signal),
-      // The whole Agent Tool Surface, from the one derivation that describes it
-      // — `tools`, `askUser` and whichever web ports this profile resolved. The
-      // Snapshot's `tools` list is `sessionToolIds` over this same object, which
-      // is what makes the array Pi resolves against and the list history records
-      // unable to disagree. See {@link PiBinding.#toolSpec}.
-      ...this.#toolSpec(),
+      ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
+      ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
+      ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
     };
+    // `sessionToolIds` is the same derivation `createSessionTools` consumes.
+    // Comparing the full ordered list here prevents corrupted/non-canonical
+    // durable data from silently becoming a different provider tool array.
+    if (JSON.stringify(sessionToolIds(runtimeSpec)) !== JSON.stringify(context.toolSurface)) {
+      throw new Error(
+        "The Session's frozen Agent Tool Surface is not valid for this product version.",
+      );
+    }
+    return runtimeSpec;
   }
 
   /**

@@ -751,24 +751,40 @@ export type RuntimeObservation =
   | InteractionObservation;
 
 /**
- * The Session's authority refused a call, before the tool ran.
+ * The Session's authority decided whether one tool call could run.
  *
- * Not an activity that failed: no tool executed, and the runtime is reporting
- * Volli's own decision back to Volli. Emitted through the same observer as
- * everything else so the refusal reaches durable history before the model is
- * told — `observer` resolves only at the consumer boundary, which is what makes
- * "recorded, then refused" an ordering the runtime can actually keep.
+ * A denial is durable Session history, so it keeps the model-visible tool and
+ * reason for the normal translation path. An allowance is observability-only:
+ * the runtime reduces it straight to the metadata side channel rather than
+ * making a durable fact or waiting on the Session observer. `toolCallId` is an
+ * opaque local join key for that reducer; it must never leave it.
  */
-export interface AuthorityObservation {
-  kind: "authority";
-  state: "denied";
-  /** Null before the first turn opens, which a refusal need not wait for. */
-  turnId: string | null;
-  tool: string;
-  cause: AuthorityDenialCause;
-  reason: string;
-  occurredAt?: number;
-}
+export type AuthorityObservation =
+  | {
+      kind: "authority";
+      state: "allowed";
+      /** Null before the first turn opens, which a decision need not wait for. */
+      turnId: string | null;
+      /** Pi's local tool-call id, used only to join a wait to its activity. */
+      toolCallId?: string;
+      /** Time waiting for a person, when the authority gate measured it. */
+      waitDurationMs?: number;
+      occurredAt?: number;
+    }
+  | {
+      kind: "authority";
+      state: "denied";
+      /** Null before the first turn opens, which a refusal need not wait for. */
+      turnId: string | null;
+      /** Pi's local tool-call id, used only to join a wait to its activity. */
+      toolCallId?: string;
+      /** Time waiting for a person, when the authority gate measured it. */
+      waitDurationMs?: number;
+      tool: string;
+      cause: AuthorityDenialCause;
+      reason: string;
+      occurredAt?: number;
+    };
 
 export interface AttachmentObservation {
   kind: "attachment";

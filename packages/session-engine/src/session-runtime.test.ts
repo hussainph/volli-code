@@ -734,6 +734,45 @@ describe("SessionRuntime native adapter contract", () => {
     ).toEqual(authority);
   });
 
+  it("hands a rehydrated binding the Snapshot the attachment opened under", async () => {
+    // The other half of pinning, and the half a relaunch breaks if nobody
+    // carries it: `#rehydrateBinding` rebuilds an attachment from history, and
+    // the adapter would otherwise resolve whatever policy says NOW. One
+    // `attachmentId` would then run under one policy while the `attachment.opened`
+    // record cited another — and a denial resolves through that id, so the
+    // durable answer would be the wrong one.
+    const first = composition();
+    const authority: AuthoritySnapshot = {
+      mode: "auto",
+      location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+      rulePackId: "volli.builtin",
+      rulePackHash: "dca89a93",
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    };
+    first.adapter.authority = authority;
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+
+    // The project edits policy while nothing is running. A fresh attach would
+    // pick the new one up; this attachment must not.
+    first.adapter.authority = { ...authority, enforcement: "observe", judgmentMode: "auto" };
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "cold-authority-",
+    });
+    await recovered.runtime.reconcile({ sessionId, attachmentId });
+
+    const rehydrated = first.adapter.specs.at(-1)!;
+    expect(rehydrated.continuity).toBe("native_resume");
+    expect(rehydrated.pinnedAuthority).toEqual(authority);
+  });
+
   it("records no Snapshot for a binding that runs no gate", async () => {
     // An adapter that answers nothing — a terminal companion — and a project
     // that turned the gate off both land here, because both mean the same thing

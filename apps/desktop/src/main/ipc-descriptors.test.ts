@@ -13,6 +13,8 @@ import {
   THEME_IPC,
   UPDATE_CHANNELS,
   UPDATE_IPC,
+  AGENT_OBSERVABILITY_CHANNELS,
+  AGENT_OBSERVABILITY_IPC,
   WEB_ACCESS_CHANNELS,
   WEB_ACCESS_IPC,
 } from "./ipc-descriptors";
@@ -2309,6 +2311,58 @@ describe("WEB_ACCESS_IPC descriptor table", () => {
         "volli:web-access-set-provider",
         "volli:web-access-set-key",
         "volli:web-access-clear-key",
+      ]);
+    });
+  });
+});
+
+describe("AGENT_OBSERVABILITY_IPC descriptor table", () => {
+  describe("volli:agent-observability-get", () => {
+    const { guard, invalidError } = AGENT_OBSERVABILITY_IPC["volli:agent-observability-get"];
+
+    it("accepts an empty args tuple", () => {
+      expect(guard([])).toBe(true);
+    });
+
+    it("rejects stray arguments", () => {
+      expect(guard(["junk"])).toBe(false);
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:agent-observability-set", () => {
+    const { guard } = AGENT_OBSERVABILITY_IPC["volli:agent-observability-set"];
+
+    it("accepts a switch and an address", () => {
+      expect(guard([true, "http://localhost:4318"])).toBe(true);
+      expect(guard([false, ""])).toBe(true);
+    });
+
+    it("rejects the wrong shapes", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([true])).toBe(false);
+      expect(guard(["true", "http://localhost:4318"])).toBe(false);
+      expect(guard([true, 4318])).toBe(false);
+      expect(guard([true, "http://localhost:4318", "extra"])).toBe(false);
+    });
+
+    it("leaves WHERE telemetry may go to policy, not to the guard", () => {
+      // `admitCollectorEndpoint` refuses these with sentences a person can act
+      // on; "Invalid request" would tell them nothing about what to fix.
+      expect(guard([true, "ftp://localhost:4318"])).toBe(true);
+      expect(guard([true, "http://user:pw@localhost:4318"])).toBe(true);
+    });
+  });
+
+  describe("AGENT_OBSERVABILITY_CHANNELS derivation", () => {
+    it("derives the channel list from the table rather than repeating it", () => {
+      expect(AGENT_OBSERVABILITY_CHANNELS).toEqual(Object.keys(AGENT_OBSERVABILITY_IPC));
+    });
+
+    it("covers the whole agent-observability surface", () => {
+      expect(AGENT_OBSERVABILITY_CHANNELS).toEqual([
+        "volli:agent-observability-get",
+        "volli:agent-observability-set",
       ]);
     });
   });

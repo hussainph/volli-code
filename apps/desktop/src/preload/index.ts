@@ -153,6 +153,7 @@ import type {
   WebAccessProvider,
   KeyedWebAccessProvider,
   WebAccessResult,
+  AgentObservabilityResult,
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
@@ -631,6 +632,25 @@ const api = {
     /** Forgets one provider's key. The provider choice, and the other key, are left alone. */
     clearKey: (provider: KeyedWebAccessProvider): Promise<WebAccessResult> =>
       invoke("volli:web-access-clear-key", provider),
+  },
+  /**
+   * The opt-in agent-telemetry export switch (VC-119).
+   *
+   * Its own door beside `webAccess` for the same reason that one has one: the
+   * Session RPC wire is instrumented, and a switch governing instrumentation
+   * should not travel on it. Nothing here carries a secret — main refuses a
+   * collector address with credentials rather than storing one.
+   */
+  agentObservability: {
+    /** The stored setting plus whatever the exporter has since found out. */
+    get: (): Promise<AgentObservabilityResult> => invoke("volli:agent-observability-get"),
+    /**
+     * The switch and the address as one decision. The address is judged by
+     * policy before it is stored, so a bad one is an error in Settings rather
+     * than telemetry silently going nowhere.
+     */
+    set: (enabled: boolean, endpoint: string): Promise<AgentObservabilityResult> =>
+      invoke("volli:agent-observability-set", enabled, endpoint),
   },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>

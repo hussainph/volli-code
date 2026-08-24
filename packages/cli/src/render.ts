@@ -315,8 +315,30 @@ function renderModelList(data: Record<string, unknown>): string | null {
 }
 
 /**
+ * How often a section's bytes are re-bought, as one cell beside what they cost.
+ *
+ * Class and placement travel together rather than as two columns, because
+ * neither is worth much alone: "session-static" prices very differently on the
+ * two sides of the Cache Prefix, and the side alone says nothing about how
+ * often anything is paid. The prefix side is the common case and stays
+ * unmarked — the same bargain `renderModelList` strikes with its state cell,
+ * where a cell earns its width exactly when it says something other than the
+ * default.
+ *
+ * Absent entirely when the server named no class, so an older or partial reply
+ * renders as the breakdown it is instead of a row claiming "undefined".
+ */
+function cacheClassCell(section: Record<string, unknown>): string {
+  const cacheClass = section["cacheClass"];
+  if (typeof cacheClass !== "string") return "";
+  const side = section["placement"] === "message" ? ", message-side" : "";
+  return `  ${terminalSafeInline(cacheClass)}${side}`;
+}
+
+/**
  * The prompt.baseline report: one header with the honest rollup, one row per
- * composed section, and the named remainder the estimate deliberately excludes.
+ * composed section carrying what it costs and how often it is bought again, and
+ * the named remainder the estimate deliberately excludes.
  */
 function renderPromptBaseline(data: Record<string, unknown>): string | null {
   const sections = recordsAt(data, "sections");
@@ -325,7 +347,7 @@ function renderPromptBaseline(data: Record<string, unknown>): string | null {
   const header = `prompt baseline  ${terminalSafeInline(data["role"])}  ~${terminalSafeInline(total["tokens"])} tokens  ${terminalSafeInline(total["chars"])} chars  (est. at ${terminalSafeInline(data["charsPerToken"])} chars/token)`;
   const rows = sections.map(
     (section) =>
-      `  ${terminalSafeInline(section["id"])}  ~${terminalSafeInline(section["tokens"])} tokens  ${terminalSafeInline(section["chars"])} chars`,
+      `  ${terminalSafeInline(section["id"])}  ~${terminalSafeInline(section["tokens"])} tokens  ${terminalSafeInline(section["chars"])} chars${cacheClassCell(section)}`,
   );
   const excluded =
     typeof data["excluded"] === "string"

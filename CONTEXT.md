@@ -48,9 +48,9 @@ processes, the Agent Runtime, UI surfaces, and execution venues. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
-Each Session has a Role and model policy. The planned authority model also
-freezes an Authority Snapshot at Session start. Reconnect, restart, and recovery
-may replace its live executor attachment without changing
+Each Session has a Role and model policy, and each of its attachments is
+governed by an Authority Snapshot frozen when that attachment opens. Reconnect,
+restart, and recovery may replace its live executor attachment without changing
 that identity. A model change is an explicit recorded action, never a silent
 fallback.
 _Avoid_: pane session, split session, harness process, terminal pane, UI tab
@@ -72,7 +72,9 @@ model allowed to help within deterministic boundaries. Built at every
 attachment from the project's Authority Policy and recorded on the attachment,
 so a refusal can name the rule pack that produced it. A Settings change does
 not silently change a running Session's authority: the Snapshot is pinned for
-the life of the attachment, and a policy change applies at the next one.
+the life of the attachment, and a policy change applies at the next one. An
+attachment rebuilt after a relaunch replays its recorded Snapshot rather than
+re-resolving policy, so "the life of the attachment" outlives the process.
 _Avoid_: permission preset (when meaning live authority), auto-approve flag
 
 **Authority Policy**:
@@ -212,9 +214,11 @@ _Avoid_: dangerous tier, middle tier
 The byte-identical leading portion of a model request that a provider reuses
 between requests. One changed byte invalidates everything after it; where the
 provider orders the tool array before the system prompt, a tool change
-invalidates the prompt too. Within a Session, the tool bundle and system prompt
-therefore never change after start — a state change is modeled as a tool call or
-a message, never as a re-composed prompt.
+invalidates the prompt too. Within a Session, the Agent Tool Surface and system
+prompt therefore never change after start — a state change is modeled as a tool
+call or a message, never as a re-composed prompt. The sanitized tool names and order are durable
+Session input; reattachment rebinds that exact surface or fails without sending
+a different one. Credentials are never part of the durable shape.
 _Avoid_: cache hit (one outcome of a stable prefix), prompt cache (the provider feature)
 
 **Context Assembly**:
@@ -222,7 +226,8 @@ The composition of one model request: system prompt, tool array, and message
 history, ordered stable-first. Assembly is cache-stable when every byte that
 varies per session or per turn — workspace path, date, ticket state — is
 delivered as late as possible, in message content rather than prompt bytes.
-Volli's assembly is deterministic: same spec, same string.
+Volli's assembly is deterministic: the system prompt is a pure function of
+Role, bundle, product version, and resource set; same inputs, same string.
 _Avoid_: prompt building, context window (the model's capacity, not the request)
 
 **Turn Reminder**:
@@ -230,6 +235,18 @@ Volatile fact delivered as content in a message at the turn that needs it,
 instead of bytes in the system prompt: the date, the working directory, live
 ticket state. The Runtime Brief is the first and largest one.
 _Avoid_: system reminder (a provider's wrapper, not Volli's), dynamic prompt section
+
+**Cache class**:
+How often one section of an assembled request is bought again at write price
+rather than read from the provider's cache: `role-static`, `project-static`,
+`session-static`, or `per-turn`. It is a claim derived from what the section is
+composed from, never a measurement — reported per section by `prompt baseline`
+beside what the section costs, and falsifiable by the cache read and write token
+counts a turn actually reports. A message-side section is marked as one, because
+the same class prices differently there: it is appended once and can invalidate
+no Cache Prefix ahead of it.
+_Avoid_: cache tier, TTL (the provider's retention window, not a section's
+stability), static/dynamic (says nothing about how often)
 
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the

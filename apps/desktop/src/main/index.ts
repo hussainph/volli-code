@@ -30,6 +30,7 @@ import {
   memoizedPathExists,
   resolveDefaultModel,
   resolveShell,
+  sessionToolIds,
   skillPromptResource,
   skillsIndexResource,
   ticketBranchName,
@@ -37,7 +38,13 @@ import {
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
-import type { PromptResource, SessionEnvRepair, SessionEvent, SessionInput } from "@volli/shared";
+import type {
+  PromptResource,
+  SessionEnvRepair,
+  SessionEvent,
+  SessionInput,
+  SessionToolId,
+} from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
@@ -70,6 +77,8 @@ import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { AgentObservability } from "./observability/settings";
 import {
   BRAVE_SEARCH_KEY_SECRET,
   EXA_SEARCH_KEY_SECRET,
@@ -78,12 +87,13 @@ import {
 import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
-import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
+import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { createAutoTitler } from "./session-runtime/auto-title";
 import {
   createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
+  type SessionToolSurfacePorts,
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
@@ -322,6 +332,26 @@ function recordedPromptResources(events: readonly SessionEvent[]): readonly Prom
     }
   }
   return [];
+}
+
+/** The Cache Prefix's durable tool half, or null for a pre-VC-164 Session. */
+function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionToolId[] | null {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.tools;
+    }
+  }
+  return null;
+}
+
+function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
+  if (input.kind !== "tool-surface") {
+    throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
+  }
+  return input.tools;
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -741,12 +771,58 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  const sessionToolSurface: SessionToolSurfacePorts | null =
+    webAccess !== null && sessionEngine !== null
+      ? {
+          resolve: () => {
+            // Membership only. `webAccess.resolve()` may momentarily read a key
+            // to prove the capability works, but `sessionToolIds` retains only
+            // sanitized names/order; the provider closures are discarded here.
+            const web = webPortsFor(webAccess.resolve());
+            return sessionToolIds({
+              tools: PI_TOOLS,
+              // The desktop always owns the ask surface. This placeholder is
+              // never called; the adapter binds the real interaction port.
+              askUser: async () => {
+                throw new Error("Tool-surface resolution cannot ask a question.");
+              },
+              ...web,
+            });
+          },
+          record: async (sessionId, tools) => {
+            await sessionEngine.getOrRecordSessionInput({
+              sessionId,
+              input: { kind: "tool-surface", tools },
+              provenance: {
+                source: { kind: "system", id: "pi-runtime", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+            });
+          },
+        }
+      : null;
+  // Agent observability (VC-119): the opt-in export switch, and the sink the
+  // runtime holds whether or not it is on. Constructed here because this is the
+  // only process allowed to initialize OpenTelemetry — never the renderer, and
+  // never a process a model's tools can see. `start()` brings a stored
+  // opt-in into effect; a profile that never asked for one builds no exporter
+  // at all and the runtime keeps the no-op sink.
+  const agentObservability = dbHandle.ok
+    ? new AgentObservability({ db: dbHandle.db, serviceVersion: app.getVersion() })
+    : null;
+  agentObservability?.start();
   const piRuntimeHost =
-    dbHandle.ok && piModelAccess !== null
+    dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
       ? createPiRuntimeHost({
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
+          // A stable reference for the life of the process: flipping the
+          // Settings switch swaps what is behind this owner rather than
+          // replacing it, so a Session started before the flip is observed
+          // after it. Absent when the database never opened, which leaves the
+          // runtime on its own no-op default.
+          ...(agentObservability === null ? {} : { observability: agentObservability }),
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here
@@ -787,12 +863,12 @@ app.whenReady().then(async () => {
               },
             });
           },
-          // What this profile's Web Access setting amounts to, read once per
-          // attachment. A profile that configured nothing answers `{}`, and a
-          // Session given `{}` is offered no `web_fetch` and no `web_search` at
-          // all — absent rather than present and refusing. This is the only
-          // call path in the app that reads the stored key, and it hands it
-          // straight to the provider constructor.
+          // What this profile can honestly bind now, read once per attachment.
+          // The durable Session record decides whether either port belongs in
+          // the tool array; this live answer supplies closures only. Missing a
+          // recorded capability rejects recovery, while newly enabled ports are
+          // ignored. This is the only attach path that reads the stored key,
+          // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -809,15 +885,32 @@ app.whenReady().then(async () => {
               source: { kind: "system", id: "pi-runtime", detail: null },
               venue: { id: "local", kind: "local" },
             } as const;
+            const events = await sessionEngine.listEvents({ sessionId });
+            let toolSurface = recordedToolSurface(events);
+            if (toolSurface === null) {
+              // Legacy backfill: the first attach under VC-164 freezes whatever
+              // this Session can honestly bind now. Every later attach reads
+              // the record and Settings can no longer recompose membership.
+              toolSurface = toolSurfaceTools(
+                await sessionEngine.getOrRecordSessionInput({
+                  sessionId,
+                  input: { kind: "tool-surface", tools: sessionToolSurface.resolve() },
+                  provenance,
+                }),
+              );
+            }
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
-              // The policy this attachment will be pinned to (VC-44), read from
+              toolSurface,
+              // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
               // edit. Resolved per attach for the reason the web ports are: what
               // a Session may do is fixed when it starts, so a Settings change
-              // never lands mid-turn.
+              // never lands mid-turn. A rehydrated attachment ignores this and
+              // replays its own recorded Snapshot instead — see
+              // `NativeAttachmentSpec.pinnedAuthority`.
               authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
               // What history already holds, so the Session-wide fallback
               // threshold is measured against the Session rather than against
@@ -828,9 +921,7 @@ app.whenReady().then(async () => {
               // durable record on EVERY attach — never from disk — so a
               // restart-recovery re-attach composes the same system prompt the
               // first attach did, whatever `.agents/skills/` says today.
-              promptResources: recordedPromptResources(
-                await sessionEngine.listEvents({ sessionId }),
-              ),
+              promptResources: recordedPromptResources(events),
             };
             // A ticketless Session is a Role, not a Ticket lookup that failed:
             // it briefs on the project root it already runs in.
@@ -987,7 +1078,8 @@ app.whenReady().then(async () => {
     sessionRuntime !== null &&
     piRuntimeHost !== null &&
     sessionDb !== null &&
-    sessionSkills !== null
+    sessionSkills !== null &&
+    sessionToolSurface !== null
       ? createSessions({
           runtime: sessionRuntime,
           // Role in, purpose out (VC-53): a Ticket Session resolves the
@@ -1004,6 +1096,7 @@ app.whenReady().then(async () => {
           readModelSelection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
+          toolSurface: sessionToolSurface,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
@@ -1146,6 +1239,15 @@ app.whenReady().then(async () => {
     webAccess,
     dbHandle.ok ? undefined : `Web access settings are unavailable. ${dbHandle.error}`,
   );
+  // Agent telemetry export (VC-119): its own door beside Web Access, because the
+  // instrumented Session RPC wire is not where a switch governing
+  // instrumentation belongs.
+  registerAgentObservabilityIpcHandlers(
+    agentObservability,
+    dbHandle.ok
+      ? undefined
+      : `Agent telemetry settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+  );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -1160,6 +1262,11 @@ app.whenReady().then(async () => {
           console.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
         }
       }
+      // The one flush, and it is here rather than anywhere else because this is
+      // the only point at which every Session has stopped producing events.
+      // Bounded inside the owner, so a collector that has stopped answering
+      // delays the quit by a couple of seconds instead of holding it.
+      await agentObservability?.shutdown();
     },
     shutdownAgentSocket,
     reportFailure: (error) => {

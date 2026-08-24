@@ -121,7 +121,14 @@ export function composeTicketBrief(input: {
   project: Pick<Project, "id" | "path" | "ticketPrefix">;
   ticket: Pick<
     Ticket,
-    "id" | "ticketNumber" | "title" | "body" | "worktreePath" | "branch" | "baseBranch"
+    | "id"
+    | "ticketNumber"
+    | "title"
+    | "body"
+    | "usesWorktree"
+    | "worktreePath"
+    | "branch"
+    | "baseBranch"
   >;
   attachments: Parameters<typeof blobsSectionInput>[0];
 }): string {
@@ -131,18 +138,22 @@ export function composeTicketBrief(input: {
     title: input.ticket.title,
     body: input.ticket.body,
   });
-  // Orientation preamble (worktree-support §6): agents must never infer their
-  // working directory — state it outright, same as main's own post-ensure
-  // prepend, whenever the ticket has an active worktree.
-  const orientation =
-    input.ticket.worktreePath !== null && input.ticket.branch !== null
+  // Runtime-Brief orientation is message-side Cache Prefix material (VC-164):
+  // every execution root is concrete once it exists. A worktree-scoped Ticket
+  // with no stamp is intentionally silent because its worktree has not
+  // materialized yet; a no-worktree Ticket is different — the Main checkout is
+  // already its final execution root and must be named rather than mistaken for
+  // the same pending state.
+  const orientation = input.ticket.usesWorktree
+    ? input.ticket.worktreePath !== null && input.ticket.branch !== null
       ? worktreeOrientationPreamble({
           worktreePath: input.ticket.worktreePath,
           branch: input.ticket.branch,
           baseBranch: input.ticket.baseBranch,
           projectPath: input.project.path,
         }) + "\n\n"
-      : "";
+      : ""
+    : `This Ticket intentionally runs in the Main checkout at \`${input.project.path}\`. All work happens in this directory.\n\n`;
   // Attachments (CONCEPT decision #19): the brief is read-only — it never
   // materializes, only lists what session boot already did (or will do), via
   // the same deterministic relPath mapping main's `ensure` pipeline uses.
@@ -2328,16 +2339,19 @@ export function createAgentCommandService(
         // session baseline this command exists to price. `null` is a real
         // measurement: a prompt with no resources section at all.
         const index = await options.skillsIndex(project.id);
+        // No `workspacePath`: it is not a prompt byte any more (VC-164), so it
+        // cannot change what the prompt costs. The measured environment is back
+        // — not as a prompt layer, but because a workspace with absent
+        // dependencies really is sent an extra ~60 tokens as a Turn Reminder on
+        // the first message, and a breakdown that skipped them would under-price
+        // that Session by exactly the bytes it moved out of the prompt.
+        // Measured here the way a real attach measures it (VC-156).
         const baseline = promptBaseline({
           role,
-          workspacePath,
           tools: { tools: [...PI_TOOLS.tools] },
           ...(index === null ? {} : { promptResources: [index] }),
-          // Measured, exactly as a real attach measures it (VC-156): a
-          // workspace whose dependencies are absent composes an extra layer,
-          // and a baseline that skipped it would under-price that Session.
-          workspaceEnvironment: readWorkspaceEnvironment(workspacePath),
           brief: { text: brief },
+          workspaceEnvironment: readWorkspaceEnvironment(workspacePath),
         });
         return {
           v: 1,

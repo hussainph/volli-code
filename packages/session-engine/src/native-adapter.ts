@@ -22,6 +22,25 @@ export interface NativeAttachmentSpec {
   directory: string;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
+  /**
+   * The Authority Snapshot this attachment ALREADY opened under, when it is
+   * being rebuilt rather than opened (VC-44).
+   *
+   * Present only on the cold-rehydration path, and it is what makes "pinned for
+   * the life of one attachment" a property instead of a claim. The adapter
+   * resolves current project policy when it opens an attachment; replaying that
+   * resolution on rehydration would re-govern a live attachment from whatever
+   * the store says today, so a relaunch after a policy edit would leave the same
+   * `attachmentId` running under one policy while `authority.denied` — which
+   * resolves through that id — still cited the recorded one. Two answers to one
+   * question, and the durable one wrong.
+   *
+   * `null` is meaningful and distinct from absence: the attachment opened with
+   * no Snapshot (its project had `enforcement: "off"`, or it predates VC-44), and
+   * it must keep running with none rather than acquire one from a policy edit
+   * made after it opened. Absent means "not a rehydration" — resolve policy.
+   */
+  pinnedAuthority?: AuthoritySnapshot | null;
 }
 
 export type NativeMessageDelivery = "queue" | "steer" | "replace";

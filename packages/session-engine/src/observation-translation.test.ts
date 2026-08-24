@@ -886,6 +886,20 @@ describe("live observation translation", () => {
     ]);
   });
 
+  it("leaves an allowed authority observation out of durable Session history", async () => {
+    const { translate, sink } = composition();
+
+    await translate({
+      kind: "authority",
+      state: "allowed",
+      turnId: "turn-1",
+      toolCallId: "local-tool-call",
+      waitDurationMs: 100,
+    });
+
+    expect(sink.observations).toEqual([]);
+  });
+
   it("carries a refusal reported before any turn has opened with a null turnId", async () => {
     const { translate, sink } = composition();
 
