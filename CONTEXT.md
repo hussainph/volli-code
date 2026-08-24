@@ -66,7 +66,7 @@ involvement, and is recorded in Session history exactly as a Ticket Session is.
 _Avoid_: harness mode, agent mode, plan mode, scratch session
 
 **Authority Snapshot**:
-The durable policy granted to one Session when it starts: which actions are
+The durable policy one attachment runs under: which actions are
 automatic, which require a decision, which are forbidden, and the classifier
 model allowed to help within deterministic boundaries. Built at every
 attachment from the project's Authority Policy and recorded on the attachment,
