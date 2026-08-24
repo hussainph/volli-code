@@ -13,6 +13,13 @@
  * Diff layout was a `Segmented` in the prototype and is a `Select` here. Two
  * options that are not a mode and carry no icons do not earn two pills — see
  * the pill budget in `kit/index.ts`.
+ *
+ * Cost visibility joins them because it is the same KIND of preference: what
+ * this window puts on screen, app-wide, with no bearing on what the app does.
+ * It is deliberately NOT in Settings → Telemetry, which configures the
+ * developer OTLP export — a reader who went there to stop a dollar figure
+ * appearing during a screen-share would be turning off an unrelated subsystem
+ * and would still see the figure.
  */
 import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
 
@@ -24,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
+import { Switch } from "@renderer/components/ui/switch";
 import { UI_SCALE_STEPS, useUiStore, type DiffPresentation } from "@renderer/stores/ui";
 
 export function DisplaySection() {
@@ -31,6 +39,8 @@ export function DisplaySection() {
   const setUiScale = useUiStore((store) => store.setUiScale);
   const diffPresentation = useUiStore((store) => store.diffPresentation);
   const setDiffPresentation = useUiStore((store) => store.setDiffPresentation);
+  const costVisible = useUiStore((store) => store.costVisible);
+  const setCostVisible = useUiStore((store) => store.setCostVisible);
 
   return (
     <PrefSection title="Display" icon={MonitorIcon}>
@@ -61,6 +71,30 @@ export function DisplaySection() {
             <SelectItem value="side-by-side">Side by side</SelectItem>
           </SelectContent>
         </Select>
+      </PrefRow>
+      {/*
+       * Stated as the POSITIVE, like General's project-switcher row: the flag
+       * is what it says, and a switch reading "Hide cost" that is ON when the
+       * number is absent is a double negative every reader has to unpick.
+       *
+       * The hint carries the one thing a reader could otherwise get wrong.
+       * Someone turning this off is hiding a number from a shared screen, and
+       * they must not walk away believing they also stopped Volli measuring —
+       * the ledger keeps recording either way, which is what makes turning it
+       * back on show a complete history rather than a gap.
+       */}
+      <PrefRow
+        label="Show cost and token usage"
+        htmlFor="cost-visible"
+        hint={
+          <>
+            Shows what Sessions, Tickets and projects have cost, in the rails. Turning this off
+            hides those readouts only — usage is still recorded, so switching it back on shows the
+            full history.
+          </>
+        }
+      >
+        <Switch id="cost-visible" checked={costVisible} onCheckedChange={setCostVisible} />
       </PrefRow>
     </PrefSection>
   );

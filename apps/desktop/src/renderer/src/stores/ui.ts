@@ -303,6 +303,18 @@ interface UiState {
   homeRailMode: HomeRailMode;
   /** Which drawing a Project Session's empty chat opens on. Persisted app-wide. */
   homeEmptyVisual: EmptyVisual;
+  /**
+   * Whether the rails draw what a Session, Ticket or project has cost.
+   * Persisted app-wide (see module doc).
+   *
+   * A DISPLAY preference and nothing more: metering keeps running, the ledger
+   * keeps recording, and `volli cost` would still answer. It governs whether a
+   * number that is nobody's business but the owner's is standing on screen
+   * during a screen-share, a pairing session or a recorded demo. Turning it off
+   * must never be mistaken for turning telemetry off, which is why the Settings
+   * copy says so out loud.
+   */
+  costVisible: boolean;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
   /** Chosen external app, or explicit Ask every time. Persisted app-wide. */
@@ -350,6 +362,7 @@ interface UiState {
   setRailMode(mode: TicketRailMode): void;
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
+  setCostVisible(visible: boolean): void;
   setDiffPresentation(presentation: DiffPresentation): void;
   setDefaultExternalAppId(appId: DefaultExternalAppId): void;
   /**
@@ -400,6 +413,7 @@ type PersistedUiState = Pick<
   | "railMode"
   | "homeRailMode"
   | "homeEmptyVisual"
+  | "costVisible"
   | "diffPresentation"
   | "defaultExternalAppId"
   | "dismissedEnvironmentFaults"
@@ -434,6 +448,7 @@ export function createUiStore(storage?: StateStorage) {
         railMode: DEFAULT_TICKET_RAIL_MODE,
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
+        costVisible: true,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
         dismissedEnvironmentFaults: [],
@@ -460,6 +475,7 @@ export function createUiStore(storage?: StateStorage) {
         setRailMode: (mode) => set({ railMode: mode }),
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
+        setCostVisible: (visible) => set({ costVisible: visible }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
         setDefaultExternalAppId: (appId) => set({ defaultExternalAppId: appId }),
         reconcileDefaultExternalApp: (apps) =>
@@ -514,6 +530,7 @@ export function createUiStore(storage?: StateStorage) {
           railMode: state.railMode,
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
+          costVisible: state.costVisible,
           diffPresentation: state.diffPresentation,
           defaultExternalAppId: state.defaultExternalAppId,
           dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
@@ -551,6 +568,11 @@ export function createUiStore(storage?: StateStorage) {
             // longer offers lands on the one it opens with.
             homeRailMode: sanitizeHomeRailMode(stored.homeRailMode),
             homeEmptyVisual: sanitizeEmptyVisual(stored.homeEmptyVisual),
+            // Anything other than an explicit `false` shows cost, so a missing
+            // key or corrupt JSON opens on the visible default rather than
+            // silently hiding a feature the reader never turned off — the same
+            // discipline `sidebarPinned` above follows.
+            costVisible: stored.costVisible !== false,
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),

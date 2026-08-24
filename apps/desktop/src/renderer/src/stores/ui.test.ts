@@ -405,6 +405,7 @@ describe("persistence", () => {
     store.getState().setHomeRailMode("sessions");
     store.getState().setHomeEmptyVisual("board");
     store.getState().setDiffPresentation("side-by-side");
+    store.getState().setCostVisible(false);
     store.getState().dismissEnvironmentFault("login-path-unreadable");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
@@ -420,6 +421,7 @@ describe("persistence", () => {
       railMode: "files",
       homeRailMode: "sessions",
       homeEmptyVisual: "board",
+      costVisible: false,
       diffPresentation: "side-by-side",
       defaultExternalAppId: null,
       dismissedEnvironmentFaults: ["login-path-unreadable"],
@@ -561,6 +563,34 @@ describe("persistence", () => {
       }),
     );
     expect(createUiStore(corrupt).getState().sidebarPinned).toBe(true);
+  });
+
+  it("rehydrates costVisible from storage; corrupt/missing values keep cost on screen", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setCostVisible(false);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().costVisible).toBe(false);
+
+    // Every build before VC-87 wrote no key at all, and those launches must
+    // open showing cost — a reader who never turned the feature off must not
+    // find it missing.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().costVisible).toBe(true);
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, costVisible: "no" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().costVisible).toBe(true);
   });
 
   it("rehydrates railCollapsed from storage; corrupt/missing values default to expanded", async () => {
