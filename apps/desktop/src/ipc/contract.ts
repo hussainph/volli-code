@@ -16,6 +16,9 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   Appearance,
   ArchivedTicket,
+  Automation,
+  AutomationRun,
+  AutomationRunRefusalCode,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -1299,6 +1302,76 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- automations (VC-112, tracer VC-126) -----------------------------------
+
+/** What a create carries. `projectId: null` is global Ownership. */
+export interface AutomationCreateInput {
+  projectId: string | null;
+  name: string;
+  instructions: string;
+  /** The pinned selection, whole, or `null` to inherit. */
+  runtime: ModelSelection | null;
+}
+
+/** An update rewrites the editable fields; Ownership is identity and never moves. */
+export interface AutomationUpdateInput {
+  automationId: string;
+  name: string;
+  instructions: string;
+  runtime: ModelSelection | null;
+}
+
+export interface AutomationIdInput {
+  automationId: string;
+}
+
+export interface AutomationRunInput {
+  automationId: string;
+  ticketId: string;
+}
+
+export type AutomationsResult = Result<{ automations: Automation[] }>;
+export type AutomationResult = Result<{ automation: Automation }>;
+export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+
+/**
+ * A run's answer: the durable Run (holding the fresh Session's id and the
+ * RESOLVED model), or a coded refusal the caller classifies without string
+ * matching. The Session boots detached — VC-16's optimistic open — so an ok
+ * here means "durable and addressable", never "attached and delivered".
+ */
+export type AutomationRunStartResult =
+  | { ok: true; run: AutomationRun; projectId: string }
+  // `code` is absent only when the shared guard/throw envelope produced the
+  // failure; every handler-authored refusal carries one.
+  | { ok: false; error: string; code?: AutomationRunRefusalCode };
+
+/**
+ * The Automations planning surface (VC-126): the record's CRUD plus the one
+ * Run door. Same stance as the rest of the planning data — typed channels,
+ * JSON-safe payloads (docs/BOUNDARIES.md rule 3: no Date, no Map, no
+ * undefined-bearing shapes), main-owned writes, `volli:data-changed` fan-out.
+ */
+export interface VolliAutomationIpcContract {
+  /** A project's own Automations plus every global one — the Offered universe for its surfaces. */
+  "volli:automation-list": { args: [input: ProjectIdInput]; result: AutomationsResult };
+  /** Creates one Automation. Main re-validates the draft and any Runtime pin before writing. */
+  "volli:automation-create": { args: [input: AutomationCreateInput]; result: AutomationResult };
+  /** Rewrites one Automation's editable fields, under the same validation as create. */
+  "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
+  /** A record delete — Runs keep their history. */
+  "volli:automation-delete": { args: [input: AutomationIdInput]; result: Result };
+  /** Runs an Automation by hand on a Ticket: one fresh chat Session, one Run row. */
+  "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
+  /** A Ticket's Runs, newest first. */
+  "volli:automation-runs-for-ticket": {
+    args: [input: TicketIdInput];
+    result: AutomationRunsResult;
+  };
+}
+
+export type AutomationIpcChannel = keyof VolliAutomationIpcContract;
+
 /**
  * Type-only entries for every remaining invoke channel — these live outside
  * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
@@ -1495,6 +1568,7 @@ export interface VolliInvokeContract
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
     VolliUpdateIpcContract {}
