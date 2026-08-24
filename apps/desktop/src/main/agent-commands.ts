@@ -12,6 +12,7 @@ import {
   buildMutationPlan,
   MUTATION_PLAN_CONTRACT,
   blobsSectionInput,
+  cliVerbName,
   composeAttachmentsSection,
   composeTicketPrompt,
   DEFAULT_KICKOFF_MESSAGE,
@@ -371,6 +372,39 @@ function dryRunResponse(
     ok: true,
     data: buildMutationPlan(entry, target, overrides),
   };
+}
+
+/**
+ * Why an undeclared `dryRun` may not proceed, or null when the verb declares a
+ * preview. The bundled CLI's parser already refuses this, but the socket is a
+ * public door and a registry-projected tool builds its own arguments — so the
+ * only place the promise "a preview never executes the real write" can actually
+ * be kept is here, where the write would otherwise happen. Registry-generic on
+ * purpose: a verb becomes previewable by declaring the option, never by being
+ * named in a second list.
+ */
+/**
+ * What this build can do, answered without resolving Project, Ticket or
+ * Session. The `--dry-run` preflight asks this and nothing else: an ordinary
+ * `identify` can fail with PROJECT_REQUIRED or SESSION_NOT_FOUND, and refusing
+ * a preview for either would be the same confident-but-irrelevant refusal the
+ * teaching-error work exists to remove. An app that predates the marker simply
+ * ignores the unknown argument and answers a context-shaped identify, which
+ * carries no `previewContract` — so the preflight stays fail-closed.
+ */
+function capabilityReport(appVersion: string): AgentResponse {
+  return { v: 1, ok: true, data: { appVersion, previewContract: MUTATION_PLAN_CONTRACT } };
+}
+
+function undeclaredPreviewRefusal(request: AgentRequest): AgentResponse | null {
+  if (request.args["dryRun"] !== true) return null;
+  const entry = verbEntry(request.cmd);
+  if (entry?.options.some((option) => option.name === "--dry-run") === true) return null;
+  return failure(
+    "INVALID_REQUEST",
+    `${request.cmd} declares no side-effect preview, so dryRun was refused rather than ignored on the way to a real write.`,
+    `Run \`volli help ${cliVerbName(request.cmd)}\` to see whether this verb offers --dry-run, or drop dryRun to perform the real operation.`,
+  );
 }
 
 /**
@@ -1308,6 +1342,14 @@ export function createAgentCommandService(
 
   return {
     async execute(request): Promise<AgentResponse> {
+      // Both answers below precede every read: a preview must be refused before
+      // the work that would perform it, and a capability probe must not be able
+      // to fail for a reason that has nothing to do with the capability.
+      const undeclaredPreview = undeclaredPreviewRefusal(request);
+      if (undeclaredPreview !== null) return undeclaredPreview;
+      if (request.cmd === "identify" && request.args["capabilities"] === true) {
+        return capabilityReport(options.appVersion);
+      }
       const projects = listProjects(options.db);
       // Hooks arrive on a process-per-event hot path. They address one durable
       // Session directly, so avoid taking a complete multi-project snapshot
@@ -1388,12 +1430,21 @@ export function createAgentCommandService(
             ticket && displayId
               ? worktreeMisalignment(displayId, ticket.worktreePath, request.ctx.cwd)
               : null;
-          // Read-only and deliberately nullable for Sessions that predate
-          // VC-164. Help must never freeze or reconstruct a bundle as a side
-          // effect of asking what this Session already recorded.
-          const frozenTools = recordedAgentToolSurface(
-            await sessionEngine.listEvents({ sessionId: envSession.id }),
-          );
+          // Read-only, opt-in, and deliberately nullable for Sessions that
+          // predate VC-164. Help must never freeze or reconstruct a bundle as a
+          // side effect of asking what this Session already recorded.
+          //
+          // Only the caller that needs it pays for it. Reading the frozen list
+          // means folding this Session's whole ledger, and `identify` already
+          // folds it once through `getSession` — doing it twice on the command
+          // agents are told to run first would be a real cost for a fact only
+          // role-aware `volli help` consumes.
+          const frozenTools =
+            request.args["agentSurface"] === true
+              ? recordedAgentToolSurface(
+                  await sessionEngine.listEvents({ sessionId: envSession.id }),
+                )
+              : null;
           return {
             v: 1,
             ok: true,

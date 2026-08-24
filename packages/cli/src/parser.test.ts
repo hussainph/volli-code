@@ -634,23 +634,28 @@ describe("parseCliArgs", () => {
     }
   });
 
-  it("keeps previews file-free and requires a repair intent for doctor", () => {
-    for (const [argv, message] of [
-      [
-        ["ticket", "create", "--title", "T", "--body-file", "/tmp/body", "--dry-run"],
-        "ticket create --dry-run cannot read --body-file; pass --body inline",
-      ],
-      [
-        ["ticket", "update", "VC-1", "--body-file", "/tmp/body", "--dry-run"],
-        "ticket update --dry-run cannot read --body-file; pass --body inline",
-      ],
-      [
-        ["ticket", "comment", "VC-1", "--file", "/tmp/note", "--dry-run"],
-        "ticket comment --dry-run cannot read --file; pass -m inline",
-      ],
-      [["doctor", "--dry-run"], "doctor --dry-run requires --fix"],
-    ] as const) {
-      expect(parseCliArgs(argv)).toEqual({ ok: false, code: "USAGE", message });
+  it("requires a repair intent for a doctor preview", () => {
+    expect(parseCliArgs(["doctor", "--dry-run"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "doctor --dry-run requires --fix",
+    });
+  });
+
+  // Reading the body a real call would send is a read. Refusing it would make a
+  // preview validate different input than the operation it previews, which is
+  // the one thing the preview contract cannot afford; the non-effect it owes is
+  // that nothing is WRITTEN.
+  it("previews a file-sourced body instead of refusing to read it", () => {
+    for (const argv of [
+      ["ticket", "create", "--title", "T", "--body-file", "/tmp/body", "--dry-run"],
+      ["ticket", "update", "VC-1", "--body-file", "/tmp/body", "--dry-run"],
+      ["ticket", "comment", "VC-1", "--file", "/tmp/note", "--dry-run"],
+    ]) {
+      expect(parseCliArgs(argv)).toMatchObject({
+        ok: true,
+        invocation: { args: { dryRun: true } },
+      });
     }
   });
 

@@ -39,8 +39,12 @@ human-visible effects, and explicit non-effects. JSON returns the same versioned
 plan shape a registry-projected tool uses through its `dryRun` argument.
 
 A preview creates no durable ID, row, event, Session, model turn, notification,
-process, worktree, or file write. A later real call repeats validation and can
-lose a race.
+process, worktree, or file write. It still performs the reads the real call
+would, including `--body-file` and `--file`, so it validates the same input.
+A later real call repeats validation and can lose a race.
+
+A verb whose detail does not list `--dry-run` refuses a preview rather than
+ignoring it, so a preview request can never fall through to the real write.
 
 ## Orientation
 

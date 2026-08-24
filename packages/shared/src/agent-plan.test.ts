@@ -39,6 +39,18 @@ describe("side-effect preview contract", () => {
     expect(isAgentMutationPlan(plan)).toBe(true);
   });
 
+  // The socket refuses an undeclared preview before a handler runs, so this
+  // throw guards the other door: a registry-projected tool that assembles a
+  // plan itself. Inventing an empty contract there would let a preview promise
+  // non-effects nobody ever wrote down.
+  it("refuses to invent a contract for a verb that declares no effects", () => {
+    const entry = verbEntry("ticket.brief")!;
+    expect(entry.effects).toBeUndefined();
+    expect(() =>
+      buildMutationPlan(entry, { kind: "ticket", id: "VC-91", label: "VC-91" }),
+    ).toThrowError("Verb ticket.brief has no declared side-effect contract");
+  });
+
   it("can represent a validated no-op without inventing a write", () => {
     const entry = verbEntry("ticket.move")!;
     const plan = buildMutationPlan(
@@ -58,9 +70,45 @@ describe("side-effect preview contract", () => {
     ]);
   });
 
+  // The last thing standing between "the app answered something else" and the
+  // CLI printing that answer under a Side-effect preview heading, so every
+  // field it claims to check is checked one at a time.
   it("rejects values that only resemble a plan", () => {
-    expect(isAgentMutationPlan({ kind: "mutation-plan", dryRun: true })).toBe(false);
-    expect(isAgentMutationPlan(null)).toBe(false);
+    const valid = buildMutationPlan(verbEntry("ticket.comment")!, {
+      kind: "ticket",
+      id: "VC-91",
+      label: "VC-91",
+    });
+    expect(isAgentMutationPlan(valid)).toBe(true);
+    expect(isAgentMutationPlan({ ...valid, target: { ...valid.target, id: null } })).toBe(true);
+
+    for (const wrong of [
+      null,
+      "mutation-plan",
+      [valid],
+      { kind: "mutation-plan", dryRun: true },
+      { ...valid, v: 2 },
+      { ...valid, kind: "ticket" },
+      { ...valid, dryRun: false },
+      { ...valid, verb: 91 },
+      { ...valid, target: null },
+      { ...valid, target: [valid.target] },
+      { ...valid, target: { ...valid.target, kind: 1 } },
+      { ...valid, target: { ...valid.target, id: 91 } },
+      { ...valid, target: { ...valid.target, label: null } },
+      { ...valid, durableWrites: "one write" },
+      { ...valid, durableWrites: [null] },
+      { ...valid, durableWrites: [["resource"]] },
+      { ...valid, durableWrites: [{ ...valid.durableWrites[0], resource: 1 }] },
+      { ...valid, durableWrites: [{ ...valid.durableWrites[0], operation: 1 }] },
+      { ...valid, durableWrites: [{ ...valid.durableWrites[0], summary: 1 }] },
+      { ...valid, humanVisibleEffects: "a toast" },
+      { ...valid, humanVisibleEffects: [1] },
+      { ...valid, nonEffects: [null] },
+      { ...valid, caveat: "Preview only." },
+    ]) {
+      expect(isAgentMutationPlan(wrong)).toBe(false);
+    }
   });
 
   it("reads a declared preview contract only from a well-formed identify answer", () => {

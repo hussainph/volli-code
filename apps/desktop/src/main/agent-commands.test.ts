@@ -714,7 +714,7 @@ describe("agent command service", () => {
     const response = await service.execute({
       v: 1,
       cmd: "identify",
-      args: {},
+      args: { agentSurface: true },
       ctx: { cwd: "/repo/volli", env: { session: sessionId } },
     });
 
@@ -725,6 +725,90 @@ describe("agent command service", () => {
       },
     });
     expect(await engine.listEvents({ sessionId })).toEqual(beforeEvents);
+
+    // Reading the frozen list folds the whole Session ledger, and identify
+    // already folds it once. Only role-aware help wants it, so only role-aware
+    // help asks — the command agents are told to run first does not pay.
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      }),
+    ).not.toHaveProperty("data.agentSurface");
+  });
+
+  // The `--dry-run` preflight asks whether this build understands a preview at
+  // all. An ordinary identify resolves a Project and Session first, so a
+  // context-shaped probe made `volli notify --dry-run` fail with
+  // PROJECT_REQUIRED from any unregistered directory while plain `volli notify`
+  // worked — the confident-but-irrelevant refusal this ticket exists to remove.
+  it("answers the preview-capability probe without resolving project or session context", async () => {
+    ctx = openTestDb();
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
+    const probe = (env: Record<string, string>) =>
+      service.execute({
+        v: 1,
+        cmd: "identify",
+        args: { capabilities: true },
+        ctx: { cwd: "/somewhere/unregistered", env },
+      });
+
+    const capabilities = {
+      v: 1,
+      ok: true,
+      data: { appVersion: "1.2.3", previewContract: MUTATION_PLAN_CONTRACT },
+    };
+    // No registered project for this cwd, and a session id that resolves to
+    // nothing: both refuse a context identify, neither is the probe's question.
+    expect(await probe({})).toEqual(capabilities);
+    expect(await probe({ session: "00000000-0000-0000-0000-000000000000" })).toEqual(capabilities);
+
+    // The same request without the probe argument is exactly the refusal a
+    // preview used to inherit.
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/somewhere/unregistered", env: {} },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+  });
+
+  // The bundled parser refuses this, but the socket is a public door and a
+  // registry-projected tool builds its own arguments. Silently ignoring dryRun
+  // on the way to a real write is the one outcome a preview cannot allow.
+  it("refuses a preview for a verb that declares none instead of writing anyway", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      newId: () => "ticket-one",
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+    await execute("ticket.create", { title: "Ship CLI" });
+
+    expect(await execute("ticket.archive", { id: "VC-1", dryRun: true })).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        reason: expect.stringContaining("ticket.archive declares no side-effect preview"),
+        next: expect.stringContaining("volli help ticket archive"),
+      },
+    });
+    // Still on the board: the refusal happened instead of the archive, not
+    // after it.
+    expect(await execute("board", {})).toMatchObject({
+      data: { columns: { backlog: [{ id: "VC-1" }] } },
+    });
   });
 
   it("lists filtered tickets and shows recent public history without internal ids", async () => {

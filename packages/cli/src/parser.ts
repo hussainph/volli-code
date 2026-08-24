@@ -225,9 +225,6 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       if ("body" in args && "bodyFile" in args) {
         return "ticket create accepts only one of --body or --body-file";
       }
-      if (args["dryRun"] === true && "bodyFile" in args) {
-        return "ticket create --dry-run cannot read --body-file; pass --body inline";
-      }
       return null;
     },
   },
@@ -262,15 +259,10 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--dry-run": DRY_RUN,
     },
     defaults: { addLabels: [], removeLabels: [] },
-    finalize: (args, counters) => {
-      if ((counters["bodyMode"] ?? 0) > 1) {
-        return "ticket update accepts exactly one body mutation mode";
-      }
-      if (args["dryRun"] === true && "bodyFile" in args) {
-        return "ticket update --dry-run cannot read --body-file; pass --body inline";
-      }
-      return null;
-    },
+    finalize: (_args, counters) =>
+      (counters["bodyMode"] ?? 0) > 1
+        ? "ticket update accepts exactly one body mutation mode"
+        : null,
   },
   "ticket.move": {
     options: {
@@ -286,15 +278,10 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--file": { kind: "value", key: "file" },
       "--dry-run": DRY_RUN,
     },
-    finalize: (args) => {
-      if ("message" in args === "file" in args) {
-        return "ticket comment requires exactly one of -m or --file";
-      }
-      if (args["dryRun"] === true && "file" in args) {
-        return "ticket comment --dry-run cannot read --file; pass -m inline";
-      }
-      return null;
-    },
+    finalize: (args) =>
+      "message" in args === "file" in args
+        ? "ticket comment requires exactly one of -m or --file"
+        : null,
   },
   "ticket.archive": { options: {} },
   "ticket.brief": { options: {} },

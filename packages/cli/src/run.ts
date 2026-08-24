@@ -144,6 +144,14 @@ function omitFix(args: Readonly<Record<string, unknown>>): Record<string, unknow
  * the CLI confirms the running build declares the contract before sending. The
  * preflight is fail-closed: an unreadable or silent `identify` refuses the
  * preview rather than gambling a durable write on it.
+ *
+ * It asks the capability question only. A context-shaped `identify` resolves a
+ * Project and Session, so `volli notify --dry-run` run from an unregistered
+ * directory would be refused with PROJECT_REQUIRED while the same command
+ * without `--dry-run` succeeded — a confident refusal about something the verb
+ * never needed. `capabilities` opts out of that resolution; an older app that
+ * ignores the argument answers a context identify with no `previewContract`,
+ * so opting out costs nothing that keeps the gate closed.
  */
 async function previewContractRefusal(
   socketPath: string,
@@ -153,7 +161,7 @@ async function previewContractRefusal(
   const response = await dependencies.request(socketPath, {
     v: 1,
     cmd: "identify",
-    args: {},
+    args: { capabilities: true },
     ctx: request.ctx,
   });
   if (!response.ok) return response.error;
@@ -204,7 +212,9 @@ async function readHelpRuntime(dependencies: RunCliDependencies): Promise<AgentH
   const request: AgentRequest = {
     v: 1,
     cmd: "identify",
-    args: {},
+    // The one caller that wants the frozen bundle asks for it, so plain
+    // `volli identify` never pays to fold a Session ledger it will not read.
+    args: { agentSurface: true },
     ctx: {
       cwd: dependencies.cwd,
       env: {

@@ -818,6 +818,45 @@ describe("runCli — doctor", () => {
     expect(requests[0]?.args["requiredTools"]).toEqual(["git", "node", "yarn"]);
   });
 
+  // A preview that validated different input than the real call would is not a
+  // preview of it. The file is read (a read), folded into the same argument the
+  // real request carries, and only then previewed.
+  it("previews the body a file-sourced write would really send", async () => {
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("ticket.create")!, {
+      kind: "project",
+      id: "VC",
+      label: "Volli Code (VC)",
+    });
+    const argv = ["ticket", "create", "--title", "T", "--body-file", "/tmp/b", "--dry-run"];
+    const code = await runCli(argv, {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async (path) => `body from ${path}`,
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        requests.push(request);
+        if (request.cmd === "identify") {
+          return { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } };
+        }
+        return { v: 1, ok: true, data: plan };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    // The preview flag has to survive materialization, or the read would have
+    // turned the preview into the write it was previewing.
+    expect(code).toBe(0);
+    const preview = requests.find((request) => request.cmd === "ticket.create");
+    expect(preview?.args).toEqual({
+      title: "T",
+      body: "body from /tmp/b",
+      dryRun: true,
+    });
+  });
+
   it("keeps doctor --fix preview free of local observation and a second request", async () => {
     const requests: AgentRequest[] = [];
     let observed = false;
@@ -850,6 +889,11 @@ describe("runCli — doctor", () => {
     expect(observed).toBe(false);
     // The read-only preflight travels first; the preview itself is one request.
     expect(requests.map((request) => request.cmd)).toEqual(["identify", "doctor"]);
+    // It asks the capability question and nothing else. A context-shaped
+    // identify resolves a Project, so `doctor --fix --dry-run` run outside a
+    // registered directory would be refused with PROJECT_REQUIRED while the
+    // real repair succeeded.
+    expect(requests[0]?.args).toEqual({ capabilities: true });
     expect(requests[1]?.args).toEqual({ fix: true, dryRun: true });
   });
 

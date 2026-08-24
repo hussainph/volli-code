@@ -127,7 +127,8 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "volli help concepts and volli help changes as app-independent local topics.",
       "Structured human-visible effects and explicit non-effects in command detail.",
       "--dry-run previews for ticket create/update/move/comment, Session done/blocked/link, notify, and doctor --fix. The shared dryRun tool contract is ready for session.start when VC-162 supplies its tool seam.",
-      "A preview is refused up front unless the running app declares the preview contract on identify, so --dry-run can never execute as a real write on an older app build.",
+      "A preview is refused up front unless the running app declares the preview contract on a context-free identify probe, so --dry-run can never execute as a real write on an older app build, and never inherits a Project or Session refusal the verb itself did not need.",
+      "An app-side refusal when a verb declares no preview at all, so a dryRun argument built outside the bundled CLI cannot be ignored on the way to a real write.",
       "Structured JSON error reason and next fields while stable error codes remain unchanged.",
     ],
     changed: [
