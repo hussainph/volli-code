@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { SessionEngine } from "@volli/session-engine";
+import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 
 import { watchSessionActivity } from "./activity-watch";
@@ -42,6 +43,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     signal: null,
     turnActive: false,
     authorityDenials: 0,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
     bornTicketless: false,
     modelSelection: null,
@@ -74,6 +76,7 @@ function stubEngine(current: () => SessionProjection | null) {
     listSessionStarts: unused("listSessionStarts"),
     listLatestTicketSignals: unused("listLatestTicketSignals"),
     listEvents: unused("listEvents"),
+    reportUsage: unused("reportUsage"),
   } as unknown as SessionEngine;
   return engine;
 }
@@ -270,6 +273,13 @@ describe("watchSessionActivity", () => {
       listSessionStarts: vi.fn(async () => []),
       listLatestTicketSignals: vi.fn(async () => []),
       listEvents: vi.fn(async () => []),
+      // A cost read is a read: it must pass straight through, and must never
+      // be mistaken for a write that marks a Session dirty.
+      reportUsage: vi.fn(async () => ({
+        total: EMPTY_SESSION_USAGE_SUMMARY,
+        groups: [],
+        meteredSessionCount: 0,
+      })),
     };
     Object.assign(engine, reads);
     const watch = watchSessionActivity(engine, { publish: vi.fn() });
@@ -281,6 +291,7 @@ describe("watchSessionActivity", () => {
     await watch.engine.listSessionStarts({ sinceMs: 0 });
     await watch.engine.listLatestTicketSignals({ projectId: "project-1" });
     await watch.engine.listEvents({ sessionId: "session-1" });
+    await watch.engine.reportUsage({ scope: { kind: "all" } });
 
     for (const read of Object.values(reads)) expect(read).toHaveBeenCalledTimes(1);
     watch.stop();

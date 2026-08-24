@@ -172,6 +172,12 @@ export default defineConfig(({ mode }) => ({
         "src/components/home/home-tabs.ts",
         // Home's rail pages and their persisted-value sanitizer (VC-55).
         "src/components/home/home-rail-model.ts",
+        // How a metered total is written down (VC-87). The whole feature's
+        // correctness risk lives in this one module: a missing tilde prints a
+        // catalogue estimate as provider spend, and a `—` collapsed to `$0.00`
+        // tells an owner their pass was free. Both are one-character mistakes
+        // that no view test would catch.
+        "src/usage/usage-format.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",

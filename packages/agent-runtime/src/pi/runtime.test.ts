@@ -33,6 +33,7 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
+  UtilityCompletionError,
   type AuthoritySnapshot,
   type ObservabilityEvent,
   type CompactionObservation,
@@ -355,6 +356,22 @@ function attentions(observations: RuntimeObservation[]): RuntimeObservation[] {
 
 function compactions(observations: RuntimeObservation[]): CompactionObservation[] {
   return observations.filter((observation) => observation.kind === "compaction");
+}
+
+/** A well-formed durable usage marker, so a malformed case names one broken field. */
+function meteredMarker(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: MODEL_ID,
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    costUsd: 0.003,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
 }
 
 /**
@@ -1810,10 +1827,12 @@ describe("startSession", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "activity",
       "authority",
       "activity",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
       "attachment:closed",
@@ -2195,10 +2214,12 @@ describe("startSession", () => {
       "turn:started",
       "delta",
       "delta",
+      "usage",
       "message-settled",
       "activity",
       "activity",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -2319,6 +2340,86 @@ describe("startSession", () => {
     for (const observation of settled) {
       expect(sidecar).toContain(observation.message.entryId);
     }
+  });
+
+  it("meters every model call in a turn, including the one that only called a tool", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("Reading the file.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("The token is volli-marker-42.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("Read MARKER.txt and report the token.");
+
+    const usage = observations.filter((observation) => observation.kind === "usage");
+    // Two provider calls, so two bills — even though the first reply carries a
+    // tool call and the transcript shows one exchange.
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({
+      kind: "usage",
+      turnId: expect.any(String),
+      usage: {
+        cause: "assistant",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: 100,
+        outputTokens: 20,
+        costUsd: 0.003,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    // Each is named by the sidecar entry it belongs to, so a reattach that
+    // replays the same history cannot double the Session's bill.
+    const entryIds = usage.flatMap((observation) =>
+      observation.kind === "usage" ? [observation.entryId] : [],
+    );
+    expect(new Set(entryIds).size).toBe(2);
+
+    const ref = handle.recovery;
+    const replay = await handle.reconcile(null);
+    const replayed = replay.observations.flatMap((observation) =>
+      observation.kind === "usage" ? [observation.entryId] : [],
+    );
+    expect(replayed).toEqual(entryIds);
+
+    await handle.close();
+    const sidecar = readFileSync(ref?.sessionFilePath as string, "utf8");
+    for (const entryId of entryIds) expect(sidecar).toContain(entryId);
+  });
+
+  it("meters a reply the provider billed before it failed", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail("The model run failed.")])),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("Do the work.");
+    await handle.close();
+
+    // Nothing settled and nothing was said, but the prompt was already paid
+    // for. Reading spend off the transcript alone would lose this entirely.
+    expect(settledTexts(observations)).toEqual([]);
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "usage" ? [observation.usage.costUsd] : [],
+      ),
+    ).toEqual([0.003]);
   });
 
   it("keeps an actual Pi read turn inside the Ticket worktree", async () => {
@@ -2524,6 +2625,7 @@ describe("startSession", () => {
     const firstReplay = await firstHandle.reconcile(null);
     expect(kinds([...firstReplay.observations])).toEqual([
       "turn:started",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -2646,7 +2748,7 @@ describe("startSession", () => {
     await firstDelivery;
     const recovery = firstHandle.recovery;
     const replay = await firstHandle.reconcile(null);
-    expect(kinds([...replay.observations])).toEqual(["turn:started", "turn:interrupted"]);
+    expect(kinds([...replay.observations])).toEqual(["turn:started", "usage", "turn:interrupted"]);
     const durableEntries = readFileSync(recovery!.sessionFilePath, "utf8")
       .trimEnd()
       .split("\n")
@@ -2726,11 +2828,12 @@ describe("startSession", () => {
 
     expect(kinds([...replay.observations])).toEqual([
       "turn:started",
+      "usage",
       "message-settled",
       "attention",
       "turn:interrupted",
     ]);
-    expect(replay.observations[2]).toMatchObject({
+    expect(replay.observations[3]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "partial-turn",
@@ -3102,6 +3205,44 @@ describe("startSession", () => {
         tokensAfter: 1,
       },
       { kind: "compaction", state: "failed", reason: "threshold" },
+      // Usage shapes the durable ledger would refuse. A marker accepted here
+      // and rejected there is a Session that recovers and then cannot be read,
+      // which is the VC-155 failure re-laid one field at a time.
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: null },
+      { kind: "usage", entryId: 1, turnId: null, usage: meteredMarker() },
+      { kind: "usage", entryId: "entry-1", turnId: 7, usage: meteredMarker() },
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: meteredMarker({ cause: "cron" }) },
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ providerId: 1 }),
+      },
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: meteredMarker({ modelId: 1 }) },
+      // Fractional tokens, which no provider reports and the codec reads as
+      // integers.
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ inputTokens: 1.5 }),
+      },
+      // No NaN case here, and deliberately: `JSON.stringify` writes NaN as
+      // `null`, so a poisoned cost arrives back looking exactly like an honest
+      // absent one and is rightly accepted. The codec refuses NaN where it can
+      // still be seen — at the write, before the round trip.
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ costUsd: "free" }),
+      },
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ costBasis: "guessed" }),
+      },
     ];
 
     const secondRuntime = createPiAgentRuntime({
@@ -3611,6 +3752,7 @@ describe("startSession", () => {
       "attachment:started",
       "turn:started",
       "delta",
+      "usage",
       "turn:interrupted",
     ]);
 
@@ -4009,10 +4151,11 @@ describe("startSession", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "attention",
       "turn:interrupted",
     ]);
-    expect(observations[2]).toMatchObject({
+    expect(observations[3]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "auth",
@@ -4217,10 +4360,15 @@ describe("auto-retrying a dropped transport", () => {
       delivery: "prompt",
     });
 
+    // Two bills for one turn: the dropped attempt was metered before the
+    // socket died, and the resumed one was metered when it succeeded. This is
+    // what makes a retry storm legible in a cost report rather than invisible.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -4243,9 +4391,12 @@ describe("auto-retrying a dropped transport", () => {
     await handle.submitUserMessage("go");
 
     expect(attempts).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Eleven metered attempts for one turn that produced nothing. An owner
+    // asking why a quiet pass was expensive has to be able to see this.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      ...Array.from({ length: 11 }, () => "usage"),
       "attention",
       "turn:interrupted",
     ]);
@@ -4325,7 +4476,12 @@ describe("auto-retrying a dropped transport", () => {
     await handle.interrupt();
     await delivery;
 
-    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
     await handle.close();
   });
 
@@ -4350,6 +4506,7 @@ describe("auto-retrying a dropped transport", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "turn:interrupted",
       "attachment:closed",
     ]);
@@ -4383,7 +4540,12 @@ describe("auto-retrying a dropped transport", () => {
     await delivery;
 
     expect(calls).toBe(1);
-    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
     await handle.close();
   });
 
@@ -4507,6 +4669,24 @@ describe("compacting a context that reached its reserve", () => {
     ]);
     const [compaction] = compactions(attachment.observations);
     expect(compaction?.state === "compacted" && compaction.tokensAfter).toBeLessThan(OVER_RESERVE);
+
+    // Summarising a Session costs a model call, and that call is spent on the
+    // Session's behalf. A cost report that omitted it would tell an owner the
+    // long pass was cheaper than the short one.
+    const compactionUsage = attachment.observations.flatMap((observation) =>
+      observation.kind === "usage" && observation.usage.cause === "compaction"
+        ? [observation.usage]
+        : [],
+    );
+    expect(compactionUsage).toEqual([
+      expect.objectContaining({
+        cause: "compaction",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: expect.any(Number),
+        costBasis: "catalog-estimate",
+      }),
+    ]);
     await handle.close();
   });
 
@@ -6098,7 +6278,24 @@ describe("completeUtility", () => {
         systemPrompt: "Title this conversation.",
         user: "The login button is broken",
       }),
-    ).resolves.toBe("Fix the login flow");
+    ).resolves.toEqual({
+      text: "Fix the login flow",
+      // A title is real spend against a real Session, and it produces no
+      // transcript to carry the bill. If the runtime reported only the text,
+      // this would be the one kind of model call a Session could never account
+      // for.
+      usage: {
+        cause: "utility",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.003,
+        costBasis: "catalog-estimate",
+      },
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model.id).toBe(MODEL_ID);
     expect(calls[0]!.context.systemPrompt).toBe("Title this conversation.");
@@ -6210,6 +6407,76 @@ describe("completeUtility", () => {
     ).rejects.toThrow("returned no text");
   });
 
+  /**
+   * A provider bills for the prompt it accepted, not for whether Volli could
+   * use the answer. These two are the shapes that failure takes here — a reply
+   * that stopped short, and one that was all reasoning — and both are real
+   * charges the caller has to be able to record.
+   */
+  it("carries what a billed failure consumed out on the error", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error", errorMessage: "Provider refused the call." }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(UtilityCompletionError);
+    expect((failure as UtilityCompletionError).usage).toMatchObject({
+      cause: "utility",
+      inputTokens: 100,
+      costUsd: 0.003,
+      costBasis: "catalog-estimate",
+    });
+  });
+
+  it("carries the bill out when the answer was reasoning alone", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ thinking: "pondering" }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect((failure as UtilityCompletionError).usage).toMatchObject({ inputTokens: 100 });
+  });
+
+  // Nothing was sent, so nothing was billed. Null, never an all-zero
+  // measurement: "no request was made" and "a request cost nothing" are
+  // different facts, and only one of them is true here.
+  it("reports no usage for a call that never reached a provider", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: "not-a-model", reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(UtilityCompletionError);
+    expect((failure as UtilityCompletionError).usage).toBeNull();
+  });
+
   it("returns agent message tokens only, never the reasoning beside them", async () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
@@ -6226,6 +6493,6 @@ describe("completeUtility", () => {
         systemPrompt: "Title this conversation.",
         user: "hello",
       }),
-    ).resolves.toBe("Fix the login flow");
+    ).resolves.toMatchObject({ text: "Fix the login flow" });
   });
 });

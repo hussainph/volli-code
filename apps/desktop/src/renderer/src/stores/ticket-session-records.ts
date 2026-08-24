@@ -68,13 +68,24 @@ export function createTicketSessionRecordsStore() {
             // kind is rebuilt as itself — the id it answers to differs (`id` vs
             // `sessionId`) and so does everything else on the record.
             [ticketId]: rows.map((row) => {
+              // `usage` is carried across untouched on every rebuilt row. It is
+              // a measurement of what the Session spent, and renaming it or
+              // re-reading its harness changes nothing about that.
               if (row.kind === "chat") {
                 return row.record.sessionId === sessionId
-                  ? { kind: "chat" as const, record: Object.assign({}, row.record, { title }) }
+                  ? {
+                      kind: "chat" as const,
+                      record: Object.assign({}, row.record, { title }),
+                      usage: row.usage,
+                    }
                   : row;
               }
               return row.record.id === sessionId
-                ? { kind: "terminal" as const, record: Object.assign({}, row.record, { title }) }
+                ? {
+                    kind: "terminal" as const,
+                    record: Object.assign({}, row.record, { title }),
+                    usage: row.usage,
+                  }
                 : row;
             }),
           },
@@ -97,6 +108,7 @@ export function createTicketSessionRecordsStore() {
                 ? {
                     kind: "terminal" as const,
                     record: Object.assign({}, row.record, { activeHarnessId: harnessId }),
+                    usage: row.usage,
                   }
                 : row,
             ),

@@ -5,8 +5,10 @@ import {
   askOffer,
   REASONING_LEVELS,
   sessionToolIds,
+  UtilityCompletionError,
   type RuntimeAskRequest,
 } from "./agent-runtime";
+import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import {
   SESSION_ESCALATION_OPTIONS,
@@ -190,5 +192,43 @@ describe("sessionToolIds", () => {
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
     expect(everything).toHaveLength(7);
+  });
+});
+
+/**
+ * The bill has to survive the throw.
+ *
+ * A provider charges for the prompt it accepted, not for whether the caller
+ * could use the answer — so a utility completion that failed after being billed
+ * is real spend, and it reaches its caller as an exception. Carrying the usage
+ * on the error is what stops failed background work being the one kind of model
+ * call a Session can never account for.
+ */
+describe("UtilityCompletionError", () => {
+  const usage: SessionUsage = {
+    cause: "utility",
+    providerId: "anthropic",
+    modelId: "claude-haiku-4-5",
+    inputTokens: 210,
+    outputTokens: 0,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    costUsd: 0.000_31,
+    costBasis: "catalog-estimate",
+  };
+
+  it("is an Error a caller can catch by type, carrying what the call consumed", () => {
+    const error = new UtilityCompletionError("The utility completion returned no text.", usage);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(UtilityCompletionError);
+    expect(error.name).toBe("UtilityCompletionError");
+    expect(error.message).toBe("The utility completion returned no text.");
+    expect(error.usage).toEqual(usage);
+  });
+
+  // Null means nothing reached a provider, never that a request was free.
+  it("carries null for a failure that was never billed", () => {
+    expect(new UtilityCompletionError("not in this runtime's catalog", null).usage).toBeNull();
   });
 });

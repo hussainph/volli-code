@@ -5,14 +5,20 @@ import type {
   ListLatestTicketSignalsQuery,
   ListSessionStartsQuery,
   ListSessionsQuery,
+  ListSessionUsageQuery,
   LatestSessionSignal,
   Session,
   SessionCommand,
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionUsage,
+  SessionUsageAttribution,
+  SessionUsageEntry,
 } from "@volli/shared";
 import {
+  COST_BASES,
+  SESSION_USAGE_CAUSES,
   assertSession,
   assertSessionEvent,
   decodeCommandReceipt,
@@ -194,6 +200,137 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     });
   }
 
+  listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[] {
+    this.assertOpen();
+    const scope =
+      query.scope.kind === "all"
+        ? ""
+        : query.scope.kind === "project"
+          ? " AND project_id = @projectId"
+          : query.scope.kind === "ticket"
+            ? " AND ticket_id = @ticketId"
+            : " AND session_id = @sessionId";
+    // Half-open, so two adjacent windows tile without billing a boundary
+    // operation to both of them.
+    const window =
+      (query.since === undefined ? "" : " AND occurred_at >= @since") +
+      (query.until === undefined ? "" : " AND occurred_at < @until");
+    const rows = this.db
+      .prepare(
+        `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                cost_usd, cost_basis
+           FROM session_usage
+          WHERE 1 = 1${scope}${window}
+          ORDER BY occurred_at DESC, event_id COLLATE BINARY DESC`,
+      )
+      .all({
+        ...(query.scope.kind === "project" ? { projectId: query.scope.projectId } : {}),
+        ...(query.scope.kind === "ticket" ? { ticketId: query.scope.ticketId } : {}),
+        ...(query.scope.kind === "session" ? { sessionId: query.scope.sessionId } : {}),
+        ...(query.since === undefined ? {} : { since: query.since }),
+        ...(query.until === undefined ? {} : { until: query.until }),
+      }) as unknown[];
+    return rows.map((row) => decodeUsageEntry(row, "session_usage row"));
+  }
+
+  /**
+   * How far back this profile's index reaches, from the single coverage row
+   * migration 027 wrote.
+   *
+   * Read rather than derived. `MIN(occurred_at)` over the projection would say
+   * when spending happened to start, which for a quiet profile upgraded today
+   * is indistinguishable from a complete history — and that is exactly the
+   * reading the floor exists to refuse.
+   */
+  usageMeteredFrom(): number {
+    this.assertOpen();
+    const row = this.db
+      .prepare("SELECT metered_from FROM session_usage_coverage WHERE id = 1")
+      .get() as unknown;
+    /* v8 ignore next -- migration 027 inserts the row in the same statement that creates the table. */
+    if (row === undefined) return 0;
+    return readInteger(asRecord(row, "session_usage_coverage row").metered_from, "metered_from");
+  }
+
+  /**
+   * One projection row. Shared by the live append and the rebuild, so the two
+   * paths cannot store the same fact two different ways.
+   */
+  private insertUsage(entry: {
+    eventId: string;
+    sessionId: string;
+    attribution: SessionUsageAttribution;
+    occurredAt: number;
+    usage: SessionUsage;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO session_usage
+           (event_id, session_id, project_id, ticket_id, occurred_at, cause,
+            provider_id, model_id, input_tokens, output_tokens,
+            cache_read_tokens, cache_write_tokens, cost_usd, cost_basis)
+         VALUES
+           (@eventId, @sessionId, @projectId, @ticketId, @occurredAt, @cause,
+            @providerId, @modelId, @inputTokens, @outputTokens,
+            @cacheReadTokens, @cacheWriteTokens, @costUsd, @costBasis)`,
+      )
+      .run({
+        eventId: entry.eventId,
+        sessionId: entry.sessionId,
+        projectId: entry.attribution.projectId,
+        ticketId: entry.attribution.ticketId,
+        occurredAt: entry.occurredAt,
+        cause: entry.usage.cause,
+        providerId: entry.usage.providerId,
+        modelId: entry.usage.modelId,
+        inputTokens: entry.usage.inputTokens,
+        outputTokens: entry.usage.outputTokens,
+        cacheReadTokens: entry.usage.cacheReadTokens,
+        cacheWriteTokens: entry.usage.cacheWriteTokens,
+        costUsd: entry.usage.costUsd,
+        costBasis: entry.usage.costBasis,
+      });
+  }
+
+  /**
+   * Derive the projection again from the events alone.
+   *
+   * NO JOIN TO `sessions`, deliberately. Attribution comes out of the event's
+   * own payload, exactly as the live append path takes it, so the two produce
+   * the same rows for the same history — including after a Ticket delete, which
+   * nulls `sessions.ticket_id` and would otherwise move that Ticket's whole
+   * bill into unticketed Project spend on the next rebuild.
+   */
+  rebuildUsageProjection(): void {
+    this.assertOpen();
+    this.db.exec("DELETE FROM session_usage");
+    const events = this.db
+      .prepare(
+        `SELECT e.id, e.session_id, e.occurred_at, e.payload
+           FROM session_events e
+          WHERE json_extract(e.payload, '$.kind') = 'usage.recorded'
+          ORDER BY e.session_id COLLATE BINARY ASC, e.sequence ASC`,
+      )
+      .all() as unknown[];
+    for (const row of events) {
+      const value = asRecord(row, "usage rebuild row");
+      const payload = decodeSessionEventPayload(
+        JSON.parse(readString(value.payload, "usage rebuild row.payload")),
+        "usage rebuild row.payload",
+      );
+      /* v8 ignore next -- the query selects this kind and nothing else. */
+      if (payload.kind !== "usage.recorded") continue;
+      this.insertUsage({
+        eventId: readString(value.id, "usage rebuild row.id"),
+        sessionId: readString(value.session_id, "usage rebuild row.session_id"),
+        attribution: payload.attribution,
+        occurredAt: readInteger(value.occurred_at, "usage rebuild row.occurred_at"),
+        usage: payload.usage,
+      });
+    }
+  }
+
   insertSession(session: Session): void {
     this.assertOpen();
     assertSession(session, "Session");
@@ -261,6 +398,22 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         commandId: event.commandId ?? null,
         payload: encodeSessionJson(event.payload),
       });
+    // Projected in the same transaction that appends the fact. A projection
+    // written afterwards would have a window in which the ledger and its read
+    // model disagree, and the disagreement would survive a crash.
+    if (event.payload.kind === "usage.recorded") {
+      this.insertUsage({
+        eventId: event.id,
+        sessionId: event.sessionId,
+        // Straight off the fact, which is the only reason `rebuildUsageProjection`
+        // can promise the same rows: both paths read one immutable source, so
+        // neither can be told a different story later by `sessions.ticket_id`
+        // going null under a deleted Ticket.
+        attribution: event.payload.attribution,
+        occurredAt: event.occurredAt,
+        usage: event.payload.usage,
+      });
+    }
     if (event.payload.kind === "command.receipt.recorded") {
       const receipt = this.getReceipt(event.payload.receipt.id);
       if (!receipt || !sameCommandReceipt(receipt, event.payload.receipt)) {
@@ -550,6 +703,36 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   }
 }
 
+/**
+ * One projection row, read back into the domain shape.
+ *
+ * Null survives as null through every measured column. Healing an absent token
+ * count to zero here would be the one place a reader could never detect it:
+ * the row would claim a provider reported nothing consumed, rather than that
+ * it reported nothing at all.
+ */
+function decodeUsageEntry(row: unknown, context: string): SessionUsageEntry {
+  const value = asRecord(row, context);
+  return {
+    sessionId: readString(value.session_id, `${context}.session_id`),
+    projectId: readString(value.project_id, `${context}.project_id`),
+    ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),
+    occurredAt: readInteger(value.occurred_at, `${context}.occurred_at`),
+    cause: enumValue(value.cause, SESSION_USAGE_CAUSES, `${context}.cause`),
+    providerId: readString(value.provider_id, `${context}.provider_id`),
+    modelId: readString(value.model_id, `${context}.model_id`),
+    inputTokens: readNullableInteger(value.input_tokens, `${context}.input_tokens`),
+    outputTokens: readNullableInteger(value.output_tokens, `${context}.output_tokens`),
+    cacheReadTokens: readNullableInteger(value.cache_read_tokens, `${context}.cache_read_tokens`),
+    cacheWriteTokens: readNullableInteger(
+      value.cache_write_tokens,
+      `${context}.cache_write_tokens`,
+    ),
+    costUsd: readNullableNumber(value.cost_usd, `${context}.cost_usd`),
+    costBasis: enumValue(value.cost_basis, COST_BASES, `${context}.cost_basis`),
+  };
+}
+
 function decodeSession(row: unknown, context: string): Session {
   const value = asRecord(row, context);
   const session: Session = {
@@ -663,6 +846,19 @@ function readString(value: unknown, context: string): string {
 
 function readNullableString(value: unknown, context: string): string | null {
   return value === null ? null : readString(value, context);
+}
+
+function readNullableInteger(value: unknown, context: string): number | null {
+  return value === null ? null : readInteger(value, context);
+}
+
+/** A money amount: the one stored number that is not whole, and never NaN. */
+function readNullableNumber(value: unknown, context: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a finite number`);
+  }
+  return value;
 }
 
 function readInteger(value: unknown, context: string): number {

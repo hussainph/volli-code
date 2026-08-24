@@ -35,6 +35,7 @@ import {
   type SessionInteractionResolution,
   type SessionRuntimeSpec,
   type UtilityCompletion,
+  type UtilityCompletionResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -146,9 +147,9 @@ class FakeRuntime implements AgentRuntime {
     return { observedAt: 0, providers: [], models: [] };
   }
 
-  async completeUtility(input: UtilityCompletion): Promise<string> {
+  async completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult> {
     this.utilityCompletions.push(input);
-    return this.utilityReplies.shift() ?? "utility answer";
+    return { text: this.utilityReplies.shift() ?? "utility answer", usage: null };
   }
 
   async startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle> {

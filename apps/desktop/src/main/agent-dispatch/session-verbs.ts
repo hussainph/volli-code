@@ -18,6 +18,7 @@ import {
   DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
   effectiveHarnessId,
+  EMPTY_SESSION_USAGE_SUMMARY,
   errorMessage,
   REASONING_LEVELS,
   shortSessionId,
@@ -28,6 +29,7 @@ import type {
   ReasoningLevel,
   SessionProjection,
   SessionRecord,
+  SessionUsageSummary,
 } from "@volli/shared";
 import { readSessionTranscriptTail } from "@volli/session-engine";
 
@@ -173,13 +175,19 @@ export async function sessionListVerb(
   }
   const project = "id" in resolvedProject ? resolvedProject : resolvedProject.project;
   const projectById = new Map(projects.map((entry) => [entry.id, entry]));
+  // What each Session consumed, off the fold the dispatch already made. Keyed
+  // by full id because that is what both halves of the listing hold; the short
+  // handle is only ever an output.
+  const usageById = new Map(
+    context.projections.map((projection) => [projection.session.id, projection.usage]),
+  );
   const projectSessions = sessions
     .filter((session) => session.projectId === project.id)
     .filter((session) => !ticketResolution?.ok || session.ticketId === ticketResolution.ticket.id)
     .map((session) => {
       const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
       const ticketProject = ticket ? projectById.get(ticket.projectId) : undefined;
-      return {
+      const row = {
         id: shortSessionId(session.id),
         kind: session.ticketId ? "ticket" : "project",
         status: session.endedAt === null ? "running" : "exited",
@@ -194,6 +202,9 @@ export async function sessionListVerb(
         harness: effectiveHarnessId(session),
         ageMs: Math.max(0, now() - session.createdAt),
       };
+      // Assigned rather than spread (oxc(no-map-spread)); the target is a
+      // fresh literal on every row, so this is still copy-on-write.
+      return Object.assign(row, usageCells(usageById.get(session.id)));
     });
   // Structured chat rows (VC-13 decision 4): `session start` must never
   // open a session its own caller cannot see. Precedence mirrors the
@@ -209,20 +220,47 @@ export async function sessionListVerb(
     if (ticketResolution?.ok && record.ticketId !== ticketResolution.ticket.id) return [];
     const ticket = record.ticketId ? getTicket(options.db, record.ticketId) : undefined;
     const ticketProject = ticket ? projectById.get(ticket.projectId) : undefined;
-    return [
-      {
-        id: shortSessionId(record.sessionId),
-        kind: "chat",
-        ticket:
-          ticket && ticketProject
-            ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
-            : null,
-        title: record.title,
-        ageMs: Math.max(0, now() - record.createdAt),
-      },
-    ];
+    const row = {
+      id: shortSessionId(record.sessionId),
+      kind: "chat",
+      ticket:
+        ticket && ticketProject
+          ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+          : null,
+      title: record.title,
+      ageMs: Math.max(0, now() - record.createdAt),
+    };
+    return [Object.assign(row, usageCells(usageById.get(record.sessionId)))];
   });
   return { v: 1, ok: true, data: { sessions: [...projectSessions, ...chatRows] } };
+}
+
+/**
+ * What a listed Session cost, as the four fields a reader needs to quote it
+ * safely (VC-87).
+ *
+ * The basis and the coverage travel WITH the amount rather than being dropped
+ * for width. A bare `costUsd` cannot be printed honestly: most executors price
+ * tokens against a local catalogue, so the number is right about what was
+ * consumed and only an estimate of what will be invoiced, and a partial total
+ * is a floor rather than a sum. A row that carried the dollars alone would
+ * force every surface to invent its own hedge, or to skip one.
+ *
+ * `costUsd: null` is the honest answer for a Session nothing could price —
+ * never `0`, which would say a provider reported no charge.
+ */
+function usageCells(usage: SessionUsageSummary | undefined): Record<string, unknown> {
+  const summary = usage ?? EMPTY_SESSION_USAGE_SUMMARY;
+  return {
+    costUsd: summary.knownCostUsd,
+    costBasis: summary.costBasis,
+    costCoverage: summary.costCoverage,
+    tokens:
+      summary.inputTokens +
+      summary.outputTokens +
+      summary.cacheReadTokens +
+      summary.cacheWriteTokens,
+  };
 }
 
 /** `volli session peek` — a terminal's trailing output, or a chat's tail. */

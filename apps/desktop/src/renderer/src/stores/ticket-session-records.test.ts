@@ -1,4 +1,9 @@
-import type { ChatSessionRecord, SessionListingRow, SessionRecord } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  type ChatSessionRecord,
+  type SessionListingRow,
+  type SessionRecord,
+} from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
@@ -28,7 +33,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
 }
 
 function terminalRow(overrides: Partial<SessionRecord> = {}): SessionListingRow {
-  return { kind: "terminal", record: record(overrides) };
+  return { kind: "terminal", record: record(overrides), usage: EMPTY_SESSION_USAGE_SUMMARY };
 }
 
 function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow {
@@ -48,6 +53,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       bornTicketless: false,
       ...overrides,
     },
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
   };
 }
 

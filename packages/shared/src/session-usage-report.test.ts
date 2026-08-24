@@ -1,0 +1,281 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  isSessionUsageGrouping,
+  parseSessionUsageWindow,
+  reportSessionUsage,
+  SESSION_USAGE_GROUPINGS,
+  sessionUsageWindowSince,
+  type SessionUsageEntry,
+} from "./session-usage-report";
+
+const DAY = 86_400_000;
+/** 2026-08-01T00:00:00Z, so a UTC day key is readable in a failure message. */
+const AUGUST = Date.UTC(2026, 7, 1);
+
+function entry(overrides: Partial<SessionUsageEntry> = {}): SessionUsageEntry {
+  return {
+    sessionId: "session-1",
+    projectId: "project-1",
+    ticketId: "ticket-1",
+    occurredAt: AUGUST,
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
+describe("reportSessionUsage", () => {
+  it("answers an empty window with nothing measured, not with zero spent", () => {
+    const report = reportSessionUsage([], { groupBy: "model" });
+    expect(report.total.knownCostUsd).toBeNull();
+    expect(report.total.costCoverage).toBe("unavailable");
+    expect(report.groups).toEqual([]);
+    expect(report.meteredSessionCount).toBe(0);
+  });
+
+  it("totals every entry once, whatever it is grouped by", () => {
+    const entries = [
+      entry({ sessionId: "a", costUsd: 1 }),
+      entry({ sessionId: "b", costUsd: 2 }),
+      entry({ sessionId: "b", costUsd: 4 }),
+    ];
+    for (const groupBy of ["ticket", "session", "model", "day"] as const) {
+      expect(reportSessionUsage(entries, { groupBy }).total.knownCostUsd).toBe(7);
+    }
+  });
+
+  it("counts the Sessions that actually spent, not the entries", () => {
+    const report = reportSessionUsage(
+      [entry({ sessionId: "a" }), entry({ sessionId: "b" }), entry({ sessionId: "b" })],
+      { groupBy: "session" },
+    );
+    expect(report.meteredSessionCount).toBe(2);
+    expect(report.total.requestCount).toBe(3);
+  });
+
+  it("splits a Session that changed model without losing its total", () => {
+    const report = reportSessionUsage(
+      [
+        entry({ modelId: "claude-opus-4-1", costUsd: 8 }),
+        entry({ providerId: "openai", modelId: "gpt-5", costUsd: 2 }),
+      ],
+      { groupBy: "model" },
+    );
+    expect(report.groups.map((group) => group.key)).toEqual([
+      "anthropic/claude-opus-4-1",
+      "openai/gpt-5",
+    ]);
+    expect(report.groups.map((group) => group.usage.knownCostUsd)).toEqual([8, 2]);
+    expect(report.total.knownCostUsd).toBe(10);
+  });
+
+  it("orders groups by what they cost, so the expensive one is first", () => {
+    const report = reportSessionUsage(
+      [
+        entry({ sessionId: "cheap", costUsd: 1 }),
+        entry({ sessionId: "dear", costUsd: 9 }),
+        entry({ sessionId: "middling", costUsd: 5 }),
+      ],
+      { groupBy: "session" },
+    );
+    expect(report.groups.map((group) => group.key)).toEqual(["dear", "middling", "cheap"]);
+  });
+
+  // A Project Session has no ticket. It is still spend, and dropping it would
+  // make the sum of the groups quietly smaller than the total above them.
+  it("keeps unticketed spend as its own group rather than discarding it", () => {
+    const report = reportSessionUsage(
+      [entry({ ticketId: "ticket-1", costUsd: 3 }), entry({ ticketId: null, costUsd: 4 })],
+      { groupBy: "ticket" },
+    );
+    expect(report.groups.map((group) => group.key)).toEqual([null, "ticket-1"]);
+    expect(report.groups.reduce((sum, group) => sum + (group.usage.knownCostUsd ?? 0), 0)).toBe(7);
+  });
+
+  it("buckets time by UTC day, so a report does not move when the reader does", () => {
+    const report = reportSessionUsage(
+      [
+        // 23:30 UTC on the 1st, which is the 2nd in some places and not others.
+        entry({ occurredAt: AUGUST + 84_600_000, costUsd: 1 }),
+        entry({ occurredAt: AUGUST + DAY, costUsd: 2 }),
+      ],
+      { groupBy: "day" },
+    );
+    expect(report.groups.map((group) => group.key)).toEqual(["2026-08-02", "2026-08-01"]);
+  });
+
+  it("carries partial coverage into each group, not only into the total", () => {
+    const report = reportSessionUsage(
+      [
+        entry({ sessionId: "a", costUsd: 5 }),
+        entry({ sessionId: "a", costUsd: null, costBasis: "unavailable" }),
+        entry({ sessionId: "b", costUsd: 1 }),
+      ],
+      { groupBy: "session" },
+    );
+    expect(report.groups[0]?.usage.costCoverage).toBe("partial");
+    expect(report.groups[1]?.usage.costCoverage).toBe("complete");
+    expect(report.total.costCoverage).toBe("partial");
+  });
+
+  // A wholly unpriced group has no number to rank by. It sorts as if it cost
+  // nothing, which is an ordering choice and not a claim: its own summary
+  // still reads `unavailable`, never `$0.00`.
+  it("ranks a group nothing could price below every group that has a number", () => {
+    const report = reportSessionUsage(
+      [
+        entry({ sessionId: "unpriced", costUsd: null, costBasis: "unavailable" }),
+        entry({ sessionId: "priced", costUsd: 2 }),
+      ],
+      { groupBy: "session" },
+    );
+    expect(report.groups.map((group) => group.key)).toEqual(["priced", "unpriced"]);
+    expect(report.groups[1]?.usage.costCoverage).toBe("unavailable");
+    expect(report.groups[1]?.usage.knownCostUsd).toBeNull();
+  });
+
+  it("reports the whole window without groups when none is asked for", () => {
+    const report = reportSessionUsage([entry({ costUsd: 3 })], {});
+    expect(report.groups).toEqual([]);
+    expect(report.total.knownCostUsd).toBe(3);
+  });
+});
+
+/**
+ * The floor is what stops a profile that upgraded yesterday from printing a
+ * complete-looking lifetime total covering one day. Every arm below is a
+ * sentence a reader would otherwise get wrong.
+ */
+describe("reportSessionUsage history coverage", () => {
+  it("calls a profile with no unmetered past complete, whatever the window", () => {
+    expect(reportSessionUsage([entry({})], {}).history).toEqual({
+      meteredFrom: 0,
+      complete: true,
+    });
+    expect(reportSessionUsage([entry({})], { since: 5_000 }).history).toEqual({
+      meteredFrom: 0,
+      complete: true,
+    });
+  });
+
+  it("calls an unbounded window partial when history begins after the beginning", () => {
+    expect(reportSessionUsage([entry({})], { meteredFrom: 9_000 }).history).toEqual({
+      meteredFrom: 9_000,
+      complete: false,
+    });
+  });
+
+  it("calls a window that starts at or after the floor complete", () => {
+    expect(
+      reportSessionUsage([entry({})], { meteredFrom: 9_000, since: 9_000 }).history.complete,
+    ).toBe(true);
+    expect(
+      reportSessionUsage([entry({})], { meteredFrom: 9_000, since: 9_001 }).history.complete,
+    ).toBe(true);
+  });
+
+  it("calls a window that reaches behind the floor partial", () => {
+    expect(
+      reportSessionUsage([entry({})], { meteredFrom: 9_000, since: 8_999 }).history.complete,
+    ).toBe(false);
+  });
+
+  // The empty report is the one that misleads hardest: "no metered model calls
+  // yet" reads as "this project is free", and only the floor distinguishes that
+  // from "this project's spend predates measurement".
+  it("still reports the floor when nothing at all is in the window", () => {
+    expect(reportSessionUsage([], { meteredFrom: 9_000 }).history).toEqual({
+      meteredFrom: 9_000,
+      complete: false,
+    });
+  });
+});
+
+/**
+ * The `--since` vocabulary. Every case is a window a caller could plausibly
+ * type; a malformed one has to be REFUSED rather than read as zero, because a
+ * lower bound silently read as the epoch answers a different question with a
+ * number that looks entirely normal.
+ */
+describe("parseSessionUsageWindow", () => {
+  it("reads a look-back in each unit it offers", () => {
+    expect(parseSessionUsageWindow("90m")).toEqual({ kind: "duration", ms: 5_400_000 });
+    expect(parseSessionUsageWindow("24h")).toEqual({ kind: "duration", ms: 86_400_000 });
+    expect(parseSessionUsageWindow("7d")).toEqual({ kind: "duration", ms: 604_800_000 });
+    expect(parseSessionUsageWindow("2w")).toEqual({ kind: "duration", ms: 1_209_600_000 });
+  });
+
+  it("reads an RFC 3339 instant as the instant it names", () => {
+    expect(parseSessionUsageWindow("2026-01-14T09:22:11Z")).toEqual({
+      kind: "instant",
+      epochMs: Date.parse("2026-01-14T09:22:11Z"),
+    });
+  });
+
+  it("tolerates the whitespace a shell leaves around a quoted argument", () => {
+    expect(parseSessionUsageWindow("  7d  ")).toEqual({ kind: "duration", ms: 604_800_000 });
+  });
+
+  // A window with no width is a real question with a real answer: nothing has
+  // been spent since this instant. It is not an error and must not become one.
+  it("accepts a zero-width look-back", () => {
+    expect(parseSessionUsageWindow("0d")).toEqual({ kind: "duration", ms: 0 });
+  });
+
+  it("refuses anything it cannot read, rather than falling back to the epoch", () => {
+    expect(parseSessionUsageWindow("last tuesday")).toBeNull();
+    expect(parseSessionUsageWindow("d7")).toBeNull();
+    expect(parseSessionUsageWindow("-7d")).toBeNull();
+    expect(parseSessionUsageWindow("7y")).toBeNull();
+    expect(parseSessionUsageWindow("")).toBeNull();
+  });
+
+  // `Date.parse("7")` is a valid date to the platform and lands in 2001. A
+  // caller who typed that meant seven of something and fumbled the unit; a
+  // window opening twenty-five years ago is exactly the plausible wrong answer
+  // that would never be noticed.
+  it("refuses a bare number the platform would happily read as a year", () => {
+    expect(Number.isFinite(Date.parse("7"))).toBe(true);
+    expect(parseSessionUsageWindow("7")).toBeNull();
+    expect(parseSessionUsageWindow("2026")).toBeNull();
+  });
+
+  it("still refuses a calendar-shaped string that is not a real instant", () => {
+    expect(parseSessionUsageWindow("2026-13-45")).toBeNull();
+  });
+});
+
+describe("sessionUsageWindowSince", () => {
+  // The whole reason the two arms survive to the handler: a look-back is
+  // relative to when the question is ANSWERED, not to when it was typed.
+  it("measures a look-back against the reader's own clock", () => {
+    expect(sessionUsageWindowSince({ kind: "duration", ms: 2_000 }, 10_000)).toBe(8_000);
+    expect(sessionUsageWindowSince({ kind: "duration", ms: 2_000 }, 50_000)).toBe(48_000);
+  });
+
+  it("leaves an instant exactly where it was written, whatever the clock says", () => {
+    expect(sessionUsageWindowSince({ kind: "instant", epochMs: 500 }, 10_000)).toBe(500);
+  });
+});
+
+describe("isSessionUsageGrouping", () => {
+  it("accepts every grouping this build reports", () => {
+    for (const grouping of SESSION_USAGE_GROUPINGS) {
+      expect(isSessionUsageGrouping(grouping)).toBe(true);
+    }
+  });
+
+  it("refuses a dimension nothing groups by, and a non-string", () => {
+    expect(isSessionUsageGrouping("provider")).toBe(false);
+    expect(isSessionUsageGrouping(undefined)).toBe(false);
+    expect(isSessionUsageGrouping(7)).toBe(false);
+  });
+});

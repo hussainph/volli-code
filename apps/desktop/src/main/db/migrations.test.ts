@@ -1499,7 +1499,7 @@ describe("migration 026 — Automations command ledger and projections", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(26);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(tableExists(db, "automations")).toBe(true);
     expect(tableExists(db, "automation_runs")).toBe(true);
     expect(tableExists(db, "automation_commands")).toBe(true);
@@ -1515,7 +1515,7 @@ describe("migration 026 — Automations command ledger and projections", () => {
 
     migrate(db, dbPath);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(26);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(columnNames(db, "projects")).toContain("authority_policy");
     expect(tableExists(db, "automation_commands")).toBe(true);
     expect(
@@ -1623,6 +1623,97 @@ describe("migration 026 — Automations command ledger and projections", () => {
     ]);
     expect(() =>
       db.prepare("UPDATE automation_runs SET provider_id = '' WHERE id = 'r1'").run(),
+    ).toThrow();
+    db.close();
+  });
+});
+
+/**
+ * A database at the version current main ships — every migration through
+ * Automations, and nothing of VC-87's.
+ *
+ * Built by replaying the real migrations up to 26 rather than by pasting a
+ * schema, so the fixture cannot drift from what a user's profile actually
+ * holds. It carries one Session with one event, because the coverage floor is
+ * derived from history and a profile with none is a different case.
+ */
+function buildCurrentV26Db(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 26)) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.pragma("user_version = 26");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p26', 'Current main', '/repo/current', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('s26', 'p26', NULL, 'Worked before metering', 1_000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, payload)
+       VALUES ('e26', 's26', 1, 7_000, 7_000, '{}', '{"kind":"session.created"}')`,
+  ).run();
+  return db;
+}
+
+describe("migration 027 — the Session usage projection", () => {
+  it("upgrades a database at current main's user_version 26 instead of skipping usage", () => {
+    const dbPath = tempDbPath();
+    const db = buildCurrentV26Db(dbPath);
+    expect(tableExists(db, "session_usage")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(tableExists(db, "session_usage")).toBe(true);
+    expect(tableExists(db, "session_usage_coverage")).toBe(true);
+    // Automations, which owned 026, survives the upgrade untouched.
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(db.prepare("SELECT id FROM projects").all()).toEqual([{ id: "p26" }]);
+    db.close();
+  });
+
+  /**
+   * The bug a marker exists to prevent: an existing profile's past spend is
+   * unrecoverable, so the index starts empty. Without a floor the first read
+   * says "no metered model calls yet" and the second, days later, prints a
+   * total that looks complete and covers only the days since the upgrade.
+   */
+  it("marks an existing profile's history as covered only from its newest fact", () => {
+    const dbPath = tempDbPath();
+    const db = buildCurrentV26Db(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT metered_from FROM session_usage_coverage").get()).toEqual({
+      metered_from: 7_000,
+    });
+    db.close();
+  });
+
+  it("leaves a fresh profile with no boundary at all", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT metered_from FROM session_usage_coverage").get()).toEqual({
+      metered_from: 0,
+    });
+    db.close();
+  });
+
+  it("keeps exactly one coverage row, so no reader can find two floors", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(() =>
+      db.prepare("INSERT INTO session_usage_coverage (id, metered_from) VALUES (2, 0)").run(),
     ).toThrow();
     db.close();
   });

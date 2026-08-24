@@ -6,6 +6,7 @@ import {
   type HarnessAdapterLookup,
   type SessionActivityState,
   type SessionHarnessState,
+  type SessionListingIdentity,
   type SessionListingRow,
   type SessionRecord,
 } from "@volli/shared";
@@ -57,7 +58,10 @@ export interface TicketSessionRow {
  * ticketless sidebar row now: where there is a ticket, its status says where
  * the Session lives more usefully than `Live` ever did.
  */
-export function sessionSourceLabel(row: SessionListingRow): string {
+// Takes the identity half, not a whole row: naming a Session's source has
+// nothing to do with what it spent, and demanding a usage summary would make
+// every caller holding a bare record invent one.
+export function sessionSourceLabel(row: SessionListingIdentity): string {
   if (row.kind === "chat") return row.record.live ? "Chat · Live" : "Chat";
   const record = row.record;
   const source =
@@ -270,7 +274,10 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
  * exists so a test can say what this process knows instead of inheriting it
  * from a module singleton.
  */
-export function canResumeSession(row: SessionListingRow, lookup: HarnessAdapterLookup): boolean {
+export function canResumeSession(
+  row: SessionListingIdentity,
+  lookup: HarnessAdapterLookup,
+): boolean {
   if (row.kind === "chat") return false;
   const record = row.record;
   return (

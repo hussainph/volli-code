@@ -66,6 +66,8 @@ import type {
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
+  UsageReportInput,
+  UsageReportResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -876,6 +878,20 @@ export function registerDataIpcHandlers(
       // because the chart is about the person rather than the project.
       const startedAt = await sessionEngine.listSessionStarts({ sinceMs: input.sinceMs });
       return { ok: true, startedAt: [...startedAt] };
+    },
+
+    "volli:usage-report": async (input: UsageReportInput): Promise<UsageReportResult> => {
+      // Straight through as well. The engine owns what a mixed basis means and
+      // when a total is only partial (`summarizeSessionUsage`); re-deciding any
+      // of that here would be a second opinion about the same money, which is
+      // exactly what `session-usage-report.ts` refuses to allow.
+      const report = await sessionEngine.reportUsage({
+        scope: input.scope,
+        since: input.sinceMs,
+        until: input.untilMs,
+        groupBy: input.groupBy,
+      });
+      return { ok: true, report };
     },
 
     "volli:venue-snapshot": async (input: VenueSnapshotInput): Promise<VenueSnapshotResult> => {

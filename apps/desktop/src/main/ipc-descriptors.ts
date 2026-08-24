@@ -58,6 +58,34 @@ export interface IpcRequestDescriptor<C extends keyof VolliInvokeContract> {
 // the vocab constants they guard (isTicketStatus/isTicketPriority/parseHarnessId),
 // imported above; isValidBranchName lives next to the branch-naming rules.
 
+/**
+ * The usage scope's four arms, checked structurally.
+ *
+ * Written out rather than accepting any record with a `kind`, because this is
+ * the boundary where a renderer's word becomes a database predicate: an
+ * unrecognised arm must be rejected here rather than fall through the ledger's
+ * switch and read a scope nobody asked for.
+ */
+function isUsageScope(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (value["kind"]) {
+    case "all":
+      return true;
+    case "project":
+      return typeof value["projectId"] === "string";
+    case "ticket":
+      return typeof value["ticketId"] === "string";
+    case "session":
+      return typeof value["sessionId"] === "string";
+    default:
+      return false;
+  }
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -508,6 +536,29 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       typeof args[0]["sinceMs"] === "number" &&
       Number.isFinite(args[0]["sinceMs"]),
     invalidError: "Invalid session window",
+  },
+  "volli:usage-report": {
+    guard: (args): args is IpcArgs<"volli:usage-report"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (!isUsageScope(input["scope"])) return false;
+      // Absent is legal for all three; present must be usable. A NaN bound
+      // would otherwise reach SQLite as a comparison that silently matches
+      // nothing, and the surface would draw an empty report as if it were a
+      // measured zero.
+      if (!isOptionalFiniteNumber(input["sinceMs"])) return false;
+      if (!isOptionalFiniteNumber(input["untilMs"])) return false;
+      const groupBy = input["groupBy"];
+      return (
+        groupBy === undefined ||
+        groupBy === "ticket" ||
+        groupBy === "session" ||
+        groupBy === "model" ||
+        groupBy === "day"
+      );
+    },
+    invalidError: "Invalid usage query",
   },
   "volli:venue-snapshot": {
     guard: (args): args is IpcArgs<"volli:venue-snapshot"> => {

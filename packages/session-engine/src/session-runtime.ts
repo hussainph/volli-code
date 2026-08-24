@@ -1998,6 +1998,14 @@ class DefaultSessionRuntime implements SessionRuntime {
           reason: observation.reason,
         });
         break;
+      case "usage.recorded":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          turnId: observation.turnId,
+          usage: observation.usage,
+        });
+        break;
       case "interaction.opened":
         event = await this.ports.engine.observe({
           ...base,

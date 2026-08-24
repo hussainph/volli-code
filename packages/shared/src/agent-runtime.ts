@@ -36,6 +36,7 @@ import {
   type SessionInteractionOption,
   type SessionInteractionResolution,
 } from "./session-ledger";
+import type { SessionUsage } from "./session-usage";
 
 export type SessionRole = "project" | "ticket" | "subagent";
 
@@ -745,6 +746,7 @@ export type RuntimeObservation =
   | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
+  | UsageObservation
   | RuntimeActivityObservation
   | AuthorityObservation
   | AttentionObservation
@@ -895,6 +897,32 @@ export interface SettledMessageObservation {
   kind: "message-settled";
   turnId: string;
   message: SettledAssistantMessage;
+  occurredAt?: number;
+  recoveryCursor?: string;
+}
+
+/**
+ * One model operation was metered.
+ *
+ * Deliberately not folded into {@link SettledMessageObservation}, and the split
+ * is the point. A settled message is a message worth showing; a metered
+ * operation is money worth counting, and most agentic spend is the second
+ * without being the first — a reply that only called tools, a reply that failed
+ * after its prompt had been billed, a Context Compaction, a utility completion
+ * with no transcript at all. Usage carried on the settled arm could only ever
+ * report the fraction of a turn that happened to say something out loud.
+ *
+ * `entryId` is the executor's own durable identity for the operation, and it is
+ * what the durable fact is named after. A counter would re-mint a different id
+ * on every replay and give the ledger a second copy of a bill it already has.
+ */
+export interface UsageObservation {
+  kind: "usage";
+  /** The executor's durable entry identity for the operation that spent this. */
+  entryId: string;
+  /** Null for spend outside a turn: compaction, and utility work. */
+  turnId: string | null;
+  usage: SessionUsage;
   occurredAt?: number;
   recoveryCursor?: string;
 }
@@ -1108,9 +1136,56 @@ export interface AgentRuntime {
   }): Promise<ModelAccessSnapshot>;
   startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle>;
   /**
-   * Run one utility completion and resolve its text. Throws when the model is
-   * not one this runtime holds or the call failed; a caller that cannot afford
-   * the throw (a title that keeps its heuristic) catches and logs.
+   * Run one utility completion and resolve its text and what it consumed.
+   * Throws when the model is not one this runtime holds or the call failed; a
+   * caller that cannot afford the throw (a title that keeps its heuristic)
+   * catches and logs.
+   *
+   * A failure that was nonetheless BILLED throws a
+   * {@link UtilityCompletionError} carrying its usage, so the caller can record
+   * the spend it owes even though it got nothing for it.
    */
-  completeUtility(input: UtilityCompletion): Promise<string>;
+  completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult>;
+}
+
+/**
+ * What a utility completion produced, and what it cost.
+ *
+ * Usage rides back with the text rather than being dropped, because this is
+ * real spend on a real Session and it produces no transcript to carry it. A
+ * caller that keeps the answer and a caller that discards it owe the same
+ * bill: the provider charged for the call, not for the decision made after it.
+ *
+ * `usage` is null when the executor metered nothing — never a zero.
+ */
+export interface UtilityCompletionResult {
+  text: string;
+  usage: SessionUsage | null;
+}
+
+/**
+ * A utility completion that produced no usable answer, carrying what it cost
+ * anyway.
+ *
+ * THE FAILURE IS THE CASE THAT MOST NEEDS THIS. A provider bills for the prompt
+ * it accepted, not for the answer Volli could use: a reply that stopped on a
+ * length limit, a refusal, a model that returned nothing but a reasoning span.
+ * Every one of those is a real charge, and every one of them reaches the caller
+ * as a thrown error. A runtime that threw before reading `message.usage` would
+ * make failed background work the one kind of spend a Session could never
+ * account for — and the auto-titler retries, so the same Session can be billed
+ * repeatedly for calls that leave no trace at all.
+ *
+ * `usage` is null when the call failed BEFORE anything was metered (an unknown
+ * model, a transport that never connected). Null is "nothing was billed as far
+ * as we can tell", never "free".
+ */
+export class UtilityCompletionError extends Error {
+  readonly usage: SessionUsage | null;
+
+  constructor(message: string, usage: SessionUsage | null) {
+    super(message);
+    this.name = "UtilityCompletionError";
+    this.usage = usage;
+  }
 }

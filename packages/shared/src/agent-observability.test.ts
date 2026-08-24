@@ -382,6 +382,30 @@ describe("ObservabilityReducer content carriers", () => {
       expect(reducer.reduce(observation)).toBeNull();
     }
   });
+
+  // Usage is a Session Semantic Fact with its own durable path. This exporter
+  // is opt-in and droppable, and every token it would carry is already on the
+  // neighbouring provider-attempt event.
+  it("leaves a metered operation to the ledger rather than exporting it twice", () => {
+    expect(
+      new ObservabilityReducer(() => 0).reduce({
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: "t1",
+        usage: {
+          cause: "assistant",
+          providerId: "anthropic",
+          modelId: "claude-opus-4-1",
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          costUsd: 0.01,
+          costBasis: "catalog-estimate",
+        },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("observability vocabulary", () => {

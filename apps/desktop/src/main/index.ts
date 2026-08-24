@@ -1246,6 +1246,26 @@ app.whenReady().then(async () => {
           readTicket: (ticketId) => getTicketBrief(sessionDb, ticketId) ?? null,
           inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
           completeUtility: (input) => piRuntimeHost.completeUtility(input),
+          // System provenance and no attachment, because there is neither: the
+          // titler runs one model call against a Session it does not attach
+          // to. A fresh event id per call rather than one derived from the
+          // Session, so a second refinement is a second bill instead of a
+          // replay the ledger silently drops.
+          recordUsage: async (sessionId, usage) => {
+            await sessionEngine.observe({
+              id: `usage:auto-title:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "auto-title", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
+          },
           retitle: async (sessionId, title) => {
             const submitted = await sessionEngine.submit({
               commandId: randomUUID(),

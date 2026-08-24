@@ -1,9 +1,13 @@
 /**
- * Full-database JSON export: one versioned document covering every table in
+ * Full-database JSON export: one versioned document covering the tables in
  * the current schema (`migrations.ts` is the authoritative table list) —
  * user-facing data-export trust, a debug/inspection tool, and a manual
  * backup story alongside the migration backups. Export only: there is
  * deliberately no import/restore path here.
+ *
+ * {@link REBUILDABLE_PROJECTIONS} names what is left out and why: a read model
+ * whose every fact is derived from a table this document does carry is stated
+ * once, in the events, rather than twice.
  *
  * `buildExportDocument` is pure given its inputs (the db handle plus the
  * caller-supplied `appVersion`/`now`) so it stays fully unit-testable
@@ -20,6 +24,38 @@ import { prepared } from "./prepared";
 
 /** Top-level format marker — lets a future importer/reader recognize the document before touching its shape. */
 export const EXPORT_FORMAT = "volli-export";
+
+/**
+ * Tables this document omits ON PURPOSE, because every fact in them is derived
+ * from a table it does carry.
+ *
+ * A DECLARATION, not a note. VC-87's review asked for one of two things about
+ * the usage projection — export it, or say plainly that rebuildable projections
+ * are excluded — because the failure mode of neither is a user opening a rescue
+ * document, finding no cost history, and having no way to tell whether that is
+ * a design decision or a dropped table. `export.test.ts` holds every name here
+ * against the live schema, so an exemption cannot outlive the thing it exempts.
+ *
+ * `session_usage` is a fact INDEX over the `usage.recorded` events in
+ * `session_events`, which this document carries. Every column of it —
+ * attribution included — comes out of the event payload rather than out of any
+ * row it joined, which is what makes the rebuild exact; a copy here would be a
+ * second statement of the same money that a hand-edit could put out of step
+ * with the first.
+ *
+ * `session_usage_coverage` is the same argument one level up: a single row
+ * recording where metering began, which migration 027 derived from the event
+ * history this document carries.
+ *
+ * A table belongs here because it is DERIVED, never because it is large or
+ * awkward. `automations` and `automation_runs` are projections too, and they
+ * are exported, because they project a command ledger whose payloads this
+ * document does not carry — omitting them would lose the records themselves.
+ */
+export const REBUILDABLE_PROJECTIONS: readonly string[] = [
+  "session_usage",
+  "session_usage_coverage",
+];
 
 /** Any value SQLite's `json_valid` columns can carry after parsing. */
 export type ExportJsonValue =

@@ -40,6 +40,7 @@
 
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
+import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
 
 /**
@@ -197,8 +198,28 @@ export interface ChatSessionRecord {
  * the precedence between them. Replaces the flat `SessionRecord[]` those
  * endpoints used to return, which is where a structured-only Session used to
  * disappear.
+ *
+ * `usage` rides on the ROW rather than inside either record, because it is a
+ * fact about the Session and not about the attachment that renders it: the same
+ * summary means the same thing for a terminal row and a chat row, and a copy in
+ * each record would be two places for one number to drift. A Session that never
+ * called a model through Volli — every manual terminal companion — carries
+ * {@link EMPTY_SESSION_USAGE_SUMMARY}, which reads as unmeasured rather than as
+ * free, and that distinction is the reason it is a summary here and not a
+ * nullable dollar amount.
  */
-export type SessionListingRow =
+export type SessionListingRow = SessionListingIdentity & { usage: SessionUsageSummary };
+
+/**
+ * The identity half of a listing row: which kind of Session, and its record.
+ *
+ * Named so a helper that only CLASSIFIES or NAMES a Session — what to label its
+ * source, whether it can be resumed — can ask for exactly that, rather than
+ * demanding a whole row from callers that hold a record and no usage. Widening
+ * those helpers is what keeps `usage` an honest measurement instead of a field
+ * every caller learns to fill with a placeholder to get past the compiler.
+ */
+export type SessionListingIdentity =
   | { kind: "terminal"; record: SessionRecord }
   | { kind: "chat"; record: ChatSessionRecord };
 

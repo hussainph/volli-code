@@ -37,6 +37,7 @@
 import { REASONING_LEVELS } from "./agent-runtime";
 import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
+import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
 
 /**
@@ -309,7 +310,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "ticket.create" },
     listed: true,
-    referenceOrder: 11,
+    referenceOrder: 12,
     group: "Write",
     summary: "Create a ticket (defaults to Backlog).",
     example: 'volli ticket create --title "Fix auth" --label bug',
@@ -380,7 +381,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "ticket.update" },
     listed: true,
-    referenceOrder: 12,
+    referenceOrder: 13,
     group: "Write",
     summary: "Update a ticket's fields or body.",
     example: 'volli ticket update VC-12 --edit "old" "new"',
@@ -458,7 +459,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "ticket.move" },
     listed: true,
-    referenceOrder: 13,
+    referenceOrder: 14,
     group: "Write",
     summary: "Move a ticket to another column.",
     example: "volli ticket move VC-12 --to needs-review",
@@ -496,7 +497,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "ticket.comment" },
     listed: true,
-    referenceOrder: 14,
+    referenceOrder: 15,
     group: "Write",
     summary: "Add a comment to a ticket.",
     example: 'volli ticket comment VC-12 -m "Ready for review"',
@@ -549,7 +550,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "ticket.archive" },
     listed: true,
-    referenceOrder: 15,
+    referenceOrder: 16,
     group: "Write",
     summary: "Archive a ticket (its worktree is preserved).",
     example: "volli ticket archive VC-12",
@@ -669,12 +670,76 @@ export const VERB_REGISTRY = [
     ],
   },
   {
+    // What a pass cost, and where it went (VC-87).
+    //
+    // READ TIER, and VC-92's staging is explicit about why that is the whole
+    // design: an orchestrator sampling spend must not pay context rent for the
+    // privilege. So it is a CLI verb any caller may run rather than a named
+    // tool sitting in every Role bundle's prompt — composable with the shell
+    // the agent already has, and costing no model context until an agent
+    // chooses to run it.
+    //
+    // Deliberately NOT a place to set a budget. Reading a cap is a read; a cap
+    // the capped Session can write is decoration, so setting one is VC-44
+    // app-owned policy and tripping one rides `ticket.signal` (VC-85).
+    //
+    // And deliberately not an account meter. What an API organization has
+    // spent or has left is a different fact with a different credential and a
+    // different freshness, and folding it into this total would let a
+    // catalogue estimate be read as a bill.
+    key: "cost",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "cost" },
+    listed: true,
+    referenceOrder: 11,
+    group: "Read",
+    summary: "Report what Sessions consumed: tokens, cost, and cache class.",
+    example: "volli cost --ticket VC-12 --group-by session",
+    notes: [
+      "Volli's own measurement of its Sessions, not a provider account balance or an invoice.",
+      "~ marks a catalogue estimate, + marks a total only partly priced, and — means nothing could be priced.",
+      "Token classes do not overlap: cache reads bill near 0.1x and cache writes near 1.25-2x, so a falling cached share is what a rising bill starts as.",
+      "Cost is recorded per operation, never per token class — no split of the money by class is derivable.",
+      "--since takes an RFC 3339 instant or a look-back like 7d, 24h or 90m.",
+      "coverage says partial when the window reaches back past the point this profile began metering.",
+    ],
+    options: [
+      { name: "--ticket", kind: "value", placeholder: "<id>", help: "Only this ticket's spend." },
+      {
+        name: "--session",
+        kind: "value",
+        placeholder: "<handle>",
+        help: "Only this session's spend, by short id.",
+      },
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
+      {
+        name: "--all-projects",
+        kind: "flag",
+        help: "Every project this profile holds, not just one.",
+      },
+      {
+        name: "--since",
+        kind: "value",
+        placeholder: "<when>",
+        help: "Only operations at or after this instant or look-back.",
+      },
+      {
+        name: "--group-by",
+        kind: "value",
+        placeholder: "<dimension>",
+        values: `valid: ${SESSION_USAGE_GROUPINGS.join(", ")}`,
+        help: "Break the total down along one dimension.",
+      },
+    ],
+  },
+  {
     key: "session.list",
     accessModes: ["cli"],
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 17,
+    referenceOrder: 18,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
@@ -692,7 +757,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 18,
+    referenceOrder: 19,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -727,7 +792,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.start" },
     listed: true,
-    referenceOrder: 16,
+    referenceOrder: 17,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
@@ -792,7 +857,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 19,
+    referenceOrder: 20,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -827,7 +892,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 20,
+    referenceOrder: 21,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -858,7 +923,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 22,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -918,7 +983,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 23,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -977,7 +1042,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 26,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1022,7 +1087,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 25,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1059,7 +1124,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 24,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1084,7 +1149,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 27,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",

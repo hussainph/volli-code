@@ -181,6 +181,7 @@ export function watchSessionActivity(
     listSessionStarts: (query) => engine.listSessionStarts(query),
     listLatestTicketSignals: (query) => engine.listLatestTicketSignals(query),
     listEvents: (query) => engine.listEvents(query),
+    reportUsage: (query) => engine.reportUsage(query),
   };
 
   return {

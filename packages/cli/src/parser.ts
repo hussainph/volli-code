@@ -2,10 +2,13 @@ import {
   cliVerbName,
   HARNESS_VOCABULARY,
   HELP_TOPIC_NAMES,
+  isSessionUsageGrouping,
   isTicketPriority,
   parseColumnToken,
   parseHarnessId,
+  parseSessionUsageWindow,
   REASONING_LEVELS,
+  SESSION_USAGE_GROUPINGS,
   TICKET_PRIORITIES,
   VERB_REGISTRY,
 } from "@volli/shared";
@@ -111,6 +114,34 @@ const positiveIntValue: ValueParser = (raw, token) => {
     ? { ok: true, value: parsed }
     : { ok: false, message: `${token} requires a positive integer` };
 };
+
+/**
+ * `--since`, kept as the two shapes a caller may write rather than resolved to
+ * an instant here.
+ *
+ * A look-back is relative to the moment the QUESTION IS ANSWERED, and this
+ * process does not answer it. Resolving `7d` against the CLI's own clock would
+ * work and would be wrong in the one way nobody notices: the window would be
+ * pinned at parse time, and main's injected clock would stop governing an
+ * answer it is supposed to govern.
+ */
+const usageWindowValue: ValueParser = (raw, token) => {
+  const window = parseSessionUsageWindow(raw);
+  return window === null
+    ? {
+        ok: false,
+        message: `${token} expects an RFC 3339 instant or a look-back like 7d, 24h or 90m`,
+      }
+    : { ok: true, value: window };
+};
+
+const usageGroupingValue: ValueParser = (raw) =>
+  isSessionUsageGrouping(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown grouping ${JSON.stringify(raw)} (valid: ${SESSION_USAGE_GROUPINGS.join(", ")})`,
+      };
 
 /**
  * The executable half of one declared option: what the walker DOES with the
@@ -292,6 +323,29 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
   "model.list": { options: { "--all": { kind: "flag", key: "all", value: true } } },
+  cost: {
+    options: {
+      "--ticket": { kind: "value", key: "ticket" },
+      "--session": { kind: "value", key: "session" },
+      "--project": { kind: "value", key: "project" },
+      "--all-projects": { kind: "flag", key: "allProjects", value: true },
+      "--since": { kind: "value", key: "since", parse: usageWindowValue },
+      "--group-by": { kind: "value", key: "groupBy", parse: usageGroupingValue },
+    },
+    // One scope per question. Two would have to mean something, and the two
+    // available meanings (intersect, or let one win) are both worse than
+    // saying so: a caller who wrote both learns which one main ignored only by
+    // noticing the total is wrong.
+    finalize: (args) => {
+      const scopes = ["ticket", "session", "allProjects"].filter((key) => key in args);
+      // `--project` is the ladder's own word and rides WITH a narrower scope
+      // where it can disagree; `session.list` already refuses that mismatch by
+      // name, and the cost verb does the same in main where both ids resolve.
+      return scopes.length > 1
+        ? `cost takes one of --ticket, --session or --all-projects, not ${scopes.length}`
+        : null;
+    },
+  },
   "session.list": {
     options: {
       "--project": { kind: "value", key: "project" },

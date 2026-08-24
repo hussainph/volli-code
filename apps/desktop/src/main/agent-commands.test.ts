@@ -16,6 +16,7 @@ import type {
   DoctorCheck,
   HarnessId,
   ModelAccessSnapshot,
+  SessionUsage,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type {
@@ -1537,6 +1538,12 @@ describe("agent command service", () => {
             ticket: "VC-1",
             title: "Codex session",
             harness: "claude-code",
+            // A Session that never called a model through Volli: null cost and
+            // an unavailable basis, never `0` — unmeasured is not free.
+            costUsd: null,
+            costBasis: "unavailable",
+            costCoverage: "unavailable",
+            tokens: 0,
             ageMs: 100,
           },
         ],
@@ -5086,5 +5093,257 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
 
     if (!res.ok) throw new Error("expected identify to succeed");
     expect(res.data).not.toHaveProperty("warning");
+  });
+});
+
+/**
+ * `volli cost` — the read-tier rollup (VC-87).
+ *
+ * The cases below are the sentences the verb must never print, not a tour of
+ * its options: an unmeasured Session read as free, a deleted Ticket's bill
+ * silently rehomed, an upgraded profile's short history read as its whole
+ * history, and a window whose lower bound was pinned by the wrong clock.
+ */
+/** One metered operation, priced by a catalogue like most real ones are. */
+function metered(over: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...over,
+  };
+}
+
+describe("volli cost", () => {
+  const provenance = {
+    source: { kind: "system" as const, id: "test", detail: null },
+    venue: { id: "local", kind: "local" as const },
+  };
+
+  async function seeded(now: () => number = () => 10_000) {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Volli Code", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 1, usesWorktree: false }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now,
+      sessionEngine,
+    });
+    const execute = (args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd: "cost", args, ctx: { cwd: "/repo/volli", env: {} } });
+    return { sessionEngine, execute };
+  }
+
+  async function meteredSession(
+    sessionEngine: SessionEngine,
+    options: { commandId: string; ticketId: string | null },
+  ): Promise<string> {
+    const created = await sessionEngine.createSession({
+      commandId: options.commandId,
+      projectId: "p1",
+      ticketId: options.ticketId,
+      title: options.commandId,
+      provenance,
+    });
+    return created.session.id;
+  }
+
+  async function record(
+    sessionEngine: SessionEngine,
+    sessionId: string,
+    id: string,
+    occurredAt: number,
+    usage: SessionUsage,
+  ): Promise<void> {
+    await sessionEngine.observe({
+      id,
+      kind: "usage.recorded",
+      sessionId,
+      occurredAt,
+      provenance,
+      attachmentId: null,
+      turnId: null,
+      usage,
+    });
+  }
+
+  it("reports a project's spend with its token classes kept apart", async () => {
+    const { sessionEngine, execute } = await seeded();
+    const sessionId = await meteredSession(sessionEngine, { commandId: "s1", ticketId: "t1" });
+    await record(sessionEngine, sessionId, "u1", 1_000, metered({ costUsd: 0.25 }));
+    await record(sessionEngine, sessionId, "u2", 2_000, metered({ costUsd: 0.75 }));
+
+    const result = await execute({});
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        scope: "project Volli Code",
+        since: null,
+        costUsd: 1,
+        costBasis: "catalog-estimate",
+        costCoverage: "complete",
+        // Non-overlapping: 200 uncached input, 800 cache read, 20 output.
+        inputTokens: 200,
+        cacheReadTokens: 800,
+        cacheWriteTokens: 0,
+        outputTokens: 20,
+        totalTokens: 1_020,
+        cachedInputShare: 0.8,
+        requestCount: 2,
+        pricedRequestCount: 2,
+        meteredSessionCount: 1,
+        coverage: "complete",
+        groups: [],
+      },
+    });
+  });
+
+  it("keeps an unpriced operation's cost null rather than reporting it as free", async () => {
+    const { sessionEngine, execute } = await seeded();
+    const sessionId = await meteredSession(sessionEngine, { commandId: "s1", ticketId: null });
+    await record(
+      sessionEngine,
+      sessionId,
+      "u1",
+      1_000,
+      metered({ costUsd: null, costBasis: "unavailable" }),
+    );
+
+    const result = await execute({});
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { costUsd: null, costCoverage: "unavailable", requestCount: 1, pricedRequestCount: 0 },
+    });
+  });
+
+  it("scopes to a ticket by display id and breaks it down by session", async () => {
+    const { sessionEngine, execute } = await seeded();
+    const onTicket = await meteredSession(sessionEngine, { commandId: "s1", ticketId: "t1" });
+    const elsewhere = await meteredSession(sessionEngine, { commandId: "s2", ticketId: null });
+    await record(sessionEngine, onTicket, "u1", 1_000, metered({ costUsd: 2 }));
+    await record(sessionEngine, elsewhere, "u2", 1_000, metered({ costUsd: 9 }));
+
+    const result = await execute({ ticket: "VC-1", groupBy: "session" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        scope: "ticket VC-1",
+        costUsd: 2,
+        groups: [
+          {
+            groupBy: "session",
+            key: onTicket.slice(0, 8),
+            label: onTicket.slice(0, 8),
+            costUsd: 2,
+          },
+        ],
+      },
+    });
+    // The full UUID is never a public handle, on this door like every other.
+    expect(JSON.stringify(result)).not.toContain(onTicket);
+  });
+
+  it("labels a by-ticket group with its display id, and unticketed spend as null", async () => {
+    const { sessionEngine, execute } = await seeded();
+    const onTicket = await meteredSession(sessionEngine, { commandId: "s1", ticketId: "t1" });
+    const projectSession = await meteredSession(sessionEngine, { commandId: "s2", ticketId: null });
+    await record(sessionEngine, onTicket, "u1", 1_000, metered({ costUsd: 5 }));
+    await record(sessionEngine, projectSession, "u2", 1_000, metered({ costUsd: 1 }));
+
+    const result = await execute({ groupBy: "ticket" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        groups: [
+          { key: "VC-1", label: "VC-1", costUsd: 5 },
+          // A real group, not an absence: dropping it would make the rows add
+          // up to less than the total above them.
+          { key: null, label: null, costUsd: 1 },
+        ],
+      },
+    });
+  });
+
+  it("resolves --since against the handler's clock, not the caller's", async () => {
+    const { sessionEngine, execute } = await seeded(() => 10_000);
+    const sessionId = await meteredSession(sessionEngine, { commandId: "s1", ticketId: null });
+    await record(sessionEngine, sessionId, "old", 1_000, metered({ costUsd: 7 }));
+    await record(sessionEngine, sessionId, "new", 9_000, metered({ costUsd: 3 }));
+
+    // A 2-second look-back against now = 10_000 keeps only the 9_000 operation.
+    const relative = await execute({ since: { kind: "duration", ms: 2_000 } });
+    const absolute = await execute({ since: { kind: "instant", epochMs: 500 } });
+
+    expect(relative).toMatchObject({ ok: true, data: { since: 8_000, costUsd: 3 } });
+    expect(absolute).toMatchObject({ ok: true, data: { since: 500, costUsd: 10 } });
+  });
+
+  it("refuses a malformed since and an unknown grouping rather than guessing", async () => {
+    const { execute } = await seeded();
+
+    await expect(execute({ since: "last tuesday" })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+    await expect(execute({ groupBy: "provider" })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("refuses two scopes rather than silently picking one", async () => {
+    const { execute } = await seeded();
+
+    await expect(execute({ ticket: "VC-1", allProjects: true })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("keeps a deleted Ticket's spend on that Ticket", async () => {
+    const { sessionEngine, execute } = await seeded();
+    const sessionId = await meteredSession(sessionEngine, { commandId: "s1", ticketId: "t1" });
+    await record(sessionEngine, sessionId, "u1", 1_000, metered({ costUsd: 4 }));
+
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("t1");
+
+    // The money is still counted — attribution is frozen in the fact — and it
+    // is named as spend on something gone rather than as unticketed spend or
+    // as an internal id no caller could use.
+    const result = await execute({ groupBy: "ticket" });
+    expect(result).toMatchObject({
+      ok: true,
+      data: { costUsd: 4, groups: [{ key: null, label: "(deleted ticket)", costUsd: 4 }] },
+    });
+    expect(JSON.stringify(result)).not.toContain("t1");
+  });
+
+  it("says partial when the window reaches behind what this profile has metered", async () => {
+    const { execute } = await seeded();
+    ctx.db.prepare("UPDATE session_usage_coverage SET metered_from = 5_000 WHERE id = 1").run();
+
+    const lifetime = await execute({});
+    const recent = await execute({ since: { kind: "instant", epochMs: 6_000 } });
+
+    expect(lifetime).toMatchObject({
+      ok: true,
+      data: { coverage: "partial", meteredFrom: 5_000 },
+    });
+    expect(recent).toMatchObject({ ok: true, data: { coverage: "complete", meteredFrom: 5_000 } });
   });
 });

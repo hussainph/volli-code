@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 import {
   readTerminalAttachmentDetail,
@@ -27,6 +28,7 @@ function projectionWith(attachments: SessionAttachmentProjection[]): SessionProj
     modelSelection: null,
     turnActive: false,
     authorityDenials: 0,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
     bornTicketless: true,
   };

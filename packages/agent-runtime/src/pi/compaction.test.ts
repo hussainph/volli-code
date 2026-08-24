@@ -359,6 +359,19 @@ describe("compactSession", () => {
     expect(outcome.entry.tokensBefore).toBeGreaterThan(0);
     // Billed to the Session: the summarization call's own usage rides on the entry.
     expect(outcome.entry.usage).toEqual(usage());
+    // And is reported in Volli's vocabulary, so a Session's total includes the
+    // cost of keeping itself inside its own context window.
+    expect(outcome.usage).toEqual({
+      cause: "compaction",
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 7,
+      costUsd: 0.003,
+      costBasis: "catalog-estimate",
+    });
     expect(outcome.entry.retainedTail).toEqual([path[2]?.message, path[3]?.message]);
     // The entry is a real one in the tree, not a marker: Pi can find it by type.
     expect(await sidecar.findEntriesOnBranch({ type: "compaction" })).toEqual([outcome.entry]);

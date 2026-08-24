@@ -29,11 +29,14 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   COMPACTION_REASONS,
+  COST_BASES,
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
+  SESSION_USAGE_CAUSES,
+  UtilityCompletionError,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
@@ -52,7 +55,9 @@ import {
   type RuntimeSessionIdentity,
   type SessionRuntimeSpec,
   type TurnObservation,
+  type UsageObservation,
   type UtilityCompletion,
+  type UtilityCompletionResult,
 } from "@volli/shared";
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
@@ -80,11 +85,13 @@ import {
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { createSessionTools } from "./tools";
 import {
+  assistantUsage,
   attentionReasonFor,
   classifyAssistantMessage,
   isTransientTransportFailure,
   recoveryRefFor,
   sanitizeDiagnostic,
+  sessionUsageFrom,
 } from "./transcript";
 
 /**
@@ -245,22 +252,31 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
 }
 
 /**
- * One utility completion on an explicit model, read back as plain text.
+ * One utility completion on an explicit model, read back as text and a bill.
  *
  * The executor half of the port — the caller resolved and validated the
  * model; this runs it and refuses rather than substitutes. A model this
  * collection does not hold throws, a failed stop reason throws, and an
  * answer with no text throws: the caller keeps its heuristic title and logs,
  * which is the whole of the contract on this side.
+ *
+ * The usage travels back with the text because nothing else here will carry
+ * it. A utility call creates no Session, no attachment and no transcript row,
+ * so a runtime that reported only the text would make this the one kind of
+ * model spend a Session could never account for.
  */
 async function runUtilityCompletion(
   host: PiRuntimeHost,
   input: UtilityCompletion,
-): Promise<string> {
+): Promise<UtilityCompletionResult> {
   const model = host.models.getModel(input.model.providerId, input.model.modelId);
   if (model === undefined) {
-    throw new Error(
+    // Nothing was sent, so nothing was billed. Null rather than an empty
+    // measurement: the difference between "no request was made" and "a request
+    // was made and cost nothing" is the whole discipline of this module.
+    throw new UtilityCompletionError(
       `Model ${input.model.providerId}/${input.model.modelId} is not in this runtime's catalog.`,
+      null,
     );
   }
   const message = await host.models.completeSimple(
@@ -275,8 +291,21 @@ async function runUtilityCompletion(
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
+  // Read BEFORE either refusal below. The provider billed for the prompt it
+  // accepted, not for whether Volli could use the answer — so a reply that
+  // stopped short and a reply that was all reasoning are both real spend, and
+  // extracting usage after the throw would lose exactly the calls a caller can
+  // least afford to be silently charged for.
+  const usage = sessionUsageFrom(
+    message.usage,
+    { provider: message.provider, model: message.model, api: message.api },
+    "utility",
+  );
   if (hasFailedStopReason(message)) {
-    throw new Error(sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."));
+    throw new UtilityCompletionError(
+      sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."),
+      usage,
+    );
   }
   // Agent message tokens only. `thinking` blocks are dropped here rather than
   // filtered downstream, because a caller that runs a model at a reasoning
@@ -289,9 +318,11 @@ async function runUtilityCompletion(
   }
   const trimmed = text.trim();
   if (trimmed.length === 0) {
-    throw new Error("The utility completion returned no text.");
+    // A model that answered only with a reasoning span still ran. The caller
+    // keeps its fallback and still owes the bill.
+    throw new UtilityCompletionError("The utility completion returned no text.", usage);
   }
-  return trimmed;
+  return { text: trimmed, usage };
 }
 
 /** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */
@@ -369,6 +400,7 @@ type RecoverableObservation =
   | TurnObservation
   | CompactionObservation
   | SettledMessageObservation
+  | UsageObservation
   | RuntimeActivityObservation
   | AttentionObservation;
 
@@ -453,6 +485,12 @@ function isRecoverableObservation(value: unknown): boolean {
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
+    case "usage":
+      return (
+        typeof value["entryId"] === "string" &&
+        (value["turnId"] === null || typeof value["turnId"] === "string") &&
+        isSessionUsage(value["usage"])
+      );
     case "compaction":
       if (!isOneOf(value["reason"], COMPACTION_REASON_VALUES)) return false;
       // Whole numbers, because the durable ledger reads them as integers and a
@@ -500,6 +538,30 @@ function isRecoverableObservation(value: unknown): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * The durable usage shape, checked with the ledger's own strictness.
+ *
+ * Whole token counts and a finite cost, because the Session Event codec reads
+ * them that way: a marker this accepted and the ledger refused would be a
+ * Session that recovers and then cannot be read — the VC-155 shape, re-laid
+ * one field at a time. `null` is accepted everywhere a number is, and only
+ * `null`: absent is what an unmetered field honestly says, and `undefined`
+ * would not survive the JSON round trip this validator guards.
+ */
+function isSessionUsage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const tokens = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
+  return (
+    isOneOf(value["cause"], SESSION_USAGE_CAUSES) &&
+    typeof value["providerId"] === "string" &&
+    typeof value["modelId"] === "string" &&
+    tokens.every((key) => value[key] === null || wholeNumber(value[key])) &&
+    (value["costUsd"] === null ||
+      (typeof value["costUsd"] === "number" && Number.isFinite(value["costUsd"]))) &&
+    isOneOf(value["costBasis"], COST_BASES)
+  );
 }
 
 function isPersistedUserMessage(value: unknown): value is UserMessage {
@@ -1408,6 +1470,23 @@ async function attachSession(
           // while both remain in the ledger and on screen.
           agent.state.messages = outcome.messages;
         }
+        // Recorded before the compaction fact, so a crash between the two
+        // loses the summary rather than the bill: the summary is recoverable
+        // from Pi's own entry, and spend that went unrecorded is not.
+        if (outcome.kind === "compacted" && outcome.usage !== null) {
+          await commitObservation(
+            await persistObservation({
+              kind: "usage",
+              // Named after the compaction entry, which is what makes a
+              // replayed compaction land on the bill it already has.
+              entryId: outcome.entry.id,
+              // Compaction has no turn of its own. Inventing one here would
+              // put maintenance spend inside a conversation unit it is not in.
+              turnId: null,
+              usage: outcome.usage,
+            }),
+          );
+        }
         await commitObservation(
           await persistObservation(
             outcome.kind === "compacted"
@@ -1643,6 +1722,17 @@ async function attachSession(
         }
         /* v8 ignore next -- acceptedUserMessages only contains user messages. */
         if (entryId === null) throw new Error("Pi assistant message was not persisted.");
+        // Metering happens BEFORE classification, and that ordering is the
+        // whole point. Classification asks whether the message said anything;
+        // most agentic spend answers no — a reply that only called tools, a
+        // reply that failed after its prompt was billed — and usage read off
+        // the settled arm alone would report a fraction of the bill.
+        const metered = assistantUsage(event.message as AssistantMessage);
+        if (metered !== null) {
+          await commitObservation(
+            await persistObservation({ kind: "usage", entryId, turnId, usage: metered }),
+          );
+        }
         const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
         if (outcome.kind === "settled") {
           await commitObservation(

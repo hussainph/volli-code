@@ -868,6 +868,82 @@ CREATE TABLE secrets (
 `;
 
 /**
+ * Migration 027: `session_usage` — the read model for what Sessions consumed.
+ *
+ * A fact INDEX, not an aggregate. One row per metered model operation, keyed
+ * by the `usage.recorded` event that proves it, so the table can be dropped
+ * and rebuilt from the ledger at any time and no total is ever stored where a
+ * later write could disagree with the facts under it.
+ *
+ * Every measured column is nullable and none defaults to zero. A provider that
+ * reported no cost and a provider that charged nothing are different facts, and
+ * `DEFAULT 0` here would erase the difference at the storage layer where no
+ * reader could recover it.
+ *
+ * `project_id` and `ticket_id` are copied from the *event* at write time and
+ * carry no foreign key to `tickets`. `sessions.ticket_id` is ON DELETE SET
+ * NULL, so joining live would move a deleted Ticket's whole bill into
+ * unticketed Project spend — a quieter lie than an id that no longer resolves.
+ * Attribution therefore rides in the immutable `usage.recorded` event, which is
+ * what lets a rebuild reproduce this table row for row. The Session reference
+ * does cascade: a Session that is gone has no history for these rows to index.
+ *
+ * `session_usage_coverage` records HOW FAR BACK this profile can answer, and it
+ * is the difference between a partial total and a wrong one. A database that
+ * existed before this migration has real spend in its past that was never
+ * evented, so the index starts empty and the first total a reader saw would
+ * otherwise be “no metered model calls yet”, followed later by a complete-
+ * looking figure covering only what happened after the upgrade.
+ *
+ * NOT BACKFILLED, and the choice is deliberate rather than deferred. The only
+ * historical source is the settled transcript artifacts, and settled messages
+ * are a biased sample of spend: a tool-use-only reply, a reply that failed
+ * after its prompt was billed, a Context Compaction and the auto-title utility
+ * call each cost money and settle no transcript row. A backfill from that
+ * source would produce a number that is systematically low and
+ * indistinguishable from a complete one — which is precisely the sentence this
+ * whole feature exists to prevent. A boundary a reader can see beats a total
+ * nobody can check.
+ *
+ * `metered_from` is the newest fact already in history rather than a wall
+ * clock: a migration must be a deterministic function of the database it is
+ * handed, and everything at or before that instant demonstrably predates
+ * metering. `0` — the value a fresh profile gets — means there is no boundary
+ * and every window is complete.
+ */
+const MIGRATION_027_SESSION_USAGE = `
+CREATE TABLE session_usage_coverage (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  metered_from INTEGER NOT NULL
+);
+
+INSERT INTO session_usage_coverage (id, metered_from)
+VALUES (1, COALESCE((SELECT MAX(occurred_at) FROM session_events), 0));
+
+CREATE TABLE session_usage (
+  event_id           TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  project_id         TEXT NOT NULL,
+  ticket_id          TEXT,
+  occurred_at        INTEGER NOT NULL,
+  cause              TEXT NOT NULL,
+  provider_id        TEXT NOT NULL,
+  model_id           TEXT NOT NULL,
+  input_tokens       INTEGER,
+  output_tokens      INTEGER,
+  cache_read_tokens  INTEGER,
+  cache_write_tokens INTEGER,
+  cost_usd           REAL,
+  cost_basis         TEXT NOT NULL
+);
+
+CREATE INDEX session_usage_project_time ON session_usage(project_id, occurred_at);
+CREATE INDEX session_usage_ticket_time ON session_usage(ticket_id, occurred_at);
+CREATE INDEX session_usage_session_time ON session_usage(session_id, occurred_at);
+CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, occurred_at);
+`;
+
+/**
  * Migration 025: the durable authority policy store (VC-44, slice 7 of
  * `docs/plans/authority-two-axis-rearchitecture.md`).
  *
@@ -1157,6 +1233,16 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "automations — command ledger, projections and durable first-message intents",
     sql: MIGRATION_026_AUTOMATIONS,
     apply: applyMigration026Automations,
+  },
+  // Renumbered twice — 025 when VC-44's authority policy store reached main
+  // first, 027 when VC-118's automations took 026. A version is a position in
+  // an ordered, already-applied history, not a name: two migrations claiming
+  // one number would leave whichever profile ran the other one silently
+  // missing this table, at a `user_version` that says it is up to date.
+  {
+    version: 27,
+    name: "session_usage — the rebuildable index of what each model operation consumed",
+    sql: MIGRATION_027_SESSION_USAGE,
   },
 ];
 

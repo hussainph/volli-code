@@ -7,6 +7,7 @@ import {
   buildExportDocument,
   defaultExportFilename,
   EXPORT_FORMAT,
+  REBUILDABLE_PROJECTIONS,
   serializeExportDocument,
 } from "./export";
 import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
@@ -583,6 +584,90 @@ describe("buildExportDocument — populated db", () => {
     expect(document.sessionCommands.find(({ id }) => id === "message-command")?.route).toEqual({
       adapterId: "terminal",
       attachmentId: `test-terminal:${session.id}`,
+    });
+  });
+
+  /**
+   * The exclusion has to be a declaration rather than an oversight, and this is
+   * what makes it one: every name in the list is held against the live schema,
+   * so an exemption cannot outlive the table it exempts, and a projection
+   * silently renamed by a migration fails here rather than in a user's rescue
+   * document.
+   */
+  it("declares each omitted projection against a table that really exists", async () => {
+    ctx = openTestDb();
+    const tables = (
+      ctx.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    ).map(({ name }) => name);
+
+    expect(REBUILDABLE_PROJECTIONS).toEqual(["session_usage", "session_usage_coverage"]);
+    for (const projection of REBUILDABLE_PROJECTIONS) {
+      expect(tables, `${projection} is declared rebuildable but is not in the schema`).toContain(
+        projection,
+      );
+    }
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    expect(document).not.toHaveProperty("sessionUsage");
+    expect(document).not.toHaveProperty("sessionUsageCoverage");
+  });
+
+  /**
+   * The projection is excluded because it is DERIVED, and this is the claim
+   * that makes the exclusion honest: the events the export does carry are
+   * enough to put every row back, attribution included.
+   */
+  it("carries the events a dropped usage projection can be rebuilt from", async () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "proj-1" });
+    insertProject(ctx.db, project);
+    insertTicket(ctx.db, testTicket(project.id, { id: "ticket-1", usesWorktree: false }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1 });
+    const created = await sessionEngine.createSession({
+      commandId: "usage-session",
+      projectId: project.id,
+      ticketId: "ticket-1",
+      title: "Metered",
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    await sessionEngine.observe({
+      id: "usage-1",
+      kind: "usage.recorded",
+      sessionId: created.session.id,
+      occurredAt: 2,
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+      attachmentId: null,
+      turnId: null,
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 0,
+        costUsd: 0.25,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+
+    expect(document).not.toHaveProperty("sessionUsage");
+    const usageEvent = document.sessionEvents.find((event) => event.id === "usage-1");
+    expect(usageEvent?.payload).toMatchObject({
+      kind: "usage.recorded",
+      // Attribution rides in the fact, which is exactly why the derived table
+      // does not need to be carried beside it.
+      attribution: { projectId: project.id, ticketId: "ticket-1" },
+      usage: { costUsd: 0.25, cacheReadTokens: 400 },
     });
   });
 
