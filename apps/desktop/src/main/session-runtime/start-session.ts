@@ -42,7 +42,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { displayTicketId } from "@volli/shared";
+import { displayTicketId, errorMessage, shortSessionId } from "@volli/shared";
 import type {
   ModelSelection,
   Project,
@@ -160,8 +160,11 @@ export async function startSessionOperation(
         ports.submitSessionMessage?.({ sessionId: started.sessionId, text: kickoff, ...ids }),
       )
       .catch((error: unknown) => {
+        // The short handle and the bare message, exactly as the socket door
+        // logged this before the act was lifted out of it: an extraction that
+        // changes what an operator greps for has changed behavior.
         console.error(
-          `[volli] kickoff for session ${started.sessionId} was not delivered: ${String(error)}`,
+          `[volli] kickoff for session ${shortSessionId(started.sessionId)} was not delivered: ${errorMessage(error)}`,
         );
       });
   }

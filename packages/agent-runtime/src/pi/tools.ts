@@ -110,11 +110,16 @@ function createTool(tool: CodingToolId, env: ExecutionEnv): AgentTool {
  * only ever refused calls a correct caller would never have produced. Making it
  * structural is what allowed that rule to be deleted (VC-3).
  *
- * The switch is exhaustive over {@link SessionToolBinding} rather than
- * defaulted, and each binding carries its own port: a name added to the
- * vocabulary with no tool behind it fails to compile here, and "named but
- * unwired" is not a case this has to handle because the binding type cannot
- * express it. There is no unreachable branch to leave untested.
+ * Every binding carries its own port, so "named but unwired" is not a case this
+ * has to handle: the binding type cannot express it.
+ *
+ * The switch covers {@link SessionToolBinding} exhaustively, but it reaches the
+ * verb arm through `default` rather than a case label, because that arm's
+ * members are registry data — there is no closed set of literals to enumerate
+ * (VC-162). Exhaustiveness is kept by the `satisfies` on that branch instead of
+ * by the labels: it narrows to the verb arm, so a name added to the vocabulary
+ * with no case above fails to compile there rather than falling through. The
+ * `default` is therefore reachable and covered, not an untested escape hatch.
  */
 export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): AgentTool[] {
   return sessionToolBindings(spec).map((binding) => {

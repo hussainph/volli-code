@@ -86,16 +86,21 @@ const REFERENCE_SURFACE = [
  * every key, so a new verb cannot be added without a tier answer — that is the
  * "adding a verb is a tier decision" discipline, enforced by the compiler.
  *
- * Two rows deliberately disagree with VC-92's target assignment, because this
- * ticket changes no behavior and both verbs are on the socket right now:
+ * Two rows deliberately disagree with VC-92's target assignment, because both
+ * verbs are still on the socket right now:
  *
  * - `ticket.archive` — target: off the agent surface entirely (no access mode,
  *   no tier). VC-163 empties its access modes; until then it is a coordination
  *   write like the other ticket writes.
  * - `session.start` — target: control tier, a named tool in the `project`
- *   bundle, absent from the socket. VC-162 flips its access mode to `tool` and
- *   ships it as the tracer-bullet control verb; until then the socket answers
- *   it, and coordination is the honest reading of where it lives.
+ *   bundle, absent from the socket. VC-162 ADDED the `tool` access mode and
+ *   `project` bundle membership; it did not flip one, and it did not make this
+ *   a control verb. The socket door stays open, so the verb is dual-surface
+ *   (`["cli", "tool"]`) and `verbTier` reads that as coordination — a tier is
+ *   the WEAKEST door a verb is reachable through, and claiming control while
+ *   any authenticated socket caller still reaches it would be a claim about a
+ *   door standing open. VC-163 removes `cli` and flips the actor to `role`,
+ *   and THAT is the moment this row becomes `control`.
  *
  * `app.launch` and `help` are not in VC-92's audit — they never reach the
  * socket. They are read tier by the same rule as any other any-caller verb.

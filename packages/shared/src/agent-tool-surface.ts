@@ -52,7 +52,7 @@
  * including the system prompt, where the provider orders tools first.
  */
 
-import { CODING_TOOL_IDS, NON_CODING_TOOL_IDS } from "./authority";
+import { CAPABILITY_TOOL_IDS, CODING_TOOL_IDS, NON_CODING_TOOL_IDS } from "./authority";
 import type { CodingToolId, NonCodingToolId, SessionToolId } from "./authority";
 import type { SessionRole } from "./agent-runtime";
 import { VERB_TOOL_KEYS, isVerbToolKey } from "./verb-registry";
@@ -99,11 +99,11 @@ export function roleVerbBundle(role: SessionRole): readonly VerbToolKey[] {
  */
 export function isSessionToolId(value: unknown): value is SessionToolId {
   if (typeof value !== "string") return false;
-  return (
-    (CODING_TOOL_IDS as readonly string[]).includes(value) ||
-    (NON_CODING_TOOL_IDS as readonly string[]).includes(value) ||
-    isVerbToolKey(value)
-  );
+  // The two halves through the two constants that ARE those halves, rather than
+  // through a restatement of either: `CAPABILITY_TOOL_IDS` is the whole
+  // capability vocabulary and `isVerbToolKey` the whole registry one, so a tool
+  // added to either is admitted here without this line being touched.
+  return (CAPABILITY_TOOL_IDS as readonly string[]).includes(value) || isVerbToolKey(value);
 }
 
 /** What a venue can actually answer, as membership rather than as ports. */

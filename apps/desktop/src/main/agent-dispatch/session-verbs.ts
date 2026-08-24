@@ -302,13 +302,18 @@ export async function sessionPeekVerb(
  * `volli session start` — an agent chat Session on a ticket.
  *
  * VC-92 ruled this one control tier: a named tool in the `project` bundle, off
- * the socket for every caller. VC-162 makes that move, and it moves the ACCESS
- * MODE, not this function. The registry binds `session.start` to one handler
- * id; a verb that leaves the `cli` access mode leaves `AGENT_COMMAND_BINDINGS`
- * and stops being reachable over the wire, and the tool surface resolves the
- * same binding. Adding a second implementation there would be two verbs
- * wearing one name — exactly what the registry's one-binding-per-verb rule
- * exists to prevent.
+ * the socket for every caller. That move happens in ACCESS MODES, never in this
+ * function — and it happens in two steps, not one. VC-162 ADDED a `tool` access
+ * mode beside `cli`, so the verb is dual-surface and this door still answers.
+ * VC-163 removes `cli`, at which point the verb leaves `AGENT_COMMAND_BINDINGS`
+ * and stops being reachable over the wire at all.
+ *
+ * What survives both steps is the binding. The registry binds `session.start`
+ * to one handler id, and the tool surface resolves that SAME id rather than
+ * growing a second implementation — which is why the application act moved to
+ * `start-session.ts` and this function kept only argv parsing and the wire
+ * envelope. Two verbs wearing one name is exactly what the registry's
+ * one-binding-per-verb rule exists to prevent.
  */
 export async function sessionStartVerb(
   context: AgentCommandContext,
