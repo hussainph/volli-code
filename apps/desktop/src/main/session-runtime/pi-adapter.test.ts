@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import {
+  getProjectAuthorityPolicy,
+  insertProject,
+  updateProjectAuthorityPolicy,
+} from "../db/projects-repo";
+import { openTestDb, testProject } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
 import type {
   BindingHandle,
   HarnessCommand,
@@ -2152,5 +2159,112 @@ describe("Pi native adapter reconcile and release", () => {
 
     // The Session Engine writes `attachment.closed` itself once release resolves.
     expect(sink.observations).toEqual([]);
+  });
+});
+
+/**
+ * VC-172's acceptance: the whole chain, with nothing faked in the middle.
+ *
+ * Every other test in this file hands `resolveRuntimeContext` a policy built in
+ * memory. These start where a person starts — the write behind the Configure →
+ * Authority pane — and follow one departure through the column, through
+ * `resolveAuthorityPolicy`, into the Snapshot an attachment pins. That path had
+ * no test because until this ticket it had no beginning: the store was
+ * write-only through raw SQL in a test file.
+ */
+describe("a departure written by the product reaches the next attachment's Snapshot", () => {
+  let db: TestDb;
+
+  afterEach(() => {
+    db.cleanup();
+  });
+
+  /** The real main-process read, standing where the fake policy usually stands. */
+  function fromDatabase(projectId: string): Partial<PiAdapterOptions> {
+    return {
+      resolveRuntimeContext: async () => ({
+        ...context,
+        authorityPolicy: getProjectAuthorityPolicy(db.db, projectId),
+      }),
+    };
+  }
+
+  it("carries enforcement from the write, through resolution, into the pinned Snapshot", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+
+    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "enforce" }, 1000);
+    const { binding, runtime } = await attached(fromDatabase("p1"));
+
+    expect(binding.authority?.enforcement).toBe("enforce");
+    // And the gate actually installs, which is the difference the person who
+    // opened the pane was reaching for.
+    expect(runtime.spec.authority).toEqual(binding.authority);
+  });
+
+  it("carries the thresholds a person set, inheriting the one they left alone", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+
+    updateProjectAuthorityPolicy(db.db, "p1", { fallback: { consecutiveDenials: 2 } }, 1000);
+    const { binding } = await attached(fromDatabase("p1"));
+
+    expect(binding.authority?.fallback).toEqual({
+      consecutiveDenials: 2,
+      sessionDenials: DEFAULT_AUTHORITY_POLICY.fallback.sessionDenials,
+    });
+  });
+
+  it("pins no Snapshot once a project turns the gate off through the product", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+
+    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "off" }, 1000);
+    const { binding, runtime } = await attached(fromDatabase("p1"));
+
+    expect(binding.authority).toBeNull();
+    expect("authority" in runtime.spec).toBe(false);
+  });
+
+  it("returns to the built-in defaults when the last departure is reverted", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "enforce" }, 1000);
+
+    // What the pane's revert button does.
+    updateProjectAuthorityPolicy(db.db, "p1", null, 2000);
+    const { binding } = await attached(fromDatabase("p1"));
+
+    expect(binding.authority?.enforcement).toBe(DEFAULT_AUTHORITY_POLICY.enforcement);
+  });
+
+  it("reaches the NEXT attachment, never one already running", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p1" }));
+
+    // A Session attaches under the defaults...
+    const opened = await attached(fromDatabase("p1"));
+    const pinned = opened.binding.authority;
+    expect(pinned?.enforcement).toBe("observe");
+
+    // ...and someone opens the pane and turns enforcement on mid-Session.
+    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "enforce" }, 2000);
+
+    // The running attachment keeps the policy it was pinned to. This is the
+    // property the write path must not break: a Snapshot is a claim about one
+    // attachment's whole life, and `authority.denied` resolves through its id.
+    const rehydrated = await attached(
+      fromDatabase("p1"),
+      attachmentSpec({
+        continuity: "native_resume",
+        native: opened.binding.native,
+        pinnedAuthority: pinned,
+      }),
+    );
+    expect(rehydrated.binding.authority).toEqual(pinned);
+
+    // A fresh attachment is where the change lands.
+    const fresh = await attached(fromDatabase("p1"));
+    expect(fresh.binding.authority?.enforcement).toBe("enforce");
   });
 });

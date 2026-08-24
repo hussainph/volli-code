@@ -106,6 +106,42 @@ export interface ProjectSkillModesInput {
 }
 
 /**
+ * One project's authority departures (VC-172, migration 025).
+ *
+ * The WHOLE override every time and `null` to state nothing, matching
+ * `ProjectSkillModesInput`: the Authority pane holds every control on screen at
+ * once, so a per-field channel would turn one visible state into N writes that
+ * can land out of order and half-fail.
+ *
+ * Typed `unknown` on the wire ON PURPOSE. This is the one project write whose
+ * payload is a nested document rather than a flat row, and the renderer is not
+ * the thing that gets to say it is well-formed — `validateAuthorityPolicyOverride`
+ * in main is. Declaring it as `AuthorityPolicyOverride` here would let a
+ * compile-time claim stand in for the runtime check on the surface whose entire
+ * job is to be the trustworthy door to policy.
+ */
+export interface ProjectAuthorityPolicyInput {
+  id: string;
+  /** An `AuthorityPolicyOverride`-shaped document, or `null` to inherit everything. */
+  override: unknown;
+}
+
+/**
+ * A policy write that was refused, with every reason.
+ *
+ * Distinct from `ProjectUpdateResult` because this is the one project write a
+ * person can get WRONG rather than merely unlucky: `error` carries the summary
+ * and `errors` the per-field detail, so any caller that can show per-field
+ * refusals may. Every reason at once — fixing one field to be told about the
+ * next is the interaction this avoids. (The Authority pane itself routes
+ * through `writeThrough`, which toasts the summary; its controls are all
+ * constrained, so it cannot produce the document `errors` describes.)
+ */
+export type ProjectAuthorityPolicyResult =
+  | { ok: true; project: Project }
+  | { ok: false; error: string; errors?: readonly string[] };
+
+/**
  * One project's defaults for new Sessions (VC-111, migration 023). Both fields
  * every time, `null` meaning inherit — see `updateProjectSessionDefaults` for
  * why these two travel together where the theme pair does not.
@@ -446,6 +482,21 @@ export interface VolliDataIpcContract {
   "volli:project-session-defaults": {
     args: [input: ProjectSessionDefaultsInput];
     result: ProjectUpdateResult;
+  };
+  /**
+   * Replaces this project's authority departures wholesale (VC-172).
+   *
+   * APP-ONLY, and that is the security property rather than an oversight. There
+   * is no agent verb behind this channel and there must not be: writing the
+   * policy that governs a Session is control tier, `verb-registry.ts` refuses a
+   * `cli` access mode on control-tier verbs outright, and the socket attributes
+   * its caller without authenticating one. The agent must not be able to author
+   * the policy that governs it — VC-44's non-negotiable. Reads may go on the
+   * socket; this does not.
+   */
+  "volli:project-authority-policy": {
+    args: [input: ProjectAuthorityPolicyInput];
+    result: ProjectAuthorityPolicyResult;
   };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };

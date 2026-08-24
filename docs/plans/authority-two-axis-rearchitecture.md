@@ -20,6 +20,14 @@ Snapshot onto `attachment.opened`. `rulePackId`/`rulePackHash` finally pin
 something: an `authority.denied` event carries an `attachmentId`, and the
 attachment carries the pack.
 
+**And a person can now change it.** VC-172 added the write half: Configure →
+Authority records a project's departures, validated at the door, and the next
+attachment resolves and pins them. A Session already running keeps the Snapshot
+it opened under — policy is pinned for the life of one attachment, so an edit
+reaches the next Session rather than one mid-turn. The write is app-only by
+construction: no agent verb projects it, because the agent must not author the
+policy that governs it.
+
 The posture is data, with three values. `off` builds no Snapshot, so
 `SessionRuntimeSpec.authority` is absent and the Pi runtime installs no
 `beforeToolCall` — the explicit bypass, and what every Session ran under before
@@ -260,13 +268,43 @@ attach, which finally gives `rulePackId` and `rulePackHash` something to pin —
 they used to be written into a live spec that no reader ever compared, while
 `authority.denied` recorded a cause with no record of the pack that produced it.
 
-VC-44 landed the document, the store and the persisted Snapshot. Two things it
-deliberately did not do. The **rule pack stays compiled**: what became data is
-the posture, the judge and the per-actor policy, not the rules, because
-rules-as-data needs a rule language before it needs a store. And there is **no
-settings surface** — the column is written by nothing yet, so every project runs
-on defaults until one exists. `volli authority defaults|effective` was scoped as
-a nice-to-have and split out rather than shipped.
+VC-44 landed the document, the store and the persisted Snapshot. One thing it
+deliberately did not do, and one it left owing.
+
+The **rule pack stays compiled**: what became data is the posture, the judge and
+the per-actor policy, not the rules, because rules-as-data needs a rule language
+before it needs a store.
+
+The **settings surface** was the thing owed, and VC-172 shipped it: Configure →
+Authority writes a project's departures through `volli:project-authority-policy`,
+and `updateProjectAuthorityPolicy` is the write `getProjectAuthorityPolicy` had
+been missing since migration 025. Two properties are load-bearing and are held
+by tests rather than by intent:
+
+- **Departures, never the resolved document.** The column, the `Project` field
+  the renderer edits, and the IPC payload all carry only what a project
+  disagreed with, so tightening a built-in default still reaches every project
+  that never disagreed. An override that states nothing is stored as `NULL`, so
+  "reverted the last departure" and "never spoke" are the same bytes.
+- **The agent cannot write it.** There is no `volli authority set`, and there
+  cannot be one: writing the policy that governs a Session is control tier, and
+  `verbTier` refuses a `cli` access mode on a control-tier verb outright. The
+  write is an app-only IPC channel with no verb behind it. Reads are a different
+  question — `volli authority defaults|effective` stays scoped as a
+  nice-to-have, and stays legitimate on the socket, because reading a policy is
+  not authoring one.
+
+Validation splits along the same seam. `resolveAuthorityPolicy` is total and
+degrades a bad document to the defaults, because it runs where a throw costs a
+Session its attachment; `validateAuthorityPolicyOverride` refuses at the write,
+where a person is present to be told. The difference that matters is an unknown
+key: the read path drops it silently, which is indistinguishable from a project
+that never spoke, so the write path is the only place a typo can be caught.
+
+Still not tamper-proof, and the plan should not pretend otherwise. A Session's
+`execute` still reaches `volli.db` through an ordinary shell command until slice
+2 lands `writableRoots`. What the surface buys is that policy has a door, and
+that the door is not one the agent can open.
 
 ## Slices
 
@@ -284,9 +322,11 @@ Each is independently shippable and independently valuable.
    the moment egress opens, the argument for no classifier expires.
 7. **Policy as data**, and the persisted snapshot. *(Minimal cut landed in
    VC-44: the policy document, the app-owned store, the Snapshot built at attach
-   and recorded on the attachment, and `observe` as the day-one posture. Still
-   open: a settings surface to write it, the CLI inspection verbs, and the rule
-   pack itself becoming data.)*
+   and recorded on the attachment, and `observe` as the day-one posture. VC-172
+   added the write — Configure → Authority, an app-only IPC channel, and a
+   rejecting validator — so a project's departures are reachable through the
+   product. Still open: the CLI inspection READS, and the rule pack itself
+   becoming data.)*
 8. **The file-tool boundary** — one enforcement layer, TOCTOU seam closed.
 
 ## What this supersedes

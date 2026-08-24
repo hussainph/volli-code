@@ -8,6 +8,7 @@ import {
   parseSkillModes,
   derivePrefix,
   errorMessage,
+  validateAuthorityPolicyOverride,
   LEGACY_BACKUP_APP_STATE_KEY,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
@@ -19,7 +20,7 @@ import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -41,6 +42,8 @@ import type {
   LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
+  ProjectAuthorityPolicyInput,
+  ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
   ProjectIdInput,
@@ -109,6 +112,7 @@ import {
   listProjects,
   nextSortOrder,
   reorderProjects,
+  updateProjectAuthorityPolicy,
   updateProjectBaseBranch,
   updateProjectSessionDefaults,
   updateProjectSetupCommand,
@@ -546,6 +550,43 @@ export function registerDataIpcHandlers(
         { harness: harness === "" ? null : harness, model: input.model },
         Date.now(),
       );
+      if (!project) return { ok: false, error: "Unknown project" };
+      return { ok: true, project };
+    },
+
+    /**
+     * Records this project's authority departures (VC-172) — the write migration
+     * 025 was missing, and the only door to it.
+     *
+     * THIS is where a policy document is judged. `resolveAuthorityPolicy` runs on
+     * the attach path and degrades a bad document to the defaults rather than
+     * costing a Session its attachment; that bargain is only honest if something
+     * refuses the bad document earlier, where a person is present to be told.
+     * This is that place, and `validateAuthorityPolicyOverride` refuses what the
+     * read path would have silently dropped — an unknown key above all, which
+     * otherwise stores cleanly, reads back cleanly and governs nothing.
+     *
+     * `null` clears every departure, which is not the same as writing an empty
+     * document and is stored identically to a project that never spoke.
+     */
+    "volli:project-authority-policy": (
+      input: ProjectAuthorityPolicyInput,
+    ): ProjectAuthorityPolicyResult => {
+      // `null` is the caller CLEARING every departure, and it is not a document
+      // to be judged — there is nothing in it to be wrong about.
+      let override: AuthorityPolicyOverride | null = null;
+      if (input.override !== null) {
+        const validation = validateAuthorityPolicyOverride(input.override);
+        if (!validation.ok) {
+          return {
+            ok: false,
+            error: "This authority policy cannot be saved.",
+            errors: validation.errors,
+          };
+        }
+        override = validation.override;
+      }
+      const project = updateProjectAuthorityPolicy(db, input.id, override, Date.now());
       if (!project) return { ok: false, error: "Unknown project" };
       return { ok: true, project };
     },

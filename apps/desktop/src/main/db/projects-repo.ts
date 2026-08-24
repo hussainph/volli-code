@@ -6,6 +6,7 @@
 import type Database from "better-sqlite3";
 import {
   isAppearance,
+  isEmptyAuthorityPolicyOverride,
   isProjectThemeOverrideEmpty,
   parseAuthorityPolicyOverride,
   parseCanvas,
@@ -16,6 +17,7 @@ import {
 import type {
   Appearance,
   AuthorityPolicy,
+  AuthorityPolicyOverride,
   Canvas,
   ModelSelection,
   Project,
@@ -137,6 +139,12 @@ function mapProject(row: ProjectRow): Project {
     // value that fails the guard means a db edited around it — inherit.
     themeAppearance: isAppearance(row.theme_appearance) ? row.theme_appearance : null,
     skillModes: parseSkillModes(parseJsonColumn(row.skill_modes)),
+    // The DEPARTURES this project stated, not the policy it resolves to — see
+    // `Project.authorityPolicy`. The surface that edits this needs to know what
+    // was chosen versus what is inherited, and only the unresolved document
+    // carries that. `getProjectAuthorityPolicy` below is the other reader, and
+    // it resolves because the attach path wants the answer, not the question.
+    authorityPolicy: parseAuthorityPolicyOverride(parseJsonColumn(row.authority_policy)),
     sessionHarness: row.session_harness,
     sessionModel: parseSessionModel(parseJsonColumn(row.session_model)),
     colorIndex: row.color_index,
@@ -169,14 +177,21 @@ export function getProjectById(db: Database.Database, id: string): Project | und
 }
 
 /**
- * The authority policy one project is governed by (VC-44).
+ * The authority policy one project is governed by (VC-44), RESOLVED.
  *
- * Read apart from {@link mapProject} rather than added to `Project`, and that is
- * deliberate. `Project` is the renderer's shape and rides the data bootstrap
- * payload to every window; authority is host-side policy with no surface to show
- * it yet, and putting it on the domain object would publish a contract before
- * anything renders it. It is read on the attach path by
- * `resolveRuntimeContext`, which is the one caller that needs it.
+ * Kept separate from {@link mapProject} because the two readers want different
+ * documents, which is no longer the reason VC-44 gave. That reason was "no
+ * surface to show it yet", and it held exactly until VC-172 built one; the
+ * departures now ride `Project.authorityPolicy` to the renderer, because a
+ * surface that edits an override has to distinguish a chosen value from an
+ * inherited one.
+ *
+ * What survives the change is the split itself. This is the ATTACH path's
+ * reader: `resolveRuntimeContext` wants the resolved answer, because a Snapshot
+ * is built from what a Session may actually do. The renderer wants the
+ * unresolved question. Resolving once here and shipping the departures there is
+ * what keeps the resolved document from ever being written back — migration
+ * 025's ruling, and the thing that would break inheritance if it slipped.
  *
  * A project that does not exist resolves to the defaults rather than throwing.
  * This runs where a throw costs a Session its attachment, and "no project row"
@@ -195,6 +210,49 @@ export function getProjectAuthorityPolicy(
   return resolveAuthorityPolicy(
     parseAuthorityPolicyOverride(parseJsonColumn(row?.authority_policy ?? null)),
   );
+}
+
+/**
+ * Records what one project says about its own authority (VC-172), and returns
+ * the authoritative row.
+ *
+ * The write `getProjectAuthorityPolicy` above was owed since migration 025. Note
+ * what it takes: an {@link AuthorityPolicyOverride}, the DEPARTURES — never an
+ * {@link AuthorityPolicy}. The resolved document must not round-trip into this
+ * column, because a project storing a full policy would pin every field it never
+ * meant to state, and the next tightening of a built-in default would silently
+ * skip every project a person had ever opened this surface on.
+ *
+ * VALIDATION IS THE CALLER'S, and it happens before this is reached — see
+ * `validateAuthorityPolicyOverride`, which the IPC handler runs so a person gets
+ * told. This function still normalises rather than trusting: it stores the
+ * validated object's own fields, so a caller that skipped the check cannot park
+ * an unknown key in the column for `parseAuthorityPolicyOverride` to drop
+ * forever after.
+ *
+ * An EMPTY override stores `NULL`, not `{}` — `updateProjectSkillModes`'s rule,
+ * for its reason. "This project states nothing" and "this project reverted its
+ * last departure" are the same fact and must be the same bytes; two spellings of
+ * one state is a difference something eventually depends on by accident.
+ */
+export function updateProjectAuthorityPolicy(
+  db: Database.Database,
+  id: string,
+  override: AuthorityPolicyOverride | null,
+  now: number,
+): Project | undefined {
+  const normalized = override === null ? null : parseAuthorityPolicyOverride(override);
+  const stored =
+    normalized === null || isEmptyAuthorityPolicyOverride(normalized)
+      ? null
+      : JSON.stringify(normalized);
+  prepared(
+    db,
+    `UPDATE projects
+        SET authority_policy = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(stored, now, id);
+  return getProjectById(db, id);
 }
 
 /** Updates the pinned automation base branch and returns the authoritative row. */

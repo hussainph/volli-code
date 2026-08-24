@@ -231,6 +231,27 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session defaults",
   },
+  "volli:project-authority-policy": {
+    /**
+     * Shape only — an id and a slot that is an object or `null`. The document
+     * itself is judged by `validateAuthorityPolicyOverride` in the handler,
+     * NOT here, and the split is deliberate: a guard can only refuse, and a
+     * refused policy write has to come back saying which field was wrong. A
+     * duplicate structural check here would be a second validator to keep in
+     * agreement with the first, which is how the two drift apart.
+     */
+    guard: (args): args is IpcArgs<"volli:project-authority-policy"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["id"] !== "string") return false;
+      const override = input["override"];
+      // `isRecord` admits an array (`typeof [] === "object"`), and an array is
+      // not a policy document. The handler's validator refuses one too, so this
+      // is the cheap half of a check that exists on both sides.
+      return override === null || (isRecord(override) && !Array.isArray(override));
+    },
+    invalidError: "Invalid authority policy",
+  },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
       if (args.length !== 1) return false;
