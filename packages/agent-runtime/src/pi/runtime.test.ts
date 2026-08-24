@@ -39,6 +39,7 @@ import {
   type RuntimeAskUserRequest,
   type RuntimeObservation,
   type RuntimeSessionIdentity,
+  type RuntimeVerbCall,
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -5788,10 +5789,105 @@ describe("compacting because somebody asked", () => {
  * adapter has done its work; a constant-level comparison would agree with
  * itself while a downstream recomposition changed what reached the wire.
  */
+/**
+ * The Role bundle as tools the model can actually call (VC-162).
+ *
+ * The tracer bullet's runtime half. What is proved here is the translation and
+ * the binding: the model is offered a provider-safe name, the host is handed
+ * the canonical dot-key, and a Session whose Role carries no verb is offered
+ * nothing to call.
+ */
+describe("the verb half of the Agent Tool Surface", () => {
+  it("offers the wire name and hands the host the dot-key", async () => {
+    const calls: RuntimeVerbCall[] = [];
+    const attachment = fixture({
+      tools: { tools: ["read"], verbs: ["session.start"] },
+      authority: undefined,
+      callVerb: async (request) => {
+        calls.push(request);
+        return { text: "Started Session ab12cd34 on VC-12." };
+      },
+    });
+    let answered: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            // The model calls what it was offered, which is the underscored
+            // spelling. It has never seen `session.start`.
+            emit.toolCall("session_start", { ticket: "VC-12", message: "Fix the flaky test" });
+            emit.finish();
+          },
+          (emit, context) => {
+            answered = context;
+            emit.text("Delegated.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("Delegate VC-12.");
+    await handle.close();
+
+    // Across the boundary it is the dot-key again, because that is the name
+    // authority, the durable record and every product surface spell. Nothing
+    // downstream of the provider has to un-mangle anything.
+    expect(calls).toEqual([
+      {
+        verb: "session.start",
+        input: { ticket: "VC-12", message: "Fix the flaky test" },
+        // Passed through, not regenerated: the host derives its durable
+        // operation id from this plus the caller it already knows, which is
+        // what makes a replayed call one act instead of two.
+        toolCallId: "tc-0",
+      },
+    ]);
+    expect(JSON.stringify(answered?.messages)).toContain("Started Session ab12cd34 on VC-12.");
+  });
+
+  it("offers a Session with no verbs nothing to call", async () => {
+    // Role-scoped availability, end to end: the array a Ticket Session is sent
+    // simply does not contain the tool, so there is no call for any injected
+    // instruction to make.
+    const offered = await offeredIn({
+      ...fixture({ tools: { tools: ["read"] } }).spec,
+      authority: undefined,
+    });
+    expect(offered).toEqual(["read"]);
+    expect(offered).not.toContain("session_start");
+  });
+
+  it("refuses to attach when the bundle names a verb the host cannot answer", async () => {
+    // A bundle promising a tool with no port behind it is not a smaller
+    // surface — it is a Session whose durable record says it holds something
+    // that was never offered. Failing here is what keeps the record and the
+    // array unable to disagree.
+    const attachment = fixture({ tools: { tools: ["read"] }, authority: undefined });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("never reached")])),
+    });
+    await expect(
+      runtime.startSession({
+        ...attachment.spec,
+        tools: { tools: ["read"], verbs: ["session.start"] },
+      }),
+    ).rejects.toThrow("no verb port is wired to answer it");
+  });
+});
+
 describe("the Cache Prefix a Session sends", () => {
   it("offers one tool array from turn 1 to turn N, and again after a reattach", async () => {
     const attachment = fixture({
-      tools: { tools: ["read", "edit"] },
+      // The verb half rides this assertion too (VC-162). A product tool is
+      // built from registry data rather than from a literal in this package,
+      // so its name, description and schema are exactly the bytes a real
+      // Session sends — and a registry edit that changed them mid-Session
+      // would invalidate the whole prefix just as surely as adding a tool.
+      tools: { tools: ["read", "edit"], verbs: ["session.start"] },
+      callVerb: async () => ({ text: "started" }),
       askUser: async () => ({ optionIds: ["one"], response: null }),
       webFetch: async () => ({
         requestedUrl: "https://example.com/guide",
@@ -5881,7 +5977,19 @@ describe("the Cache Prefix a Session sends", () => {
       // Same names, same order, same count — against the literal rather than
       // against the first call alone, so an array that silently emptied could
       // not pass by agreeing with itself.
-      expect(call.toolNames).toEqual(["read", "edit", "ask_user", "web_fetch", "web_search"]);
+      //
+      // `session_start` and not `session.start`: the dot is this verb's
+      // identity everywhere durable, and is exactly what no provider accepts
+      // on the wire. The canonical order puts the verb half last, so a verb
+      // added in a later product version cannot shift anything ahead of it.
+      expect(call.toolNames).toEqual([
+        "read",
+        "edit",
+        "ask_user",
+        "web_fetch",
+        "web_search",
+        "session_start",
+      ]);
       // And byte-identical past the names. A description reworded mid-Session
       // invalidates the prefix exactly as surely as a tool added to it, and
       // where a provider orders the tool array ahead of the system prompt it

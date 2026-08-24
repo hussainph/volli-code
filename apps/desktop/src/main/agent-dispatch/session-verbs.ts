@@ -34,6 +34,7 @@ import { readSessionTranscriptTail } from "@volli/session-engine";
 import { getTicket } from "../db/tickets-repo";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { StructuredSessionsError } from "../session-runtime/sessions";
+import { startSessionModelOverride, startSessionOperation } from "../session-runtime/start-session";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
@@ -339,80 +340,47 @@ export async function sessionStartVerb(
   ) {
     return failure("INVALID_REQUEST", "Invalid session start arguments.");
   }
-  const displayId = displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber);
-  const kickoff = typeof message === "string" ? message : DEFAULT_KICKOFF_MESSAGE;
-  const sessionTitle =
-    typeof title === "string" ? title.trim() : autoTitleFromKickoff(kickoff, displayId);
   try {
-    const started = await sessionsFacade.start({
-      operationId: newId(),
-      projectId: resolved.project.id,
-      ticketId: resolved.ticket.id,
-      // The explicit --title is already a user-set string. Otherwise the
-      // deterministic kickoff heuristic gives the CLI door a meaningful
-      // durable title before its detached first exchange begins.
-      title: sessionTitle,
-      actor: actor.actor,
-      ...(model !== undefined || reasoning !== undefined
-        ? {
-            modelOverride: {
-              ...(isModelRef(model) ? { model } : {}),
-              ...(reasoning !== undefined ? { reasoningLevel: reasoning as ReasoningLevel } : {}),
-            },
-          }
-        : {}),
-    });
-    // The kickoff rides only a ready attach — a Session that needs
-    // recovery holds the first turn for the app's Retry — and it is
-    // deliberately detached: the runtime answers a `message.submit` when
-    // the TURN it started ends, and this reply is due as the session
-    // opens, not when the agent finishes.
-    if (started.state === "ready") {
-      void Promise.resolve()
-        .then(() => options.submitSessionMessage?.({ sessionId: started.sessionId, text: kickoff }))
-        .catch((error: unknown) => {
-          console.error(
-            `[volli] kickoff for session ${shortSessionId(started.sessionId)} was not delivered: ${errorMessage(error)}`,
+    // The application act is shared with the Agent Tool Surface's door
+    // (VC-162); what is left in this function is the socket's own half — argv
+    // shapes in, a wire envelope out, and an actor this door can only
+    // attribute. `newId()` stays: the socket has no stable call identity to
+    // derive an operation id from, so every socket start is a new operation.
+    const started = await startSessionOperation(
+      {
+        db: options.db,
+        projects,
+        sessions: sessionsFacade,
+        submitSessionMessage: options.submitSessionMessage,
+        refineAutoTitle: options.refineAutoTitle,
+        onMutation: options.onMutation,
+        onSessionStarted: options.onSessionStarted,
+        actorTicketDisplay: (ticketId) => actorSessionTicketDisplay(options.db, projects, ticketId),
+        now,
+      },
+      {
+        operationId: newId(),
+        project: resolved.project,
+        ticket: resolved.ticket,
+        ...(typeof message === "string" ? { message } : {}),
+        ...(typeof title === "string" ? { title } : {}),
+        ...(() => {
+          const override = startSessionModelOverride(
+            isModelRef(model) ? model : undefined,
+            reasoning === undefined ? undefined : (reasoning as ReasoningLevel),
           );
-        });
-    }
-    // Only the heuristic door refines: a session started with an
-    // explicit --title is a person's naming and gets zero title calls.
-    //
-    // Gated on the same `ready` the kickoff delivery is gated on. A
-    // Session held for recovery has not sent its first user message and
-    // may never send this one — titling it from text nobody submitted
-    // would spend a model call on a conversation that did not happen.
-    if (typeof title !== "string" && started.state === "ready") {
-      options.refineAutoTitle?.({
-        sessionId: started.sessionId,
-        firstMessage: kickoff,
-        heuristicTitle: sessionTitle,
-      });
-    }
-    options.onMutation?.({
-      ticketId: resolved.ticket.id,
-      projectId: resolved.project.id,
-      kind: "session",
-    });
-    options.onSessionStarted?.({
-      sessionId: started.sessionId,
-      projectId: resolved.project.id,
-      ticketId: resolved.ticket.id,
-      ticketDisplayId: displayId,
-      actor: actor.actor.kind,
-      actorTicket:
-        actor.actor.kind === "session"
-          ? actorSessionTicketDisplay(options.db, projects, actor.actor.ticketId)
-          : null,
-      at: now(),
-    });
+          return override === undefined ? {} : { modelOverride: override };
+        })(),
+        actor: actor.actor,
+      },
+      { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
+    );
     return {
       v: 1,
       ok: true,
       data: {
         session: shortSessionId(started.sessionId),
-        ticket: displayId,
+        ticket: started.ticketDisplayId,
         state: started.state,
         model: `${started.model.providerId}/${started.model.modelId}`,
         reasoning: started.model.reasoningLevel,

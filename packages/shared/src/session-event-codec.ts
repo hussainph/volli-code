@@ -37,7 +37,7 @@
 
 import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
-import { SESSION_TOOL_IDS } from "./authority";
+import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
@@ -1008,9 +1008,23 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
   });
 }
 
+/**
+ * A frozen Agent Tool Surface, read back.
+ *
+ * Guarded by {@link isSessionToolId} rather than one closed list, because the
+ * vocabulary now has two halves that live in different modules: the capability
+ * tools, and the Verb Registry keys this build can project as tools (VC-162).
+ * A name from either half decodes; anything else is a record this build cannot
+ * honestly rebind, and refusing it here is what turns "a verb withdrawn in a
+ * later version" into a failed attachment rather than a tool array quietly
+ * missing an entry.
+ */
 function decodeSessionToolIds(value: unknown, context: string): readonly SessionToolId[] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((tool, index) => enumValue(tool, SESSION_TOOL_IDS, `${context}[${index}]`));
+  return value.map((tool, index) => {
+    if (!isSessionToolId(tool)) throw new Error(`${context}[${index}] has an unsupported value`);
+    return tool;
+  });
 }
 
 function decodeModelSelection(value: unknown, context: string): ModelSelection {

@@ -41,7 +41,12 @@
 import { SKILLS_INDEX_RESOURCE_NAME } from "@volli/shared";
 import type { RuntimeBrief, RuntimeWorkspaceEnvironment } from "@volli/shared";
 
-import { composeBriefBlock, composeTurnReminderBlock, systemPromptSections } from "./prompt";
+import {
+  composeBriefBlock,
+  composeToolSurfaceBlock,
+  composeTurnReminderBlock,
+  systemPromptSections,
+} from "./prompt";
 import type { SystemPromptInput } from "./prompt";
 
 /**
@@ -122,6 +127,22 @@ export type PromptCachePlacement = "prefix" | "message";
  */
 export const WORKSPACE_ENVIRONMENT_REMINDER_ID = "reminder:workspace-environment";
 
+/**
+ * The Role bundle block riding the same first message (VC-162).
+ *
+ * `session-static` and not `role-static`, which is the whole reason it is a
+ * message-side block instead of a system-prompt layer: membership is
+ * `bundle(Role) ∪ grants(session)`, so two Project Sessions differing only by a
+ * grant compose different bytes here. In the prompt that would have split their
+ * Cache Prefix; on the message side it is bought once and invalidates nothing.
+ *
+ * Always priced, never conditional. Unlike the workspace reminder — which
+ * composes null for a healthy workspace — this block is delivered to every
+ * Session, because a Session holding no verbs is exactly the one that most
+ * needs to be told so.
+ */
+export const TOOL_SURFACE_REMINDER_ID = "reminder:session-tools";
+
 /** One measured slice of the baseline. */
 export interface PromptBaselineSection {
   /**
@@ -162,7 +183,19 @@ export interface PromptBaseline {
    */
   reminder: PromptBaselineTotal;
   /**
-   * `system + brief + reminder`: everything Volli composes into a fresh
+   * The Role bundle block riding that same message (VC-162).
+   *
+   * Its own rollup rather than folded into {@link reminder}, because that field
+   * means one specific thing — the workspace-environment fact, whose measured
+   * zero for a healthy workspace is an assertion several callers make. Adding
+   * bytes to it would have quietly changed what a zero there proves.
+   *
+   * Never zero in practice: every Session is told what its Role bundle holds,
+   * including the Sessions that hold nothing.
+   */
+  toolSurface: PromptBaselineTotal;
+  /**
+   * `system + brief + reminder + toolSurface`: everything Volli composes into a fresh
    * Session's context. The provider's first-turn meter also carries tool
    * definitions, the user's own text, the newlines joining the message-side
    * blocks to it, and provider overhead — real costs this breakdown cannot see
@@ -262,12 +295,14 @@ export function promptBaseline(input: PromptBaselineInput): PromptBaseline {
   const sections = systemPromptSections(input);
   const system = measure(sections.map((section) => section.text).join("\n\n"));
   const briefBlock = composeBriefBlock(input.role, input.brief);
-  // The same composer the first message uses, so a reminder cannot be delivered
+  // The same composers the first message uses, so a block cannot be delivered
   // without being priced: no environment, or a healthy one, composes null and
   // costs a measured nothing.
   const reminderBlock = composeTurnReminderBlock(input.workspaceEnvironment);
+  const toolSurfaceBlock = composeToolSurfaceBlock(input.role, input.tools);
   const brief = measure(briefBlock);
   const reminder = measure(reminderBlock ?? "");
+  const toolSurface = measure(toolSurfaceBlock);
   return {
     charsPerToken: PROMPT_BASELINE_CHARS_PER_TOKEN,
     sections: [
@@ -278,6 +313,7 @@ export function promptBaseline(input: PromptBaselineInput): PromptBaseline {
       // state and this workspace's measurements, and carried by a message no
       // later turn rewrites.
       priced("brief", briefBlock, "session-static", "message"),
+      priced(TOOL_SURFACE_REMINDER_ID, toolSurfaceBlock, "session-static", "message"),
       ...(reminderBlock === null
         ? []
         : [priced(WORKSPACE_ENVIRONMENT_REMINDER_ID, reminderBlock, "session-static", "message")]),
@@ -285,9 +321,10 @@ export function promptBaseline(input: PromptBaselineInput): PromptBaseline {
     system,
     brief,
     reminder,
+    toolSurface,
     total: {
-      chars: system.chars + brief.chars + reminder.chars,
-      tokens: system.tokens + brief.tokens + reminder.tokens,
+      chars: system.chars + brief.chars + reminder.chars + toolSurface.chars,
+      tokens: system.tokens + brief.tokens + reminder.tokens + toolSurface.tokens,
     },
   };
 }

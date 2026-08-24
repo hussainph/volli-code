@@ -47,7 +47,7 @@ import {
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
-import { sessionToolBindings } from "@volli/shared";
+import { sessionToolBindings, verbEntry } from "@volli/shared";
 import type {
   CodingToolId,
   NonCodingToolId,
@@ -56,7 +56,12 @@ import type {
   SessionInteractionResolution,
   SessionRuntimeSpec,
   SessionToolSpec,
+  VerbToolField,
+  VerbToolKey,
 } from "@volli/shared";
+
+/** Run one product verb in the host's process, exactly as the Session spec supplies it. */
+export type CallVerbPort = NonNullable<SessionRuntimeSpec["callVerb"]>;
 
 function bindContext<TParameters extends TSchema, TDetails>(
   tool: AgentHarnessTool<ExecutionToolContext, TParameters, TDetails>,
@@ -125,8 +130,113 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         return createWebFetchTool(binding.port, spec.signal);
       case "web_search":
         return createWebSearchTool(binding.port, spec.signal);
+      default:
+        // The verb half, and the one branch that cannot be a case label: its
+        // members are registry data, so there is no closed set of literals to
+        // enumerate here. Exhaustiveness is kept by the assignment below —
+        // `binding` narrows to the verb arm, and a name added to
+        // `SessionToolBinding` with no case above would not satisfy it.
+        return createVerbTool(binding satisfies { verb: VerbToolKey }, spec.signal);
     }
   });
+}
+
+/**
+ * One registry field as a schema node.
+ *
+ * The registry's field vocabulary is closed (`string`, `enum`, `object`), so
+ * this switch is total and there is no "unknown type" branch to leave
+ * untested. That closure is the whole reason the schema is neutral data in
+ * `@volli/shared` instead of a TypeBox value: the registry stays free of a
+ * schema library, and exactly one module knows how a field becomes one.
+ */
+function verbFieldSchema(field: VerbToolField): TSchema {
+  switch (field.type) {
+    case "string":
+      return Type.String({ description: field.description });
+    case "enum":
+      return Type.Union(
+        field.values.map((value) => Type.Literal(value)),
+        { description: field.description },
+      );
+    case "object":
+      return verbObjectSchema(field.fields, field.description);
+  }
+}
+
+/** A run of fields as one object schema, with the optional ones marked. */
+function verbObjectSchema(
+  fields: readonly VerbToolField[],
+  description?: string,
+): ReturnType<typeof Type.Object> {
+  const properties: Record<string, TSchema> = {};
+  for (const field of fields) {
+    const schema = verbFieldSchema(field);
+    properties[field.name] = field.required === true ? schema : Type.Optional(schema);
+  }
+  return Type.Object(properties, description === undefined ? {} : { description });
+}
+
+/**
+ * What the host is handed, and what the model is told, for one product verb.
+ *
+ * The two names in play are deliberately not the same string. `binding.verb` is
+ * the canonical dot-key — what authority, the durable `tool-surface` record, the
+ * Role bundle and any grant all spell — and `entry.tool.name` is what a
+ * provider will actually accept, since neither Anthropic nor OpenAI permits a
+ * dot in a tool name. The wire name goes out; the dot-key is what comes back
+ * across {@link SessionRuntimeSpec.callVerb}, so nothing downstream of the
+ * provider ever has to un-mangle a name. Volli already made this trade once:
+ * product `execute` reaches the model as Pi's `bash`.
+ *
+ * A refusal the host states is a result and not a throw, on the same line
+ * {@link createWebFetchTool} draws: a verb that refused judged the request and
+ * said so, and the model is the party who can act on that. A host that could
+ * not answer at all fails the call.
+ */
+export function createVerbTool(
+  binding: { verb: VerbToolKey; port: CallVerbPort },
+  signal?: AbortSignal,
+): AgentTool<TSchema, undefined> {
+  const entry = verbEntry(binding.verb);
+  if (entry?.tool === undefined) {
+    // Unreachable from a resolved surface — `resolveAgentToolSurface` admits
+    // only keys this build projects — and still worth refusing loudly, because
+    // the alternative is a nameless tool reaching a provider.
+    throw new Error(`${binding.verb} has no tool projection in this build`);
+  }
+  const parameters = verbObjectSchema(entry.tool.input);
+  return {
+    name: entry.tool.name,
+    label: entry.tool.name,
+    description: entry.tool.description,
+    parameters,
+    async execute(toolCallId, params, callSignal): Promise<AgentToolResult<undefined>> {
+      const withdrawn = new AbortController();
+      const abandon = (): void => withdrawn.abort();
+      const signals = [signal, callSignal].filter((one) => one !== undefined);
+      for (const one of signals) {
+        if (one.aborted) abandon();
+        else one.addEventListener("abort", abandon, { once: true });
+      }
+      try {
+        const result = await binding.port(
+          {
+            verb: binding.verb,
+            input: params as Readonly<Record<string, unknown>>,
+            // Passed through rather than regenerated: the host derives its
+            // durable operation id from this plus the caller it already knows,
+            // which is what makes a replayed call one act instead of two.
+            toolCallId,
+          },
+          withdrawn.signal,
+        );
+        return { content: [{ type: "text", text: result.text }], details: undefined };
+      } finally {
+        for (const one of signals) one.removeEventListener("abort", abandon);
+      }
+    },
+  };
 }
 
 /** The name the model calls, and a name no rule in the pack has an opinion about. */

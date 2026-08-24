@@ -7,6 +7,7 @@ import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
   composeFirstUserMessage,
   composeSystemPrompt as composeStableSystemPrompt,
+  composeToolSurfaceBlock,
   composeTurnReminderBlock,
   systemPromptSections,
   type SystemPromptSpec,
@@ -55,6 +56,13 @@ function projectSpec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntim
     },
     workspacePath: "/code/volli",
     brief: { text: "A project-scoped chat Session." },
+    // A Project Session's real bundle (VC-162): the same coding tools every
+    // Session gets, plus the agent-control verb its Role carries. Kept on the
+    // shared fixture rather than set per test, so every project-Role assertion
+    // in this file runs against the shape production actually composes —
+    // including the system-prompt ones, which must NOT change because of it.
+    tools: { tools: ["read", "edit", "write", "execute"], verbs: ["session.start"] },
+    callVerb: async () => ({ text: "" }),
     ...overrides,
   });
 }
@@ -470,6 +478,15 @@ describe("composeTurnReminderBlock — the workspace environment fact", () => {
       A project-scoped chat Session.
       --- END PROJECT BRIEF ---
 
+      --- BEGIN SESSION TOOLS ---
+      This Project Session's Role bundle holds these Volli verbs as named tools:
+        session.start — call it as session_start
+      Membership was fixed when this Session was created and does not change while
+      it runs. A Volli verb not named here is not in this Session's tool array: do
+      not probe for it, and do not reach for an equivalent another way. Where the
+      \`volli\` CLI still offers a verb, the shell remains its door.
+      --- END SESSION TOOLS ---
+
       --- BEGIN WORKSPACE ENVIRONMENT ---
       The workspace has a package manifest and no installed dependencies. This is
       an ordinary fresh checkout, not a fault, and nobody is waiting to be asked:
@@ -496,7 +513,11 @@ describe("composeTurnReminderBlock — the workspace environment fact", () => {
 });
 
 describe("composeFirstUserMessage", () => {
-  it("leads with a delimited brief block", () => {
+  it("leads with a delimited brief block, then names the Role bundle", () => {
+    // A Ticket Session holds no verbs, and is told so. That sentence is the
+    // whole point of the block for this Role (VC-162): what stops a Session
+    // from spending turns hunting for an agent-control tool is being told the
+    // room does not contain one.
     expect(
       composeFirstUserMessage(
         spec({ brief: { text: "VC-12 — add an MCP server." } }),
@@ -507,8 +528,32 @@ describe("composeFirstUserMessage", () => {
       VC-12 — add an MCP server.
       --- END TICKET BRIEF ---
 
+      --- BEGIN SESSION TOOLS ---
+      This Ticket Session's Role bundle holds no Volli verbs as named tools.
+      Membership was fixed when this Session was created and does not change while
+      it runs. A Volli verb not named here is not in this Session's tool array: do
+      not probe for it, and do not reach for an equivalent another way. Where the
+      \`volli\` CLI still offers a verb, the shell remains its door.
+      --- END SESSION TOOLS ---
+
       Start with the transport."
     `);
+  });
+
+  it("still names a verb this build stopped projecting", () => {
+    // Deliberately impossible through the types: `VerbToolKey` only admits keys
+    // with a projection, and `sessionToolBindings` refuses a surface without
+    // one. What this reaches is a durable record written by a LATER product
+    // version and read back by an older one — the block names the key it was
+    // given rather than dropping it, because a Session silently told it holds
+    // one fewer tool than its record says is the failure this block exists to
+    // prevent. Refusing is the attach path's job, not this composer's.
+    expect(
+      composeToolSurfaceBlock("project", {
+        tools: ["read"],
+        verbs: ["vault.rotate" as never],
+      }),
+    ).toContain("  vault.rotate\n");
   });
 
   it("names the block for what a project Session actually has", () => {
@@ -521,6 +566,15 @@ describe("composeFirstUserMessage", () => {
       "--- BEGIN PROJECT BRIEF ---
       A project-scoped chat Session.
       --- END PROJECT BRIEF ---
+
+      --- BEGIN SESSION TOOLS ---
+      This Project Session's Role bundle holds these Volli verbs as named tools:
+        session.start — call it as session_start
+      Membership was fixed when this Session was created and does not change while
+      it runs. A Volli verb not named here is not in this Session's tool array: do
+      not probe for it, and do not reach for an equivalent another way. Where the
+      \`volli\` CLI still offers a verb, the shell remains its door.
+      --- END SESSION TOOLS ---
 
       Where does the runtime attach?"
     `);

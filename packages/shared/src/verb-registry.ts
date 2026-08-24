@@ -135,7 +135,7 @@ export interface VerbOptionCommon {
 /**
  * One option, as data. `kind` is the value shape a caller supplies — a bare
  * flag, one value, a repeatable value, or a fixed run of words — which is what
- * both a usage line and a tool schema need to know.
+ * a usage line needs to know.
  */
 export type VerbOption =
   | (VerbOptionCommon & { readonly kind: "flag" })
@@ -144,6 +144,77 @@ export type VerbOption =
       /** The value shape shown after the name (`<text>`, `<old> <new>`). */
       readonly placeholder: string;
     });
+
+/**
+ * What a provider will accept as a tool name (VC-162).
+ *
+ * Both providers Volli speaks to publish the same bound, and neither is
+ * negotiable: OpenAI's generated `FunctionDefinition` says a name "Must be
+ * a-z, A-Z, 0-9, or contain underscores and dashes, with a maximum length of
+ * 64", and Anthropic rejects the whole request with `tools.N.custom.name:
+ * String should match pattern '^[a-zA-Z0-9_-]{1,64}$'`.
+ *
+ * A dot is therefore legal in a {@link VerbEntry.key} and illegal on the wire,
+ * which is why {@link VerbToolProjection.name} exists at all.
+ */
+export const VERB_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * One field of a tool's input, as neutral data.
+ *
+ * Deliberately NOT {@link VerbOption}. That table is argv: `-m`, `--model`,
+ * placeholders like `<provider/model>`, hidden aliases, and mutual-exclusion
+ * groups the parser resolves. None of it means anything to a model, and
+ * several parts of it would actively mislead one — a model shown `-m` will
+ * write `-m`. What a tool call needs is a named field with a type, so the two
+ * are separate projections of one verb rather than one table doing both jobs.
+ *
+ * The type vocabulary is closed and small on purpose. `packages/agent-runtime`
+ * compiles these into the runtime's schema types; keeping the vocabulary
+ * closed is what makes that compilation total rather than best-effort, and
+ * keeps `@volli/shared` free of any schema library.
+ */
+export type VerbToolField = {
+  /** The field name the model supplies. Never an argv token. */
+  readonly name: string;
+  /** What this field is, in the only place the model will read it. */
+  readonly description: string;
+  /** Absent means optional; the tool schema marks it so. */
+  readonly required?: boolean;
+} & (
+  | { readonly type: "string" }
+  | { readonly type: "enum"; readonly values: readonly string[] }
+  | { readonly type: "object"; readonly fields: readonly VerbToolField[] }
+);
+
+/**
+ * How one verb is projected onto the Agent Tool Surface (VC-162).
+ *
+ * Present exactly when the entry carries a `tool` access mode, which
+ * `verb-registry.test.ts` pins in both directions: a `tool` mode with no
+ * projection is a verb the runtime could not build, and a projection with no
+ * `tool` mode is metadata nothing reads.
+ */
+export interface VerbToolProjection {
+  /**
+   * The callable name on the provider wire — the verb's dot-key with the dot
+   * spelled a provider will accept (`session.start` → `session_start`).
+   *
+   * This is a rendering of the identity, never a second identity. The dot-key
+   * remains what authority, the durable `tool-surface` record, Role bundles
+   * and grants all spell; the runtime adapter translates at the boundary, the
+   * same way product `execute` already reaches Pi as `bash`.
+   */
+  readonly name: string;
+  /**
+   * What the model is told this tool does. Separate from
+   * {@link VerbEntry.summary}, which is written for a person reading `volli
+   * help` and says nothing about when NOT to reach for it.
+   */
+  readonly description: string;
+  /** The tool's input, semantically. Empty means a tool that takes nothing. */
+  readonly input: readonly VerbToolField[];
+}
 
 /** One agent-facing verb. Pure data; see the module comment for what is not here. */
 export interface VerbEntry {
@@ -165,6 +236,8 @@ export interface VerbEntry {
   readonly notes?: readonly string[];
   /** Structured writes and person-visible effects; the canonical side-effect contract. */
   readonly effects?: VerbEffects;
+  /** How this verb appears on the Agent Tool Surface; required by a `tool` access mode. */
+  readonly tool?: VerbToolProjection;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
   /** Rendered after `<id>` for positionals the option table cannot express. */
@@ -720,10 +793,17 @@ export const VERB_REGISTRY = [
     // `volli app launch` is the sanctioned recovery.
     //
     // VC-92 ruled it control tier — a named tool in the `project` bundle, off
-    // the socket for every caller. This entry records where it is TODAY, so its
-    // derived tier is coordination until VC-162 flips the access mode.
+    // the socket for every caller. VC-162 added the `tool` mode and `project`
+    // bundle membership; the socket door stays until VC-163 removes `cli` and
+    // flips the actor to `role`, which is the moment the tier becomes control.
+    //
+    // Dual-surface in the meantime, and `verbTier` reads that honestly as
+    // coordination: a tier is the WEAKEST door a verb is reachable through,
+    // and this one is still reachable by any authenticated socket caller. A
+    // control-tier claim while the socket answers would be a claim about a
+    // door that is standing open.
     key: "session.start",
-    accessModes: ["cli"],
+    accessModes: ["cli", "tool"],
     actor: "session",
     handler: { site: "main", id: "session.start" },
     listed: true,
@@ -751,6 +831,66 @@ export const VERB_REGISTRY = [
       nonEffects: [
         "The Ticket does not move.",
         "The app does not steal focus or navigate until the person uses Open session.",
+      ],
+    },
+    tool: {
+      name: "session_start",
+      // Written for the model, and mostly about restraint: a tool that starts
+      // another agent is a tool that will be used to start another agent
+      // unless the description says when not to. The last line is the one a
+      // caller cannot learn from the schema — this door binds the caller's
+      // identity itself, so there is no project or actor field to supply and
+      // nothing to be gained by describing oneself.
+      description: [
+        "Start an agent chat Session on one Ticket in this project, and return as soon as it opens.",
+        "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
+        "It does not move the Ticket on the board, and it does not wait for the work to finish.",
+        "Volli binds the calling Session and project itself: name the Ticket and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "ticket",
+          type: "string",
+          required: true,
+          description: "The display id of the Ticket to work, for example VC-12.",
+        },
+        {
+          name: "message",
+          type: "string",
+          description:
+            "The kickoff instruction the new Session opens with. Omit to send Volli's default kickoff.",
+        },
+        {
+          name: "title",
+          type: "string",
+          description:
+            "A permanent title for the Session. Omit to let Volli name it from the kickoff.",
+        },
+        {
+          name: "model",
+          type: "object",
+          description: "Run the Session on a specific model instead of the configured default.",
+          fields: [
+            {
+              name: "providerId",
+              type: "string",
+              required: true,
+              description: "Provider id, as `model list` prints it.",
+            },
+            {
+              name: "modelId",
+              type: "string",
+              required: true,
+              description: "Model id, as `model list` prints it.",
+            },
+          ],
+        },
+        {
+          name: "reasoning",
+          type: "enum",
+          values: REASONING_LEVELS,
+          description: "Reasoning level override; the chosen model must support it.",
+        },
       ],
     },
     positionalId: "required",
@@ -1213,6 +1353,87 @@ export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbT
     throw new Error("Control tier requires tool-only access and a role actor");
   }
   return "control";
+}
+
+/**
+ * The Agent Tool Surface projection at the type level: entries carrying a
+ * `tool` access mode.
+ */
+// `E extends VerbEntry ? …` and not a bare `"tool" extends E["accessModes"]`:
+// a conditional distributes over a union only when the CHECKED type is the
+// naked parameter. Written the short way, `E["accessModes"][number]` collapses
+// to the union across every entry — which contains `"tool"` — and the type
+// silently widens to every verb key. `SocketProjected` above has the same
+// shape for the same reason.
+type ToolProjected<E extends VerbEntry> = E extends VerbEntry
+  ? "tool" extends E["accessModes"][number]
+    ? E["key"]
+    : never
+  : never;
+
+/**
+ * A verb key the Agent Tool Surface can carry — the vocabulary a Role bundle
+ * and a Session grant are allowed to name (VC-162).
+ *
+ * Narrower than {@link VerbKey} on purpose. A grant naming `ticket.list` would
+ * be asking for a tool nothing can build, and this type is what makes that a
+ * compile error at every caller inside the product; {@link isVerbToolKey} is
+ * the same check for the durable data a store hands back.
+ */
+export type VerbToolKey = ToolProjected<RegistryEntry>;
+
+/**
+ * The tool projection: entries carrying a `tool` access mode, in declaration
+ * order. Takes its entries as an argument so a projection can be proven
+ * against a synthetic table.
+ *
+ * Declaration order is the canonical tool order. Appending is what keeps a
+ * verb added later from shifting the position of one already in a Session's
+ * frozen surface.
+ */
+export function verbToolsFrom(
+  entries: readonly VerbEntry[],
+): readonly (VerbEntry & { tool: VerbToolProjection })[] {
+  const projected = entries.filter((entry) => entry.accessModes.includes("tool"));
+  for (const entry of projected) {
+    if (entry.tool === undefined) {
+      throw new Error(`Verb ${entry.key} declares a tool access mode with no tool projection`);
+    }
+    if (!VERB_TOOL_NAME_PATTERN.test(entry.tool.name)) {
+      throw new Error(
+        `Verb ${entry.key} projects tool name ${JSON.stringify(entry.tool.name)}, which no provider will accept`,
+      );
+    }
+  }
+  const wireNames = new Set<string>();
+  for (const entry of projected) {
+    const wire = entry.tool!.name;
+    if (wireNames.has(wire)) {
+      throw new Error(`Tool name ${wire} is projected by more than one verb`);
+    }
+    wireNames.add(wire);
+  }
+  return projected as readonly (VerbEntry & { tool: VerbToolProjection })[];
+}
+
+/** Every verb the Agent Tool Surface can carry, in canonical order. */
+export const VERB_TOOLS: readonly (VerbEntry & { tool: VerbToolProjection })[] =
+  verbToolsFrom(VERB_REGISTRY);
+
+/** Their keys, in the same order — the canonical tail of a resolved surface. */
+export const VERB_TOOL_KEYS = VERB_TOOLS.map((entry) => entry.key) as readonly VerbToolKey[];
+
+const VERB_TOOL_KEY_SET: ReadonlySet<string> = new Set(VERB_TOOL_KEYS);
+
+/**
+ * Whether a string is a verb this build can project as a tool.
+ *
+ * The runtime guard behind {@link VerbToolKey}: durable grant data and a
+ * decoded `tool-surface` record arrive as strings, and a key this build does
+ * not project is a name nothing can bind. Callers fail closed on `false`.
+ */
+export function isVerbToolKey(key: string): key is VerbToolKey {
+  return VERB_TOOL_KEY_SET.has(key);
 }
 
 /** Every listed verb on any agent surface, ordered for zero-cost discovery. */

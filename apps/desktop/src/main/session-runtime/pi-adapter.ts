@@ -84,6 +84,7 @@ import {
   errorMessage,
   readSkillResources,
   sessionToolIds,
+  verbToolsOf,
   type AgentRuntime,
   type AuthorityPolicy,
   type AuthoritySnapshot,
@@ -98,6 +99,9 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
+  type RuntimeSessionIdentity,
+  type RuntimeVerbCall,
+  type RuntimeVerbResult,
   type RuntimeWorkspaceEnvironment,
   type SessionInteractionOption,
   type SessionInteractionResolution,
@@ -338,6 +342,33 @@ export interface PiAdapterOptions {
    */
   resolveWebPorts?: () => SessionWebPorts;
   /**
+   * Runs one product verb a Session's Role bundle names, in main's own process
+   * (VC-162).
+   *
+   * Unlike {@link resolveWebPorts}, this decides no membership. The Session's
+   * frozen record decides that, and this supplies the one closure every verb in
+   * it is answered through — which is why it is a single port rather than one
+   * per verb: main holds every verb's handler already, keyed by the registry's
+   * own binding id.
+   *
+   * Absent means a build with no verb handlers wired, which is every test that
+   * does not exercise one. A Session whose record names a verb then fails to
+   * attach rather than being handed a smaller array — the same rule the web
+   * ports follow, and for the same reason: an attachment that quietly sends a
+   * different tool array has thrown away the Session's Cache Prefix and lied
+   * about its own durable record.
+   *
+   * The caller is not a parameter. Main binds the calling Session's identity
+   * from the attachment this port belongs to, which is the whole difference
+   * between this door and the socket — there, a caller states who it is through
+   * an environment variable anything running as the user could set.
+   */
+  callVerb?: (
+    session: RuntimeSessionIdentity,
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+  ) => Promise<RuntimeVerbResult>;
+  /**
    * The compaction policy every Session is run under — the global automatic
    * switch. Read per compaction rather than per attach: a Session outlives
    * the settings change that retunes it.
@@ -529,6 +560,7 @@ function piNativeAdapter(
         recovery,
         now,
         web: options.resolveWebPorts?.() ?? {},
+        callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
         // The directory the Session Engine prepared is the one to measure: a
         // worktree ticket's isolated checkout has its own `node_modules`
@@ -609,6 +641,7 @@ interface PiBindingOptions {
   now: () => number;
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
+  callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
   workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -621,6 +654,7 @@ class PiBinding implements BindingHandle {
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
+  readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
   readonly #abort = new AbortController();
@@ -652,6 +686,7 @@ class PiBinding implements BindingHandle {
     this.#recovery = options.recovery;
     this.#now = options.now;
     this.#web = options.web;
+    this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
     // Last, because every field it reads must already be set.
@@ -726,11 +761,23 @@ class PiBinding implements BindingHandle {
         "This Session's frozen Agent Tool Surface includes Web Access, but the current profile cannot bind it. Restore a working Web Access configuration and retry the attachment.",
       );
     }
+    // The verb half of the frozen record, read back rather than re-derived from
+    // Role and grants (VC-162). Re-deriving would be the recomposition the
+    // record exists to prevent: a Session attaching months later would resolve
+    // today's bundle and send a tool array its own history does not describe.
+    const verbs = verbToolsOf(context.toolSurface);
+    const callVerb = this.#callVerb;
+    if (verbs.length > 0 && callVerb === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes Volli verbs, but this launch wired no handler for them. Relaunch the app and retry the attachment.",
+      );
+    }
+    const sessionIdentity: RuntimeSessionIdentity =
+      context.role === "ticket"
+        ? { ...identity, role: "ticket", ticketId: context.ticketId }
+        : { ...identity, role: "project", ticketId: null };
     const runtimeSpec: SessionRuntimeSpec = {
-      identity:
-        context.role === "ticket"
-          ? { ...identity, role: "ticket", ticketId: context.ticketId }
-          : { ...identity, role: "project", ticketId: null },
+      identity: sessionIdentity,
       // The directory the Session Engine PREPARED: for a worktree ticket the
       // isolated checkout — never the main one — and for a ticketless Session
       // the project root, which is the only place it was ever going to run.
@@ -773,7 +820,13 @@ class PiBinding implements BindingHandle {
       // with no resources is a spec with no resources field — same shape the
       // runtime's own tests pin.
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
-      tools: { tools: context.toolSurface.filter(isPiCodingTool) },
+      tools: {
+        tools: context.toolSurface.filter(isPiCodingTool),
+        // Omitted rather than empty for the reason `promptResources` is: a
+        // Ticket Session holds no verbs, and "no verb field" is the shape the
+        // runtime's own tests pin for that.
+        ...(verbs.length === 0 ? {} : { verbs }),
+      },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
@@ -781,6 +834,16 @@ class PiBinding implements BindingHandle {
       ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
+      // Caller identity is closed over here and never travels in the call. The
+      // model names a verb and its arguments; WHO is asking is this
+      // attachment's own identity, which is exactly what the socket door
+      // cannot know about its callers.
+      ...(verbs.length === 0
+        ? {}
+        : {
+            callVerb: (request: RuntimeVerbCall, signal: AbortSignal) =>
+              callVerb!(sessionIdentity, request, signal),
+          }),
     };
     // `sessionToolIds` is the same derivation `createSessionTools` consumes.
     // Comparing the full ordered list here prevents corrupted/non-canonical

@@ -791,6 +791,68 @@ describe("Pi native adapter attach", () => {
     expect(runtime.specs).toHaveLength(1);
   });
 
+  it("binds the caller's identity to a verb call, never the model's claim (VC-162)", async () => {
+    const seen: unknown[] = [];
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+      callVerb: async (session, request) => {
+        seen.push({ session, request });
+        return { text: "started" };
+      },
+    });
+
+    // The bundle's verb half rides the spec, read back off the frozen record
+    // rather than re-derived from Role and grants.
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      verbs: ["session.start"],
+    });
+
+    await runtime.spec.callVerb?.(
+      { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "tc-0" },
+      new AbortController().signal,
+    );
+
+    // Who is calling is this attachment's own identity, closed over here and
+    // absent from the call. That is the difference from the socket, where a
+    // caller states who it is through an environment variable anything running
+    // as the user could set.
+    expect(seen).toEqual([
+      {
+        session: runtime.spec.identity,
+        request: { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "tc-0" },
+      },
+    ]);
+  });
+
+  it("omits the verb half entirely for a Session whose Role carries none", async () => {
+    // A Ticket Session: no `verbs` field at all rather than an empty one, so
+    // "holds nothing" and "holds an empty list" cannot both exist as shapes.
+    const { runtime } = await attached({ callVerb: async () => ({ text: "unused" }) });
+
+    expect(runtime.spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
+    expect("callVerb" in runtime.spec).toBe(false);
+  });
+
+  it("refuses the attachment rather than dropping a frozen verb it cannot bind", async () => {
+    // The Web Access rule, one surface over: an attachment that quietly sent a
+    // smaller tool array would have thrown away the Session's Cache Prefix and
+    // contradicted its own durable record.
+    const { adapter } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+    });
+
+    const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
+
+    await expect(attaching).rejects.toThrow(/wired no handler for them/);
+  });
+
   it("passes the injected model collection and session directory to the runtime factory", async () => {
     const seen: { sessionDataDir: string; models: unknown }[] = [];
     const models = { getModel: () => undefined } as unknown as NonNullable<

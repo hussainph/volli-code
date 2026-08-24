@@ -4107,6 +4107,8 @@ describe("prompt.baseline", () => {
       "resources-header",
       "resource:skills index",
       "brief",
+      // The Role bundle block the first message carries (VC-162).
+      "reminder:session-tools",
     ]);
     for (const section of sections) {
       expect(section.chars).toBeGreaterThan(0);
@@ -4124,8 +4126,12 @@ describe("prompt.baseline", () => {
     // An unwritable path is no package workspace, so it earns no reminder: a
     // measured zero rather than a missing measurement.
     expect(data["reminder"]).toEqual({ chars: 0, tokens: 0 });
-    expect(total.chars).toBe(system.chars + brief.chars);
-    expect(total.tokens).toBe(system.tokens + brief.tokens);
+    // The bundle block, unlike the reminder, is sent to every Session — so it
+    // is never a measured zero and always rides the total.
+    const toolSurface = data["toolSurface"] as { chars: number; tokens: number };
+    expect(toolSurface.chars).toBeGreaterThan(0);
+    expect(total.chars).toBe(system.chars + brief.chars + toolSurface.chars);
+    expect(total.tokens).toBe(system.tokens + brief.tokens + toolSurface.tokens);
     // The Brief priced is the project Brief a real ticketless start composes.
     expect(brief.chars).toBeGreaterThan(
       composeProjectBrief({ project: { path: "/repo/volli" } }).length,
@@ -4150,6 +4156,7 @@ describe("prompt.baseline", () => {
       "authority",
       "workspace",
       "brief",
+      "reminder:session-tools",
     ]);
   });
 
@@ -4200,8 +4207,9 @@ describe("prompt.baseline", () => {
       expect(measured.chars).toBeGreaterThan(0);
       const system = data["system"] as { chars: number };
       const brief = data["brief"] as { chars: number };
+      const toolSurface = data["toolSurface"] as { chars: number };
       const total = data["total"] as { chars: number };
-      expect(total.chars).toBe(system.chars + brief.chars + measured.chars);
+      expect(total.chars).toBe(system.chars + brief.chars + measured.chars + toolSurface.chars);
       // No prompt layer went with it: the reminder is bytes the prompt shed.
       expect(sections.map((section) => section.id)).not.toContain("environment");
     } finally {
@@ -4512,7 +4520,12 @@ describe("session.start", () => {
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
     );
     const startInputs: SessionStartInput[] = [];
-    const kickoffs: { sessionId: string; text: string }[] = [];
+    const kickoffs: {
+      sessionId: string;
+      text: string;
+      commandId: string;
+      messageId: string;
+    }[] = [];
     const refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[] = [];
     const mutations: unknown[] = [];
     const notices: SessionStartedNotice[] = [];
@@ -4588,9 +4601,20 @@ describe("session.start", () => {
 
     await harness.execute({ id: "VC-1" });
 
+    // The turn's ids are DERIVED from the start's operation id, never minted at
+    // the delivery seam (VC-162). The Session Engine deduplicates a
+    // `message.submit` on its command id, so this is the whole mechanism that
+    // makes a replayed start submit one kickoff instead of two — the socket's
+    // own operation id is random, but the tool door's is not.
     expect(harness.kickoffs).toEqual([
-      { sessionId: startedSessionId, text: DEFAULT_KICKOFF_MESSAGE },
+      {
+        sessionId: startedSessionId,
+        text: DEFAULT_KICKOFF_MESSAGE,
+        commandId: "generated-1:kickoff",
+        messageId: "generated-1:kickoff-message",
+      },
     ]);
+    expect(harness.startInputs[0]?.operationId).toBe("generated-1");
   });
 
   it("names a -m kickoff and threads the model/reasoning override", async () => {
@@ -4604,7 +4628,12 @@ describe("session.start", () => {
     });
 
     expect(harness.kickoffs).toEqual([
-      { sessionId: startedSessionId, text: "Validate VC-52 before release" },
+      {
+        sessionId: startedSessionId,
+        text: "Validate VC-52 before release",
+        commandId: "generated-1:kickoff",
+        messageId: "generated-1:kickoff-message",
+      },
     ]);
     expect(harness.startInputs[0]).toMatchObject({
       title: "Validate VC-52",

@@ -365,7 +365,7 @@ volli help session start
 ============================================================================
 session start — Start an agent chat session on a ticket.
 
-Door: Agent CLI
+Door: Agent CLI and Agent Tool Surface
 Verb tier: coordination
 
 Usage: volli session start <id> [options]
@@ -660,7 +660,7 @@ Run volli help model <subcommand> for detail.
 volli help session
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent CLI]
+  session start    Start an agent chat session on a ticket. [Agent CLI and Agent Tool Surface]
   session list     List a project's active terminal and chat sessions. [Agent CLI]
   session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
   session done     Record that this session's work is finished. [Agent CLI]
@@ -860,7 +860,7 @@ Read before writing; work your own board unless instructed; use comments and del
 volli help session harness
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent CLI]
+  session start    Start an agent chat session on a ticket. [Agent CLI and Agent Tool Surface]
   session list     List a project's active terminal and chat sessions. [Agent CLI]
   session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
   session done     Record that this session's work is finished. [Agent CLI]

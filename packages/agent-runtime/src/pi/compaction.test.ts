@@ -298,6 +298,7 @@ describe("contextMessages", () => {
       {
         identity: { role: "ticket" },
         brief: { text: "VC-12 — read the marker." },
+        tools: { tools: ["read"] },
         workspaceEnvironment: { dependencies: "absent", installCommand: "pnpm install" },
       },
       "start here",

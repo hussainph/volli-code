@@ -12,6 +12,7 @@ import { WebSearchRefusal } from "../web/search";
 import {
   ASK_USER_TOOL_NAME,
   createAskUserTool,
+  createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
   WEB_FETCH_TOOL_NAME,
@@ -802,5 +803,67 @@ describe("web_search tool", () => {
     attachment.abort();
 
     expect(searches.map((search) => search.signal.aborted)).toEqual([false, false]);
+  });
+});
+
+describe("createVerbTool", () => {
+  it("compiles the registry's semantic schema into what the model is shown", () => {
+    const tool = createVerbTool({
+      verb: "session.start",
+      port: async () => ({ text: "" }),
+    });
+
+    // The provider-safe name, and a schema built from registry data rather than
+    // from a literal in this package — so the bytes on the wire cannot drift
+    // from the one declaration every surface reads.
+    expect(tool.name).toBe("session_start");
+    const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    expect(Object.keys(properties)).toEqual(["ticket", "message", "title", "model", "reasoning"]);
+    // Required and optional survive the compilation, and a nested object stays
+    // an object rather than being flattened into argv-ish strings.
+    expect((tool.parameters as { required?: string[] }).required).toEqual(["ticket"]);
+    expect((properties.model as { type?: string }).type).toBe("object");
+  });
+
+  it("refuses to build a tool for a verb this build does not project", () => {
+    // Unreachable from a resolved surface, which is why it is a throw rather
+    // than a fallback: the alternative is a nameless tool reaching a provider,
+    // and a provider given a tool with no name rejects the whole request.
+    expect(() =>
+      createVerbTool({ verb: "ticket.list" as never, port: async () => ({ text: "" }) }),
+    ).toThrow("has no tool projection in this build");
+  });
+
+  it("withdraws the call when the attachment signal fires", async () => {
+    const attachment = new AbortController();
+    const signals: AbortSignal[] = [];
+    const tool = createVerbTool(
+      {
+        verb: "session.start",
+        port: async (_request, signal) => {
+          signals.push(signal);
+          return { text: "started" };
+        },
+      },
+      attachment.signal,
+    );
+
+    await tool.execute("tc-1", { ticket: "VC-1" });
+    expect(signals[0]?.aborted).toBe(false);
+
+    // An already-aborted signal is READ rather than waited for: a call raised
+    // into a cancelled turn must reach the host withdrawn, not hang.
+    const aborted = createVerbTool(
+      {
+        verb: "session.start",
+        port: async (_request, signal) => {
+          signals.push(signal);
+          return { text: "started" };
+        },
+      },
+      AbortSignal.abort(),
+    );
+    await aborted.execute("tc-2", { ticket: "VC-1" });
+    expect(signals[1]?.aborted).toBe(true);
   });
 });
