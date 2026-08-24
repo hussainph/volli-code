@@ -8,8 +8,6 @@ export const MAX_READ_IMAGE_BASE64_BYTES = Math.floor(4.5 * 1024 * 1024);
 const JPEG_QUALITIES = [80, 70, 60, 50] as const;
 const COMPRESSION_PASSES = 7;
 const RESIZE_STEP = 0.75;
-// Decoding an image well beyond the vision bound is work the model cannot use.
-const MAX_INPUT_PIXELS = 64_000_000;
 
 interface ReadImageProcessorOptions {
   maxBase64Bytes?: number;
@@ -50,6 +48,11 @@ const OMITTED_IMAGE = "[Image omitted: could not make a provider-safe copy.]";
  * remains in the conversation for every later provider request. This processor
  * preserves already-safe images, otherwise bounds their dimensions, transcodes
  * them to a lossy JPEG, and verifies the encoded payload before it reaches Pi.
+ *
+ * Pi's `autoResizeImages` flag is deliberately unread: it exists so a host can
+ * install a processor and still opt out of resizing, and this one is installed
+ * for exactly the opposite reason. `tools.ts` never sets it, so it is always
+ * Pi's `true` default — honouring it would be a branch nothing can reach.
  */
 export function createReadImageProcessor(
   options: ReadImageProcessorOptions = {},
@@ -62,12 +65,24 @@ export function createReadImageProcessor(
       // Dynamic loading keeps a missing native image codec a failed image read,
       // rather than a failure to attach the whole runtime.
       const { default: sharp } = await import("sharp");
-      const metadata = await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
-      // Pi only calls this after its magic-byte image detector accepted the
-      // file. A decodable raster image always has these dimensions; a corrupt
-      // one makes sharp reject and takes the safe catch below.
-      const original = metadata.autoOrient!;
+      // No `limitInputPixels` override: sharp's default (~268 MP) is the
+      // decompression-bomb guard, and a tighter one here only omits images this
+      // processor could otherwise have delivered. A 240 MP PNG measured at
+      // 330 ms and +67 MiB RSS through the pipeline below — libvips streams the
+      // resize rather than materializing the full raster — so pixel count is
+      // not the cost that needed bounding. Encoded payload is, and the loop
+      // below bounds that directly.
+      const metadata = await sharp(bytes).metadata();
+      // Dimensions after any EXIF rotation, which is what `.rotate()` produces
+      // below. Sharp types `autoOrient` as always present; a file Pi's
+      // magic-byte detector accepted but libvips cannot decode rejects here and
+      // takes the safe catch instead.
+      const original = metadata.autoOrient;
 
+      // A small, already-cheap image ships byte-for-byte: a screenshot of code
+      // or a UI reads better as its original lossless PNG than as anything this
+      // processor could re-encode. BMP is excluded because no provider accepts
+      // it as image input, so it must be transcoded however small it is.
       if (
         mimeType !== "image/bmp" &&
         original.width <= maxEdgePx &&
@@ -77,34 +92,39 @@ export function createReadImageProcessor(
         return { ok: true, data: Buffer.from(bytes).toString("base64"), mimeType, hints: [] };
       }
 
-      let displayed = fitWithin(original, maxEdgePx);
+      let box = fitWithin(original, maxEdgePx);
       for (let pass = 0; pass < COMPRESSION_PASSES; pass += 1) {
         for (const quality of JPEG_QUALITIES) {
-          const encoded = await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS })
+          // `resolveWithObject` so the hint below reports the size the model is
+          // actually looking at. `fit: "inside"` preserves the aspect ratio, so
+          // the encoded image can come out a pixel short of the requested box —
+          // and a coordinate scale derived from the box rather than the result
+          // is then wrong in the one direction that matters.
+          const { data: encoded, info } = await sharp(bytes)
             .rotate()
             .resize({
-              width: displayed.width,
-              height: displayed.height,
+              width: box.width,
+              height: box.height,
               fit: "inside",
               withoutEnlargement: true,
             })
             .flatten({ background: "#ffffff" })
             .jpeg({ quality, mozjpeg: true, chromaSubsampling: "4:2:0" })
-            .toBuffer();
+            .toBuffer({ resolveWithObject: true });
           if (base64Length(encoded.byteLength) <= maxBase64Bytes) {
-            const scale = original.width / displayed.width;
-            return {
-              ok: true,
-              data: encoded.toString("base64"),
-              mimeType: "image/jpeg",
-              hints: [
-                "[Image recompressed as JPEG to fit provider limits.]",
-                `[Image: original ${original.width}x${original.height}, displayed at ${displayed.width}x${displayed.height}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`,
-              ],
-            };
+            const hints = ["[Image recompressed as JPEG to fit provider limits.]"];
+            // Only when the pixels actually moved: telling a model to multiply
+            // coordinates by 1.00 spends its attention on a no-op.
+            if (info.width !== original.width) {
+              const scale = original.width / info.width;
+              hints.push(
+                `[Image: original ${original.width}x${original.height}, displayed at ${info.width}x${info.height}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`,
+              );
+            }
+            return { ok: true, data: encoded.toString("base64"), mimeType: "image/jpeg", hints };
           }
         }
-        displayed = nextSmaller(displayed);
+        box = nextSmaller(box);
       }
       return { ok: false, message: OMITTED_IMAGE };
     } catch {

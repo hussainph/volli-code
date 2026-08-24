@@ -66,13 +66,16 @@ describe("read image processor", () => {
     expect(result.mimeType).toBe("image/jpeg");
     expect(Buffer.byteLength(result.data, "utf8")).toBeLessThanOrEqual(MAX_READ_IMAGE_BASE64_BYTES);
     expect(output.autoOrient).toEqual({ width: MAX_READ_IMAGE_EDGE_PX, height: 1_000 });
+    // The reported size is the encoded result, not the box it was fitted into:
+    // `fit: "inside"` keeps the aspect ratio, so the two can disagree by a pixel
+    // and a scale taken from the box would be the wrong one to trust.
     expect(result.hints).toEqual([
       "[Image recompressed as JPEG to fit provider limits.]",
       "[Image: original 2401x1200, displayed at 2000x1000. Multiply coordinates by 1.20 to map to original image.]",
     ]);
   });
 
-  it("lossily recompresses a byte-heavy PNG even when its dimensions already fit", async () => {
+  it("lossily recompresses a byte-heavy PNG without claiming a coordinate change", async () => {
     // A level-zero PNG has more than the provider-safe base64 budget despite
     // containing an ordinary screenshot-sized raster. It is the regression
     // shape: Pi used to return these original PNG bytes directly.
@@ -89,7 +92,28 @@ describe("read image processor", () => {
     expect(result.mimeType).toBe("image/jpeg");
     expect(Buffer.byteLength(result.data, "utf8")).toBeLessThanOrEqual(MAX_READ_IMAGE_BASE64_BYTES);
     expect(output.autoOrient).toEqual({ width: 1_200, height: 1_200 });
-    expect(result.hints.at(-1)).toContain("original 1200x1200, displayed at 1200x1200");
+    // Nothing was resized, so the model is told only that quality changed.
+    expect(result.hints).toEqual(["[Image recompressed as JPEG to fit provider limits.]"]);
+  });
+
+  it("downscales an image far past the vision bound instead of omitting it", async () => {
+    // 64 MP: a stitched capture or a scanned page reaches this while staying a
+    // small, perfectly decodable file. Capping decode work by pixel count made
+    // exactly these reads fail, which is the breakage this processor exists to
+    // remove — so the bound belongs on the encoded payload, never on the input.
+    const source = await png(9_000, 8_000);
+    expect(source.byteLength).toBeLessThan(MAX_READ_IMAGE_BASE64_BYTES);
+
+    const result = resultImage(
+      await processReadImage(source, "image/png", { autoResizeImages: true }),
+    );
+    const output = await sharp(Buffer.from(result.data, "base64")).metadata();
+
+    expect(result.mimeType).toBe("image/jpeg");
+    expect(output.autoOrient).toEqual({ width: MAX_READ_IMAGE_EDGE_PX, height: 1_778 });
+    expect(result.hints.at(-1)).toContain(
+      "original 9000x8000, displayed at 2000x1778. Multiply coordinates by 4.50",
+    );
   });
 
   it("omits a BMP that the image codec cannot convert instead of sending its unsupported mime type", async () => {
