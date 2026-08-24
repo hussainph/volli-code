@@ -22,21 +22,21 @@
  * template list, and it drives all three rules below.
  *
  * **One name, one meaning, and the verb wins it.** A verb's name is reserved:
- * a prompt template or skill spelled `compact` is dropped from every picker
- * ({@link visiblePromptTemplates}, `visibleSkills`) and refused by
- * `expandCommandInvocation`, so it can never be what `/compact` does. This is
- * the opposite of the template-over-skill rule beside it, deliberately: those
- * two are both text, so shadowing one with the other substitutes text for
- * text, and the user-authored file is the better answer. A verb and a template
- * are not the same kind of thing, so shadowing would substitute a *message*
- * for an *operation* — and it would do it silently, at the one moment the
- * operation matters most, since a Session whose window is full is exactly when
- * `/compact` must not turn into a prompt. Losing the name is visible instead:
- * the picker shows `/compact` doing what this file says it does, where the
- * user's own row used to be. A visible cost beats an invisible one. The
- * same reservation covers `model`, `settings` and the rest — common words,
- * and a `settings.md` a project happened to have loses its row rather than
- * silently winning a verb's name.
+ * a prompt template or skill spelled `compact` cannot be what `/compact` does,
+ * and `expandCommandInvocation` refuses to expand the name. This is the
+ * opposite of the template-over-skill rule beside it, deliberately: those two
+ * are both text, so shadowing one with the other substitutes text for text,
+ * and the user-authored file is the better answer. A verb and a template are
+ * not the same kind of thing, so shadowing would substitute a *message* for an
+ * *operation* — and it would do it silently, at the one moment the operation
+ * matters most, since a Session whose window is full is exactly when
+ * `/compact` must not turn into a prompt. The same reservation covers `model`,
+ * `settings` and the rest — common words, and a `settings.md` a project
+ * happened to have must not silently win a verb's name.
+ *
+ * The file that loses the name is not lost with it: `slash-namespace.ts`
+ * qualifies it to `/command:compact` and it keeps working there. Reservation
+ * decides who owns a bare name, not who gets to exist.
  *
  * **A verb owns the whole draft or it is not a verb.** A template invocation
  * may sit mid-sentence, because expanding it leaves a message behind either
@@ -54,7 +54,6 @@
  * records — the press hands the words back rather than dropping them
  * silently, the same bargain the whole-draft rule makes.
  */
-import type { PromptTemplate } from "./prompt-template";
 
 /**
  * The Session facts an offer rule may read — everything a verb is allowed to
@@ -241,7 +240,11 @@ export interface ComposerVerb extends ComposerVerbSpec {
  * by hand beside the union; {@link COMPOSER_VERB_TABLE} says what that cost.
  */
 export const COMPOSER_VERBS: readonly ComposerVerb[] = Object.entries(COMPOSER_VERB_TABLE).map(
-  ([name, spec]) => ({ name: name as ComposerVerbName, ...spec }),
+  // `Object.assign` onto a fresh literal rather than a spread: it copies every
+  // field the spec has without naming them, so a field added to
+  // `ComposerVerbSpec` arrives here on its own rather than being silently
+  // dropped by a hand-written field list.
+  ([name, spec]) => Object.assign({ name: name as ComposerVerbName }, spec),
 );
 
 /** The verb this name belongs to. Total on {@link ComposerVerbName}, so no null. */
@@ -307,20 +310,4 @@ export function findComposerVerb(text: string): ComposerVerbInvocation | null {
   if (rest !== "" && !/^\s/.test(rest)) return null;
   const instructions = rest.trim();
   return { verb, instructions: instructions === "" ? null : instructions };
-}
-
-/**
- * The templates a picker may offer — reserved verb names removed.
- *
- * `visibleSkills`' rule one tier up, and the same bargain: a row that resolves
- * to something other than what it says is worse than no row. The removal is
- * not cosmetic — `expandCommandInvocation` refuses the same names, so what the
- * picker offers and what a press performs cannot disagree about which of the
- * two a `/compact` is — and every verb's name is in that set, not just the
- * first one's.
- */
-export function visiblePromptTemplates(
-  templates: readonly PromptTemplate[],
-): readonly PromptTemplate[] {
-  return templates.filter((template) => !isComposerVerbName(template.name));
 }

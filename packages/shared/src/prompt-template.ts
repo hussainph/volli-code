@@ -36,6 +36,7 @@
  */
 import type { PromptResource } from "./agent-runtime";
 import { isComposerVerbName } from "./composer-verb";
+import { resolveSlashNamespace, slashTargets } from "./slash-namespace";
 import { skillPromptResource, type SkillReference } from "./skill";
 
 /**
@@ -302,9 +303,9 @@ export interface ExpandedInvocation {
  * person had pasted the whole SKILL.md themselves. The skill still consumes
  * its line — the words after it are its arguments, left in place where the
  * model reads them beside the reference — so a template `/name` later on that
- * line stays an argument, exactly as before. Templates win a shared name
- * outright, which is the rule `visibleSkills` keeps the picker honest
- * against.
+ * line stays an argument, exactly as before. Templates win a shared bare name
+ * outright; the skill that lost it is not gone, but answers to `skill:<name>`
+ * (`resolveSlashNamespace`), and that qualified name resolves here too.
  *
  * An unknown command is deliberately NOT an error: the harness is perfectly
  * able to read a sentence that mentions a slash, and swallowing it would lose
@@ -323,30 +324,33 @@ export function expandCommandInvocation(
   let result = "";
   let cursor = 0;
   const resources = new Map<string, PromptResource>();
+  // The same resolution the picker offers, computed from the same two lists
+  // rather than trusted from the caller. This function is the submit-time
+  // authority: a caller that passed pre-filtered arrays would be a caller that
+  // could disagree with the picker about which `/compact` is which, and the
+  // whole point of one namespace is that the offer and the press cannot.
+  const targets = slashTargets(resolveSlashNamespace({ templates, skills }));
   for (const invocation of findCommandInvocations(text)) {
     // Consumed already: this candidate sits inside a known command's arguments.
     if (invocation.start < cursor) continue;
     // A reserved name expands to nothing, so a `commands/compact.md` a user
-    // happens to have cannot quietly turn the verb into a message. Checked
-    // here rather than by pre-filtering the arrays, because this function is
-    // the submit-time authority and a caller that forgot to filter would be a
-    // caller that disagreed with the picker.
+    // happens to have cannot quietly turn the verb into a message. That file is
+    // no longer lost, though — it answers to `/command:compact`, which IS in
+    // the map below.
     if (isComposerVerbName(invocation.name)) continue;
-    const template = templates.find((candidate) => candidate.name === invocation.name);
-    const skill =
-      template === undefined
-        ? skills.find((candidate) => candidate.name === invocation.name)
-        : undefined;
-    if (template === undefined && skill === undefined) continue;
+    const target = targets.get(invocation.name);
+    if (target === undefined) continue;
     result += text.slice(cursor, invocation.start);
-    if (template !== undefined) {
-      result += formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString));
+    if (target.kind === "command") {
+      result += formatPromptTemplateInvocation(
+        target.template,
+        parseCommandArgs(invocation.argsString),
+      );
     } else {
-      // The guard above leaves exactly one of the two defined on this path.
       // The reference and its line stay verbatim; only the resource is new.
       result += text.slice(invocation.start, invocation.end);
-      if (!resources.has(skill!.name)) {
-        resources.set(skill!.name, skillPromptResource(skill!));
+      if (!resources.has(target.skill.name)) {
+        resources.set(target.skill.name, skillPromptResource(target.skill));
       }
     }
     cursor = invocation.end;

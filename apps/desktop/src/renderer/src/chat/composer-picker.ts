@@ -48,12 +48,12 @@
 import {
   formatPromptTemplateInvocation,
   promptTemplateTakesArgs,
-  visiblePromptTemplates,
-  visibleSkills,
+  resolveSlashNamespace,
   type ComposerVerb,
   type IndexedFile,
   type PromptTemplate,
   type SkillReference,
+  type SlashName,
 } from "@volli/shared";
 
 import { fileRefTokenAt, rankFileRefCompletions, refInsertion } from "@renderer/editor/file-refs";
@@ -79,6 +79,14 @@ export type ComposerPickerRow =
       readonly kind: "command";
       /** cmdk's item value: unique per row, and what "active" names. */
       readonly value: string;
+      /**
+       * What a pick WRITES, which is not always `template.name`: a template
+       * whose bare name a verb owns answers to `command:<name>`
+       * (`resolveSlashNamespace`). Carried on the row because the row is what
+       * insertion has, and writing the bare name would stage text that submit
+       * resolves to the verb instead.
+       */
+      readonly name: string;
       readonly label: string;
       readonly detail: string;
       readonly template: PromptTemplate;
@@ -86,6 +94,8 @@ export type ComposerPickerRow =
   | {
       readonly kind: "skill";
       readonly value: string;
+      /** What a pick writes — `skill:<name>` when the bare name was taken. */
+      readonly name: string;
       readonly label: string;
       readonly detail: string;
       readonly skill: SkillReference;
@@ -148,29 +158,43 @@ export function commandTokenAt(input: {
  */
 export function rankCommandCompletions(input: {
   query: string;
-  templates: readonly PromptTemplate[];
+  entries: readonly SlashName<PromptTemplate>[];
 }): readonly ComposerPickerRow[] {
   const query = input.query.toLowerCase();
-  return input.templates
-    .map((template) => ({ template, tier: commandMatchTier(query, template) }))
-    .filter((entry): entry is { template: PromptTemplate; tier: number } => entry.tier !== null)
-    .toSorted((a, b) => a.tier - b.tier || a.template.name.localeCompare(b.template.name))
+  return input.entries
+    .map((entry) => ({ entry, tier: matchTier(query, entry.name, entry.item.description) }))
+    .filter(
+      (ranked): ranked is { entry: SlashName<PromptTemplate>; tier: number } =>
+        ranked.tier !== null,
+    )
+    .toSorted((a, b) => a.tier - b.tier || a.entry.name.localeCompare(b.entry.name))
     .slice(0, MAX_COMMAND_RESULTS)
-    .map(({ template }) => ({
+    .map(({ entry }) => ({
       kind: "command" as const,
-      value: template.name,
-      label: `/${template.name}`,
-      detail: template.description,
-      template,
+      value: entry.name,
+      name: entry.name,
+      label: `/${entry.name}`,
+      detail: entry.item.description,
+      template: entry.item,
     }));
 }
 
-/** 0 = name prefix, 1 = name contains, 2 = description contains, null = no match. */
-function commandMatchTier(query: string, template: PromptTemplate): number | null {
-  const name = template.name.toLowerCase();
-  if (query === "" || name.startsWith(query)) return 0;
-  if (name.includes(query)) return 1;
-  if (template.description.toLowerCase().includes(query)) return 2;
+/**
+ * 0 = name prefix, 1 = name contains, 2 = description contains, null = no match.
+ *
+ * One function over a name and a description, because all three row kinds rank
+ * the same way — a verb, a command and a skill are all found by what they are
+ * called and then by what they say they do. It reads the RESOLVED name, so a
+ * template qualified to `command:compact` is still found by typing `compact`
+ * (tier 1, "contains"), while the bare prefix match belongs to the verb that
+ * owns the bare name. That is the ranking agreeing with the namespace instead
+ * of arguing with it.
+ */
+function matchTier(query: string, name: string, description: string): number | null {
+  const lower = name.toLowerCase();
+  if (query === "" || lower.startsWith(query)) return 0;
+  if (lower.includes(query)) return 1;
+  if (description.toLowerCase().includes(query)) return 2;
   return null;
 }
 
@@ -190,7 +214,7 @@ export function rankVerbCompletions(input: {
 }): readonly ComposerPickerRow[] {
   const query = input.query.toLowerCase();
   return input.verbs
-    .map((verb) => ({ verb, tier: verbMatchTier(query, verb) }))
+    .map((verb) => ({ verb, tier: matchTier(query, verb.name, verb.description) }))
     .filter((entry): entry is { verb: ComposerVerb; tier: number } => entry.tier !== null)
     .toSorted((a, b) => a.tier - b.tier || a.verb.name.localeCompare(b.verb.name))
     .map(({ verb }) => ({
@@ -205,20 +229,12 @@ export function rankVerbCompletions(input: {
     }));
 }
 
-/** The command tiers, over a verb's name and description. */
-function verbMatchTier(query: string, verb: ComposerVerb): number | null {
-  const name = verb.name.toLowerCase();
-  if (query === "" || name.startsWith(query)) return 0;
-  if (name.includes(query)) return 1;
-  if (verb.description.toLowerCase().includes(query)) return 2;
-  return null;
-}
-
 /**
  * Rank skills for the same `/` query — the same three tiers over the same two
- * fields, because a skill is invoked by the same grammar. Shadowed names are
- * gone before ranking (`visibleSkills`): a row the submit-time lookup would
- * resolve to a command must not be offered as a skill.
+ * fields, because a skill is invoked by the same grammar. A skill whose bare
+ * name a command or a verb already owns is NOT missing from this list; it
+ * arrives already qualified to `skill:<name>` (`resolveSlashNamespace`), which
+ * is a name the submit-time lookup resolves to this skill and nothing else.
  *
  * Skill rows trail the command rows in the combined list rather than
  * interleaving with them. The two are different kinds of thing — a command is
@@ -228,34 +244,31 @@ function verbMatchTier(query: string, verb: ComposerVerb): number | null {
  */
 export function rankSkillCompletions(input: {
   query: string;
-  skills: readonly SkillReference[];
-  templates: readonly PromptTemplate[];
+  entries: readonly SlashName<SkillReference>[];
 }): readonly ComposerPickerRow[] {
   const query = input.query.toLowerCase();
-  return visibleSkills(input.skills, input.templates)
-    .map((skill) => ({ skill, tier: skillMatchTier(query, skill) }))
-    .filter((entry): entry is { skill: SkillReference; tier: number } => entry.tier !== null)
-    .toSorted((a, b) => a.tier - b.tier || a.skill.name.localeCompare(b.skill.name))
+  return input.entries
+    .map((entry) => ({ entry, tier: matchTier(query, entry.name, entry.item.description) }))
+    .filter(
+      (ranked): ranked is { entry: SlashName<SkillReference>; tier: number } =>
+        ranked.tier !== null,
+    )
+    .toSorted((a, b) => a.tier - b.tier || a.entry.name.localeCompare(b.entry.name))
     .slice(0, MAX_COMMAND_RESULTS)
-    .map(({ skill }) => ({
+    .map(({ entry }) => ({
       kind: "skill" as const,
       // Prefixed so a value can never collide with a command row's — cmdk's
       // "active" is a value lookup, and two rows answering to one value would
-      // highlight together.
-      value: `skill:${skill.name}`,
-      label: `/${skill.name}`,
-      detail: skill.description,
-      skill,
+      // highlight together. Keyed on the BARE name: a value only has to be
+      // unique among the rows on screen, which the bare name already is, and
+      // keying on the resolved one would spell a shadowed skill `skill:skill:x`.
+      // The resolved name is what a pick WRITES — that is `name`, below.
+      value: `skill:${entry.bareName}`,
+      name: entry.name,
+      label: `/${entry.name}`,
+      detail: entry.item.description,
+      skill: entry.item,
     }));
-}
-
-/** The command tiers, over a skill's slug and description. */
-function skillMatchTier(query: string, skill: SkillReference): number | null {
-  const name = skill.name.toLowerCase();
-  if (query === "" || name.startsWith(query)) return 0;
-  if (name.includes(query)) return 1;
-  if (skill.description.toLowerCase().includes(query)) return 2;
-  return null;
 }
 
 /** A trigger token under the caret, before anything is ranked against it. */
@@ -370,18 +383,20 @@ export function composerPickerRows(input: {
   files: readonly IndexedFile[];
 }): readonly ComposerPickerRow[] {
   if (input.mode === "command") {
-    // A verb owns its name outright, so a template spelled `compact` is gone
-    // before anything is ranked — the same removal `expandCommandInvocation`
-    // performs at submit, which is what keeps the offer and the press agreed.
-    const templates = visiblePromptTemplates(input.templates);
+    // One namespace, resolved once, for all three row kinds — the same
+    // resolution `expandCommandInvocation` performs at submit from the same two
+    // lists, which is what keeps the offer and the press agreed about which
+    // `/compact` is which. A verb owns its bare name outright; a template or
+    // skill that wanted it is offered here under its qualified name rather
+    // than dropped, so a row the user wrote is still reachable.
+    const namespace = resolveSlashNamespace({
+      templates: input.templates,
+      skills: input.skills ?? [],
+    });
     return [
       ...rankVerbCompletions({ query: input.query, verbs: input.verbs ?? [] }),
-      ...rankCommandCompletions({ query: input.query, templates }),
-      ...rankSkillCompletions({
-        query: input.query,
-        skills: input.skills ?? [],
-        templates,
-      }),
+      ...rankCommandCompletions({ query: input.query, entries: namespace.templates }),
+      ...rankSkillCompletions({ query: input.query, entries: namespace.skills }),
     ];
   }
   // "Create artifact" is deliberately dropped: it is an intent that writes a
@@ -447,9 +462,13 @@ function writtenFor(row: ComposerPickerRow, text: string, state: ComposerPickerS
     // and they agree because nothing ever expands a reserved name.
     case "verb":
       return `/${row.verb.name}`;
+    // `row.name`, not `row.template.name`: a template the verbs shadowed is
+    // staged as `/command:deploy`, which is the name submit resolves back to
+    // this template. Writing the bare name would stage text that expands to
+    // the verb, or to nothing at all.
     case "command":
       return promptTemplateTakesArgs(row.template)
-        ? `/${row.template.name}`
+        ? `/${row.name}`
         : formatPromptTemplateInvocation(row.template);
     // Always staged, never expanded at pick — twice deliberate. A skill body is
     // a document, and pasting fifteen kilobytes into the box the reader is
@@ -460,7 +479,7 @@ function writtenFor(row: ComposerPickerRow, text: string, state: ComposerPickerS
     // — so the caret parks after the space, exactly like a command that still
     // wants its arguments.
     case "skill":
-      return `/${row.skill.name}`;
+      return `/${row.name}`;
     case "file":
       return refInsertion({
         // `fileRefTokenAt` only matches at a ref boundary, so this is already

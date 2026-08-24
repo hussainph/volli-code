@@ -2075,8 +2075,8 @@ export interface PromptTemplateIndexInput {
  * Everything the composer's `/` picker can offer — returned by
  * `volli:prompt-templates`: the prompt templates, already merged (project over
  * global) and sorted, and the project's skills (`.agents/skills/<slug>/SKILL.md`),
- * shadowed names not yet removed — that is the renderer's `visibleSkills` call,
- * beside the ranking that consumes it.
+ * shadowed names not yet resolved — that is the renderer's
+ * `resolveSlashNamespace` call, beside the ranking that consumes it.
  *
  * A missing directory is an empty list, never an error: most projects have no
  * `.volli/commands/` or `.agents/skills/` and a picker that toasts about it on

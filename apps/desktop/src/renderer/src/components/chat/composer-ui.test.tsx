@@ -629,6 +629,7 @@ function pickerState(overrides: Partial<ComposerPickerState> = {}): ComposerPick
       {
         kind: "command",
         value: "review",
+        name: "review",
         label: "/review",
         detail: "Review a file",
         template: TEMPLATES[0]!,

@@ -15,7 +15,7 @@ import {
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "./composer-picker";
-import { COMPACT_VERB, COMPOSER_VERBS } from "@volli/shared";
+import { COMPACT_VERB, COMPOSER_VERBS, resolveSlashNamespace } from "@volli/shared";
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
@@ -134,38 +134,64 @@ describe("commandTokenAt", () => {
   });
 });
 
+/**
+ * The template rows as the picker gets them — through the real resolver, so a
+ * test cannot assert against a name the composer would never actually offer.
+ */
+function commandEntries(
+  templates: readonly PromptTemplate[],
+  skills: readonly SkillReference[] = [],
+) {
+  return resolveSlashNamespace({ templates, skills }).templates;
+}
+
+/** The skill rows as the picker gets them. See {@link commandEntries}. */
+function skillEntries(
+  skills: readonly SkillReference[],
+  templates: readonly PromptTemplate[] = [],
+) {
+  return resolveSlashNamespace({ templates, skills }).skills;
+}
+
 describe("rankCommandCompletions", () => {
   it("offers every template for an empty query, name-sorted", () => {
-    const rows = rankCommandCompletions({ query: "", templates: TEMPLATES });
+    const rows = rankCommandCompletions({ query: "", entries: commandEntries(TEMPLATES) });
 
     expect(rows.map((row) => row.value)).toEqual(["preview", "review", "ship"]);
   });
 
   it("labels a row with its slash and its description", () => {
-    const [row] = rankCommandCompletions({ query: "ship", templates: TEMPLATES });
+    const [row] = rankCommandCompletions({ query: "ship", entries: commandEntries(TEMPLATES) });
 
     expect(row?.label).toBe("/ship");
     expect(row?.detail).toBe("Open a pull request");
   });
 
   it("puts a prefix match above one the name merely contains", () => {
-    const rows = rankCommandCompletions({ query: "rev", templates: TEMPLATES });
+    const rows = rankCommandCompletions({ query: "rev", entries: commandEntries(TEMPLATES) });
 
     expect(rows.map((row) => row.value)).toEqual(["review", "preview"]);
   });
 
   it("still finds a template only its description explains", () => {
-    const rows = rankCommandCompletions({ query: "pull request", templates: TEMPLATES });
+    const rows = rankCommandCompletions({
+      query: "pull request",
+      entries: commandEntries(TEMPLATES),
+    });
 
     expect(rows.map((row) => row.value)).toEqual(["ship"]);
   });
 
   it("is case-insensitive", () => {
-    expect(rankCommandCompletions({ query: "SHIP", templates: TEMPLATES })).toHaveLength(1);
+    expect(
+      rankCommandCompletions({ query: "SHIP", entries: commandEntries(TEMPLATES) }),
+    ).toHaveLength(1);
   });
 
   it("is empty when nothing matches", () => {
-    expect(rankCommandCompletions({ query: "zzz", templates: TEMPLATES })).toEqual([]);
+    expect(rankCommandCompletions({ query: "zzz", entries: commandEntries(TEMPLATES) })).toEqual(
+      [],
+    );
   });
 
   it("caps a very long list", () => {
@@ -173,7 +199,17 @@ describe("rankCommandCompletions", () => {
       template({ name: `cmd${String(index).padStart(2, "0")}` }),
     );
 
-    expect(rankCommandCompletions({ query: "", templates: many })).toHaveLength(50);
+    expect(rankCommandCompletions({ query: "", entries: commandEntries(many) })).toHaveLength(50);
+  });
+
+  it("offers a template a verb shadowed, under the name that runs it", () => {
+    // It used to be missing from this list entirely. The row is back, spelled
+    // the way submit resolves it, and `name` is what a pick writes.
+    const own = template({ name: "compact", description: "my own compaction prompt" });
+    const [row] = rankCommandCompletions({ query: "compact", entries: commandEntries([own]) });
+
+    expect(row?.label).toBe("/command:compact");
+    expect(row?.kind === "command" ? row.name : null).toBe("command:compact");
   });
 });
 
@@ -247,21 +283,28 @@ describe("rankSkillCompletions", () => {
   ];
 
   it("offers skills by slug, values prefixed so they can never collide with a command's", () => {
-    const rows = rankSkillCompletions({ query: "svg", skills: SKILLS, templates: TEMPLATES });
+    const rows = rankSkillCompletions({ query: "svg", entries: skillEntries(SKILLS, TEMPLATES) });
 
     expect(rows).toMatchObject([
       { kind: "skill", value: "skill:svg-logo-designer", label: "/svg-logo-designer" },
     ]);
   });
 
-  it("drops a skill a template's name shadows — the row would not do what it says", () => {
-    const rows = rankSkillCompletions({ query: "", skills: SKILLS, templates: TEMPLATES });
+  it("keeps a skill a template's name shadows, under the name that resolves to it", () => {
+    const rows = rankSkillCompletions({ query: "", entries: skillEntries(SKILLS, TEMPLATES) });
 
-    expect(rows.map((row) => row.value)).toEqual(["skill:audits", "skill:svg-logo-designer"]);
+    // The shadowed `review` skill used to be dropped here. It is offered now,
+    // labelled `/skill:review` — a name submit resolves to this skill and
+    // nothing else — so the `review` TEMPLATE still owns the bare `/review`.
+    expect(rows.map((row) => row.label)).toEqual([
+      "/audits",
+      "/skill:review",
+      "/svg-logo-designer",
+    ]);
   });
 
   it("matches on the description at the lowest tier, like a command", () => {
-    const rows = rankSkillCompletions({ query: "checklists", skills: SKILLS, templates: [] });
+    const rows = rankSkillCompletions({ query: "checklists", entries: skillEntries(SKILLS) });
 
     expect(rows.map((row) => row.value)).toEqual(["skill:audits"]);
   });
@@ -269,8 +312,10 @@ describe("rankSkillCompletions", () => {
   it("ranks a slug that merely contains the query below a prefix match", () => {
     const rows = rankSkillCompletions({
       query: "logo",
-      skills: [skill({ name: "logos", description: "" }), skill({ name: "svg-logo-designer" })],
-      templates: [],
+      entries: skillEntries([
+        skill({ name: "logos", description: "" }),
+        skill({ name: "svg-logo-designer" }),
+      ]),
     });
 
     expect(rows.map((row) => row.value)).toEqual(["skill:logos", "skill:svg-logo-designer"]);
@@ -371,7 +416,7 @@ describe("composerPickerRows", () => {
     ]);
   });
 
-  it("drops a template and a skill whose name the verb has taken", () => {
+  it("gives the verb the bare name and qualifies the template and skill that wanted it", () => {
     const rows = composerPickerRows({
       mode: "command",
       query: "compact",
@@ -381,10 +426,18 @@ describe("composerPickerRows", () => {
       files: FILES,
     });
 
-    // One name, one meaning, and the verb wins it. Both shadowed rows are gone
-    // before ranking, exactly as `expandCommandInvocation` refuses both names
-    // at submit — which is what keeps the offer and the press agreed.
-    expect(rows.map((row) => row.value)).toEqual(["verb:compact"]);
+    // One name, one meaning, and the verb wins it — `/compact` is still the
+    // operation, and the verb leads the list. What changed is the fate of the
+    // two files that wanted the name: they used to be dropped here, so a
+    // project that had written `compact.md` before the verb existed simply
+    // lost it. Now all three are offered, each under a name that resolves to
+    // exactly one of them, which is the same agreement with submit stated the
+    // other way round.
+    expect(rows.map((row) => row.label)).toEqual([
+      "/compact",
+      "/command:compact",
+      "/skill:compact",
+    ]);
   });
 
   it("ranks whatever query it is handed, which is how it may lag the caret", () => {
@@ -491,6 +544,7 @@ describe("applyPickerRow", () => {
     return {
       kind: "command",
       value: found.name,
+      name: found.name,
       label: `/${found.name}`,
       detail: found.description,
       template: found,
@@ -579,6 +633,7 @@ describe("applyPickerRow", () => {
     const row: ComposerPickerRow = {
       kind: "skill",
       value: `skill:${picked.name}`,
+      name: picked.name,
       label: `/${picked.name}`,
       detail: picked.description,
       skill: picked,
@@ -592,7 +647,7 @@ describe("applyPickerRow", () => {
 });
 
 describe("movePickerActive", () => {
-  const rows = rankCommandCompletions({ query: "", templates: TEMPLATES });
+  const rows = rankCommandCompletions({ query: "", entries: commandEntries(TEMPLATES) });
 
   it("steps down the list", () => {
     expect(movePickerActive(rows, "preview", 1)).toBe("review");
@@ -616,7 +671,7 @@ describe("movePickerActive", () => {
 });
 
 describe("activePickerRow", () => {
-  const rows = rankCommandCompletions({ query: "", templates: TEMPLATES });
+  const rows = rankCommandCompletions({ query: "", entries: commandEntries(TEMPLATES) });
 
   it("finds the named row", () => {
     expect(activePickerRow(rows, "ship")?.value).toBe("ship");
