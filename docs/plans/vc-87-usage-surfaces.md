@@ -4,7 +4,12 @@ Design pass for the app-side read surfaces. The ledger, the projection and
 `reportSessionUsage` already exist (Slices A and B); this document decides what
 a person sees, and nothing here changes what is recorded.
 
-The CLI slice (Slice C) is deliberately **not** in this pass.
+> **Slice C landed after this design.** The CLI was deferred here and then
+> shipped in response to review: `volli cost` and the token/cost columns on
+> `volli session list` are the ticket's first two deliverables, and the branch
+> could not close without them. The rules below still govern the rails; the
+> CLI's own notation is documented in `packages/cli/src/render.ts` and quotes
+> the same hedge, because the two surfaces quote the same money.
 
 ## Scope decisions taken with the owner
 
@@ -285,11 +290,12 @@ Against a copy of a real 379-Session profile, with the projection seeded:
 - The Settings switch defaults on, persists across a full relaunch, and the
   card leaves and returns with it — no restart.
 
-**A note for anyone who ran this branch before the merge:** `session_usage` was
-migration 025 until VC-44's authority policy store reached main first. Any
-profile that applied the old 025 sits at `user_version = 25` and will fail the
-new 026 with `table session_usage already exists`. Nothing shipped on that
-numbering, so no real profile is affected — but a scratch database from an
+**A note for anyone who ran this branch before the merge:** `session_usage` has
+been renumbered twice — it was 025 until VC-44's authority policy store reached
+main first, then 026 until VC-118's Automations did. It is now **027**. Any
+scratch profile that applied an earlier numbering sits at that `user_version`
+and will fail with `table session_usage already exists`. Nothing shipped on
+either number, so no real profile is affected — but a scratch database from an
 earlier build of this branch has to be discarded rather than migrated.
 
 ### Open
@@ -297,10 +303,38 @@ earlier build of this branch has to be discarded rather than migrated.
 - **The window selector does not persist.** It is a question someone asks, not a
   standing preference, and 30d is worth opening on every time. If it proves
   otherwise it belongs beside `railMode` in the UI store.
-- **`sessionCount` on the Project card** is the larger of the open-chat count and
-  the metered count. The durable per-project Session count belongs to the roster,
-  not the usage projection; until the block reads it, the larger of the two is an
-  honest floor rather than a number that hides the gap.
+
+## Settled after review
+
+- **`sessionCount` on the Project card** reads the durable per-project listing
+  (`stores/project-sessions.ts`) — the same rows the sidebar's bands and ⌘K
+  show. It was briefly the count of resident chat slices, which dropped every
+  closed and terminal Session and counted other projects' as well, so
+  `38 sessions · 24 metered` was two numbers about two different populations.
+  The metered count is still the floor, because the listing can lag a Session
+  whose first turn is already metered.
+- **The Ticket popover lists every Session on the Ticket**, not only the metered
+  ones — the union of the durable roster and the report's groups, with an
+  unmetered Session at `—`. Passing the groups alone dropped every manual
+  terminal companion and every chat that never reached a model, which is where
+  the spend Volli did not mediate actually went.
+- **The rollups always re-read on mount.** The store has one verb, `refresh`,
+  and no read-through `ensure`: a rail unmounts on every page change while work
+  goes on settling, and nothing invalidates behind it, so a cached answer would
+  have been shown indefinitely and looked settled. `refresh` keeps the old
+  figure on screen while it re-reads, so there is no flicker and no lie.
+- **`costBasis: "unavailable"` is never called an estimate.** An unknown or
+  custom provider API can report a finite cost Volli cannot vouch for; the
+  popover reads `Unverified basis` and the CLI `unverified-basis`. The tilde
+  stays — the figure may not print bare — but the words no longer claim this
+  build priced it against a catalogue.
+- **A window reaching behind the metering floor says so.** An existing profile
+  has spend that predates the projection and no honest way to recover it, so
+  migration 027 records where metering began and every report carries it.
+  Deliberately not backfilled: settled transcripts are a biased sample of spend
+  (a tool-only reply, a failed reply, a compaction and a title each cost money
+  and settle nothing), so a backfill would be systematically low and
+  indistinguishable from a complete answer.
 
 ## Rejected
 

@@ -1303,6 +1303,50 @@ describe("renderCliSuccess cost", () => {
     ).toContain("coverage  partial — this profile has metered since 2026-01-14T09:22:11.000Z");
   });
 
+  it("prints the window's lower bound as the instant it resolved to", () => {
+    const text = renderCliSuccess(
+      "cost",
+      { ...base, since: Date.parse("2026-08-10T00:00:00Z") },
+      options,
+    );
+    expect(text).toContain("since  2026-08-10T00:00:00.000Z");
+  });
+
+  it("never rounds a small but real cached share down to nothing", () => {
+    expect(renderCliSuccess("cost", { ...base, cachedInputShare: 0.004 }, options)).toContain(
+      "cached  <1%",
+    );
+    // Absent is `-`, which reads as unmeasured. Zero would claim the provider
+    // reported no cache reads, which is a different fact.
+    expect(renderCliSuccess("cost", { ...base, cachedInputShare: null }, options)).toContain(
+      "cached  -",
+    );
+  });
+
+  // A reply from an older or partial server is a report with holes, not a
+  // reason to print "undefined tokens".
+  it("reads a missing count as zero rather than printing undefined", () => {
+    const text = renderCliSuccess(
+      "cost",
+      // No `groups` key at all, which is what an older or partial server sends.
+      { scope: "project Volli", since: null, coverage: "complete" },
+      options,
+    );
+    expect(text).toContain("tokens  0  input 0  cache-read 0  cache-write 0  output 0");
+    expect(text).toContain("sessions  0 metered");
+    expect(text).not.toContain("undefined");
+  });
+
+  it("says partial without a date when the floor itself is unknown", () => {
+    const text = renderCliSuccess(
+      "cost",
+      { ...base, coverage: "partial", meteredFrom: null },
+      options,
+    );
+    expect(text).toContain("coverage  partial");
+    expect(text).not.toContain("metered since");
+  });
+
   it("prints a group per row, and names unticketed spend rather than dropping it", () => {
     const text = renderCliSuccess(
       "cost",
@@ -1323,7 +1367,7 @@ describe("renderCliSuccess cost", () => {
           {
             groupBy: "ticket",
             key: null,
-            label: null,
+            // Absent rather than null: an older server's row still reads `-`.
             costUsd: null,
             costBasis: "unavailable",
             costCoverage: "unavailable",

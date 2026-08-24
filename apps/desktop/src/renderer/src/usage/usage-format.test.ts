@@ -202,6 +202,25 @@ describe("usageBasisLine", () => {
     const summary = summarizeSessionUsage([op({ costUsd: null, costBasis: "unavailable" })]);
     expect(usageBasisLine(summary)).toBe("No cost reported · 1 operation");
   });
+
+  // A custom `models.json` provider, or an adapter newer than this build:
+  // `sessionUsageFrom` keeps the cost it reported and marks the basis
+  // unavailable. The number is real; where it came from is not known. Calling
+  // that "Estimated" would claim this build priced it against a catalogue,
+  // which is the one thing `unavailable` denies.
+  it("does not call a cost of unknown provenance an estimate", () => {
+    const summary = summarizeSessionUsage([op({ costUsd: 2, costBasis: "unavailable" })]);
+    expect(summary.knownCostUsd).toBe(2);
+    expect(usageBasisLine(summary)).toBe("Unverified basis · 1 operation");
+    // Still hedged — it may not print bare — just not attributed to a catalogue.
+    expect(formatUsageCost(summary)).toBe("~$2.00");
+  });
+
+  it("keeps the words honest when an unverifiable basis is mixed with an estimate", () => {
+    const summary = summarizeSessionUsage([op(), op({ costUsd: 2, costBasis: "unavailable" })]);
+    expect(summary.costBasis).toBe("mixed");
+    expect(usageBasisLine(summary)).toBe("Estimated · 2 operations");
+  });
 });
 
 describe("totalUsageTokens", () => {

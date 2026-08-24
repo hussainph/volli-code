@@ -187,60 +187,58 @@ describe("refresh", () => {
   });
 });
 
-describe("ensure", () => {
-  it("reads once and then answers from cache", async () => {
+/**
+ * The cache exists to stop a figure blinking out, not to answer instead of
+ * reading. A remount that reused a cached answer would show a stale total
+ * indefinitely — the rails unmount on every page change, and nothing invalidates
+ * behind them — so `refresh` is the only verb and it always reads.
+ */
+describe("the cache never answers instead of reading", () => {
+  it("re-reads the same question every time it is asked", async () => {
     const read = stubReport({ ok: true, report: report() });
     const store = createUsageStore();
 
-    await store.getState().ensure({ scope: { kind: "all" } });
-    await store.getState().ensure({ scope: { kind: "all" } });
-
-    expect(read).toHaveBeenCalledTimes(1);
-  });
-
-  it("still reads a different question", async () => {
-    const read = stubReport({ ok: true, report: report() });
-    const store = createUsageStore();
-
-    await store.getState().ensure({ scope: { kind: "all" } });
-    await store.getState().ensure({ scope: { kind: "project", projectId: "p1" } });
+    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } });
 
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry a question that already failed until something invalidates it", async () => {
+  it("keeps the previous answer on screen while the next read is in flight", async () => {
+    const first = report({ meteredSessionCount: 1 });
+    const second = report({ meteredSessionCount: 2 });
+    // A deferred so the second read can be held open while the store is
+    // inspected mid-flight; that in-flight moment is the whole assertion.
+    let release: ((value: unknown) => void) | undefined;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, report: first })
+      .mockImplementationOnce(() => held);
+    Object.assign(globalThis, { window: { api: { sessions: { usageReport: read } } } });
+    const store = createUsageStore();
+    const key = usageKey({ kind: "all" }, undefined, undefined);
+
+    await store.getState().refresh({ scope: { kind: "all" } });
+    const second_read = store.getState().refresh({ scope: { kind: "all" } });
+
+    // Not "loading": the old figure holds the space until the new one lands.
+    expect(store.getState().byQuery[key]).toEqual({ status: "ready", report: first });
+    release!({ ok: true, report: second });
+    await second_read;
+    expect(store.getState().byQuery[key]).toEqual({ status: "ready", report: second });
+  });
+
+  it("retries a question that failed, rather than caching the failure", async () => {
     const read = stubReport({ ok: false, error: "nope" });
     const store = createUsageStore();
 
-    await store.getState().ensure({ scope: { kind: "all" } });
-    await store.getState().ensure({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } });
+    await store.getState().refresh({ scope: { kind: "all" } });
 
-    expect(read).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("invalidate", () => {
-  it("drops every cached answer so the next ensure re-reads", async () => {
-    const read = stubReport({ ok: true, report: report() });
-    const store = createUsageStore();
-
-    await store.getState().ensure({ scope: { kind: "all" } });
-    store.getState().invalidate();
-    expect(store.getState().byQuery).toEqual({});
-
-    await store.getState().ensure({ scope: { kind: "all" } });
     expect(read).toHaveBeenCalledTimes(2);
-  });
-
-  it("clears wholesale, because one settled turn moves three scopes at once", async () => {
-    stubReport({ ok: true, report: report() });
-    const store = createUsageStore();
-
-    await store.getState().ensure({ scope: { kind: "all" } });
-    await store.getState().ensure({ scope: { kind: "project", projectId: "p1" } });
-    store.getState().invalidate();
-
-    expect(store.getState().byQuery).toEqual({});
   });
 });
 
@@ -256,6 +254,6 @@ describe("USAGE_WINDOW_MS", () => {
 
 describe("the shared instance", () => {
   it("is a store", () => {
-    expect(typeof useUsageStore.getState().ensure).toBe("function");
+    expect(typeof useUsageStore.getState().refresh).toBe("function");
   });
 });

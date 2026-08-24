@@ -12,7 +12,8 @@
  * character of hedge and the popover carries the words:
  *
  *     $8.42     provider-reported and complete — the only bare case
- *     ~$8.42    a catalogue estimate, or a mix of bases
+ *     ~$8.42    a catalogue estimate, a mix of bases, or a basis Volli
+ *               cannot vouch for
  *     ~$8.42+   partial: at least this much was priced
  *     —         nothing could be priced
  *     null      nothing was metered at all
@@ -20,6 +21,13 @@
  * `~` is not new notation. `chat/context-usage-ui.tsx` already marks every
  * estimated count with it, so a reader who has opened the context meter has
  * already learned this glyph.
+ *
+ * THE GLYPH IS NOT THE CLAIM. Three different bases share the tilde because
+ * they share one consequence — do not read this as exact — and the budget is
+ * one character. What each of them actually IS gets said in words, in the
+ * popover, by {@link usageBasisLine}: an `unavailable` basis is "Unverified
+ * basis" there and never "Estimated", because Volli knowing a number and Volli
+ * having computed it are different claims.
  *
  * AND NOTHING HERE SPLITS COST BY TOKEN CLASS, because the ledger cannot: a
  * `costUsd` is recorded per metered operation, not per class, and reconstructing
@@ -178,6 +186,29 @@ export function formatCachedShare(summary: SessionUsageSummary): string | null {
 }
 
 /**
+ * What kind of number the cost is, in words.
+ *
+ * THREE ANSWERS, NOT TWO, and the third is the one this function exists to get
+ * right. `provider-reported` is the backend's own accounting. `catalog-estimate`
+ * — and a `mixed` total containing one — was priced locally at list. But
+ * `unavailable` is a cost from an executor whose pricing Volli cannot vouch
+ * for: a custom `models.json` provider, or an adapter newer than this build.
+ * The tokens beside it are real and the number is real; what is unknown is
+ * where the number came from.
+ *
+ * Calling that "Estimated" would assert a provenance `session-usage.ts`
+ * explicitly refused to assert — it would tell a reader the figure is this
+ * build's price catalogue applied to those tokens, which is exactly what
+ * `unavailable` denies. The tilde stays, because the figure still may not be
+ * printed as exact; only the claim about its origin changes.
+ */
+function usageBasisWord(basis: SessionUsageSummary["costBasis"]): string {
+  if (basis === "provider-reported") return "Provider-reported";
+  if (basis === "unavailable") return "Unverified basis";
+  return "Estimated";
+}
+
+/**
  * The sentence under a hero figure: what the number is, and how much of the
  * report it covers.
  *
@@ -189,7 +220,7 @@ export function usageBasisLine(summary: SessionUsageSummary): string | null {
   if (summary.requestCount === 0) return null;
   const operations = `${summary.requestCount} ${summary.requestCount === 1 ? "operation" : "operations"}`;
   if (summary.knownCostUsd === null) return `No cost reported · ${operations}`;
-  const basis = summary.costBasis === "provider-reported" ? "Provider-reported" : "Estimated";
+  const basis = usageBasisWord(summary.costBasis);
   if (summary.costCoverage === "partial") {
     return `${basis} · ${summary.pricedRequestCount} of ${summary.requestCount} operations priced`;
   }

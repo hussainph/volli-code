@@ -17,6 +17,7 @@
 import * as React from "react";
 
 import {
+  EMPTY_SESSION_USAGE_SUMMARY,
   shortSessionId,
   type SessionListingRow,
   type SessionUsageReport,
@@ -27,6 +28,7 @@ import { ProjectUsageBlock } from "@renderer/components/usage/project-usage-bloc
 import { SessionUsageFacts } from "@renderer/components/usage/session-usage-facts";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { USAGE_WINDOW_MS, useUsageStore, usageKey, type UsageQuery } from "@renderer/stores/usage";
@@ -54,28 +56,28 @@ function useSettleSignal(): string {
 }
 
 /**
- * One rollup, kept fresh across settles.
+ * One rollup, kept fresh across settles AND across remounts.
  *
- * `ensure` on mount so a surface that is already cached paints without a
- * flicker; `refresh` on every later settle so the figure follows the work. The
- * first settle after mount does re-read once redundantly — the alternative is
- * tracking a previous value to detect the edge, which buys one saved indexed
- * read for a piece of state that can go stale.
+ * ALWAYS `refresh`, never `ensure`. A rail is unmounted whenever the reader
+ * changes page, collapses it or switches Session — and work goes on settling
+ * while it is gone. `ensure` returns immediately for any cached answer and
+ * nothing in production invalidates the cache, so a rail that came back would
+ * show whatever the figure was when it left, indefinitely, with no signal that
+ * it was stale. That is worse than a slow number: it is a wrong one that looks
+ * settled.
+ *
+ * Refreshing costs nothing visible, because `refresh` keeps the cached entry on
+ * screen and only announces `loading` when there is nothing to show yet. So a
+ * remount paints the old figure immediately and replaces it when the read
+ * lands — no flicker, and no lie.
  */
 function useUsageReport(query: UsageQuery): SessionUsageReport | null {
   const key = usageKey(query.scope, query.windowMs, query.groupBy);
   const entry = useUsageStore((state) => state.byQuery[key]);
   const settleSignal = useSettleSignal();
-  const mounted = React.useRef(false);
 
   React.useEffect(() => {
-    const store = useUsageStore.getState();
-    if (!mounted.current) {
-      mounted.current = true;
-      void store.ensure(query);
-      return;
-    }
-    void store.refresh(query);
+    void useUsageStore.getState().refresh(query);
     // `key` stands for the whole query — it is derived from every field of it,
     // so depending on the object as well would re-read on each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,17 +130,30 @@ export function ProjectUsageRailBlock({ projectId }: { projectId: string }) {
     windowMs: USAGE_WINDOW_MS[window],
     groupBy: "model",
   });
-  const sessionCount = useChatSessionsStore((state) => Object.keys(state.sessions).length);
+  // THE DURABLE PER-PROJECT LISTING, not the open chat tabs. `38 sessions · 24
+  // metered` only means anything if the first number counts this project's
+  // Sessions and all of them: the resident chat slices are keyed by whatever
+  // is open in the window, which drops every closed and terminal Session and
+  // counts other projects' as well. The same rows the sidebar's bands and ⌘K
+  // read, so the count agrees with what a reader can see.
+  const ensureProjectSessions = useProjectSessionsStore((state) => state.ensure);
+  React.useEffect(() => {
+    void ensureProjectSessions(projectId);
+  }, [projectId, ensureProjectSessions]);
+  const sessionCount = useProjectSessionsStore((state) => {
+    const rows = state.byProject[projectId];
+    return rows === undefined ? 0 : rows.terminal.length + rows.chat.length;
+  });
 
   if (!costVisible || report === null) return null;
   return (
     <ProjectUsageBlock
       summary={report.total}
       models={groupRows(report, modelLabel)}
-      // The durable Session count is the roster's to know, not the usage
-      // projection's — a Session that never called a model leaves no row here.
-      // Falling back to the metered count would hide exactly the gap the two
-      // numbers exist to show, so the larger of the two is the honest floor.
+      // The larger of the two, because the listing can lag a Session that has
+      // just been created while its first turn is already metered. Never the
+      // metered count alone — that would hide exactly the gap the two numbers
+      // exist to show, and make an honest gap look like a cheap project.
       sessionCount={Math.max(sessionCount, report.meteredSessionCount)}
       meteredSessionCount={report.meteredSessionCount}
       window={window}
@@ -160,13 +175,48 @@ export function TicketUsageRailBlock({ ticketId }: { ticketId: string }) {
 
   if (!costVisible || bySession === null) return null;
   const topModel = byModel?.groups[0];
+  const sessions = ticketSessionRows(bySession, roster);
   return (
     <TicketUsageBlock
       summary={bySession.total}
-      sessions={groupRows(bySession, (key) => sessionLabel(key, roster))}
+      sessions={sessions}
       topModelLabel={topModel === undefined ? null : modelLabel(topModel.key)}
     />
   );
+}
+
+/**
+ * Every Session on this Ticket, metered or not — the union of the roster and
+ * the report's groups.
+ *
+ * THE ROSTER IS NOT JUST A SOURCE OF LABELS. Passing only the metered groups
+ * would drop every manual terminal companion and every chat that never reached
+ * a model, which is the majority of Sessions on a Ticket someone has been
+ * poking at — and the card's own count would then say "2 sessions" about a
+ * Ticket with six. An unmetered Session appears at `—`, which reads as
+ * unmeasured rather than free and is exactly the gap a reader needs to see:
+ * it is where the spend Volli never mediated went.
+ *
+ * A metered group the roster no longer holds is kept too, at the bottom by
+ * cost order. Its Session has been deleted; the money it spent has not.
+ */
+function ticketSessionRows(
+  report: SessionUsageReport,
+  roster: readonly SessionListingRow[] | undefined,
+): readonly UsageGroupRow[] {
+  const metered = groupRows(report, (key) => sessionLabel(key, roster));
+  const meteredKeys = new Set(report.groups.map((group) => group.key));
+  const unmetered = (roster ?? [])
+    .map((row) => rowSessionId(row))
+    .filter((sessionId) => !meteredKeys.has(sessionId))
+    .map((sessionId) => ({
+      key: sessionId,
+      label: sessionLabel(sessionId, roster),
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
+    }));
+  // After the metered rows rather than interleaved: the list is ordered by what
+  // things cost, and every row here cost an amount nobody can compare.
+  return [...metered, ...unmetered];
 }
 
 /** A report's groups as display rows, already ordered by known cost. */

@@ -1140,6 +1140,10 @@ export interface AgentRuntime {
    * Throws when the model is not one this runtime holds or the call failed; a
    * caller that cannot afford the throw (a title that keeps its heuristic)
    * catches and logs.
+   *
+   * A failure that was nonetheless BILLED throws a
+   * {@link UtilityCompletionError} carrying its usage, so the caller can record
+   * the spend it owes even though it got nothing for it.
    */
   completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult>;
 }
@@ -1157,4 +1161,31 @@ export interface AgentRuntime {
 export interface UtilityCompletionResult {
   text: string;
   usage: SessionUsage | null;
+}
+
+/**
+ * A utility completion that produced no usable answer, carrying what it cost
+ * anyway.
+ *
+ * THE FAILURE IS THE CASE THAT MOST NEEDS THIS. A provider bills for the prompt
+ * it accepted, not for the answer Volli could use: a reply that stopped on a
+ * length limit, a refusal, a model that returned nothing but a reasoning span.
+ * Every one of those is a real charge, and every one of them reaches the caller
+ * as a thrown error. A runtime that threw before reading `message.usage` would
+ * make failed background work the one kind of spend a Session could never
+ * account for — and the auto-titler retries, so the same Session can be billed
+ * repeatedly for calls that leave no trace at all.
+ *
+ * `usage` is null when the call failed BEFORE anything was metered (an unknown
+ * model, a transport that never connected). Null is "nothing was billed as far
+ * as we can tell", never "free".
+ */
+export class UtilityCompletionError extends Error {
+  readonly usage: SessionUsage | null;
+
+  constructor(message: string, usage: SessionUsage | null) {
+    super(message);
+    this.name = "UtilityCompletionError";
+    this.usage = usage;
+  }
 }

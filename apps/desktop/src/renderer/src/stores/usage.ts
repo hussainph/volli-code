@@ -26,6 +26,14 @@
  * cannot be read is a block that does not appear; a toast about SQLite over
  * the rail someone is working in would be the loudest thing on screen for the
  * least useful reason.
+ *
+ * ONE VERB, `refresh`, and no read-through cache beside it. An `ensure` that
+ * answered from cache would be right exactly once: the rails unmount whenever
+ * a reader changes page or Session, work keeps settling while they are gone,
+ * and nothing here could know to drop the stale answer — so a rail coming back
+ * would show a figure from some earlier minute and look entirely settled about
+ * it. `refresh` keeps the cached entry visible while it re-reads, which buys
+ * the same absence of flicker without the lie.
  */
 import { create } from "zustand";
 import {
@@ -93,17 +101,6 @@ interface UsageState {
    * is the shape that collision takes.
    */
   refresh(query: UsageQuery): Promise<void>;
-  /** {@link refresh}, unless this exact question has already been asked. */
-  ensure(query: UsageQuery): Promise<void>;
-  /**
-   * Drops every cached answer, so the next `ensure` re-reads.
-   *
-   * What a settled turn calls. Invalidating wholesale rather than by scope is
-   * the honest move: one Session's turn changes its own rollup, its Ticket's,
-   * and its project's at once, and a caller would have to know all three ids to
-   * invalidate precisely. The cache is a handful of small rows.
-   */
-  invalidate(): void;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
@@ -135,17 +132,6 @@ export function createUsageStore() {
         .finally(() => inFlight.delete(key));
       inFlight.set(key, pending);
       return pending;
-    },
-
-    ensure(query) {
-      if (get().byQuery[usageKey(query.scope, query.windowMs, query.groupBy)] !== undefined) {
-        return Promise.resolve();
-      }
-      return get().refresh(query);
-    },
-
-    invalidate() {
-      set({ byQuery: {} });
     },
   }));
 }

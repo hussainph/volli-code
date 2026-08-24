@@ -33,6 +33,7 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
+  UtilityCompletionError,
   type AuthoritySnapshot,
   type ObservabilityEvent,
   type CompactionObservation,
@@ -6404,6 +6405,76 @@ describe("completeUtility", () => {
         user: "hello",
       }),
     ).rejects.toThrow("returned no text");
+  });
+
+  /**
+   * A provider bills for the prompt it accepted, not for whether Volli could
+   * use the answer. These two are the shapes that failure takes here — a reply
+   * that stopped short, and one that was all reasoning — and both are real
+   * charges the caller has to be able to record.
+   */
+  it("carries what a billed failure consumed out on the error", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error", errorMessage: "Provider refused the call." }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(UtilityCompletionError);
+    expect((failure as UtilityCompletionError).usage).toMatchObject({
+      cause: "utility",
+      inputTokens: 100,
+      costUsd: 0.003,
+      costBasis: "catalog-estimate",
+    });
+  });
+
+  it("carries the bill out when the answer was reasoning alone", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ thinking: "pondering" }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect((failure as UtilityCompletionError).usage).toMatchObject({ inputTokens: 100 });
+  });
+
+  // Nothing was sent, so nothing was billed. Null, never an all-zero
+  // measurement: "no request was made" and "a request cost nothing" are
+  // different facts, and only one of them is true here.
+  it("reports no usage for a call that never reached a provider", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: "not-a-model", reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(UtilityCompletionError);
+    expect((failure as UtilityCompletionError).usage).toBeNull();
   });
 
   it("returns agent message tokens only, never the reasoning beside them", async () => {

@@ -36,6 +36,7 @@ import {
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
   SESSION_USAGE_CAUSES,
+  UtilityCompletionError,
   type AgentRuntime,
   type AuthoritySnapshot,
   type CompactionObservation,
@@ -270,8 +271,12 @@ async function runUtilityCompletion(
 ): Promise<UtilityCompletionResult> {
   const model = host.models.getModel(input.model.providerId, input.model.modelId);
   if (model === undefined) {
-    throw new Error(
+    // Nothing was sent, so nothing was billed. Null rather than an empty
+    // measurement: the difference between "no request was made" and "a request
+    // was made and cost nothing" is the whole discipline of this module.
+    throw new UtilityCompletionError(
       `Model ${input.model.providerId}/${input.model.modelId} is not in this runtime's catalog.`,
+      null,
     );
   }
   const message = await host.models.completeSimple(
@@ -286,8 +291,21 @@ async function runUtilityCompletion(
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
+  // Read BEFORE either refusal below. The provider billed for the prompt it
+  // accepted, not for whether Volli could use the answer — so a reply that
+  // stopped short and a reply that was all reasoning are both real spend, and
+  // extracting usage after the throw would lose exactly the calls a caller can
+  // least afford to be silently charged for.
+  const usage = sessionUsageFrom(
+    message.usage,
+    { provider: message.provider, model: message.model, api: message.api },
+    "utility",
+  );
   if (hasFailedStopReason(message)) {
-    throw new Error(sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."));
+    throw new UtilityCompletionError(
+      sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."),
+      usage,
+    );
   }
   // Agent message tokens only. `thinking` blocks are dropped here rather than
   // filtered downstream, because a caller that runs a model at a reasoning
@@ -300,16 +318,11 @@ async function runUtilityCompletion(
   }
   const trimmed = text.trim();
   if (trimmed.length === 0) {
-    throw new Error("The utility completion returned no text.");
+    // A model that answered only with a reasoning span still ran. The caller
+    // keeps its fallback and still owes the bill.
+    throw new UtilityCompletionError("The utility completion returned no text.", usage);
   }
-  return {
-    text: trimmed,
-    usage: sessionUsageFrom(
-      message.usage,
-      { provider: message.provider, model: message.model, api: message.api },
-      "utility",
-    ),
-  };
+  return { text: trimmed, usage };
 }
 
 /** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */

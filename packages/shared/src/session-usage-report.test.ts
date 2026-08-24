@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { reportSessionUsage, type SessionUsageEntry } from "./session-usage-report";
+import {
+  isSessionUsageGrouping,
+  parseSessionUsageWindow,
+  reportSessionUsage,
+  SESSION_USAGE_GROUPINGS,
+  sessionUsageWindowSince,
+  type SessionUsageEntry,
+} from "./session-usage-report";
 
 const DAY = 86_400_000;
 /** 2026-08-01T00:00:00Z, so a UTC day key is readable in a failure message. */
@@ -189,5 +196,86 @@ describe("reportSessionUsage history coverage", () => {
       meteredFrom: 9_000,
       complete: false,
     });
+  });
+});
+
+/**
+ * The `--since` vocabulary. Every case is a window a caller could plausibly
+ * type; a malformed one has to be REFUSED rather than read as zero, because a
+ * lower bound silently read as the epoch answers a different question with a
+ * number that looks entirely normal.
+ */
+describe("parseSessionUsageWindow", () => {
+  it("reads a look-back in each unit it offers", () => {
+    expect(parseSessionUsageWindow("90m")).toEqual({ kind: "duration", ms: 5_400_000 });
+    expect(parseSessionUsageWindow("24h")).toEqual({ kind: "duration", ms: 86_400_000 });
+    expect(parseSessionUsageWindow("7d")).toEqual({ kind: "duration", ms: 604_800_000 });
+    expect(parseSessionUsageWindow("2w")).toEqual({ kind: "duration", ms: 1_209_600_000 });
+  });
+
+  it("reads an RFC 3339 instant as the instant it names", () => {
+    expect(parseSessionUsageWindow("2026-01-14T09:22:11Z")).toEqual({
+      kind: "instant",
+      epochMs: Date.parse("2026-01-14T09:22:11Z"),
+    });
+  });
+
+  it("tolerates the whitespace a shell leaves around a quoted argument", () => {
+    expect(parseSessionUsageWindow("  7d  ")).toEqual({ kind: "duration", ms: 604_800_000 });
+  });
+
+  // A window with no width is a real question with a real answer: nothing has
+  // been spent since this instant. It is not an error and must not become one.
+  it("accepts a zero-width look-back", () => {
+    expect(parseSessionUsageWindow("0d")).toEqual({ kind: "duration", ms: 0 });
+  });
+
+  it("refuses anything it cannot read, rather than falling back to the epoch", () => {
+    expect(parseSessionUsageWindow("last tuesday")).toBeNull();
+    expect(parseSessionUsageWindow("d7")).toBeNull();
+    expect(parseSessionUsageWindow("-7d")).toBeNull();
+    expect(parseSessionUsageWindow("7y")).toBeNull();
+    expect(parseSessionUsageWindow("")).toBeNull();
+  });
+
+  // `Date.parse("7")` is a valid date to the platform and lands in 2001. A
+  // caller who typed that meant seven of something and fumbled the unit; a
+  // window opening twenty-five years ago is exactly the plausible wrong answer
+  // that would never be noticed.
+  it("refuses a bare number the platform would happily read as a year", () => {
+    expect(Number.isFinite(Date.parse("7"))).toBe(true);
+    expect(parseSessionUsageWindow("7")).toBeNull();
+    expect(parseSessionUsageWindow("2026")).toBeNull();
+  });
+
+  it("still refuses a calendar-shaped string that is not a real instant", () => {
+    expect(parseSessionUsageWindow("2026-13-45")).toBeNull();
+  });
+});
+
+describe("sessionUsageWindowSince", () => {
+  // The whole reason the two arms survive to the handler: a look-back is
+  // relative to when the question is ANSWERED, not to when it was typed.
+  it("measures a look-back against the reader's own clock", () => {
+    expect(sessionUsageWindowSince({ kind: "duration", ms: 2_000 }, 10_000)).toBe(8_000);
+    expect(sessionUsageWindowSince({ kind: "duration", ms: 2_000 }, 50_000)).toBe(48_000);
+  });
+
+  it("leaves an instant exactly where it was written, whatever the clock says", () => {
+    expect(sessionUsageWindowSince({ kind: "instant", epochMs: 500 }, 10_000)).toBe(500);
+  });
+});
+
+describe("isSessionUsageGrouping", () => {
+  it("accepts every grouping this build reports", () => {
+    for (const grouping of SESSION_USAGE_GROUPINGS) {
+      expect(isSessionUsageGrouping(grouping)).toBe(true);
+    }
+  });
+
+  it("refuses a dimension nothing groups by, and a non-string", () => {
+    expect(isSessionUsageGrouping("provider")).toBe(false);
+    expect(isSessionUsageGrouping(undefined)).toBe(false);
+    expect(isSessionUsageGrouping(7)).toBe(false);
   });
 });

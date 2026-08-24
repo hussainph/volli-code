@@ -6,6 +6,7 @@ import {
   autoTitlePrompt,
   DEFAULT_KICKOFF_MESSAGE,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  UtilityCompletionError,
   type AutoTitleTicket,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -351,6 +352,91 @@ describe("createAutoTitler().refine", () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider down"));
     } finally {
       warn.mockRestore();
+    }
+  });
+
+  /**
+   * The case the ledger most needs and most easily loses. A reply that stopped
+   * on a length limit, or came back as nothing but a reasoning span, cost what
+   * its prompt cost — and the titler retries, so the same Session can be
+   * charged again and again for calls that produce no title at all.
+   */
+  it("bills a call that failed after the provider had already charged for it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const usage = {
+        cause: "utility" as const,
+        providerId: UTILITY.providerId,
+        modelId: UTILITY.modelId,
+        inputTokens: 210,
+        outputTokens: 0,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: 0.000_31,
+        costBasis: "catalog-estimate" as const,
+      };
+      const h = harness({
+        completeUtility: async () => {
+          throw new UtilityCompletionError("The utility completion returned no text.", usage);
+        },
+      });
+
+      await expect(h.refine({})).resolves.toBeUndefined();
+
+      expect(h.recordUsage).toHaveBeenCalledWith(SESSION_ID, usage);
+      expect(h.retitle).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records nothing for a failure that was never billed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const h = harness({
+        completeUtility: async () => {
+          // No request reached a provider — null usage, never a zero one.
+          throw new UtilityCompletionError("not in this runtime's catalog", null);
+        },
+      });
+
+      await h.refine({});
+
+      expect(h.recordUsage).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps the heuristic when a billed failure's usage cannot be written either", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const h = harness({
+        completeUtility: async () => {
+          throw new UtilityCompletionError("stopped short", {
+            cause: "utility",
+            providerId: UTILITY.providerId,
+            modelId: UTILITY.modelId,
+            inputTokens: 10,
+            outputTokens: 0,
+            cacheReadTokens: null,
+            cacheWriteTokens: null,
+            costUsd: 0.000_01,
+            costBasis: "catalog-estimate",
+          });
+        },
+        recordUsage: async () => {
+          throw new Error("ledger refused");
+        },
+      });
+
+      // Work nobody asked for: no failure inside it may reach a person.
+      await expect(h.refine({})).resolves.toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("ledger refused"));
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
     }
   });
 

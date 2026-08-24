@@ -84,7 +84,8 @@ const DURATION_UNIT_MS: Readonly<Record<string, number>> = {
  * looks entirely plausible.
  */
 export function parseSessionUsageWindow(raw: string): SessionUsageWindow | null {
-  const duration = /^(\d+)([mhdw])$/.exec(raw.trim());
+  const value = raw.trim();
+  const duration = /^(\d+)([mhdw])$/.exec(value);
   if (duration !== null) {
     const amount = Number(duration[1]);
     // `0d` is a window with no width. It parses, and it is not an error: a
@@ -92,7 +93,14 @@ export function parseSessionUsageWindow(raw: string): SessionUsageWindow | null 
     // which is the true answer.
     return { kind: "duration", ms: amount * DURATION_UNIT_MS[duration[2]!]! };
   }
-  const epochMs = Date.parse(raw.trim());
+  // The calendar-date shape is required BEFORE `Date.parse`, not left to it.
+  // `Date.parse` accepts a great deal that no one means as an instant — a bare
+  // `"7"` is a valid date to it, and lands in 2001. A caller who typed that
+  // meant seven of something and fumbled the unit; answering with a window
+  // opening twenty-five years ago is the plausible wrong answer this whole
+  // vocabulary exists to refuse.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value)) return null;
+  const epochMs = Date.parse(value);
   return Number.isFinite(epochMs) ? { kind: "instant", epochMs } : null;
 }
 

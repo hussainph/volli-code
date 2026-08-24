@@ -42,6 +42,7 @@ import {
   resolveAutoTitleModel,
   resolveDefaultModel,
   sanitizeAutoTitle,
+  UtilityCompletionError,
   type AutoTitleTicket,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -117,6 +118,29 @@ export interface AutoTitler {
 
 function logSkip(sessionId: string, detail: string): void {
   console.warn(`[volli] auto-title skipped for session ${sessionId}: ${detail}`);
+}
+
+/**
+ * Record what a title call consumed, and never let that record cost the user
+ * their title.
+ *
+ * One function because both paths through the call — an answer, and a billed
+ * failure — owe the same bill and must swallow the same way. Auto-titling is
+ * work nobody asked for: no failure inside it may reach a person, and a ledger
+ * that refuses the fact is a line in the log, not a toast.
+ */
+async function bill(
+  options: Pick<AutoTitlerOptions, "recordUsage">,
+  sessionId: string,
+  usage: SessionUsage,
+): Promise<void> {
+  try {
+    await options.recordUsage(sessionId, usage);
+  } catch (failure) {
+    console.error(
+      `[volli] auto-title usage for session ${sessionId} was not recorded: ${errorMessage(failure)}`,
+    );
+  }
 }
 
 export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
@@ -211,6 +235,14 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
         signal,
       });
     } catch (failure) {
+      // A CALL THAT FAILED WAS STILL BILLED. A reply that stopped on a length
+      // limit or came back as nothing but a reasoning span cost what its prompt
+      // cost, and the titler retries — so a Session can be charged repeatedly
+      // for work that produces no title and, without this, leaves no trace.
+      // The usage rides on the error precisely so the bill survives the throw.
+      if (failure instanceof UtilityCompletionError && failure.usage !== null) {
+        await bill(options, request.sessionId, failure.usage);
+      }
       logSkip(request.sessionId, `the model call failed (${errorMessage(failure)})`);
       return;
     }
@@ -219,13 +251,7 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
     // refuses the fact must not also cost the user their title — auto-titling
     // is work nobody asked for, and no failure inside it may reach a person.
     if (completion.usage !== null) {
-      try {
-        await options.recordUsage(request.sessionId, completion.usage);
-      } catch (failure) {
-        console.error(
-          `[volli] auto-title usage for session ${request.sessionId} was not recorded: ${errorMessage(failure)}`,
-        );
-      }
+      await bill(options, request.sessionId, completion.usage);
     }
     const title = sanitizeAutoTitle(completion.text);
     if (title === null) {
