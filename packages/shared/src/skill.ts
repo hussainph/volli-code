@@ -50,9 +50,7 @@
  * Node import into the other's world.
  */
 import type { PromptResource } from "./agent-runtime";
-import { isComposerVerbName } from "./composer-verb";
 import { isPromptResource } from "./prompt-resource";
-import type { PromptTemplate } from "./prompt-template";
 
 /** One loaded skill: the slug it is invoked by, and what the file said. */
 export interface SkillReference {
@@ -234,9 +232,12 @@ export function resolveSkillMode(modes: SkillModes, skill: SkillReference): Skil
  * It works by REWRITING `userInvokeOnly` rather than by teaching each consumer
  * about modes, which is why nothing downstream needed to change:
  * {@link skillsIndexResource} already withholds a `userInvokeOnly` skill from
- * the model, {@link visibleSkills} already offers it to the person, and
- * explicit resolution already ignores the flag. `off` is the only state that
- * removes a row.
+ * the model, `resolveSlashNamespace` already offers it to the person, and
+ * explicit resolution already ignores the flag. `off` is the only PROJECT
+ * MODE that removes a merged, successfully loaded skill from the renderer's
+ * picker supply; filesystem read limits and unreadable entries remain the
+ * loader's separate safety policy. A shadowed loaded name is renamed rather
+ * than dropped.
  *
  * Applied AFTER {@link mergeSkills}, so project-over-personal is already
  * resolved and a slug names exactly one surviving skill — a rule cannot mean
@@ -263,28 +264,6 @@ export function applySkillModes(
     ruled.push(skill.userInvokeOnly === userInvokeOnly ? skill : { ...skill, userInvokeOnly });
   }
   return ruled;
-}
-
-/**
- * The skills a picker may offer beside `templates` — shadowed names removed.
- *
- * `/name` is one flat namespace at submit, and expansion resolves a name
- * template-first (see `expandCommandInvocation`), so a skill whose slug a
- * command also uses can never be invoked. Offering its row anyway would be
- * offering a control that does something other than what it says; dropping it
- * here keeps the list honest. Name-sorted, like every list the picker holds.
- *
- * A built-in verb's name is taken too, and by something neither of these
- * lists can outrank — `composer-verb.ts` says why that one goes the other way.
- */
-export function visibleSkills(
-  skills: readonly SkillReference[],
-  templates: readonly PromptTemplate[],
-): readonly SkillReference[] {
-  const taken = new Set(templates.map((template) => template.name));
-  return skills
-    .filter((skill) => !taken.has(skill.name) && !isComposerVerbName(skill.name))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 /**

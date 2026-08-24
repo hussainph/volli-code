@@ -52,28 +52,28 @@ const MODE_HEADING: Record<ComposerPickerMode, string> = {
 };
 
 /**
- * Command mode holds three kinds of row — verbs, then commands, then skills —
- * and each kind gets its own group so the heading says which kind of thing a
- * row is before anyone reads its glyph. Empty groups are dropped rather than
- * drawn empty. The split preserves the flat row order (`composerPickerRows`
- * builds it in exactly this order, and `rankVerbCompletions` says why), so the
- * arrow keys and the eye walk the same list.
+ * Command mode leads with verbs, then iterates the headings carried by the
+ * slash source registry. The picker does not keep a parallel list of command,
+ * skill, MCP or plugin groups: a future adapter's first resolved row creates
+ * its group here, in the same order ranking handed it to the keyboard.
  *
- * "Actions" earns its own heading rather than joining the commands: a verb
- * RUNS something and every other row on this card writes something, which is
- * the largest difference between any two rows here and the one a reader most
- * needs before pressing ⏎.
+ * "Actions" remains separate because a verb RUNS something and every open
+ * source row writes something, the distinction a reader needs before ⏎.
  */
 function groupedRows(
   rows: readonly ComposerPickerRow[],
 ): readonly { heading: string; rows: readonly ComposerPickerRow[] }[] {
-  const groups = [
-    { heading: "Actions", rows: rows.filter((row) => row.kind === "verb") },
-    { heading: "Commands", rows: rows.filter((row) => row.kind === "command") },
-    { heading: "Skills", rows: rows.filter((row) => row.kind === "skill") },
-  ].filter((group) => group.rows.length > 0);
+  const groups: { heading: string; rows: ComposerPickerRow[] }[] = [];
+  const verbs = rows.filter((row) => row.kind === "verb");
+  if (verbs.length > 0) groups.push({ heading: "Actions", rows: [...verbs] });
+  for (const row of rows) {
+    if (row.kind !== "command" && row.kind !== "skill") continue;
+    const current = groups.find((group) => group.heading === row.heading);
+    if (current === undefined) groups.push({ heading: row.heading, rows: [row] });
+    else current.rows.push(row);
+  }
   // A card showing nothing still needs one group to hang "No match" under.
-  return groups.length > 0 ? groups : [{ heading: "Commands", rows }];
+  return groups.length > 0 ? groups : [{ heading: "Commands", rows: [] }];
 }
 
 /**

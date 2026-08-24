@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { PromptTemplate } from "./prompt-template";
 import {
   applySkillModes,
   globalSkillsDir,
@@ -18,7 +17,6 @@ import {
   resolveSkillMode,
   skillsIndexResource,
   SKILLS_INDEX_RESOURCE_NAME,
-  visibleSkills,
   type SkillReference,
 } from "./skill";
 
@@ -39,10 +37,6 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     root: `.agents/skills/${name}`,
     ...overrides,
   };
-}
-
-function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
-  return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
 }
 
 describe("projectSkillsDir", () => {
@@ -95,28 +89,6 @@ describe("isSkillName", () => {
     expect(isSkillName("My Skill")).toBe(false);
     expect(isSkillName("dot.name")).toBe(false);
     expect(isSkillName("")).toBe(false);
-  });
-});
-
-describe("visibleSkills", () => {
-  it("drops a skill whose name a template already takes", () => {
-    const shadowed = skill({ name: "review" });
-    const offered = skill({ name: "logos" });
-    expect(visibleSkills([shadowed, offered], [template()])).toEqual([offered]);
-  });
-
-  it("drops a skill whose name a built-in verb has taken", () => {
-    // Reserved above both lists: `expandCommandInvocation` refuses the name
-    // too, so this row could never have been invoked as a skill.
-    const shadowed = skill({ name: "compact" });
-    const offered = skill({ name: "logos" });
-    expect(visibleSkills([shadowed, offered], [])).toEqual([offered]);
-  });
-
-  it("sorts by name so the list does not reorder itself", () => {
-    const b = skill({ name: "beta" });
-    const a = skill({ name: "alpha" });
-    expect(visibleSkills([b, a], [])).toEqual([a, b]);
   });
 });
 
