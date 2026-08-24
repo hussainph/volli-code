@@ -9,6 +9,8 @@ export * from "./harness-command";
 export * from "./harness";
 export * from "./verb-registry";
 export * from "./agent-surface";
+export * from "./agent-product";
+export * from "./agent-plan";
 export * from "./agent-runtime";
 export * from "./agent-observability";
 export * from "./model-access-policy";

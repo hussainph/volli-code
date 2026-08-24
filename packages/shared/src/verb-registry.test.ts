@@ -222,7 +222,7 @@ describe("CLI reference projection", () => {
       options: [],
     };
     expect(() => referenceVerbsFrom([unordered])).toThrow(
-      "Listed CLI verb unordered.verb requires referenceOrder",
+      "Listed verb unordered.verb requires referenceOrder",
     );
   });
 });
@@ -359,6 +359,36 @@ describe("the registry table", () => {
         expect(option.help.length).toBeGreaterThan(0);
         expect("placeholder" in option).toBe(option.kind !== "flag");
       }
+    }
+  });
+
+  it("keeps the ratified preview matrix on the verbs themselves", () => {
+    const previewed = VERB_REGISTRY.filter((entry) =>
+      entry.options.some((option) => option.name === "--dry-run"),
+    ).map((entry) => entry.key);
+    expect(previewed).toEqual([
+      "ticket.create",
+      "ticket.update",
+      "ticket.move",
+      "ticket.comment",
+      "session.done",
+      "session.blocked",
+      "session.link",
+      "notify",
+      "doctor",
+    ]);
+  });
+
+  it("pins human-visible effects and explicit non-effects on every voluntary write", () => {
+    const voluntaryWrites = VERB_REGISTRY.filter((entry) => entry.listed && entry.actor !== "any");
+    for (const entry of voluntaryWrites) {
+      expect(entry.effects, entry.key).toBeDefined();
+      expect(entry.effects!.humanVisible.length, entry.key).toBeGreaterThan(0);
+      expect(entry.effects!.nonEffects.length, entry.key).toBeGreaterThan(0);
+    }
+
+    for (const key of ["doctor", "app.launch"] as const) {
+      expect(verbEntry(key)?.effects, key).toBeDefined();
     }
   });
 

@@ -27,6 +27,7 @@ import {
   globalSkillsDir,
   projectSkillsDir,
   draftAttachmentHashes,
+  makeAgentError,
   memoizedPathExists,
   resolveDefaultModel,
   resolveShell,
@@ -2235,7 +2236,7 @@ app.whenReady().then(async () => {
           ({
             v: 1,
             ok: false,
-            error: { code: "DB_UNAVAILABLE", message: dbHandle.error },
+            error: makeAgentError("DB_UNAVAILABLE", dbHandle.error),
           }) as const;
     await agentSocket.start({
       socketPath: runtimePaths.socketPath,

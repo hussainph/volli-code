@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { buildMutationPlan, makeAgentError, verbEntry } from "@volli/shared";
+
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 
 /** One identify answer that differs only in what the second adoption pass reported. */
@@ -52,12 +54,65 @@ describe("renderCliSuccess", () => {
     expect(renderCliSuccess("ticket.brief", data, { json: true })).toBe(
       '{"prompt":"# Fix auth\\n\\nUse the volli skill."}\n',
     );
-    expect(
-      renderCliError({ code: "BODY_MATCH_FAILED", message: "The old text is not unique." }),
-    ).toBe("error[BODY_MATCH_FAILED] The old text is not unique.\n");
+    const refusal = makeAgentError("BODY_MATCH_FAILED", "The old text is not unique.");
+    expect(renderCliError(refusal)).toBe(
+      "error[BODY_MATCH_FAILED] The old text is not unique. Next: Read the fresh Ticket Body, choose text that appears exactly once, and retry the edit.\n",
+    );
+    expect(JSON.parse(renderCliError(refusal, { json: true }))).toEqual({
+      error: {
+        code: "BODY_MATCH_FAILED",
+        message: "The old text is not unique.",
+        reason: "The old text is not unique.",
+        next: "Read the fresh Ticket Body, choose text that appears exactly once, and retry the edit.",
+      },
+    });
     expect(exitCodeForError("APP_UNREACHABLE")).toBe(3);
     expect(exitCodeForError("INVALID_REQUEST")).toBe(2);
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
+  });
+
+  it("renders the shared mutation plan as readable text or unchanged stable JSON", () => {
+    const plan = buildMutationPlan(verbEntry("notify")!, {
+      kind: "notification",
+      id: null,
+      label: "Native notification ‘Needs input’",
+    });
+    const text = renderCliSuccess("notify", plan, { json: false });
+    expect(text).toContain("Side-effect preview");
+    expect(text).toContain("Verb: notify");
+    expect(text).toContain("Durable writes:\n  - none");
+    expect(text).toContain("Human-visible effects:");
+    expect(text).toContain("native macOS notification");
+    expect(text).toContain("not an in-app Sonner toast");
+    expect(JSON.parse(renderCliSuccess("notify", plan, { json: true }))).toEqual(plan);
+  });
+
+  it("fills guidance for a pre-VC-91 error envelope without inventing a reason", () => {
+    // An older app sends only code and message: the renderer falls back to the
+    // message and this CLI's own recovery table for that stable code.
+    const legacy = renderCliError({ code: "TIMEOUT", message: "Timed out." } as never);
+    expect(legacy).toContain("error[TIMEOUT] Timed out.");
+    expect(legacy).toContain("Next: Inspect the current Ticket or Session state");
+    // An explicit but empty `next` means the producer decided none is safe.
+    const decided = renderCliError({
+      code: "TIMEOUT",
+      message: "Timed out.",
+      next: undefined,
+    } as never);
+    expect(decided).toContain("none is safe from this evidence");
+  });
+
+  it("lists each planned durable write and an explicit none for empty human effects", () => {
+    const plan = buildMutationPlan(
+      verbEntry("ticket.comment")!,
+      { kind: "ticket", id: "VC-1", label: "VC-1" },
+      { humanVisibleEffects: [] },
+    );
+    const text = renderCliSuccess("ticket.comment", plan, { json: false });
+    expect(text).toContain(
+      "Durable writes:\n  - Create one attributed Ticket comment and its Ticket activity event.",
+    );
+    expect(text).toContain("Human-visible effects:\n  - none");
   });
 
   it("neutralizes terminal control and bidi sequences in every text-mode output path", () => {
@@ -75,7 +130,7 @@ describe("renderCliSuccess", () => {
       },
       { json: false },
     );
-    const error = renderCliError({ code: "MUTATION_FAILED", message: hostile });
+    const error = renderCliError(makeAgentError("MUTATION_FAILED", hostile));
 
     for (const control of ["\u001b", "\u0007", "\r", "\u202e", "\u2066"]) {
       expect(rendered).not.toContain(control);
@@ -100,7 +155,7 @@ describe("renderCliSuccess", () => {
       { tickets: [{ id: "VC-1", status: "doing", title, labels: [] }] },
       { json: false },
     );
-    const error = renderCliError({ code: "MUTATION_FAILED", message: title });
+    const error = renderCliError(makeAgentError("MUTATION_FAILED", title));
 
     expect(rendered).toContain("safe\\x0aerror[MUTATION_FAILED] forged");
     expect(rendered).not.toContain(title);

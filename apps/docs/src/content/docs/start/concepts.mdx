@@ -6,6 +6,7 @@ sidebar:
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+import AgentOperatingModel from "../../../components/AgentOperatingModel.astro";
 
 Use this page when a Volli label is unfamiliar. The table translates the common
 workflow into the terms you see in the app.
@@ -95,6 +96,13 @@ or unreconciled.
 
 **Attention.** A reconstructed view that shows when a Session needs recovery or
 input. It is derived from Session history rather than a source of truth.
+
+## Agent-facing operating model
+
+The CLI and managed Volli skill pack use the following operating model. Run
+`volli help concepts` for the same facts without opening this site.
+
+<AgentOperatingModel />
 
 ## In development
 

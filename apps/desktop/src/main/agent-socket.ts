@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import {
   AGENT_COMMANDS,
   errorMessage,
+  makeAgentError,
   type AgentCommand,
   type AgentRequest,
   type AgentResponse,
@@ -138,7 +139,7 @@ export function registerAgentSocketWillQuit(options: {
 }
 
 function socketFailure(message: string): AgentResponse {
-  return { v: 1, ok: false, error: { code: "SOCKET_PROTOCOL", message } };
+  return { v: 1, ok: false, error: makeAgentError("SOCKET_PROTOCOL", message) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -232,10 +233,7 @@ function handleConnection(
             {
               v: 1,
               ok: false,
-              error: {
-                code: "MUTATION_FAILED",
-                message: errorMessage(error),
-              },
+              error: makeAgentError("MUTATION_FAILED", errorMessage(error)),
             },
             responseFlushed,
           ),

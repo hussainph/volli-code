@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { AGENT_ERROR_CODES, cliVerbName, REFERENCE_VERBS } from "@volli/shared";
-import type { VerbEntry } from "@volli/shared";
+import type { AgentBuildIdentity, AgentHelpRuntime, VerbEntry } from "@volli/shared";
 
-import { bareHelpText, renderHelp } from "./help";
+import { bareHelpText, renderHelp, resolveHelp } from "./help";
 
 /** chars / 4 is the bench's token estimate; keep the two ceilings in one place. */
 const estTokens = (text: string): number => Math.floor(text.length / 4);
@@ -26,7 +26,10 @@ describe("bareHelpText", () => {
     expect(text).toContain("VOLLI_SESSION/VOLLI_TICKET");
     expect(text).toContain("Add --json to any command");
     expect(text).toContain("short session ids");
-    expect(text).toContain("Topics: exit-codes, addressing, json, orchestration");
+    expect(text).toContain(
+      "Topics: concepts, changes, exit-codes, addressing, json, orchestration",
+    );
+    expect(text).toContain("Agent Tool Surface");
     // The full option shape is spelled out for the richest command.
     expect(text).toContain(
       "ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high]",
@@ -40,11 +43,11 @@ describe("bareHelpText", () => {
 });
 
 describe("renderHelp command detail", () => {
-  it("keeps every command's detail under the 900-char / 225-token ceilings", () => {
+  it("keeps every command's detail under a scan-friendly 1,800-char ceiling", () => {
     for (const name of PUBLISHED_COMMANDS) {
       const detail = renderHelp(name.split(" "));
-      expect(detail.length, `${name} chars`).toBeLessThanOrEqual(900);
-      expect(estTokens(detail), `${name} est tokens`).toBeLessThanOrEqual(225);
+      expect(detail.length, `${name} chars`).toBeLessThanOrEqual(1800);
+      expect(estTokens(detail), `${name} est tokens`).toBeLessThanOrEqual(450);
     }
   });
 
@@ -55,6 +58,10 @@ describe("renderHelp command detail", () => {
     expect(detail).toContain("Usage: volli ticket create --title <text> [options]");
     expect(detail).toContain("Options:");
     expect(detail).toContain("--no-worktree");
+    expect(detail).toContain("--dry-run");
+    expect(detail).toContain("Door: Agent CLI");
+    expect(detail).toContain("Verb tier: coordination");
+    expect(detail).toContain("Human sees: The new Ticket appears on the board");
     expect(detail).toContain("--status <column>");
     // Column options carry the valid vocabulary in detail.
     expect(detail).toContain("(valid: backlog, todo, doing, needs-review|review, done)");
@@ -65,10 +72,11 @@ describe("renderHelp command detail", () => {
     expect(detail).not.toContain("--message");
   });
 
-  it("spells out a required non-grouped option with no trailing [options]", () => {
+  it("spells out a required option and folds dry-run into optional detail", () => {
     const detail = renderHelp(["ticket", "move"]);
-    expect(detail).toContain("Usage: volli ticket move <id> --to <column>");
-    expect(detail).not.toContain("[options]");
+    expect(detail).toContain("Usage: volli ticket move <id> --to <column> [options]");
+    expect(detail).toContain("--dry-run");
+    expect(detail).toContain("The move does not start a Session");
   });
 
   it("collapses a required grouped option and hides its alias", () => {
@@ -77,11 +85,13 @@ describe("renderHelp command detail", () => {
     expect(detail).not.toContain("--message");
   });
 
-  it("omits the Options and Notes sections when a command has neither", () => {
+  it("renders structured effects even when a command has no options or notes", () => {
     const detail = renderHelp(["ticket", "archive"]);
     expect(detail).toContain("ticket archive — ");
     expect(detail).not.toContain("Options:");
     expect(detail).not.toContain("Notes:");
+    expect(detail).toContain("Effects:");
+    expect(detail).toContain("The Ticket worktree is preserved");
     expect(detail).toContain("Example: volli ticket archive VC-12");
   });
 
@@ -147,6 +157,7 @@ describe("renderHelp groups and topics", () => {
   });
 
   it.each([
+    ["concepts", "durable identity"],
     ["json", "structured JSON"],
     ["addressing", "Context ladder"],
     ["orchestration", "Read before writing"],
@@ -154,10 +165,41 @@ describe("renderHelp groups and topics", () => {
     expect(renderHelp([topic])).toContain(needle);
   });
 
-  it("falls back to the compact reference for an unknown or over-long path", () => {
-    expect(renderHelp(["nonsense"])).toBe(bareHelpText());
-    // A topic word with extra tokens is not a single-topic path → reference.
-    expect(renderHelp(["exit-codes", "extra"])).toBe(bareHelpText());
+  it("renders changes with an embedded build identity and optional live app version", () => {
+    const identity: AgentBuildIdentity = {
+      cliVersion: "0.0.1",
+      releaseVersion: "0.1.0",
+      sourceRevision: "abc123+dirty",
+      buildId: "local-7",
+    };
+    const runtime: AgentHelpRuntime = {
+      appVersion: "0.1.1",
+      surface: null,
+      surfaceUnknownReason: null,
+    };
+    const text = renderHelp(["changes"], undefined, { identity, runtime });
+    expect(text).toContain("CLI package: @volli/cli 0.0.1");
+    expect(text).toContain("Release promotion marker: 0.1.0");
+    expect(text).toContain("Source revision: abc123+dirty");
+    expect(text).toContain("Build id: local-7");
+    expect(text).toContain("Running app: 0.1.1");
+    for (const heading of ["Added", "Changed", "Fixed", "Removed"]) {
+      expect(text).toContain(`\n${heading}\n`);
+    }
+  });
+
+  it("refuses an unknown or over-long help path with valid doors and topics", () => {
+    for (const path of [["nonsense"], ["exit-codes", "extra"]]) {
+      const resolved = resolveHelp(path);
+      expect(resolved).toMatchObject({
+        ok: false,
+        error: { code: "USAGE", next: expect.stringContaining("volli help") },
+      });
+      if (!resolved.ok) {
+        expect(resolved.error.reason).toContain("commands:");
+        expect(resolved.error.reason).toContain("topics: concepts, changes");
+      }
+    }
   });
 });
 
@@ -167,11 +209,7 @@ describe("renderHelp groups and topics", () => {
  * hold — and the only way to show that the real surface refuses it.
  */
 describe("renderHelp over a supplied entry list", () => {
-  /**
-   * A control-tier verb of the shape VC-162 introduces: a named tool, off the
-   * shell. It is deliberately marked listed to prove access mode still keeps it
-   * out of shell help.
-   */
+  /** A control-tier verb of the shape VC-162 introduces: named tool, off shell execution. */
   const toolOnly: VerbEntry = {
     key: "vault.rotate",
     accessModes: ["tool"],
@@ -197,26 +235,110 @@ describe("renderHelp over a supplied entry list", () => {
     options: [],
   };
 
-  it("projects supplied registry entries before rendering shell help", () => {
+  it("projects supplied entries without pretending a tool-only verb is executable", () => {
     const text = bareHelpText([toolOnly]);
-    expect(text).not.toContain("vault rotate");
+    expect(text).toContain("Agent Tool Surface\n  vault rotate");
+    expect(text).not.toMatch(/Session\n\s+vault rotate/);
     expect(text).not.toContain("ticket create");
   });
 
-  // The ruling this ticket implements (VC-92 §2): a verb with no `cli` access
-  // mode is not on the shell surface, so the reference a shell caller reads
-  // must not name it and no help path may render its detail.
-  it("keeps a verb that is off the CLI out of what a shell caller sees", () => {
-    const reference = bareHelpText([toolOnly]);
-    expect(reference).not.toContain("vault rotate");
-    expect(renderHelp(["vault", "rotate"], [toolOnly])).toBe(reference);
+  it("renders a tool-only verb's real door and unknown availability outside a Session", () => {
+    const detail = renderHelp(["vault", "rotate"], [toolOnly]);
+    expect(detail).toContain("Door: Agent Tool Surface (named tool; not shell-executable)");
+    expect(detail).toContain("Verb tier: control");
+    expect(detail).toContain("Role availability: not claimed outside a resolved Session");
   });
 
-  // `hook` and `session harness` are on the socket but unlisted: fired by a
-  // generated file, never typed. Asking for either lands on the reference or
-  // the group list, never on a detail page that invites a reader to run it.
-  it("renders no detail for the involuntary verbs", () => {
-    expect(renderHelp(["hook"])).toBe(bareHelpText());
+  it("names an app-only verb's door honestly instead of hiding it", () => {
+    const appOnly: VerbEntry = {
+      ...toolOnly,
+      key: "ticket.discard",
+      accessModes: [],
+      actor: "any",
+    };
+    const detail = renderHelp(["ticket", "discard"], [appOnly]);
+    expect(detail).toContain("Door: app only (no agent door)");
+    expect(detail).toContain("Verb tier: none");
+    // Bare help lists the same verb under its own section rather than a shell group.
+    expect(bareHelpText([appOnly])).toContain("App-only verbs\n  ticket discard");
+  });
+
+  it("labels a verb on both agent surfaces with both doors", () => {
+    const dual: VerbEntry = {
+      ...toolOnly,
+      key: "vault.list",
+      accessModes: ["cli", "tool"],
+      actor: "any",
+      group: "Read",
+    };
+    expect(renderHelp(["vault", "list"], [dual])).toContain(
+      "Door: Agent CLI and Agent Tool Surface",
+    );
+  });
+
+  it("reports a resolved but empty frozen surface as empty, not unknown", () => {
+    const text = bareHelpText([shellOnly], {
+      runtime: {
+        appVersion: null,
+        surface: { sessionId: "session-1", role: "subagent", tools: [] },
+        surfaceUnknownReason: null,
+      },
+    });
+    expect(text).toContain("Resolved Session Role: subagent");
+    expect(text).toContain("Frozen Agent Tool Surface: (empty)");
+  });
+
+  it("marks a tool-only verb's availability unknown when the optional read failed", () => {
+    const detail = renderHelp(["vault", "rotate"], [toolOnly], {
+      runtime: {
+        appVersion: null,
+        surface: null,
+        surfaceUnknownReason: "the app is stopped",
+      },
+    });
+    expect(detail).toContain("Role availability: unknown (the app is stopped).");
+  });
+
+  it("throws from renderHelp on an unknown path so projections cannot silently degrade", () => {
+    expect(() => renderHelp(["nonsense"])).toThrow(/Unknown help path/);
+  });
+
+  it("reports an unknown frozen surface on bare help when the optional read failed", () => {
+    const text = bareHelpText([shellOnly], {
+      runtime: {
+        appVersion: null,
+        surface: null,
+        surfaceUnknownReason: "the app is stopped",
+      },
+    });
+    expect(text).toContain(
+      "Session Role and frozen Agent Tool Surface: unknown (the app is stopped)",
+    );
+  });
+
+  it("reports whether the resolved Role's frozen bundle carries a tool-only verb", () => {
+    const carried: AgentHelpRuntime = {
+      appVersion: "0.1.1",
+      surface: { sessionId: "session-1", role: "project", tools: ["vault.rotate"] },
+      surfaceUnknownReason: null,
+    };
+    const absent: AgentHelpRuntime = {
+      ...carried,
+      surface: { sessionId: "session-2", role: "ticket", tools: [] },
+    };
+    expect(renderHelp(["vault", "rotate"], [toolOnly], { runtime: carried })).toContain(
+      "carried by this project Session's frozen bundle",
+    );
+    expect(renderHelp(["vault", "rotate"], [toolOnly], { runtime: absent })).toContain(
+      "not carried by this ticket Session's frozen bundle",
+    );
+    expect(bareHelpText([toolOnly], { runtime: carried })).toContain(
+      "Frozen Agent Tool Surface: vault.rotate",
+    );
+  });
+
+  it("keeps involuntary verbs out of discovery", () => {
+    expect(resolveHelp(["hook"])).toMatchObject({ ok: false, error: { code: "USAGE" } });
     expect(renderHelp(["session", "harness"])).toBe(renderHelp(["session"]));
   });
 

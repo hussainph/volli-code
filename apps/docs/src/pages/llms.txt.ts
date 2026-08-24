@@ -32,6 +32,7 @@ const SECTIONS = [
     label: "Reference",
     slugs: [
       "reference/cli",
+      "reference/agent-capability-changes",
       "reference/keyboard-shortcuts",
       "reference/troubleshooting",
     ],
