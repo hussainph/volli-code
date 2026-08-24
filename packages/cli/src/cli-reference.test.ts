@@ -21,7 +21,7 @@ import { parseCliArgs } from "./parser";
  * order itself, and a change to either has to be made here in the open.
  */
 
-/** The 27 listed commands, in the order the compact reference prints them. */
+/** The 28 listed commands, in the order the compact reference prints them. */
 const REFERENCE_COMMANDS = [
   "identify",
   "board",
@@ -34,6 +34,7 @@ const REFERENCE_COMMANDS = [
   "project list",
   "label list",
   "model list",
+  "cost",
   "ticket create",
   "ticket update",
   "ticket move",

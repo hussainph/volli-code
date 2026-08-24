@@ -884,3 +884,56 @@ describe("registry ↔ argv mechanics", () => {
     expect(missing).toEqual(["hook", "help"]);
   });
 });
+
+/**
+ * `volli cost` argv (VC-87). The two value options both refuse rather than
+ * guess: a `--since` read as `0` and a `--group-by` read as "no grouping" would
+ * each answer a question nobody asked, with output that looks entirely normal.
+ */
+describe("cost", () => {
+  it("keeps --since as the shape it was written in, not as an instant", () => {
+    // Resolved here, it would be pinned to THIS process's clock; main holds the
+    // clock the rest of the answer is measured against.
+    expect(parseCliArgs(["cost", "--since", "7d"])).toMatchObject({
+      ok: true,
+      invocation: { args: { since: { kind: "duration", ms: 604_800_000 } } },
+    });
+    expect(parseCliArgs(["cost", "--since", "90m"])).toMatchObject({
+      ok: true,
+      invocation: { args: { since: { kind: "duration", ms: 5_400_000 } } },
+    });
+    expect(parseCliArgs(["cost", "--since", "2026-01-14T09:22:11Z"])).toMatchObject({
+      ok: true,
+      invocation: {
+        args: { since: { kind: "instant", epochMs: Date.parse("2026-01-14T09:22:11Z") } },
+      },
+    });
+  });
+
+  it("refuses a --since nobody could have meant", () => {
+    const result = parseCliArgs(["cost", "--since", "last tuesday"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.code).toBe("USAGE");
+    expect(result.message).toContain("RFC 3339");
+  });
+
+  it("teaches the grouping vocabulary rather than ignoring an unknown one", () => {
+    expect(parseCliArgs(["cost", "--group-by", "model"])).toMatchObject({
+      ok: true,
+      invocation: { args: { groupBy: "model" } },
+    });
+    const result = parseCliArgs(["cost", "--group-by", "provider"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.message).toContain("ticket, session, model, day");
+  });
+
+  it("refuses two scopes rather than letting one silently win", () => {
+    const result = parseCliArgs(["cost", "--ticket", "VC-1", "--all-projects"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.message).toContain("one of --ticket, --session or --all-projects");
+    // --project is the ladder's own word and rides alongside a narrower scope.
+    expect(parseCliArgs(["cost", "--ticket", "VC-1", "--project", "VC"])).toMatchObject({
+      ok: true,
+    });
+  });
+});

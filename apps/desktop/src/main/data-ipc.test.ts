@@ -116,7 +116,7 @@ import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
-import { MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
@@ -1291,11 +1291,15 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         lastActivityAt: 500,
         bornTicketless: false,
       },
+      // A Session that has run no model reads as unmeasured, not as free
+      // (VC-87). It rides on the ROW rather than inside the record, so both
+      // arms of the listing carry the same fact in the same place.
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
     });
     expect(
       projectSessions.ok &&
         projectSessions.sessions.find((row) => rowId(row) === "terminal-session"),
-    ).toMatchObject({ kind: "terminal" });
+    ).toMatchObject({ kind: "terminal", usage: EMPTY_SESSION_USAGE_SUMMARY });
   });
 
   it("rejects invalid input", () => {

@@ -13,7 +13,7 @@
  * the thing the lab is supposed to be measuring — and none of it is what a
  * design question is ever about.
  */
-import type { SessionListingRow } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, type SessionListingRow } from "@volli/shared";
 import type {
   AppStateSetResult,
   HarnessPendingResult,
@@ -54,8 +54,19 @@ let retentionTtlDays = 14;
  * structured-only Session disappear.
  */
 const sessionRows: SessionListingRow[] = [
-  ...sessions.map((record): SessionListingRow => ({ kind: "terminal", record })),
-  ...chatSessions.map((record): SessionListingRow => ({ kind: "chat", record })),
+  // Unmetered, not free: the lab has no ledger behind it, and an invented
+  // dollar figure in a fixture is how a screenshot comes to promise a number
+  // the app cannot produce.
+  ...sessions.map(
+    (record): SessionListingRow => ({
+      kind: "terminal",
+      record,
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
+    }),
+  ),
+  ...chatSessions.map(
+    (record): SessionListingRow => ({ kind: "chat", record, usage: EMPTY_SESSION_USAGE_SUMMARY }),
+  ),
 ];
 
 function retentionState(ticketId: string): TicketRetentionState {

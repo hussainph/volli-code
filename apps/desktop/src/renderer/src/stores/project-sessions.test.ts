@@ -1,4 +1,9 @@
-import type { ChatSessionRecord, SessionListingRow, SessionRecord } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  type ChatSessionRecord,
+  type SessionListingRow,
+  type SessionRecord,
+} from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
@@ -74,8 +79,8 @@ describe("project-sessions store", () => {
 
   it("splits a fetched listing into the two record shapes", async () => {
     stubList([
-      { kind: "terminal", record: record() },
-      { kind: "chat", record: chatRecord() },
+      { kind: "terminal", record: record(), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      { kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY },
     ]);
     const store = createProjectSessionsStore();
 
@@ -119,20 +124,28 @@ describe("project-sessions store", () => {
     // Two rows per shape, so the upsert has to leave the untouched sibling
     // exactly as it was rather than rewriting the whole list.
     stubList([
-      { kind: "chat", record: chatRecord() },
-      { kind: "chat", record: chatRecord({ sessionId: "c2" }) },
-      { kind: "terminal", record: record() },
-      { kind: "terminal", record: record({ id: "s2" }) },
+      { kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      { kind: "chat", record: chatRecord({ sessionId: "c2" }), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      { kind: "terminal", record: record(), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      { kind: "terminal", record: record({ id: "s2" }), usage: EMPTY_SESSION_USAGE_SUMMARY },
     ]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
 
-    store
-      .getState()
-      .applyActivity(notice({ kind: "chat", record: chatRecord({ activity: "working" }) }));
-    store
-      .getState()
-      .applyActivity(notice({ kind: "terminal", record: record({ title: "Renamed" }) }));
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord({ activity: "working" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+      }),
+    );
+    store.getState().applyActivity(
+      notice({
+        kind: "terminal",
+        record: record({ title: "Renamed" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+      }),
+    );
 
     expect(store.getState().byProject.p1).toEqual({
       terminal: [record({ title: "Renamed" }), record({ id: "s2" })],
@@ -145,17 +158,29 @@ describe("project-sessions store", () => {
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
 
-    store.getState().applyActivity(notice({ kind: "chat", record: chatRecord() }));
+    store
+      .getState()
+      .applyActivity(
+        notice({ kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY }),
+      );
 
     expect(store.getState().byProject.p1?.chat).toEqual([chatRecord()]);
   });
 
   it("moves a Session across the two lists when a terminal attaches to it", async () => {
-    stubList([{ kind: "chat", record: chatRecord({ sessionId: "s1" }) }]);
+    stubList([
+      { kind: "chat", record: chatRecord({ sessionId: "s1" }), usage: EMPTY_SESSION_USAGE_SUMMARY },
+    ]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
 
-    store.getState().applyActivity(notice({ kind: "terminal", record: record({ id: "s1" }) }));
+    store.getState().applyActivity(
+      notice({
+        kind: "terminal",
+        record: record({ id: "s1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+      }),
+    );
 
     // One Session, one row — never one of each shape, with the stale one frozen.
     expect(store.getState().byProject.p1).toEqual({ terminal: [record({ id: "s1" })], chat: [] });
@@ -164,7 +189,11 @@ describe("project-sessions store", () => {
   it("drops a notice for a project with no baseline rather than seeding a partial one", () => {
     const store = createProjectSessionsStore();
 
-    store.getState().applyActivity(notice({ kind: "chat", record: chatRecord() }));
+    store
+      .getState()
+      .applyActivity(
+        notice({ kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY }),
+      );
 
     expect(store.getState().byProject.p1).toBeUndefined();
   });
@@ -174,9 +203,16 @@ describe("project-sessions store", () => {
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
 
-    store
-      .getState()
-      .applyActivity(notice({ kind: "chat", record: chatRecord({ projectId: "p2" }) }, "p2"));
+    store.getState().applyActivity(
+      notice(
+        {
+          kind: "chat",
+          record: chatRecord({ projectId: "p2" }),
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+        },
+        "p2",
+      ),
+    );
 
     expect(store.getState().byProject.p1).toEqual({ terminal: [], chat: [] });
     expect(store.getState().byProject.p2).toBeUndefined();
@@ -212,7 +248,7 @@ describe("project-sessions store", () => {
     useProjectSessionsStore.setState({ byProject: { p1: { terminal: [], chat: [] } } });
 
     const unsubscribe = subscribeProjectSessionActivity();
-    push!(notice({ kind: "chat", record: chatRecord() }));
+    push!(notice({ kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY }));
 
     expect(useProjectSessionsStore.getState().byProject.p1?.chat).toEqual([chatRecord()]);
     unsubscribe();
@@ -221,7 +257,7 @@ describe("project-sessions store", () => {
   });
 
   it("repoints a terminal row's running harness, and holds identity when nothing moved", async () => {
-    stubList([{ kind: "terminal", record: record() }]);
+    stubList([{ kind: "terminal", record: record(), usage: EMPTY_SESSION_USAGE_SUMMARY }]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
     const before = store.getState().byProject.p1;

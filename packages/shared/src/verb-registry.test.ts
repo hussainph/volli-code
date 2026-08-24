@@ -37,6 +37,7 @@ const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
   "project.list",
   "label.list",
   "model.list",
+  "cost",
   "session.list",
   "session.peek",
   "session.start",
@@ -50,7 +51,7 @@ const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
   "prompt.baseline",
 ];
 
-/** The CLI reference as it stands: `COMMAND_HELP`'s 27 entries, in its order. */
+/** The CLI reference as it stands: `COMMAND_HELP`'s entries plus `cost`, in its order. */
 const REFERENCE_SURFACE = [
   "identify",
   "board",
@@ -63,6 +64,7 @@ const REFERENCE_SURFACE = [
   "project.list",
   "label.list",
   "model.list",
+  "cost",
   "ticket.create",
   "ticket.update",
   "ticket.move",
@@ -112,6 +114,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "project.list": "read",
   "label.list": "read",
   "model.list": "read",
+  // VC-92 staged it read tier explicitly: an orchestrator sampling spend must
+  // not pay context rent to ask. Setting a budget is not here — that is
+  // app-owned policy, and a cap the capped Session could write is decoration.
+  cost: "read",
   "session.list": "read",
   "session.peek": "read",
   doctor: "read",
@@ -282,7 +288,9 @@ describe("verbTier", () => {
     const socketTiers = VERB_REGISTRY.filter((entry) =>
       (AGENT_COMMANDS as readonly string[]).includes(entry.key),
     ).map((entry) => verbTier(entry));
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(15);
+    // 15 in VC-92's audit, plus `cost` — which the amendment staged read tier
+    // in the same breath, on the grounds that spend has to be cheap to sample.
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(16);
     // VC-92 assigns 10 coordination verbs; `ticket.archive` and `session.start`
     // ride here too until VC-163 and VC-162 move them.
     expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);

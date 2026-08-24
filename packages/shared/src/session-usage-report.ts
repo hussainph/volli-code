@@ -34,8 +34,72 @@ export interface SessionUsageEntry extends SessionUsage {
   occurredAt: number;
 }
 
-/** Which dimension a report is broken down along. One per report. */
-export type SessionUsageGrouping = "ticket" | "session" | "model" | "day";
+/**
+ * Which dimension a report is broken down along. One per report.
+ *
+ * A named list rather than a bare union because two surfaces have to VALIDATE
+ * a caller's word against it — the CLI's `--group-by` and the app's IPC guard
+ * — and a union that exists only at compile time leaves each of them writing
+ * its own copy of the vocabulary to check against.
+ */
+export const SESSION_USAGE_GROUPINGS = ["ticket", "session", "model", "day"] as const;
+
+export type SessionUsageGrouping = (typeof SESSION_USAGE_GROUPINGS)[number];
+
+/** Whether `value` is a grouping this build reports. */
+export function isSessionUsageGrouping(value: unknown): value is SessionUsageGrouping {
+  return (SESSION_USAGE_GROUPINGS as readonly unknown[]).includes(value);
+}
+
+/**
+ * A window's lower bound as a caller wrote it: a fixed instant, or a look-back
+ * from whenever the question is answered.
+ *
+ * Kept as two arms all the way to the handler instead of being resolved to an
+ * instant where it is typed. `volli cost --since 7d` asked about the last seven
+ * days, and the process that parsed the argument is not the process that holds
+ * the clock the rest of the answer is measured against — collapsing it early
+ * would silently pin the window to the CLI's own `Date.now()` and make the
+ * handler's injected clock a lie in tests.
+ */
+export type SessionUsageWindow =
+  | { kind: "instant"; epochMs: number }
+  | { kind: "duration"; ms: number };
+
+const DURATION_UNIT_MS: Readonly<Record<string, number>> = {
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+  w: 604_800_000,
+};
+
+/**
+ * Reads a `--since` argument, or null when it is neither shape.
+ *
+ * Two spellings because two readers want different ones: a person or a script
+ * comparing against an external record wants an exact instant, and an agent
+ * sampling its own spend wants “the last day” without doing date arithmetic in
+ * bash first. Both are refused rather than guessed at when malformed — a window
+ * silently read as `0` would answer a question nobody asked, with a number that
+ * looks entirely plausible.
+ */
+export function parseSessionUsageWindow(raw: string): SessionUsageWindow | null {
+  const duration = /^(\d+)([mhdw])$/.exec(raw.trim());
+  if (duration !== null) {
+    const amount = Number(duration[1]);
+    // `0d` is a window with no width. It parses, and it is not an error: a
+    // caller asking what has been spent since this instant gets nothing back,
+    // which is the true answer.
+    return { kind: "duration", ms: amount * DURATION_UNIT_MS[duration[2]!]! };
+  }
+  const epochMs = Date.parse(raw.trim());
+  return Number.isFinite(epochMs) ? { kind: "instant", epochMs } : null;
+}
+
+/** The window's lower bound in epoch milliseconds, against the reader's own clock. */
+export function sessionUsageWindowSince(window: SessionUsageWindow, now: number): number {
+  return window.kind === "instant" ? window.epochMs : now - window.ms;
+}
 
 export interface SessionUsageReportQuery {
   /** Absent means one total and no breakdown. */

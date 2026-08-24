@@ -15,6 +15,7 @@ Read
   project list
   label list [--project <p>]
   model list [--all]
+  cost [--ticket <id>] [--session <handle>] [--project <p>] [--all-projects] [--since <when>] [--group-by <dimension>]
 
 Write
   ticket create --title <text> [--body <text>|--body-file <path>] [--priority low|medium|high] [--status <column>] [--label <name>]... [--project <p>] [--harness <h>] [--base <branch>] [--no-worktree] [--dry-run]
@@ -224,6 +225,34 @@ Example: volli model list
 Notes:
 - Copy a printed <provider/model> verbatim into session start --model.
 - Shows available models only; --all includes signed-out providers.
+
+============================================================================
+volli help cost
+============================================================================
+cost — Report what Sessions consumed: tokens, cost, and cache class.
+
+Door: Agent CLI
+Verb tier: read
+
+Usage: volli cost [options]
+
+Options:
+  --ticket <id>           Only this ticket's spend.
+  --session <handle>      Only this session's spend, by short id.
+  --project <p>           Target project.
+  --all-projects          Every project this profile holds, not just one.
+  --since <when>          Only operations at or after this instant or look-back.
+  --group-by <dimension>  Break the total down along one dimension. (valid: ticket, session, model, day)
+
+Example: volli cost --ticket VC-12 --group-by session
+
+Notes:
+- Volli's own measurement of its Sessions, not a provider account balance or an invoice.
+- ~ marks a catalogue estimate, + marks a total only partly priced, and — means nothing could be priced.
+- Token classes do not overlap: cache reads bill near 0.1x and cache writes near 1.25-2x, so a falling cached share is what a rising bill starts as.
+- Cost is recorded per operation, never per token class — no split of the money by class is derivable.
+- --since takes an RFC 3339 instant or a look-back like 7d, 24h or 90m.
+- coverage says partial when the window reaches back past the point this profile began metering.
 
 ============================================================================
 volli help ticket create
@@ -871,17 +900,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -956,7 +985,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket archive, ticket brief, worktree status, worktree diff, project list, label list, model list, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket archive, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1012,6 +1041,11 @@ USAGE Unknown option --not-an-option (options: --project) — see volli help lab
 volli model list --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option (options: --all) — see volli help model list
+
+============================================================================
+volli cost --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option (options: --ticket, --session, --project, --all-projects, --since, --group-by) — see volli help cost
 
 ============================================================================
 volli ticket create --not-an-option

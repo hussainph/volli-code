@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   createSessionHarnessState,
+  EMPTY_SESSION_USAGE_SUMMARY,
   getHarnessAdapter,
   type ChatSessionRecord,
   type HarnessAdapter,
@@ -30,7 +31,7 @@ import {
 import { WORKING_WINDOW_MS, ticketScope, type SessionTab } from "../../stores/sessions";
 
 function terminalRow(session: SessionRecord): SessionListingRow {
-  return { kind: "terminal", record: session };
+  return { kind: "terminal", record: session, usage: EMPTY_SESSION_USAGE_SUMMARY };
 }
 
 /**
@@ -440,7 +441,11 @@ describe("latestResumableSession", () => {
         endedAt: 20,
       }),
     );
-    const chat: SessionListingRow = { kind: "chat", record: chatRecord({ createdAt: 999 }) };
+    const chat: SessionListingRow = {
+      kind: "chat",
+      record: chatRecord({ createdAt: 999 }),
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
+    };
 
     expect(latestResumableSession([chat, older], getHarnessAdapter)).toEqual(older.record);
   });
@@ -543,7 +548,11 @@ describe("ticketOutputStamps", () => {
         lastOutputAt: { s1: 10, s3: 30, "another-ticket": 40 },
         rows: [
           terminalRow(record({ id: "s1" })),
-          { kind: "chat", record: chatRecord({ sessionId: "s2" }) },
+          {
+            kind: "chat",
+            record: chatRecord({ sessionId: "s2" }),
+            usage: EMPTY_SESSION_USAGE_SUMMARY,
+          },
           terminalRow(record({ id: "s3" })),
         ],
       }),

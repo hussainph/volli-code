@@ -29,6 +29,7 @@ import type { AgentCommandBindingId } from "@volli/shared";
 
 import type { AgentVerbHandler } from "./context";
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
+import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import {
   boardVerb,
@@ -119,6 +120,10 @@ export const AGENT_VERB_TABLE: {
   // Reads the Model Access snapshot and nothing else — no Session anywhere in
   // the answer, so folding every project's is pure cost.
   "model.list": { handle: modelListVerb, projections: "skip", envSession: "resolve" },
+  // Loads the snapshot only because `--session <handle>` resolves a short id
+  // against it. Everything else the answer needs is one indexed read of the
+  // usage projection — no Session history is folded to price a pass.
+  cost: { handle: costVerb, projections: "load", envSession: "resolve" },
   "session.list": { handle: sessionListVerb, projections: "load", envSession: "resolve" },
   // The one verb that reads BOTH halves of the snapshot (VC-79), from this one
   // fold rather than by listing the world twice.

@@ -320,6 +320,128 @@ function renderModelList(data: Record<string, unknown>): string | null {
 }
 
 /**
+ * A metered total, written so it cannot be read as more than it is.
+ *
+ * The hedge is one glyph, the same notation the app's rails use, because the
+ * two surfaces quote the same money and a reader who learns it in one has
+ * learned it in the other:
+ *
+ *     $8.42     provider-reported and wholly priced — the only bare case
+ *     ~$8.42    a catalogue estimate, or a mix of bases
+ *     ~$8.42+   partial: at least this much of the window was priced
+ *     —         operations happened and none could be priced
+ *
+ * `unavailable` never prints bare and never prints `$0.00`. A basis Volli
+ * cannot vouch for is hedged like an estimate and NAMED differently below, on
+ * the basis line — calling it "estimated" would claim we know it came from a
+ * price catalogue, which is exactly what `unavailable` says we do not know.
+ */
+function usdCell(data: Record<string, unknown>): string {
+  const cost = data["costUsd"];
+  if (typeof cost !== "number" || !Number.isFinite(cost)) return "\u2014";
+  const prefix = data["costBasis"] === "provider-reported" ? "" : "~";
+  const suffix = data["costCoverage"] === "partial" ? "+" : "";
+  // `<$0.01` rather than `$0.00`: rounding a real charge to zero prints the
+  // one sentence this whole feature exists to prevent.
+  const amount =
+    cost > 0 && cost < 0.01
+      ? "<$0.01"
+      : `$${cost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${prefix}${amount}${suffix}`;
+}
+
+/** Cache reads as a share of all prompt tokens. Never called a hit rate. */
+function cachedShareCell(data: Record<string, unknown>): string {
+  const share = data["cachedInputShare"];
+  if (typeof share !== "number" || !Number.isFinite(share)) return "-";
+  const percent = share * 100;
+  return percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+}
+
+function usageCountCell(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * What kind of number the cost is, in words rather than in a glyph.
+ *
+ * Three answers, not two. `provider-reported` is the backend's own accounting;
+ * `catalog-estimate` (and a `mixed` total containing one) is priced locally at
+ * list; and `unavailable` is a cost from an executor whose pricing Volli cannot
+ * vouch for — real tokens, a real number, and no claim about where it came
+ * from. Printing that third case as "estimated" would assert a provenance the
+ * ledger explicitly refused to assert.
+ */
+function basisWord(basis: unknown): string {
+  if (basis === "provider-reported") return "provider-reported";
+  if (basis === "unavailable") return "unverified-basis";
+  return "estimated";
+}
+
+/**
+ * The basis line: what kind of number the cost is, and how much of the report
+ * it covers.
+ *
+ * A report with no operations at all gets neither. "unverified-basis 0 of 0
+ * operations priced" describes the basis of a number that does not exist — the
+ * summary's `unavailable` there means nothing was metered, not that something
+ * was metered unverifiably, and the two must not print the same words.
+ */
+function basisLine(data: Record<string, unknown>): string {
+  const requests = usageCountCell(data["requestCount"]);
+  if (requests === 0) return "basis  no metered model calls";
+  const priced = usageCountCell(data["pricedRequestCount"]);
+  return `basis  ${basisWord(data["costBasis"])}  ${priced} of ${requests} operations priced`;
+}
+
+/**
+ * `volli cost` — the scope, the money, the four token classes, and what the
+ * profile cannot answer.
+ *
+ * Key-value lines like `identify`, so an agent reads it with `grep` and a
+ * person reads it top to bottom. THE TOKEN LINE AND THE COST LINE ARE APART on
+ * purpose: cost is recorded per operation and never per class, so a reader who
+ * saw "78% cached" on the same line as a dollar figure could conclude that 78%
+ * of the money was cache — which is roughly backwards, cache reads billing at
+ * about a tenth of an uncached input token.
+ */
+function renderCostReport(data: Record<string, unknown>): string {
+  const since = data["since"];
+  const lines = [
+    `scope  ${terminalSafeInline(data["scope"])}`,
+    `since  ${typeof since === "number" ? terminalSafeInline(new Date(since).toISOString()) : "all time"}`,
+    `cost  ${usdCell(data)}`,
+    basisLine(data),
+    `tokens  ${usageCountCell(data["totalTokens"])}  input ${usageCountCell(data["inputTokens"])}  cache-read ${usageCountCell(data["cacheReadTokens"])}  cache-write ${usageCountCell(data["cacheWriteTokens"])}  output ${usageCountCell(data["outputTokens"])}`,
+    `cached  ${cachedShareCell(data)}`,
+    `sessions  ${usageCountCell(data["meteredSessionCount"])} metered`,
+  ];
+  // Only when it changes the reading. A complete report saying so spends a
+  // line to say nothing; a partial one that omitted it would let a floor read
+  // as a total.
+  if (data["coverage"] === "partial") {
+    const from = data["meteredFrom"];
+    lines.push(
+      `coverage  partial${
+        typeof from === "number"
+          ? ` — this profile has metered since ${terminalSafeInline(new Date(from).toISOString())}`
+          : ""
+      }`,
+    );
+  }
+  const groups = recordsAt(data, "groups") ?? [];
+  for (const group of groups) {
+    // `-` for the null key, which is a real group: spend that belongs to no
+    // Ticket. Dropping it would make the rows add up to less than the total.
+    const label = group["label"];
+    lines.push(
+      `  ${terminalSafeInline(label === null || label === undefined ? "-" : label)}  ${usdCell(group)}  ${usageCountCell(group["totalTokens"])} tokens  ${cachedShareCell(group)} cached  ${usageCountCell(group["requestCount"])} operations`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
  * How often a section's bytes are re-bought, as one cell beside what they cost.
  *
  * Class and placement travel together rather than as two columns, because
@@ -390,6 +512,7 @@ function renderStableLines(command: string, data: unknown): string | null {
     );
   }
   if (command === "model.list") return renderModelList(data);
+  if (command === "cost") return renderCostReport(data);
   if (command === "label.list") {
     const labels = recordsAt(data, "labels");
     return (
@@ -406,10 +529,19 @@ function renderStableLines(command: string, data: unknown): string | null {
     return (
       sessions
         ?.map((session) =>
-          [session["id"], session["kind"], session["status"], session["ticket"], session["title"]]
-            .filter((value) => value !== null && value !== undefined)
-            .map(terminalSafeInline)
-            .join("  "),
+          [
+            ...[session["id"], session["kind"], session["status"], session["ticket"]]
+              .filter((value) => value !== null && value !== undefined)
+              .map(terminalSafeInline),
+            // Cost and tokens sit BEFORE the title and are never filtered out,
+            // because the title is free text that may contain spaces and has
+            // to stay the last cell for anything downstream to cut on. An
+            // unmetered Session prints `—  0`, which reads as unmeasured; a
+            // filtered-out cell would silently shift every column left.
+            usdCell(session),
+            terminalSafeInline(usageCountCell(session["tokens"])),
+            terminalSafeInline(session["title"]),
+          ].join("  "),
         )
         .join("\n") ?? null
     );

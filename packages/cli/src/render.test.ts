@@ -244,6 +244,9 @@ describe("renderCliSuccess", () => {
     expect(renderCliSuccess("label.list", { labels: [{ name: "bug", tickets: 2 }] }, options)).toBe(
       "bug  2 tickets\n",
     );
+    // The cost and token cells sit before the title and are never dropped, so
+    // the free-text title stays the last cell for anything cutting on columns.
+    // An unmetered Session reads `\u2014  0` — unmeasured, never free.
     expect(
       renderCliSuccess(
         "session.list",
@@ -254,20 +257,37 @@ describe("renderCliSuccess", () => {
               kind: "ticket",
               status: "running",
               ticket: null,
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
               title: "Work",
             },
           ],
         },
         options,
       ),
-    ).toBe("abcdef12  ticket  running  Work\n");
+    ).toBe("abcdef12  ticket  running  \u2014  0  Work\n");
     expect(
       renderCliSuccess(
         "session.list",
-        { sessions: [{ id: "fedcba98", kind: "chat", ticket: "VC-52", title: "Validate VC-52" }] },
+        {
+          sessions: [
+            {
+              id: "fedcba98",
+              kind: "chat",
+              ticket: "VC-52",
+              costUsd: 1.5,
+              costBasis: "catalog-estimate",
+              costCoverage: "complete",
+              tokens: 184_000,
+              title: "Validate VC-52",
+            },
+          ],
+        },
         options,
       ),
-    ).toBe("fedcba98  chat  VC-52  Validate VC-52\n");
+    ).toBe("fedcba98  chat  VC-52  ~$1.50  184000  Validate VC-52\n");
     expect(renderCliSuccess("ticket.events", { events: [{ kind: "created" }] }, options)).toBe(
       '{"kind":"created"}\n',
     );
@@ -1170,5 +1190,152 @@ describe("renderCliSuccess — doctor", () => {
     expect(() => renderCliSuccess("doctor", { unexpected: true }, { json: false })).not.toThrow();
     expect(() => renderCliSuccess("doctor", null, { json: false })).not.toThrow();
     expect(() => renderCliSuccess("doctor", { checks: [] }, { json: false })).not.toThrow();
+  });
+});
+
+/**
+ * `volli cost` text (VC-87). Every case here is a sentence the readout must
+ * never print: a catalogue estimate quoted bare, a floor quoted as a total, an
+ * unpriced report quoted as `$0.00`, a basis Volli cannot vouch for called an
+ * estimate, and an upgraded profile's partial history quoted as its whole.
+ */
+describe("renderCliSuccess cost", () => {
+  const options = { json: false };
+  const base = {
+    scope: "ticket VC-87",
+    since: null,
+    costUsd: 8.42,
+    costBasis: "catalog-estimate",
+    costCoverage: "complete",
+    inputTokens: 142_000,
+    outputTokens: 38_000,
+    cacheReadTokens: 980_000,
+    cacheWriteTokens: 61_000,
+    totalTokens: 1_221_000,
+    cachedInputShare: 0.81,
+    requestCount: 36,
+    pricedRequestCount: 36,
+    meteredSessionCount: 4,
+    coverage: "complete",
+    meteredFrom: null,
+    groups: [],
+  };
+
+  it("hedges a catalogue estimate and names the token classes apart", () => {
+    const text = renderCliSuccess("cost", base, options);
+    expect(text).toContain("cost  ~$8.42");
+    expect(text).toContain("basis  estimated  36 of 36 operations priced");
+    expect(text).toContain(
+      "tokens  1221000  input 142000  cache-read 980000  cache-write 61000  output 38000",
+    );
+    expect(text).toContain("cached  81%");
+    // Cost is per operation, never per class — so the money and the cache share
+    // must never share a line, or 81% reads as 81% of the spend.
+    expect(text).not.toMatch(/cost.*cached|cached.*\$/);
+  });
+
+  it("prints a provider-reported total bare and a partial one as a floor", () => {
+    expect(
+      renderCliSuccess("cost", { ...base, costBasis: "provider-reported" }, options),
+    ).toContain("cost  $8.42");
+    expect(
+      renderCliSuccess(
+        "cost",
+        { ...base, costCoverage: "partial", pricedRequestCount: 34 },
+        options,
+      ),
+    ).toContain("cost  ~$8.42+");
+  });
+
+  it("prints an unpriced report as an em dash, never as zero", () => {
+    const text = renderCliSuccess(
+      "cost",
+      { ...base, costUsd: null, costBasis: "unavailable", costCoverage: "unavailable" },
+      options,
+    );
+    expect(text).toContain("cost  \u2014");
+    expect(text).not.toContain("$0.00");
+  });
+
+  // "unverified-basis, 0 of 0 operations priced" describes the basis of a
+  // number that does not exist. Nothing metered is a different fact from
+  // something metered unverifiably, and they must not print the same words.
+  it("says nothing was metered rather than describing an absent number's basis", () => {
+    const text = renderCliSuccess(
+      "cost",
+      {
+        ...base,
+        costUsd: null,
+        costBasis: "unavailable",
+        costCoverage: "unavailable",
+        requestCount: 0,
+        pricedRequestCount: 0,
+      },
+      options,
+    );
+    expect(text).toContain("basis  no metered model calls");
+    expect(text).not.toContain("0 of 0");
+  });
+
+  it("never rounds a real charge down to nothing", () => {
+    expect(renderCliSuccess("cost", { ...base, costUsd: 0.004 }, options)).toContain(
+      "cost  ~<$0.01",
+    );
+  });
+
+  // The domain says `unavailable` is a cost Volli cannot vouch for. Calling it
+  // "estimated" would claim it came from a price catalogue, which is the one
+  // thing that basis exists to deny.
+  it("does not call an unverifiable basis an estimate", () => {
+    const text = renderCliSuccess("cost", { ...base, costBasis: "unavailable" }, options);
+    expect(text).toContain("basis  unverified-basis");
+    expect(text).not.toContain("estimated");
+  });
+
+  it("names the metering floor only when the window reaches behind it", () => {
+    expect(renderCliSuccess("cost", base, options)).not.toContain("coverage");
+    expect(
+      renderCliSuccess(
+        "cost",
+        { ...base, coverage: "partial", meteredFrom: Date.parse("2026-01-14T09:22:11Z") },
+        options,
+      ),
+    ).toContain("coverage  partial — this profile has metered since 2026-01-14T09:22:11.000Z");
+  });
+
+  it("prints a group per row, and names unticketed spend rather than dropping it", () => {
+    const text = renderCliSuccess(
+      "cost",
+      {
+        ...base,
+        groups: [
+          {
+            groupBy: "ticket",
+            key: "VC-87",
+            label: "VC-87",
+            costUsd: 8.1,
+            costBasis: "catalog-estimate",
+            costCoverage: "complete",
+            totalTokens: 1_000_000,
+            cachedInputShare: 0.8,
+            requestCount: 30,
+          },
+          {
+            groupBy: "ticket",
+            key: null,
+            label: null,
+            costUsd: null,
+            costBasis: "unavailable",
+            costCoverage: "unavailable",
+            totalTokens: 221_000,
+            cachedInputShare: null,
+            requestCount: 6,
+          },
+        ],
+      },
+      options,
+    );
+    expect(text).toContain("  VC-87  ~$8.10  1000000 tokens  80% cached  30 operations");
+    expect(text).toContain("  -  \u2014  221000 tokens  - cached  6 operations");
   });
 });

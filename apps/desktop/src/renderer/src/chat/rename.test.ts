@@ -1,7 +1,8 @@
-import type {
-  ChatSessionRecord,
-  SessionListingRow,
-  SessionPresentationProjection,
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  type ChatSessionRecord,
+  type SessionListingRow,
+  type SessionPresentationProjection,
 } from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -55,6 +56,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       bornTicketless: false,
       ...overrides,
     },
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
   };
 }
 
@@ -78,6 +80,7 @@ const terminalRow: SessionListingRow = {
     lastActivityAt: 1,
     bornTicketless: false,
   },
+  usage: EMPTY_SESSION_USAGE_SUMMARY,
 };
 
 /** The cached chat row's title, for the ticket the fixtures use. */

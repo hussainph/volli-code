@@ -21,9 +21,15 @@ import { terminalSessionRecord } from "./terminal-attachment";
  */
 export function sessionListingRow(session: SessionProjection): SessionListingRow {
   const terminal = terminalSessionRecord(session);
+  // The fold's own total, taken whichever arm the row lands on. A terminal row
+  // is normally empty here — a manual companion runs models Volli never
+  // mediated — but a Session that chatted before it opened a PTY has real
+  // spend, and reading it off the projection is what keeps the two arms from
+  // disagreeing about the same Session.
+  const usage = session.usage;
   return terminal !== null
-    ? { kind: "terminal", record: terminal }
-    : { kind: "chat", record: chatSessionRecord(session) };
+    ? { kind: "terminal", record: terminal, usage }
+    : { kind: "chat", record: chatSessionRecord(session), usage };
 }
 
 /** {@link sessionListingRow} over a whole listing. */
