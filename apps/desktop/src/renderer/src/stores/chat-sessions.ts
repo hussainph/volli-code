@@ -17,7 +17,6 @@ import { errorMessage, isDefaultModelRequired, type ModelSelection } from "@voll
 import { create } from "zustand";
 
 import {
-  browserChatTransport,
   isWorking,
   settledLifecycle,
   type ChatSessionLifecycle,
@@ -26,6 +25,8 @@ import {
   type ChatSessionWrites,
 } from "@renderer/chat/client";
 import { disposeChatClient, getOrCreateChatClient } from "@renderer/chat/registry";
+import { renameChatSession } from "@renderer/chat/rename";
+import { browserChatTransport } from "@renderer/chat/transport";
 import {
   appendFrames,
   EMPTY_TRANSCRIPT,
@@ -178,6 +179,14 @@ export function createChatSessionsStore(
       getOrCreateChatClient(sessionId, {
         ...transport(),
         store: api,
+        // The two desktop-owned effects the core names but never imports
+        // (VC-169): an event failure surfaces as an error toast, and the
+        // auto-title write goes through the shared rename path — which owns
+        // the optimistic labels, the rollback, and its own failure toast.
+        notify: toastError,
+        renameSession: (target, title, refineFrom) => {
+          void renameChatSession(target, title, refineFrom);
+        },
       });
 
     return {

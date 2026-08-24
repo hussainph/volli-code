@@ -47,6 +47,8 @@ function deps(): ChatSessionClientDeps {
     newCommandId: () => "cmd",
     createSession: unreachable,
     attachSession: unreachable,
+    notify: () => undefined,
+    renameSession: () => undefined,
   };
 }
 

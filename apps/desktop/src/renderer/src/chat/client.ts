@@ -9,9 +9,11 @@
  * anyone is looking at the tab.
  *
  * Every effectful dependency arrives through {@link ChatSessionClientDeps}: the
- * RPC edge, the flush pacing, and the store written back to. That is what lets
- * this file be tested without a window, and what will let the lab shell hand it
- * an HTTP client instead of the IPC one.
+ * RPC edge, the flush pacing, the store written back to, and the two surface
+ * effects a client triggers but does not own — a failure notice and the
+ * auto-title rename. That is what lets this file be tested without a window,
+ * and what will let the lab shell hand it an HTTP client instead of the IPC
+ * one.
  *
  * The seams this declares — {@link ChatSessionRpc} and {@link ChatSessionStore} —
  * are stated here rather than imported from either side. The core is the thing
@@ -32,6 +34,7 @@ import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  isUntitledChatSession,
   movesProjection,
   nextRelease,
   rejectedReceipt,
@@ -39,10 +42,6 @@ import {
   type ChatTranscriptState,
   type QueuedMessage,
 } from "@volli/session-presentation";
-
-import { isUntitledChatSession, renameChatSession } from "@renderer/chat/rename";
-import { toastError } from "@renderer/lib/toast";
-import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 /**
  * What a Session's plumbing is doing, as a surface has to draw it.
@@ -363,48 +362,23 @@ export interface ChatSessionTransport {
 
 export interface ChatSessionClientDeps extends ChatSessionTransport {
   store: ChatSessionStore;
+  /**
+   * One line to a person about a command that failed as a moment, not a state
+   * — the surface {@link ChatSessionClient.#eventRun} speaks to. The desktop
+   * passes its error toast; nothing here assumes what the line becomes.
+   */
+  notify(message: string): void;
+  /**
+   * Retitle the durable Session everywhere it is named — the auto-title's one
+   * write ({@link ChatSessionClient.#autoTitle}). Fire-and-forget by
+   * signature: a rename's failure is the implementation's to surface (the
+   * desktop's `renameChatSession` toasts and rolls back), never the
+   * submission that triggered it.
+   */
+  renameSession(sessionId: string, title: string, refineFrom?: string): void;
 }
 
 export type ProductSessionResult = SessionStartResult;
-
-/** The app's transport. Built per call; the RPC client underneath is a singleton. */
-export function browserChatTransport(): ChatSessionTransport {
-  const rpc = sessionRpcClient();
-  return {
-    rpc,
-    scheduler: racingFlushScheduler(window),
-    newCommandId: () => crypto.randomUUID(),
-    // One procedure per verb: the nullable ticketId IS the Role on create,
-    // and an attach needs no Role at all — the server owns the Session's
-    // durable state, so nothing here re-derives what it already knows.
-    createSession: (input) =>
-      rpc.sessions.create.mutate({
-        operationId: input.operationId,
-        projectId: input.projectId,
-        ticketId: input.ticketId,
-        title: input.title,
-        ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
-        // A picked model reaches the wire as the OVERRIDE it is: the server
-        // merges it onto the app default for the Role and refuses one Model
-        // Access cannot honor, exactly as it does for `volli session start
-        // --model`. Splitting the selection here rather than in the store keeps
-        // the shape difference at the one boundary that has it.
-        ...(input.model === undefined
-          ? {}
-          : {
-              modelOverride: {
-                model: { providerId: input.model.providerId, modelId: input.model.modelId },
-                reasoningLevel: input.model.reasoningLevel,
-              },
-            }),
-      }),
-    attachSession: (input) =>
-      rpc.sessions.attach.mutate({
-        operationId: input.operationId,
-        sessionId: input.sessionId,
-      }),
-  };
-}
 
 export class ChatSessionClient {
   readonly sessionId: string;
@@ -414,6 +388,8 @@ export class ChatSessionClient {
   readonly #scheduler: FlushScheduler;
   readonly #newCommandId: () => string;
   readonly #attachSession: ChatSessionTransport["attachSession"];
+  readonly #notify: ChatSessionClientDeps["notify"];
+  readonly #renameSession: ChatSessionClientDeps["renameSession"];
   readonly #detachStore: () => void;
 
   #subscription: { unsubscribe(): void } | null = null;
@@ -452,6 +428,8 @@ export class ChatSessionClient {
     this.#scheduler = deps.scheduler;
     this.#newCommandId = deps.newCommandId;
     this.#attachSession = deps.attachSession;
+    this.#notify = deps.notify;
+    this.#renameSession = deps.renameSession;
     // The queue's release rule reads lifecycle and the durable projection, and
     // any of the three can move without this client having touched it — a person
     // picking a model is enough. Watching the store is what makes one rule
@@ -700,8 +678,9 @@ export class ChatSessionClient {
       this.#writes().delivered(this.sessionId, slice.transcript.turnEpoch);
       // The first accepted message — direct or released off the queue, this is
       // the one choke point both go through — is the moment a Session gains a
-      // subject. Fire-and-forget: a failed rename costs a toast (renameChatSession
-      // already surfaces one), never the message that just landed.
+      // subject. Fire-and-forget: a failed rename is the rename dep's to
+      // surface (the desktop's renameChatSession toasts one), never the
+      // message that just landed.
       this.#autoTitle(body, attachments);
       return "delivered";
     } catch (failure) {
@@ -1014,9 +993,10 @@ export class ChatSessionClient {
    * One event-shaped command, and whether it landed — where the failure is a
    * moment, not a state, and its consequence is already visible where it
    * happened: the card the decision never reached stays answerable, the model
-   * pill keeps the selection it had, a stopped turn keeps running. A toast
-   * names the failure once; latching the band would instead park a Retry that
-   * addresses none of them (VC-97).
+   * pill keeps the selection it had, a stopped turn keeps running. One
+   * `notify` line names the failure once (the desktop surfaces it as a
+   * toast); latching the band would instead park a Retry that addresses none
+   * of them (VC-97).
    *
    * Neither outcome touches the latch. A failure of `interrupt` is not a
    * failure of the Session's plumbing, and a success of it does not repair
@@ -1027,12 +1007,12 @@ export class ChatSessionClient {
     try {
       const refusal = rejectedReceipt(await call());
       if (refusal !== null) {
-        toastError(`${label}: ${refusal}`);
+        this.#notify(`${label}: ${refusal}`);
         return false;
       }
       return true;
     } catch (failure) {
-      toastError(`${label}: ${errorMessage(failure)}`);
+      this.#notify(`${label}: ${errorMessage(failure)}`);
       return false;
     }
   }
@@ -1066,7 +1046,7 @@ export class ChatSessionClient {
     // when there are words, the attachment's label when there are not.
     /* v8 ignore next -- submit refuses a message with no text AND no attachments */
     const firstMessage = body.trim().length > 0 ? body : (attachments[0]?.label ?? "");
-    void renameChatSession(this.sessionId, subject, firstMessage);
+    this.#renameSession(this.sessionId, subject, firstMessage);
   }
 
   #writes(): ChatSessionWrites {

@@ -134,6 +134,7 @@ export default defineConfig(({ mode }) => ({
         "src/chat/composer-picker.ts",
         "src/chat/registry.ts",
         "src/chat/rename.ts",
+        "src/chat/transport.ts",
         "src/components/attachments/attachment-model.ts",
         // What the renderer does with the Run door's answer (VC-126): which
         // refusal opens Model Access, which toasts, and what success opens —
