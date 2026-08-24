@@ -84,7 +84,8 @@ export type ComposerPickerRow =
        * whose bare name a verb owns answers to `command:<name>`
        * (`resolveSlashNamespace`). Carried on the row because the row is what
        * insertion has, and writing the bare name would stage text that submit
-       * resolves to the verb instead.
+       * resolves to the verb instead. It is also this row's `value` — see
+       * {@link composerPickerRows}.
        */
       readonly name: string;
       readonly label: string;
@@ -94,7 +95,7 @@ export type ComposerPickerRow =
   | {
       readonly kind: "skill";
       readonly value: string;
-      /** What a pick writes — `skill:<name>` when the bare name was taken. */
+      /** What a pick writes, and this row's `value` — `skill:<name>` when taken. */
       readonly name: string;
       readonly label: string;
       readonly detail: string;
@@ -219,10 +220,9 @@ export function rankVerbCompletions(input: {
     .toSorted((a, b) => a.tier - b.tier || a.verb.name.localeCompare(b.verb.name))
     .map(({ verb }) => ({
       kind: "verb" as const,
-      // Prefixed like the skill rows', and now load-bearing in both
-      // directions: a verb's name is reserved, so no template can answer to
-      // this value, and cmdk's "active" is a value lookup.
-      value: `verb:${verb.name}`,
+      // The name itself — see {@link composerPickerRows} for why that is
+      // already unique across every row this card can draw.
+      value: verb.name,
       label: `/${verb.name}`,
       detail: verb.description,
       verb,
@@ -257,13 +257,7 @@ export function rankSkillCompletions(input: {
     .slice(0, MAX_COMMAND_RESULTS)
     .map(({ entry }) => ({
       kind: "skill" as const,
-      // Prefixed so a value can never collide with a command row's — cmdk's
-      // "active" is a value lookup, and two rows answering to one value would
-      // highlight together. Keyed on the BARE name: a value only has to be
-      // unique among the rows on screen, which the bare name already is, and
-      // keying on the resolved one would spell a shadowed skill `skill:skill:x`.
-      // The resolved name is what a pick WRITES — that is `name`, below.
-      value: `skill:${entry.bareName}`,
+      value: entry.name,
       name: entry.name,
       label: `/${entry.name}`,
       detail: entry.item.description,
@@ -389,6 +383,15 @@ export function composerPickerRows(input: {
     // `/compact` is which. A verb owns its bare name outright; a template or
     // skill that wanted it is offered here under its qualified name rather
     // than dropped, so a row the user wrote is still reachable.
+    //
+    // It is also what lets every row's cmdk `value` be simply its name. Those
+    // values used to carry hand-written `verb:` and `skill:` prefixes, for a
+    // uniqueness the three lists could not otherwise promise each other — two
+    // rows answering to one value highlight together, because cmdk's "active"
+    // is a value lookup. `resolveSlashNamespace` seeds itself with every verb
+    // name and hands out no name twice, so that promise is now made once, by
+    // the same function that decides what a pick writes. A prefix on top of it
+    // would only be a second spelling of a name that is already unique.
     const namespace = resolveSlashNamespace({
       templates: input.templates,
       skills: input.skills ?? [],

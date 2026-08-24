@@ -282,11 +282,11 @@ describe("rankSkillCompletions", () => {
     skill({ name: "audits", description: "Design review checklists" }),
   ];
 
-  it("offers skills by slug, values prefixed so they can never collide with a command's", () => {
+  it("offers skills by slug, keyed on the name the namespace resolved", () => {
     const rows = rankSkillCompletions({ query: "svg", entries: skillEntries(SKILLS, TEMPLATES) });
 
     expect(rows).toMatchObject([
-      { kind: "skill", value: "skill:svg-logo-designer", label: "/svg-logo-designer" },
+      { kind: "skill", value: "svg-logo-designer", label: "/svg-logo-designer" },
     ]);
   });
 
@@ -306,7 +306,7 @@ describe("rankSkillCompletions", () => {
   it("matches on the description at the lowest tier, like a command", () => {
     const rows = rankSkillCompletions({ query: "checklists", entries: skillEntries(SKILLS) });
 
-    expect(rows.map((row) => row.value)).toEqual(["skill:audits"]);
+    expect(rows.map((row) => row.value)).toEqual(["audits"]);
   });
 
   it("ranks a slug that merely contains the query below a prefix match", () => {
@@ -318,21 +318,34 @@ describe("rankSkillCompletions", () => {
       ]),
     });
 
-    expect(rows.map((row) => row.value)).toEqual(["skill:logos", "skill:svg-logo-designer"]);
+    expect(rows.map((row) => row.value)).toEqual(["logos", "svg-logo-designer"]);
+  });
+
+  it("keys a shadowed skill on its qualified name, which is still unique", () => {
+    // The value used to carry a hand-written `skill:` prefix for uniqueness.
+    // `resolveSlashNamespace` promises that now, so the value is just the name.
+    const rows = rankSkillCompletions({
+      query: "review",
+      entries: skillEntries([skill({ name: "review" })], [template({ name: "review" })]),
+    });
+
+    expect(rows.map((row) => row.value)).toEqual(["skill:review"]);
   });
 });
 
 describe("rankVerbCompletions", () => {
-  it("offers the verb by name, with a value no template row can answer to", () => {
+  it("offers the verb by name, with a value no other row can answer to", () => {
+    // No prefix: a verb's name is reserved before any template or skill is
+    // resolved, so nothing else can ever be keyed on it.
     expect(rankVerbCompletions({ query: "comp", verbs: COMPOSER_VERBS })).toMatchObject([
-      { kind: "verb", value: "verb:compact", label: "/compact", verb: COMPACT_VERB },
+      { kind: "verb", value: "compact", label: "/compact", verb: COMPACT_VERB },
     ]);
   });
 
   it("matches the description at the lowest tier, like every other row", () => {
     expect(
       rankVerbCompletions({ query: "summarize", verbs: COMPOSER_VERBS }).map((row) => row.value),
-    ).toEqual(["verb:compact"]);
+    ).toEqual(["compact"]);
     expect(rankVerbCompletions({ query: "nothing here", verbs: COMPOSER_VERBS })).toEqual([]);
   });
 
@@ -386,7 +399,7 @@ describe("composerPickerRows", () => {
       files: FILES,
     });
 
-    expect(rows.map((row) => row.value)).toEqual(["review", "preview", "skill:revisions"]);
+    expect(rows.map((row) => row.value)).toEqual(["review", "preview", "revisions"]);
   });
 
   it("leads with the verbs, in the order the card's headings read", () => {
@@ -403,16 +416,16 @@ describe("composerPickerRows", () => {
     // `rankVerbCompletions` sorts ties by name — then the templates, then the
     // skills: three groups, the card's own order.
     expect(rows.map((row) => row.value)).toEqual([
-      "verb:compact",
-      "verb:copy",
-      "verb:login",
-      "verb:model",
-      "verb:reload",
-      "verb:settings",
+      "compact",
+      "copy",
+      "login",
+      "model",
+      "reload",
+      "settings",
       "preview",
       "review",
       "ship",
-      "skill:revisions",
+      "revisions",
     ]);
   });
 
@@ -610,7 +623,7 @@ describe("applyPickerRow", () => {
     if (state === null) throw new Error("expected an open picker");
     const row: ComposerPickerRow = {
       kind: "verb",
-      value: "verb:compact",
+      value: "compact",
       label: "/compact",
       detail: COMPACT_VERB.description,
       verb: COMPACT_VERB,
@@ -632,7 +645,7 @@ describe("applyPickerRow", () => {
     const picked = skill();
     const row: ComposerPickerRow = {
       kind: "skill",
-      value: `skill:${picked.name}`,
+      value: picked.name,
       name: picked.name,
       label: `/${picked.name}`,
       detail: picked.description,

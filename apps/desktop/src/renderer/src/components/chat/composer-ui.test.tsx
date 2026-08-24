@@ -716,7 +716,7 @@ describe("the picker card", () => {
         rows: [
           {
             kind: "verb",
-            value: "verb:compact",
+            value: "compact",
             label: "/compact",
             detail: COMPACT_VERB.description,
             verb: COMPACT_VERB,
@@ -747,7 +747,7 @@ describe("the picker card", () => {
           rows: [
             {
               kind: "verb",
-              value: `verb:${verb.name}`,
+              value: verb.name,
               label: `/${verb.name}`,
               detail: verb.description,
               verb,
