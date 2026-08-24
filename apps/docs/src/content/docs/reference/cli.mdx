@@ -6,6 +6,8 @@ sidebar:
 ---
 
 import { Aside } from "@astrojs/starlight/components";
+import AgentErrorRecovery from "../../../components/AgentErrorRecovery.astro";
+import AgentVerbEffects from "../../../components/AgentVerbEffects.astro";
 
 `volli` is how agents read the plan and report back, and it works just as well
 typed by hand. It talks to the running app over a local Unix socket.
@@ -28,6 +30,17 @@ first answer:
 `volli` never guesses past that. If more than one project or ticket fits, the
 command fails with `AMBIGUOUS_PROJECT` or `AMBIGUOUS_TICKET` rather than
 picking one.
+
+## Preview writes
+
+A write whose command detail lists `--dry-run` can resolve and validate its
+target without mutating it. Plain output explains the intended durable writes,
+human-visible effects, and explicit non-effects. JSON returns the same versioned
+plan shape a registry-projected tool uses through its `dryRun` argument.
+
+A preview creates no durable ID, row, event, Session, model turn, notification,
+process, worktree, or file write. A later real call repeats validation and can
+lose a race.
 
 ## Orientation
 
@@ -321,6 +334,14 @@ something that could interrupt a running agent.
 `turn.completed`, `input.needed`, `permission.requested`, `tool.started`,
 `subagent.completed`.
 
+## Human-visible effects and non-effects
+
+This section is generated from the Verb Registry data used by command detail and
+`--dry-run`. It states where a person sees each write and which nearby actions
+remain independent.
+
+<AgentVerbEffects />
+
 ## Environment
 
 | Variable | Purpose |
@@ -347,16 +368,13 @@ baked into the bundled `volli` shim, so the CLI reaches the app either way.
   set in the shell you're using. Run `volli identify` to confirm.
 </Aside>
 
-## Error codes
+## Error codes and recovery
 
-Every failure prints `error[CODE] message` and carries one of these codes. The
-code is stable; the message isn't, so branch on the code.
+Every plain failure is one scan-friendly `error[CODE]` refusal. With `--json`,
+the error includes structured `code`, `reason`, and `next` fields. `next` is
+`null` when Volli cannot name a safe action from the evidence it has.
 
-| Exit | Codes |
-| --- | --- |
-| `2` | `USAGE`, `INVALID_REQUEST`, `UNSUPPORTED_COMMAND` |
-| `3` | `APP_UNREACHABLE` |
-| `1` | `DB_UNAVAILABLE`, `PROJECT_REQUIRED`, `PROJECT_NOT_FOUND`, `AMBIGUOUS_PROJECT`, `TICKET_NOT_FOUND`, `AMBIGUOUS_TICKET`, `SESSION_NOT_FOUND`, `AMBIGUOUS_CONTEXT`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `BODY_MATCH_FAILED`, `INVALID_COLUMN`, `INVALID_PRIORITY`, `ARCHIVED_TICKET`, `SESSION_ENDED`, `MODEL_REQUIRED`, `MODEL_UNAVAILABLE`, `PREFIX_CONFLICT`, `FILE_READ_FAILED`, `MUTATION_FAILED`, `SOCKET_PROTOCOL`, `TIMEOUT` |
+The stable code vocabulary and recovery guidance below come from the same data
+as `volli help exit-codes` and the managed skill pack.
 
-Run `volli help exit-codes` for the same table, generated from the codes the
-app actually emits.
+<AgentErrorRecovery />
