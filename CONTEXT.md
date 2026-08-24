@@ -409,41 +409,82 @@ A human drag or explicit `volli` move, as opposed to a lifecycle-driven auto-mov
 _Avoid_: manual move (too narrow — implies human-only)
 
 **Automation**:
-A saved, named way of starting work on a ticket, made of four parts: the Trigger
-(which columns it applies to, and whether it may fire unattended), its
-Instructions, its Runtime, and its Outcome. An Automation removes the repetitive
-setup of composing a prompt and choosing model, reasoning, and authority
-defaults — it does not remove the person. Running one always opens a Session the
-user is expected to work inside, watch, and interrupt; it is never a silent
-background job.
+A saved, named way of starting work, made of three parts: its Trigger, its
+Instructions, and its Runtime. An Automation removes the repetitive setup of
+composing a prompt and choosing model, reasoning, and authority defaults — it
+does not remove the person. Every Automation is runnable by hand from any
+surface that lists one, so the Trigger says only what _else_ starts it. Whether
+a Run is attended follows from that Trigger; it is never a property an
+Automation declares about itself.
 _Avoid_: recipe, preset, workflow, template, pipeline
 
+**Trigger**:
+What starts an Automation besides a person: a ticket entering one or more named
+columns, or a schedule. "Nothing else" is the third answer and the default for a
+new Automation — run by hand is always available, so an Automation with no
+Trigger is complete rather than inert. One Automation holds exactly one Trigger.
+The same work on two Triggers is two Automations naming one Skill, which is
+cheap precisely because the workflow lives in the Skill rather than in either
+record.
+_Avoid_: event, hook, condition
+
 **Armed automation**:
-The single Automation a column fires on its own when a ticket arrives there by Deliberate move. A column has at most one, or none — in which case an arriving ticket is a pure status change and any Automation must be chosen by hand. Arming a column is not retroactive: it governs tickets that arrive afterward, never those already sitting there.
+The single Automation a column fires on its own when a ticket arrives there by
+Deliberate move. A column has at most one, or none — in which case an arriving
+ticket is a pure status change. Arming is a property of the column, not of the
+Automation, so one Automation may be armed in one column and merely offered in
+another. It is local to the machine that set it and never travels with the
+project. Arming a column is not retroactive: it governs tickets that arrive
+afterward, never those already sitting there.
 _Avoid_: default automation (collides with project defaults and the default base branch)
 
-**Instructions**:
-The prompt an Automation sends when it opens its Session: authored prose,
-Context Chips, and Volli capabilities such as skills or slash commands. Every
-Automation starts from an opinionated default that already carries the ticket's
-own context, so composing it by hand is optional.
-_Avoid_: prompt template, Ticket Body, Runtime Brief
+**Offered list**:
+The Automations a column presents during a Deliberate move, in the order their
+digit accelerators read, with a `Move only` target beside them. A column's Armed
+automation is always first. Offering is not arming: a column offers many and
+fires at most one on its own.
+_Avoid_: column automations, automation menu
 
-**Context chip**:
-A placeholder in an Automation's Instructions that resolves at launch to live ticket state — the Runtime Brief, Change Set, comment timeline, or pull request. A chip is always a reference resolved at launch, never a stored copy.
-_Avoid_: variable, macro, Attachment
+**Instructions**:
+The prompt an Automation sends when it opens its Session: authored prose plus
+the composer's own grammar — `/` for prompt templates and Skills, `@` for file
+references — resolved exactly as they resolve for a person typing into the chat
+composer. Nothing is appended to them. The Runtime Brief already carries the
+ticket's context, and per-Automation prompt text would break the cache prefix a
+stable system prompt exists to hold. An Automation starts from an empty box.
+_Avoid_: prompt template, Ticket Body, Runtime Brief
 
 **Runtime**:
 An Automation's execution setting: its model policy, reasoning policy, Session
-Role, and Authority Snapshot defaults. Model and reasoning may be overridden at
-invocation within the user's configured policy; the Agent Runtime is a product
-constant rather than an Automation choice.
+Role, and Authority Snapshot defaults. Model and reasoning travel together as
+one selection, and are inherited or pinned together rather than separately — the
+reasoning levels a model offers are its own, so a pinned level against an
+inherited model can name a pair that does not exist. An Automation that pins
+nothing resolves through the project's runtime preferences and then the global
+record, so changing the model in Settings changes every Automation that inherits
+it. The Agent Runtime is a product constant rather than an Automation choice.
 _Avoid_: agent, harness, model (alone)
 
 **Run**:
-One invocation of an Automation against one ticket, and the record of which Automation and Runtime produced a given Session. A Run owns exactly one Session and carries that Automation's Outcome if it has one; only that Session finishing can resolve it. A ticket has at most one Run in flight at a time. Runs outlive the app: one whose Session died is interrupted, never lost, and only a human restarts it. Sessions a user starts by hand belong to no Run and never move the board.
+One invocation of an Automation, and the record of which Automation and which
+_resolved_ model and reasoning produced a given Session. A Run owns exactly one
+Session and always starts a fresh one: it never wakes an existing Session, whose
+Authority Snapshot was granted while a person was present and whose context is
+stale by the time a schedule fires. A ticket has at most one Run in flight at a
+time. Runs outlive the app — one whose Session died is interrupted, never lost,
+and only a human restarts it. A Session a user opens from the composer belongs
+to no Run and never moves the board.
 _Avoid_: job, task, session (a Run has a Session — it is not one)
 
-**Outcome**:
-What a Run does to its ticket once its agent hands control back: move it to a named column, announce it and stay put, or nothing at all. An Outcome has one arm per way a Run can end — completed, blocked, or ended without signalling — so a Run that stalls is never mistaken for one that succeeded. It is a contract the Run carries from the moment it launches, never a property of the ticket or of the column it lands in.
-_Avoid_: result, action, auto-move
+**Unbound Run**:
+A Run that carries its own Instructions and names no Automation — the one-time
+case, authored where it is launched. It writes no file and saves no record
+beyond the Run, so there is nothing left afterwards to name, disable, or delete.
+_Avoid_: ad-hoc automation, draft automation, one-shot automation
+
+**Skipped occurrence**:
+A scheduled Trigger's due time that passed without a Run, because the app was
+not open. It is recorded with its reason and never replayed — the next
+occurrence stands — and a person may start it by hand from the Run history
+afterwards. A skip and a silence must not look the same.
+_Avoid_: missed run, failed run
