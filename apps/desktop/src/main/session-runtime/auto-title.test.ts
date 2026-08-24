@@ -67,6 +67,7 @@ interface Harness {
   readSession: ReturnType<typeof vi.fn<AutoTitlerOptions["readSession"]>>;
   completeUtility: ReturnType<typeof vi.fn<AutoTitlerOptions["completeUtility"]>>;
   retitle: ReturnType<typeof vi.fn<AutoTitlerOptions["retitle"]>>;
+  recordUsage: ReturnType<typeof vi.fn<AutoTitlerOptions["recordUsage"]>>;
   inspectModelAccess: ReturnType<typeof vi.fn<AutoTitlerOptions["inspectModelAccess"]>>;
   refine(input: { firstMessage?: string; heuristicTitle?: string }): Promise<void>;
 }
@@ -81,8 +82,9 @@ function harness(
   });
   const completeUtility = vi.fn<AutoTitlerOptions["completeUtility"]>(async (input) => {
     const custom = overrides.completeUtility;
-    return custom === undefined ? "Fix the login flow" : custom(input);
+    return custom === undefined ? { text: "Fix the login flow", usage: null } : custom(input);
   });
+  const recordUsage = vi.fn<AutoTitlerOptions["recordUsage"]>(async () => {});
   const retitle = vi.fn<AutoTitlerOptions["retitle"]>(async (sessionId, title) => {
     const current = sessions.get(sessionId);
     if (current !== null && current !== undefined) {
@@ -108,11 +110,13 @@ function harness(
     inspectModelAccess: overrides.inspectModelAccess ?? inspectModelAccess,
     completeUtility,
     retitle: overrides.retitle ?? retitle,
+    recordUsage: overrides.recordUsage ?? recordUsage,
   });
   return {
     readSession,
     completeUtility,
     retitle,
+    recordUsage,
     inspectModelAccess,
     refine: (input) =>
       titler.refine({
@@ -133,7 +137,9 @@ const NO_UTILITY: ModelAccessDefaults = {
 
 describe("createAutoTitler().refine", () => {
   it("retitles with the sanitized model answer once it lands", async () => {
-    const h = harness({ completeUtility: async () => '"Fix the login flow."' });
+    const h = harness({
+      completeUtility: async () => ({ text: '"Fix the login flow."', usage: null }),
+    });
     await h.refine({});
     expect(h.completeUtility).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -275,7 +281,7 @@ describe("createAutoTitler().refine", () => {
 
   it("records the heuristic first when the title is still null", async () => {
     const h = harness(
-      { completeUtility: async () => "Login button fix" },
+      { completeUtility: async () => ({ text: "Login button fix", usage: null }) },
       session({ title: null }),
     );
     await h.refine({});
@@ -348,6 +354,96 @@ describe("createAutoTitler().refine", () => {
     }
   });
 
+  it("bills the Session for the title it paid for", async () => {
+    const usage = {
+      cause: "utility" as const,
+      providerId: UTILITY.providerId,
+      modelId: UTILITY.modelId,
+      inputTokens: 210,
+      outputTokens: 6,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      costUsd: 0.000_42,
+      costBasis: "catalog-estimate" as const,
+    };
+    const h = harness({ completeUtility: async () => ({ text: "Login button fix", usage }) });
+
+    await h.refine({});
+
+    expect(h.recordUsage).toHaveBeenCalledWith(SESSION_ID, usage);
+  });
+
+  // The call happened and the provider billed it. Whether Volli then decided to
+  // keep the answer is a separate question, and the wrong one to bill on.
+  it("bills a title the Session did not end up using", async () => {
+    const usage = {
+      cause: "utility" as const,
+      providerId: UTILITY.providerId,
+      modelId: UTILITY.modelId,
+      inputTokens: 210,
+      outputTokens: 6,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      costUsd: 0.000_42,
+      costBasis: "catalog-estimate" as const,
+    };
+    let firstRead = true;
+    const h = harness({
+      completeUtility: async () => ({ text: "Login button fix", usage }),
+      readSession: async () => {
+        if (firstRead) {
+          firstRead = false;
+          return session();
+        }
+        return session({ title: "Renamed while it ran" });
+      },
+    });
+
+    await h.refine({});
+
+    expect(h.retitle).not.toHaveBeenCalled();
+    expect(h.recordUsage).toHaveBeenCalledWith(SESSION_ID, usage);
+  });
+
+  it("records nothing when the executor reported no usage", async () => {
+    const h = harness({ completeUtility: async () => ({ text: "Login fix", usage: null }) });
+    await h.refine({});
+    expect(h.recordUsage).not.toHaveBeenCalled();
+  });
+
+  // Auto-titling is work nobody asked for, so no failure inside it may reach a
+  // person. A ledger that refuses the usage fact must not cost them the title.
+  it("keeps the title when the usage fact cannot be written", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const h = harness({
+        completeUtility: async () => ({
+          text: "Login button fix",
+          usage: {
+            cause: "utility" as const,
+            providerId: UTILITY.providerId,
+            modelId: UTILITY.modelId,
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadTokens: null,
+            cacheWriteTokens: null,
+            costUsd: 0.001,
+            costBasis: "catalog-estimate" as const,
+          },
+        }),
+        recordUsage: async () => {
+          throw new Error("ledger refused the usage fact");
+        },
+      });
+
+      await expect(h.refine({})).resolves.toBeUndefined();
+      expect(h.retitle).toHaveBeenCalledWith(SESSION_ID, "Login button fix");
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("ledger refused the usage fact"));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("drops the answer when the title changed while the call was in flight", async () => {
     let firstRead = true;
     const h = harness({
@@ -371,7 +467,7 @@ describe("createAutoTitler().refine", () => {
   });
 
   it("keeps the heuristic when the sanitized answer is empty", async () => {
-    const h = harness({ completeUtility: async () => "." });
+    const h = harness({ completeUtility: async () => ({ text: ".", usage: null }) });
     await h.refine({});
     expect(h.retitle).not.toHaveBeenCalled();
   });

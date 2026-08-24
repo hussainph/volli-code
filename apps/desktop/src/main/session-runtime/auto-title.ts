@@ -46,7 +46,9 @@ import {
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelSelection,
+  type SessionUsage,
   type UtilityCompletion,
+  type UtilityCompletionResult,
 } from "@volli/shared";
 
 /**
@@ -79,8 +81,16 @@ export interface AutoTitlerOptions {
    */
   readTicket(ticketId: string): AutoTitleTicket | null;
   inspectModelAccess(input: { signal: AbortSignal }): Promise<ModelAccessSnapshot>;
-  completeUtility(input: UtilityCompletion): Promise<string>;
+  completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult>;
   retitle(sessionId: string, title: string): Promise<void>;
+  /**
+   * Bill the Session for the model call this refinement made.
+   *
+   * Separate from {@link retitle} because the two answer different questions.
+   * A title Volli decides not to keep was still paid for, and a Session whose
+   * only spend was the title it rejected should still be able to say so.
+   */
+  recordUsage(sessionId: string, usage: SessionUsage): Promise<void>;
 }
 
 /**
@@ -189,9 +199,9 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
         logSkip(request.sessionId, `the ticket could not be read (${errorMessage(failure)})`);
       }
     }
-    let raw: string;
+    let completion: UtilityCompletionResult;
     try {
-      raw = await options.completeUtility({
+      completion = await options.completeUtility({
         model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel },
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
         // Capped and delimited: a title is six words, and the opening decides
@@ -204,7 +214,20 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       logSkip(request.sessionId, `the model call failed (${errorMessage(failure)})`);
       return;
     }
-    const title = sanitizeAutoTitle(raw);
+    // Billed here, before any decision about the answer: the provider charged
+    // for the call, not for what Volli concluded from it. A ledger that
+    // refuses the fact must not also cost the user their title — auto-titling
+    // is work nobody asked for, and no failure inside it may reach a person.
+    if (completion.usage !== null) {
+      try {
+        await options.recordUsage(request.sessionId, completion.usage);
+      } catch (failure) {
+        console.error(
+          `[volli] auto-title usage for session ${request.sessionId} was not recorded: ${errorMessage(failure)}`,
+        );
+      }
+    }
+    const title = sanitizeAutoTitle(completion.text);
     if (title === null) {
       logSkip(request.sessionId, "the model answer held no title");
       return;

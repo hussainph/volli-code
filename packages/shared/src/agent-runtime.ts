@@ -1133,9 +1133,25 @@ export interface AgentRuntime {
   }): Promise<ModelAccessSnapshot>;
   startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle>;
   /**
-   * Run one utility completion and resolve its text. Throws when the model is
-   * not one this runtime holds or the call failed; a caller that cannot afford
-   * the throw (a title that keeps its heuristic) catches and logs.
+   * Run one utility completion and resolve its text and what it consumed.
+   * Throws when the model is not one this runtime holds or the call failed; a
+   * caller that cannot afford the throw (a title that keeps its heuristic)
+   * catches and logs.
    */
-  completeUtility(input: UtilityCompletion): Promise<string>;
+  completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult>;
+}
+
+/**
+ * What a utility completion produced, and what it cost.
+ *
+ * Usage rides back with the text rather than being dropped, because this is
+ * real spend on a real Session and it produces no transcript to carry it. A
+ * caller that keeps the answer and a caller that discards it owe the same
+ * bill: the provider charged for the call, not for the decision made after it.
+ *
+ * `usage` is null when the executor metered nothing — never a zero.
+ */
+export interface UtilityCompletionResult {
+  text: string;
+  usage: SessionUsage | null;
 }

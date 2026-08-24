@@ -56,6 +56,7 @@ import {
   type TurnObservation,
   type UsageObservation,
   type UtilityCompletion,
+  type UtilityCompletionResult,
 } from "@volli/shared";
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
@@ -89,6 +90,7 @@ import {
   isTransientTransportFailure,
   recoveryRefFor,
   sanitizeDiagnostic,
+  sessionUsageFrom,
 } from "./transcript";
 
 /**
@@ -249,18 +251,23 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
 }
 
 /**
- * One utility completion on an explicit model, read back as plain text.
+ * One utility completion on an explicit model, read back as text and a bill.
  *
  * The executor half of the port — the caller resolved and validated the
  * model; this runs it and refuses rather than substitutes. A model this
  * collection does not hold throws, a failed stop reason throws, and an
  * answer with no text throws: the caller keeps its heuristic title and logs,
  * which is the whole of the contract on this side.
+ *
+ * The usage travels back with the text because nothing else here will carry
+ * it. A utility call creates no Session, no attachment and no transcript row,
+ * so a runtime that reported only the text would make this the one kind of
+ * model spend a Session could never account for.
  */
 async function runUtilityCompletion(
   host: PiRuntimeHost,
   input: UtilityCompletion,
-): Promise<string> {
+): Promise<UtilityCompletionResult> {
   const model = host.models.getModel(input.model.providerId, input.model.modelId);
   if (model === undefined) {
     throw new Error(
@@ -295,7 +302,14 @@ async function runUtilityCompletion(
   if (trimmed.length === 0) {
     throw new Error("The utility completion returned no text.");
   }
-  return trimmed;
+  return {
+    text: trimmed,
+    usage: sessionUsageFrom(
+      message.usage,
+      { provider: message.provider, model: message.model, api: message.api },
+      "utility",
+    ),
+  };
 }
 
 /** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */

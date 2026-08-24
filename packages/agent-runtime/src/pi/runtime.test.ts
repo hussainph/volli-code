@@ -6275,7 +6275,24 @@ describe("completeUtility", () => {
         systemPrompt: "Title this conversation.",
         user: "The login button is broken",
       }),
-    ).resolves.toBe("Fix the login flow");
+    ).resolves.toEqual({
+      text: "Fix the login flow",
+      // A title is real spend against a real Session, and it produces no
+      // transcript to carry the bill. If the runtime reported only the text,
+      // this would be the one kind of model call a Session could never account
+      // for.
+      usage: {
+        cause: "utility",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.003,
+        costBasis: "catalog-estimate",
+      },
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model.id).toBe(MODEL_ID);
     expect(calls[0]!.context.systemPrompt).toBe("Title this conversation.");
@@ -6403,6 +6420,6 @@ describe("completeUtility", () => {
         systemPrompt: "Title this conversation.",
         user: "hello",
       }),
-    ).resolves.toBe("Fix the login flow");
+    ).resolves.toMatchObject({ text: "Fix the login flow" });
   });
 });
