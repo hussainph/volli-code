@@ -84,6 +84,35 @@ export class WebFetchRefusal extends Error {
 }
 
 /**
+ * The longest a host may be when a refusal names it.
+ *
+ * Refusal text is the one thing this module hands a model *outside* the
+ * untrusted-content envelope: `refusalText` presents it as Volli's own words,
+ * because Volli writes it. That claim only holds while the sentence cannot be
+ * filled with somebody else's writing — and once redirects are followed, the
+ * host in it may have been chosen by the previous hop rather than by the
+ * caller. A URL parser does not bound a hostname: `new URL()` accepts five
+ * thousand characters of one quite happily, and a redirect to it produces a
+ * named refusal without a single DNS packet having to succeed.
+ *
+ * So every host reaching a message goes through {@link named} first. Sixty-four
+ * characters identifies any real host — DNS itself stops at 253, and the ones
+ * people read are far shorter — while being far too little to carry an
+ * instruction.
+ */
+const NAMED_HOST_CHARS = 64;
+
+/**
+ * One host, rendered short enough to be a name rather than a message.
+ *
+ * The ellipsis matters: a truncated host is visibly truncated, so a reader is
+ * never shown a shortened name that looks like a whole one.
+ */
+function named(host: string): string {
+  return host.length <= NAMED_HOST_CHARS ? host : `${host.slice(0, NAMED_HOST_CHARS)}…`;
+}
+
+/**
  * The bounds every fetch runs inside.
  *
  * Constants rather than settings: each one is a claim about what a document
@@ -370,14 +399,17 @@ function pinAddresses(
   // Nothing to connect to is a refusal, not an empty success: a resolver that
   // returns no answers has told us it could not say where this name lives.
   if (addresses.length === 0) {
-    throw new WebFetchRefusal("fetch.unresolvable", `${hostname} did not resolve to any address.`);
+    throw new WebFetchRefusal(
+      "fetch.unresolvable",
+      `${named(hostname)} did not resolve to any address.`,
+    );
   }
   for (const candidate of addresses) {
     const verdict = classifyWebAddress(candidate.address);
     if (verdict.outcome === "refuse") {
       throw new WebFetchRefusal(
         "fetch.address",
-        `${hostname} resolves to ${candidate.address}, which is not on the public Internet: ${verdict.reason}`,
+        `${named(hostname)} resolves to ${candidate.address}, which is not on the public Internet: ${verdict.reason}`,
       );
     }
   }
@@ -503,7 +535,7 @@ function document(
   if (UNREADABLE_TYPES.has(media) || UNREADABLE_FAMILIES.some((one) => media.startsWith(one))) {
     throw new WebFetchRefusal(
       "fetch.type",
-      `${target.hostname} served ${media}, which is not a document Volli reads as text.`,
+      `${named(target.hostname)} served ${media}, which is not a document Volli reads as text.`,
     );
   }
   // A type this module knows, or failing that whatever the bytes say they are.
@@ -511,7 +543,7 @@ function document(
   if (kind === undefined) {
     throw new WebFetchRefusal(
       "fetch.type",
-      `${target.hostname} served a document Volli does not read as text.`,
+      `${named(target.hostname)} served a document Volli does not read as text.`,
     );
   }
   const decoded = decoderFor(charsetFor(body, charset, kind)).decode(body);
@@ -534,7 +566,7 @@ function document(
     } catch {
       throw new WebFetchRefusal(
         "fetch.unreadable",
-        `${target.hostname} served a document Volli could not read.`,
+        `${named(target.hostname)} served a document Volli could not read.`,
       );
     }
     text = extracted.text;
@@ -555,7 +587,7 @@ function document(
   if (text.trim() === "") {
     throw new WebFetchRefusal(
       "fetch.unreadable",
-      `${target.hostname} served a page with no readable text in it; its content is probably rendered by scripts, which Volli does not run.`,
+      `${named(target.hostname)} served a page with no readable text in it; its content is probably rendered by scripts, which Volli does not run.`,
     );
   }
   return {
@@ -612,7 +644,10 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
     try {
       answers = await resolve(target.hostname);
     } catch {
-      throw new WebFetchRefusal("fetch.unresolvable", `${target.hostname} could not be resolved.`);
+      throw new WebFetchRefusal(
+        "fetch.unresolvable",
+        `${named(target.hostname)} could not be resolved.`,
+      );
     }
     const addresses = pinAddresses(target.hostname, answers);
     // Asked twice, because resolution takes real time and the listener that
@@ -624,7 +659,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
     if (signal.aborted) {
       throw new WebFetchRefusal(
         "fetch.cancelled",
-        `The request to ${target.hostname} was cancelled before it was sent.`,
+        `The request to ${named(target.hostname)} was cancelled before it was sent.`,
       );
     }
     // Parsing the href admission produced, not the caller's string: this is
@@ -652,7 +687,12 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
       function stop(when: string): void {
         abandon();
         request.destroy();
-        refuse(new WebFetchRefusal("fetch.timeout", `${target.hostname} ran out of time ${when}.`));
+        refuse(
+          new WebFetchRefusal(
+            "fetch.timeout",
+            `${named(target.hostname)} ran out of time ${when}.`,
+          ),
+        );
       }
 
       // One cleanup for every way out, including the ordinary one: a deadline
@@ -669,7 +709,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         refuse(
           new WebFetchRefusal(
             "fetch.cancelled",
-            `The request to ${target.hostname} was cancelled.`,
+            `The request to ${named(target.hostname)} was cancelled.`,
           ),
         );
       }
@@ -685,7 +725,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         refuse(
           new WebFetchRefusal(
             "fetch.transport",
-            `Volli could not read ${target.hostname}: the connection failed (${code}).`,
+            `Volli could not read ${named(target.hostname)}: the connection failed (${code}).`,
           ),
         );
       });
@@ -705,7 +745,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
             refuse(
               new WebFetchRefusal(
                 "fetch.redirect",
-                `${target.hostname} answered ${status} without saying where to look instead.`,
+                `${named(target.hostname)} answered ${status} without saying where to look instead.`,
               ),
             );
             return;
@@ -721,7 +761,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
             refuse(
               new WebFetchRefusal(
                 "fetch.redirect",
-                `${target.hostname} answered ${status} pointing somewhere Volli cannot read as a URL.`,
+                `${named(target.hostname)} answered ${status} pointing somewhere Volli cannot read as a URL.`,
               ),
             );
             return;
@@ -738,7 +778,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
           refuse(
             new WebFetchRefusal(
               "fetch.status",
-              `${target.hostname} answered ${status} rather than serving the document.`,
+              `${named(target.hostname)} answered ${status} rather than serving the document.`,
             ),
           );
           return;
@@ -753,7 +793,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
           refuse(
             new WebFetchRefusal(
               "fetch.encoding",
-              `${target.hostname} compressed its answer, which Volli cannot bound in this slice.`,
+              `${named(target.hostname)} compressed its answer, which Volli cannot bound in this slice.`,
             ),
           );
           return;
@@ -769,7 +809,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
           refuse(
             new WebFetchRefusal(
               "fetch.too-large",
-              `${target.hostname} declared a body over the ${limits.bodyBytes} byte bound.`,
+              `${named(target.hostname)} declared a body over the ${limits.bodyBytes} byte bound.`,
             ),
           );
           return;
@@ -783,7 +823,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
             refuse(
               new WebFetchRefusal(
                 "fetch.too-large",
-                `${target.hostname} served more than ${limits.bodyBytes} bytes.`,
+                `${named(target.hostname)} served more than ${limits.bodyBytes} bytes.`,
               ),
             );
             return;
@@ -856,13 +896,24 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         if (scheme === "https" && destination.protocol === "http:") {
           throw new WebFetchRefusal(
             "fetch.redirect",
-            `${destination.hostname} redirected a secure request onto plain http, which Volli does not follow.`,
+            `Reading ${requestedUrl} was redirected from https onto plain http at ${named(
+              destination.hostname,
+            )}, which Volli does not follow.`,
           );
         }
         if (seen.has(destination.href)) {
+          // The host, never the href. A `Location` carries a path and a query
+          // the server wrote, and this sentence is delivered outside the
+          // untrusted-content envelope as Volli's own words — so quoting the
+          // whole URL here would hand a redirect the one thing the envelope
+          // exists to deny it. Measured before this was written: a self-
+          // redirecting `Location` put 10,003 characters of the server's
+          // choosing into the refusal.
           throw new WebFetchRefusal(
             "fetch.redirect",
-            `Reading ${requestedUrl} came back to ${destination.href}, so the redirects are a loop.`,
+            `Reading ${requestedUrl} came back to a URL at ${named(
+              destination.hostname,
+            )} it had already followed, so the redirects are a loop.`,
           );
         }
         seen.add(destination.href);
