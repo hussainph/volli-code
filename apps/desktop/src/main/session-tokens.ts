@@ -63,6 +63,8 @@ export interface SessionTokenRegistry {
    * claim.
    */
   verify(token: string | undefined): string | null;
+  /** Session ids with at least one attachment token the socket would currently accept. */
+  liveSessionIds(): string[];
 }
 
 /** 256 bits, hex-encoded: far past guessing, and safe in an environment variable. */
@@ -97,6 +99,9 @@ export function createSessionTokenRegistry(): SessionTokenRegistry {
       // who can reach this socket.
       if (token === undefined || token.length === 0) return null;
       return sessions.get(token) ?? null;
+    },
+    liveSessionIds() {
+      return [...new Set(sessions.values())];
     },
   };
 }

@@ -60,6 +60,19 @@ describe("createSessionTokenRegistry", () => {
     expect(registry.verify(second)).toBe("session-1");
   });
 
+  it("lists a session exactly while at least one attachment token remains live", () => {
+    const registry = createSessionTokenRegistry();
+    registry.mint({ sessionId: "session-1", attachmentId: "attachment-1" });
+    registry.mint({ sessionId: "session-1", attachmentId: "attachment-2" });
+    registry.mint({ sessionId: "session-2", attachmentId: "attachment-3" });
+
+    expect(registry.liveSessionIds()).toEqual(["session-1", "session-2"]);
+    registry.revoke("attachment-1");
+    expect(registry.liveSessionIds()).toEqual(["session-1", "session-2"]);
+    registry.revoke("attachment-2");
+    expect(registry.liveSessionIds()).toEqual(["session-2"]);
+  });
+
   it("retires the previous token when one attachment mints again", () => {
     const registry = createSessionTokenRegistry();
     const first = registry.mint({ sessionId: "session-1", attachmentId: "attachment-1" });

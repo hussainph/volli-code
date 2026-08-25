@@ -5,9 +5,17 @@ import type { DoctorCheck, DoctorFacts, DoctorObservation } from "./doctor";
 const BIN = "/ud/bin";
 
 function observation(overrides: Partial<DoctorObservation> = {}): DoctorObservation {
+  const sessionId = overrides.sessionId === undefined ? "s-1" : overrides.sessionId;
+  const authenticatedSessionId =
+    overrides.authenticatedSessionId === undefined
+      ? overrides.sessionId === undefined
+        ? "s-1"
+        : null
+      : overrides.authenticatedSessionId;
   return {
     pathEntries: [BIN, "/usr/bin", "/bin"],
-    sessionId: "s-1",
+    sessionId,
+    authenticatedSessionId,
     zdotDir: "/ud/shell/zsh",
     resolved: {
       claude: `${BIN}/claude`,
@@ -295,12 +303,51 @@ describe("runDoctorChecks — session", () => {
     expect(check.detail).toContain("not in a Volli session");
   });
 
-  // An environment that outlived its session — the tmux/daemon leak.
-  it("warns when VOLLI_SESSION names a session that has ended", () => {
-    const check = find(runDoctorChecks(observation({ sessionId: "gone" }), facts()), "session");
+  it("distinguishes an authenticated live caller from a genuinely ended session", () => {
+    const live = find(
+      runDoctorChecks(
+        observation({ sessionId: "s-1", authenticatedSessionId: "s-1" }),
+        facts({ liveSessionIds: ["s-1"] }),
+      ),
+      "session",
+    );
+    const ended = find(
+      runDoctorChecks(
+        observation({ sessionId: "gone", authenticatedSessionId: null }),
+        facts({ liveSessionIds: [] }),
+      ),
+      "session",
+    );
+
+    expect(live).toMatchObject({ status: "ok", detail: "s-1" });
+    expect(ended.status).toBe("warn");
+    expect(ended.detail).toContain("has ended");
+    expect(ended.remedy).toContain("outlived its session");
+  });
+
+  it("does not call an unauthenticated claim for another live session healthy", () => {
+    const check = find(
+      runDoctorChecks(
+        observation({ sessionId: "s-1", authenticatedSessionId: null }),
+        facts({ liveSessionIds: ["s-1"] }),
+      ),
+      "session",
+    );
+
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("not authenticated");
+    expect(check.detail).not.toContain("has ended");
+  });
+
+  it("does not read a missing door fact as a live Session", () => {
+    const legacy = {
+      ...observation({ sessionId: "gone", authenticatedSessionId: null }),
+      authenticatedSessionId: undefined,
+    } as unknown as DoctorObservation;
+    const check = find(runDoctorChecks(legacy, facts({ liveSessionIds: [] })), "session");
+
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("has ended");
-    expect(check.remedy).toContain("outlived its session");
   });
 });
 

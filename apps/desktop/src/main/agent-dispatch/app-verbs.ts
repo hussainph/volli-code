@@ -119,7 +119,10 @@ function observedRequiredTools(value: unknown): readonly RequirableSessionEnvToo
   return REQUIRABLE_SESSION_ENV_TOOLS.filter((tool) => value.includes(tool));
 }
 
-function parseDoctorObservation(request: AgentRequest): DoctorObservation | null {
+function parseDoctorObservation(
+  request: AgentRequest,
+  authenticatedSessionId: string | null,
+): DoctorObservation | null {
   const pathEntries = request.args["pathEntries"];
   const resolved = request.args["resolved"];
   if (!Array.isArray(pathEntries) || !pathEntries.every((entry) => typeof entry === "string")) {
@@ -129,6 +132,7 @@ function parseDoctorObservation(request: AgentRequest): DoctorObservation | null
   return {
     pathEntries,
     sessionId: request.ctx.env.session ?? null,
+    authenticatedSessionId,
     zdotDir: observedText(request.args["zdotDir"]),
     resolved: Object.fromEntries(
       Object.entries(resolved as Record<string, unknown>).map(([key, value]) => [
@@ -172,7 +176,7 @@ export async function doctorVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options } = context;
+  const { options, authenticatedSessionId } = context;
   if (!options.doctorFacts) {
     return failure("APP_UNREACHABLE", "The harness runtime is not available this launch.");
   }
@@ -193,7 +197,7 @@ export async function doctorVerb(
   // test; main supplies only what it alone knows. Keeping those apart is
   // the point — an observation main reconstructed would be exactly the
   // kind of plausible, wrong answer this command exists to catch.
-  const observation = parseDoctorObservation(request);
+  const observation = parseDoctorObservation(request, authenticatedSessionId);
   if (observation === null) {
     return failure("INVALID_REQUEST", "doctor requires the caller's observed environment.");
   }

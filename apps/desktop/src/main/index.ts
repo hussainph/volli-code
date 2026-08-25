@@ -2528,7 +2528,10 @@ app.whenReady().then(async () => {
             // it actually points at. An unresolved comparison would call a
             // correct install "another Volli install owns the link".
             shimPath: await realpath(shimPath).catch(() => shimPath),
-            liveSessionIds: ptyManager.liveSessionIds(),
+            // A writing caller is live exactly while its attachment token is
+            // valid at the socket door. PTY membership excludes structured
+            // attachments, so it cannot answer this diagnostic truthfully.
+            liveSessionIds: sessionTokens.liveSessionIds(),
             reporting: dbHandle.ok
               ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
                   harnessId: record.slug,

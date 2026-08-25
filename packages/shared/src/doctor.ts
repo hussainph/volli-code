@@ -53,16 +53,20 @@ export interface DoctorCheck {
 export type Observed<T> = T | null | undefined;
 
 /**
- * What the calling process can see from inside the environment being audited —
- * which is the only place several of these questions have a truthful answer. A
- * `volli doctor` run in a Volli PTY reports that PTY's reality; one run from a
- * plain terminal correctly reports that it is not in a session.
+ * What the calling process can see from inside the environment being audited,
+ * plus the socket door's one request-scoped identity fact. The shell reports
+ * the PATH and tool resolutions no other process can observe; the door reports
+ * whether this request actually carries a live attachment token. A `volli
+ * doctor` run in a Volli PTY reports that PTY's reality; one run from a plain
+ * terminal correctly reports that it is not in a session.
  */
 export interface DoctorObservation {
   /** The caller's own `PATH`, split — the real one, not one main reconstructed. */
   pathEntries: readonly string[];
-  /** `VOLLI_SESSION`, or null outside a session. */
+  /** `VOLLI_SESSION`, or null outside a session. This is a claim, not proof. */
   sessionId: string | null;
+  /** The Session attachment the socket authenticated for this caller, or null when it did not. */
+  authenticatedSessionId: string | null;
   /** `ZDOTDIR` as the caller sees it. */
   zdotDir: Observed<string>;
   /** Where each harness command resolves for the caller, by command name. */
@@ -98,7 +102,7 @@ export interface DoctorFacts {
   shellInitPresent: boolean;
   /** This app's own `volli` shim. */
   shimPath: string;
-  /** Session ids main considers live. */
+  /** Session ids with a currently valid attachment token at the socket door. */
   liveSessionIds: readonly string[];
   /** Per harness: what it declares it can report, and what has actually arrived. */
   reporting: readonly { harnessId: string; declared: number; verified: number }[];
@@ -388,6 +392,13 @@ function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorC
 function sessionCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck {
   const id = "session";
   const title = "Session context";
+  // This is the same fact a coordination write starts from: a valid,
+  // attachment-scoped token this request presented. A live PTY map excludes a
+  // structured attachment and was therefore able to call a working caller
+  // ended; the authenticated door is the source of truth.
+  if (typeof observation.authenticatedSessionId === "string") {
+    return ok(id, title, observation.authenticatedSessionId);
+  }
   if (observation.sessionId === null) {
     return ok(
       id,
@@ -396,9 +407,16 @@ function sessionCheck(observation: DoctorObservation, facts: DoctorFacts): Docto
     );
   }
   if (facts.liveSessionIds.includes(observation.sessionId)) {
-    return ok(id, title, observation.sessionId);
+    return bad(
+      id,
+      title,
+      "warn",
+      `VOLLI_SESSION names ${observation.sessionId}, but this caller is not authenticated for it`,
+      "This environment has no valid attachment token for that Session. Events from here are refused.",
+    );
   }
-  // The tmux/daemon leak: an environment that outlived the session that made it.
+  // The tmux/daemon leak: an environment that outlived the attachment that
+  // authenticated this Session. No valid token remains at the socket door.
   return bad(
     id,
     title,
