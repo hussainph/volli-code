@@ -174,42 +174,113 @@ export function recordSessionStartedOnce(
   return true;
 }
 
-/**
- * Where one ticket's log currently ends, as a `rowid` (VC-85).
- *
- * The mark `ticket-wake.ts` takes before a mutation so it can tell afterwards
- * what that mutation appended. `rowid` rather than `created_at` because a
- * command can write several events in one millisecond and an injected clock can
- * repeat one outright; insertion order is the only thing that always
- * distinguishes them. `0` for a ticket with no events — and for a ticket that
- * does not exist yet, which is the same answer for the same reason.
- */
-export function ticketEventCursor(db: Database.Database, ticketId: string): number {
-  const row = prepared<[string], { cursor: number | null }>(
-    db,
-    "SELECT MAX(rowid) AS cursor FROM ticket_events WHERE ticket_id = ?",
-  ).get(ticketId);
-  return row?.cursor ?? 0;
+/** One durable Ticket Event together with the opaque cursor after it. */
+export interface SequencedTicketEvent {
+  readonly event: TicketEvent;
+  readonly cursor: string;
+}
+
+interface SequencedTicketEventRow extends TicketEventRow {
+  sequence: number;
 }
 
 /**
- * One ticket's events appended after a {@link ticketEventCursor} mark, in the
- * order they were written.
- *
- * Insertion order, not timestamp order: these are read to announce what just
- * happened, and a mutation whose events share a millisecond must still be
- * announced in the order it wrote them.
+ * Host-private cursor encoding. Callers copy this string; they never interpret
+ * it. Keeping the storage sequence behind a versioned prefix lets a cloud host
+ * use a different cursor while preserving the `ticket.await` contract.
  */
+const TICKET_EVENT_CURSOR_PREFIX = "ticket-event-v1:";
+
+export function encodeTicketEventCursor(sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new Error(`Invalid Ticket Event sequence: ${String(sequence)}`);
+  }
+  return `${TICKET_EVENT_CURSOR_PREFIX}${sequence.toString(36)}`;
+}
+
+export function decodeTicketEventCursor(cursor: unknown): number | null {
+  if (typeof cursor !== "string" || !cursor.startsWith(TICKET_EVENT_CURSOR_PREFIX)) return null;
+  const encoded = cursor.slice(TICKET_EVENT_CURSOR_PREFIX.length);
+  if (!/^(?:0|[1-9a-z][0-9a-z]*)$/.test(encoded)) return null;
+  const sequence = Number.parseInt(encoded, 36);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
+/** The database-wide high-water cursor at this instant. */
+export function currentTicketEventCursor(db: Database.Database): string {
+  // AUTOINCREMENT's own high-water mark, not MAX(rows): deleting the newest
+  // event must not make a cursor move backwards.
+  const row = prepared<[], { sequence: number }>(
+    db,
+    "SELECT seq AS sequence FROM sqlite_sequence WHERE name = 'ticket_event_sequence'",
+  ).get();
+  return encodeTicketEventCursor(row?.sequence ?? 0);
+}
+
+/**
+ * Where one ticket's durable event sequence currently ends.
+ *
+ * This numeric mark stays inside main. `ticket-wake.ts` takes it before a
+ * mutation so it can announce exactly what that transaction appended; the
+ * public wait contract receives only {@link encodeTicketEventCursor}'s opaque
+ * string.
+ */
+export function ticketEventCursor(db: Database.Database, ticketId: string): number {
+  const row = prepared<[string], { sequence: number | null }>(
+    db,
+    "SELECT MAX(sequence) AS sequence FROM ticket_event_sequence WHERE ticket_id = ?",
+  ).get(ticketId);
+  return row?.sequence ?? 0;
+}
+
+/** One ticket's events appended after a local mutation mark, in commit order. */
 export function listTicketEventsAfter(
   db: Database.Database,
   ticketId: string,
-  cursor: number,
-): TicketEvent[] {
-  const rows = prepared<[string, number], TicketEventRow>(
+  sequence: number,
+): SequencedTicketEvent[] {
+  const rows = prepared<[string, number], SequencedTicketEventRow>(
     db,
-    "SELECT * FROM ticket_events WHERE ticket_id = ? AND rowid > ? ORDER BY rowid ASC",
-  ).all(ticketId, cursor);
-  return rows.map(mapTicketEvent);
+    `SELECT e.*, ordered.sequence AS sequence
+       FROM ticket_event_sequence ordered
+       JOIN ticket_events e ON e.id = ordered.event_id
+      WHERE ordered.ticket_id = ? AND ordered.sequence > ?
+      ORDER BY ordered.sequence ASC`,
+  ).all(ticketId, sequence);
+  return rows.map((row) => ({
+    event: mapTicketEvent(row),
+    cursor: encodeTicketEventCursor(row.sequence),
+  }));
+}
+
+/**
+ * The first matching durable event after an opaque cursor, across a watched
+ * set. One indexed query and `LIMIT 1`: a chained fleet wait never folds each
+ * Ticket's history in memory.
+ */
+export function firstMatchingTicketEventAfter(
+  db: Database.Database,
+  ticketIds: readonly string[],
+  eventKinds: readonly string[],
+  cursor: string,
+): SequencedTicketEvent | undefined {
+  if (ticketIds.length === 0 || eventKinds.length === 0) return undefined;
+  const sequence = decodeTicketEventCursor(cursor);
+  if (sequence === null) return undefined;
+  const row = prepared<[number, string, string], SequencedTicketEventRow>(
+    db,
+    `SELECT e.*, ordered.sequence AS sequence
+       FROM ticket_event_sequence ordered
+       JOIN ticket_events e ON e.id = ordered.event_id
+      WHERE ordered.sequence > ?
+        AND ordered.ticket_id IN (SELECT value FROM json_each(?))
+        AND ordered.kind IN (SELECT value FROM json_each(?))
+      ORDER BY ordered.sequence ASC
+      LIMIT 1`,
+  ).get(sequence, JSON.stringify(ticketIds), JSON.stringify(eventKinds));
+  return row === undefined
+    ? undefined
+    : { event: mapTicketEvent(row), cursor: encodeTicketEventCursor(row.sequence) };
 }
 
 /**
@@ -223,6 +294,23 @@ export function listTicketEvents(db: Database.Database, ticketId: string): Ticke
     "SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY created_at ASC, rowid ASC",
   ).all(ticketId);
   return rows.map(mapTicketEvent);
+}
+
+/** A bounded chronological tail for CLI reads; zero performs no query. */
+export function listRecentTicketEvents(
+  db: Database.Database,
+  ticketId: string,
+  limit: number,
+): TicketEvent[] {
+  if (limit === 0) return [];
+  const rows = prepared<[string, number], TicketEventRow>(
+    db,
+    `SELECT * FROM ticket_events
+      WHERE ticket_id = ?
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT ?`,
+  ).all(ticketId, limit);
+  return rows.toReversed().map(mapTicketEvent);
 }
 
 interface TicketStatusEntryRow {

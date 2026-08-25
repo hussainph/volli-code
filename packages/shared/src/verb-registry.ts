@@ -39,6 +39,7 @@ import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
 import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 
 /**
@@ -350,7 +351,7 @@ export const VERB_REGISTRY = [
     example: "volli ticket show VC-12 --comments-only",
     notes: [
       "Latest signal per kind is always printed: signals carry state, comments carry prose.",
-      "Either count takes 0, which drops that section entirely — a poll costs what it reads.",
+      "Either count takes 0 and performs no history query; zeroing both returns a compact ticket header for signal polling.",
     ],
     positionalId: "required",
     options: [
@@ -369,7 +370,7 @@ export const VERB_REGISTRY = [
       {
         name: "--comments-only",
         kind: "flag",
-        help: "Drop the event log — sugar for --events 0.",
+        help: "Show comments/signals with a compact ticket header; read no event history.",
       },
     ],
   },
@@ -1425,13 +1426,12 @@ export const VERB_REGISTRY = [
           name: "tickets",
           type: "string",
           required: true,
-          description:
-            "One or more ticket display ids in this project, separated by spaces or commas, for example 'VC-12 VC-14'.",
+          description: `One to ${MAX_TICKET_AWAIT_TARGETS} ticket display ids in this project, separated by spaces or commas, for example 'VC-12 VC-14'.`,
         },
         {
           name: "for",
           type: "enum",
-          values: ["signal", "comment", "status", "any"],
+          values: TICKET_AWAIT_FOR,
           description:
             "What wakes the wait: a verdict signal, a comment, a board move, or any of the three. Defaults to any.",
         },
@@ -1442,10 +1442,10 @@ export const VERB_REGISTRY = [
             "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
         },
         {
-          name: "sinceMs",
-          type: "number",
+          name: "cursor",
+          type: "string",
           description:
-            "Wake immediately on a matching event that already happened after this epoch-milliseconds time. Pass the previous wake's occurredAt so nothing that fired between two waits is ever missed.",
+            "Wake immediately on the first matching event after this opaque cursor. Copy the cursor returned by the previous wake or timeout unchanged; omit it on the first wait to start watching from now.",
         },
       ],
     },

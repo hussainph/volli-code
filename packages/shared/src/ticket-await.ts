@@ -22,6 +22,14 @@ import type { TicketEventKind } from "./ticket-events";
 /** What one wake may be waited on: a verdict signal, a comment, or a board move. */
 export const TICKET_AWAIT_KINDS = ["signal", "comment", "status"] as const;
 
+/**
+ * One parked turn may watch a fleet, not an unbounded request payload. A
+ * hundred tickets covers the orchestration use case while keeping target
+ * resolution, policy filtering, and a future distributed subscription
+ * bounded by a contract every host can enforce.
+ */
+export const MAX_TICKET_AWAIT_TARGETS = 100;
+
 export type TicketAwaitKind = (typeof TICKET_AWAIT_KINDS)[number];
 
 /** The `for` vocabulary the tool offers: every await kind, plus `any` for their union. */

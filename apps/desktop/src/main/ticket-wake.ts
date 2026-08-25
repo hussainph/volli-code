@@ -42,10 +42,11 @@ import type { TicketEvent } from "@volli/shared";
 import { listTicketEventsAfter, ticketEventCursor } from "./db/events-repo";
 import { getTicketRow } from "./db/tickets-repo";
 
-/** One committed planner fact, with the project scope every subscriber filters on. */
+/** One committed planner fact, its project scope, and its opaque durable cursor. */
 export interface TicketWake {
   event: TicketEvent;
   projectId: string;
+  cursor: string;
 }
 
 export type TicketWakeListener = (wake: TicketWake) => void;
@@ -84,10 +85,10 @@ export function emitTicketWake(
  * A mutation's place in one ticket's event log, taken BEFORE the write.
  *
  * How a door announces what it committed without every write path having to
- * hand back the events it wrote. `ticket_events.rowid` only ever increases, so
- * "this ticket's rows above the mark" is exactly the set this mutation added —
- * including the several a single command can write (a ticket update that also
- * changes priority and labels writes three).
+ * hand back the events it wrote. Migration 029's AUTOINCREMENT sequence never
+ * repeats, so "this ticket's rows above the mark" is exactly the set this
+ * mutation added — including the several a single command can write (a ticket
+ * update that also changes priority and labels writes three).
  *
  * A brand-new ticket has no mark to take, and 0 is the honest answer: every row
  * it has is a row the create just wrote.
@@ -115,7 +116,13 @@ export function emitTicketWakesSince(db: Database.Database, ticketId: string, ma
   // and this call has nothing to attribute, and nobody may be woken for it.
   const row = getTicketRow(db, ticketId);
   if (!row) return;
-  for (const event of events) emitTicketWake({ event, projectId: row.project_id });
+  for (const sequenced of events) {
+    emitTicketWake({
+      event: sequenced.event,
+      projectId: row.project_id,
+      cursor: sequenced.cursor,
+    });
+  }
 }
 
 /**

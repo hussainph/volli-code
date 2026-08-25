@@ -156,11 +156,11 @@ describe("additive inheritance", () => {
     expect(resolved.actors.session.coordinationVerbs).toEqual([...defaults]);
   });
 
-  it("splices the awaitable list on the same terms", () => {
+  it("splices the typed awaitable list on the same terms", () => {
     const resolved = resolveAuthorityPolicy({
-      actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "ticket.signal"] } },
+      actors: { session: { awaitable: ["status", AUTHORITY_DEFAULTS_TOKEN] } },
     });
-    expect(resolved.actors.session.awaitable).toEqual([...TICKET_AWAIT_KINDS, "ticket.signal"]);
+    expect(resolved.actors.session.awaitable).toEqual(["status", "signal", "comment"]);
   });
 });
 
@@ -246,10 +246,17 @@ describe("parseAuthorityPolicyOverride", () => {
     ).toEqual({ actors: { session: { coordinationVerbs: [] } } });
   });
 
-  it("reads an awaitable list", () => {
-    expect(parseAuthorityPolicyOverride({ actors: { session: { awaitable: ["x"] } } })).toEqual({
-      actors: { session: { awaitable: ["x"] } },
+  it("reads only the fixed awaitable vocabulary", () => {
+    expect(
+      parseAuthorityPolicyOverride({
+        actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "comment"] } },
+      }),
+    ).toEqual({
+      actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "comment"] } },
     });
+    expect(
+      parseAuthorityPolicyOverride({ actors: { session: { awaitable: ["ticket.signal"] } } }),
+    ).toEqual({});
   });
 
   it("ignores an actor kind it does not know, and a malformed actor entry", () => {
@@ -386,8 +393,28 @@ describe("validateAuthorityPolicyOverride", () => {
     });
     expect(validateAuthorityPolicyOverride({ actors: { session: { awaitable: "all" } } })).toEqual({
       ok: false,
-      errors: ["actors.session.awaitable must be an array of strings."],
+      errors: ["actors.session.awaitable must be an array."],
     });
+  });
+
+  it("refuses inert awaitable names instead of persisting a silent typo", () => {
+    for (const awaitable of [["ticket.signal"], ["x"], ["signal", 3]]) {
+      expect(validateAuthorityPolicyOverride({ actors: { session: { awaitable } } })).toEqual({
+        ok: false,
+        errors: [
+          `actors.session.awaitable entries must be one of: ${[
+            ...TICKET_AWAIT_KINDS,
+            AUTHORITY_DEFAULTS_TOKEN,
+          ].join(", ")}.`,
+        ],
+      });
+    }
+
+    expect(
+      validateAuthorityPolicyOverride({
+        actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "status"] } },
+      }).ok,
+    ).toBe(true);
   });
 
   it("accepts the $defaults token as the ordinary string it is", () => {

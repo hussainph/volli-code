@@ -11,18 +11,27 @@ import type {
   AuthorityPolicy,
   RuntimeSessionIdentity,
   RuntimeVerbResult,
-  TicketEvent,
+  TicketAwaitKind,
   TicketEventPayload,
 } from "@volli/shared";
 
 import { awaitTicketTool, type AwaitTicketPorts } from "./agent-await";
 import { createComment } from "./db/comments-repo";
-import { recordTicketEvent } from "./db/events-repo";
+import {
+  currentTicketEventCursor,
+  encodeTicketEventCursor,
+  recordTicketEvent,
+} from "./db/events-repo";
 import { insertProject, listProjects } from "./db/projects-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertTicket } from "./db/tickets-repo";
-import { emitTicketWake, subscribeTicketWake } from "./ticket-wake";
+import {
+  emitTicketWake,
+  emitTicketWakesSince,
+  markTicketWake,
+  subscribeTicketWake,
+} from "./ticket-wake";
 
 let ctx: TestDb | undefined;
 
@@ -41,7 +50,7 @@ const CALLER: RuntimeSessionIdentity = {
   ticketId: null,
 };
 
-function narrowedPolicy(awaitable: readonly string[]): AuthorityPolicy {
+function narrowedPolicy(awaitable: readonly TicketAwaitKind[]): AuthorityPolicy {
   return {
     ...DEFAULT_AUTHORITY_POLICY,
     actors: {
@@ -51,7 +60,7 @@ function narrowedPolicy(awaitable: readonly string[]): AuthorityPolicy {
   };
 }
 
-function harness(options: { awaitable?: readonly string[] } = {}) {
+function harness(options: { awaitable?: readonly TicketAwaitKind[] } = {}) {
   ctx = openTestDb();
   const db = ctx.db;
   insertProject(
@@ -74,22 +83,14 @@ function harness(options: { awaitable?: readonly string[] } = {}) {
     signal: AbortSignal = new AbortController().signal,
   ) => awaitTicketTool(ports, CALLER, { verb: "ticket.await", input, toolCallId: "tc-1" }, signal);
   /** Record the durable event AND fan it out, the way a fed door does (slice C). */
-  const commit = (ticketId: string, payload: TicketEventPayload, at: number): TicketEvent => {
+  const commit = (ticketId: string, payload: TicketEventPayload, at: number): void => {
+    const mark = markTicketWake(db, ticketId);
     recordTicketEvent(db, ticketId, payload, at, {
       kind: "session",
       sessionId: "worker",
       ticketId,
     });
-    const event: TicketEvent = {
-      id: `event-${at}`,
-      ticketId,
-      actor: "session",
-      actorContext: { sessionId: "worker", ticketId },
-      createdAt: at,
-      payload,
-    };
-    emitTicketWake({ event, projectId: "project-one" });
-    return event;
+    emitTicketWakesSince(db, ticketId, mark);
   };
   return { db, call, commit };
 }
@@ -100,6 +101,12 @@ const SIGNALED: TicketEventPayload = {
   verdict: "pass",
   detail: "Gates green at HEAD",
 };
+
+function cursorFrom(result: RuntimeVerbResult): string {
+  const match = /^cursor: ([^.\s]+)\./m.exec(result.text);
+  if (match === null) throw new Error(`No cursor in result: ${result.text}`);
+  return match[1]!;
+}
 
 describe("ticket.await — waking", () => {
   it("parks until a matching signal commits, then wakes with the typed fact and the cursor", async () => {
@@ -115,6 +122,7 @@ describe("ticket.await — waking", () => {
     expect(result.text).toContain("Gates green at HEAD");
     expect(result.text).toContain("untrusted signal detail");
     expect(result.text).toContain("occurredAt: 2000");
+    expect(result.text).toContain("cursor: ticket-event-v1:");
   });
 
   it("wakes on a comment with the body enveloped as another author's prose", async () => {
@@ -173,28 +181,51 @@ describe("ticket.await — waking", () => {
   });
 });
 
-describe("ticket.await — the sinceMs cursor", () => {
+describe("ticket.await — the opaque durable cursor", () => {
   it("wakes immediately on a durable event after the cursor, without any bus emit", async () => {
     const h = harness();
     recordTicketEvent(h.db, "ticket-one", SIGNALED, 7_000, { kind: "user" });
-    const result = await h.call({ tickets: "VC-1", for: "signal", sinceMs: 6_500 });
+    const result = await h.call({
+      tickets: "VC-1",
+      for: "signal",
+      cursor: encodeTicketEventCursor(0),
+    });
     expect(result.text).toContain("Ticket VC-1 signaled review: pass.");
     expect(result.text).toContain("occurredAt: 7000");
+    expect(cursorFrom(result)).toBe(currentTicketEventCursor(h.db));
   });
 
-  it("replays the EARLIEST match across the watched set, so chaining reconstructs order", async () => {
+  it("replays commit order across the watched set even when timestamps are equal", async () => {
     const h = harness();
     recordTicketEvent(h.db, "ticket-two", SIGNALED, 8_000, { kind: "user" });
-    recordTicketEvent(h.db, "ticket-one", SIGNALED, 9_000, { kind: "user" });
-    const result = await h.call({ tickets: "VC-1 VC-2", for: "signal", sinceMs: 7_500 });
-    expect(result.text).toContain("Ticket VC-2 signaled");
-    expect(result.text).toContain("occurredAt: 8000");
+    recordTicketEvent(h.db, "ticket-one", SIGNALED, 8_000, { kind: "user" });
+
+    const first = await h.call({
+      tickets: "VC-1 VC-2",
+      for: "signal",
+      cursor: encodeTicketEventCursor(0),
+    });
+    expect(first.text).toContain("Ticket VC-2 signaled");
+    expect(first.text).toContain("occurredAt: 8000");
+
+    const second = await h.call({
+      tickets: "VC-1 VC-2",
+      for: "signal",
+      cursor: cursorFrom(first),
+    });
+    expect(second.text).toContain("Ticket VC-1 signaled");
+    expect(second.text).toContain("occurredAt: 8000");
+    expect(cursorFrom(second)).not.toBe(cursorFrom(first));
   });
 
   it("parks when everything durable is at or before the cursor", async () => {
     const h = harness();
     recordTicketEvent(h.db, "ticket-one", SIGNALED, 9_000, { kind: "user" });
-    const pending = h.call({ tickets: "VC-1", for: "signal", sinceMs: 9_000 });
+    const pending = h.call({
+      tickets: "VC-1",
+      for: "signal",
+      cursor: currentTicketEventCursor(h.db),
+    });
     h.commit("ticket-one", SIGNALED, 9_500);
     const result = await pending;
     expect(result.text).toContain("occurredAt: 9500");
@@ -210,6 +241,25 @@ describe("ticket.await — bounded and withdrawn waits", () => {
     const result = await pending;
     expect(result.text).toContain("No matching event within 30 seconds on VC-1");
     expect(result.text).toContain("waiting for: signal");
+    expect(cursorFrom(result)).toBe(encodeTicketEventCursor(0));
+  });
+
+  it("replays an event committed after a cursorless timeout and before the retry", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    const timedOut = h.call({ tickets: "VC-1", for: "signal", timeoutSeconds: 1 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const timeout = await timedOut;
+
+    // No subscriber exists in this gap. Durability plus the returned baseline
+    // cursor is the only way the retry can still see the event.
+    h.commit("ticket-one", SIGNALED, 30_000);
+    const replayed = await h.call({
+      tickets: "VC-1",
+      for: "signal",
+      cursor: cursorFrom(timeout),
+    });
+    expect(replayed.text).toContain("Ticket VC-1 signaled review: pass.");
   });
 
   it("rejects a withdrawn wait, and a late event wakes nothing", async () => {
@@ -226,6 +276,7 @@ describe("ticket.await — bounded and withdrawn waits", () => {
       {
         event: { id: "e", ticketId: "ticket-one", actor: "user", createdAt: 1, payload: SIGNALED },
         projectId: "project-one",
+        cursor: encodeTicketEventCursor(0),
       },
       (error) => failures.push(error),
     );
@@ -259,16 +310,22 @@ describe("ticket.await — refusals the model can act on", () => {
     );
   });
 
-  it("refuses a non-positive timeout and a non-numeric cursor by name", async () => {
+  it("refuses a non-positive timeout and an invented cursor by name", async () => {
     const h = harness();
     await refusesWith(
       h.call({ tickets: "VC-1", timeoutSeconds: 0 }),
       "`timeoutSeconds` must be a positive number",
     );
     await refusesWith(
-      h.call({ tickets: "VC-1", sinceMs: "yesterday" }),
-      "`sinceMs` must be a positive number",
+      h.call({ tickets: "VC-1", cursor: "yesterday" }),
+      "`cursor` must be an opaque cursor returned by a previous ticket_await",
     );
+  });
+
+  it("bounds one fleet subscription before resolving any targets", async () => {
+    const h = harness();
+    const targets = Array.from({ length: 101 }, (_, index) => `VC-${index + 1}`).join(" ");
+    await refusesWith(h.call({ tickets: targets }), "at most 100 tickets");
   });
 
   it("refuses a ticket the caller's project does not hold", async () => {

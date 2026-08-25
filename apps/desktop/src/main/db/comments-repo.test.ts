@@ -23,6 +23,7 @@ import {
   deleteComment,
   getComment,
   listComments,
+  listRecentComments,
   updateComment,
 } from "./comments-repo";
 import { listTicketEvents } from "./events-repo";
@@ -72,6 +73,19 @@ describe("listComments", () => {
     createComment(ctx.db, { ticketId: otherTicket.id, body: "theirs", actor: USER_ACTOR }, 100);
 
     expect(listComments(ctx.db, ticketId).map((c) => c.body)).toEqual(["mine"]);
+  });
+
+  it("returns a chronological SQL-limited tail and short-circuits zero", () => {
+    const { ticketId } = setup();
+    createComment(ctx.db, { ticketId, body: "first", actor: USER_ACTOR }, 100);
+    createComment(ctx.db, { ticketId, body: "third", actor: USER_ACTOR }, 300);
+    createComment(ctx.db, { ticketId, body: "second", actor: USER_ACTOR }, 200);
+
+    expect(listRecentComments(ctx.db, ticketId, 0)).toEqual([]);
+    expect(listRecentComments(ctx.db, ticketId, 2).map((comment) => comment.body)).toEqual([
+      "second",
+      "third",
+    ]);
   });
 });
 

@@ -443,8 +443,9 @@ The control-tier wait: a Session's `ticket_await` tool call parks its turn
 until a watched Ticket signals, is commented on, or moves — then wakes with
 that one event (VC-85). Runtime-native like `ask_user`: no bash sleeps, no
 polling, and never a CLI verb, because a CLI verb must never wait. What may
-be awaited is per-actor policy data (`awaitable`); chaining each wake's
-`occurredAt` into the next call's `sinceMs` makes the watch window continuous.
+be awaited is per-actor policy data (`awaitable`); chaining the opaque `cursor`
+returned by every wake or timeout makes the watch window continuous. A cursor
+is ledger order; `occurredAt` is metadata and must never be used as one.
 _Avoid_: watch verb, `volli ticket wait`, polling loop
 
 **Project**:

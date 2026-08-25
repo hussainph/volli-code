@@ -35,7 +35,7 @@
  */
 
 import type { AuthorityFallback } from "./authority";
-import { TICKET_AWAIT_KINDS } from "./ticket-await";
+import { TICKET_AWAIT_KINDS, type TicketAwaitKind } from "./ticket-await";
 
 /**
  * What the deterministic rule pack does to a Session, as a per-project posture.
@@ -154,7 +154,7 @@ export interface AuthorityActorPolicy {
    * ships in both bundles and waiting is not itself an act of authority — so
    * what may be *awaited* is policy data, and the tool's presence is not.
    */
-  awaitable: readonly string[];
+  awaitable: readonly TicketAwaitKind[];
 }
 
 /**
@@ -280,14 +280,20 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
  */
 export const AUTHORITY_DEFAULTS_TOKEN = "$defaults";
 
-/** One list-valued field, as a project may state it. */
+/** One coordination-verb list, as a project may state it. */
 export type AuthorityListOverride = readonly string[];
+
+/** An await list can name only the fixed await vocabulary or splice defaults. */
+export type AuthorityAwaitableOverride = readonly (
+  | TicketAwaitKind
+  | typeof AUTHORITY_DEFAULTS_TOKEN
+)[];
 
 /** The per-actor half of an override; every field optional. */
 export interface AuthorityActorPolicyOverride {
   coordinationVerbs?: AuthorityListOverride;
   peek?: PeekDisclosure;
-  awaitable?: AuthorityListOverride;
+  awaitable?: AuthorityAwaitableOverride;
 }
 
 /**
@@ -311,14 +317,16 @@ export interface AuthorityPolicyOverride {
  * defaults already carry does not get it twice — the list is a set with an order
  * and a reader should not have to know whether a duplicate meant anything.
  */
-function spliceList(
-  override: AuthorityListOverride | undefined,
-  defaults: readonly string[],
-): readonly string[] {
+function spliceList<T extends string>(
+  override: readonly (T | typeof AUTHORITY_DEFAULTS_TOKEN)[] | undefined,
+  defaults: readonly T[],
+): readonly T[] {
   if (override === undefined) return defaults;
-  const spliced = override.flatMap((entry) =>
-    entry === AUTHORITY_DEFAULTS_TOKEN ? defaults : [entry],
-  );
+  const spliced: T[] = [];
+  for (const entry of override) {
+    if (entry === AUTHORITY_DEFAULTS_TOKEN) spliced.push(...defaults);
+    else spliced.push(entry as T);
+  }
   return Object.freeze([...new Set(spliced)]);
 }
 
@@ -449,13 +457,23 @@ function parseActor(value: unknown): AuthorityActorPolicyOverride | undefined {
   if (coordinationVerbs !== undefined) actor.coordinationVerbs = coordinationVerbs;
   const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
   if (peek !== undefined) actor.peek = peek;
-  const awaitable = parseStringList(row.awaitable);
+  const awaitable = parseAwaitableList(row.awaitable);
   if (awaitable !== undefined) actor.awaitable = awaitable;
   return Object.keys(actor).length === 0 ? undefined : actor;
 }
 
+function parseAwaitableList(value: unknown): AuthorityAwaitableOverride | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const allowed = [...TICKET_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
+  return value.every(
+    (entry) => typeof entry === "string" && (allowed as readonly string[]).includes(entry),
+  )
+    ? (value as AuthorityAwaitableOverride)
+    : undefined;
+}
+
 /**
- * A list is kept only when every entry is a string.
+ * A coordination-verb list is kept only when every entry is a string.
  *
  * All-or-nothing rather than filtering the bad entries out, because a list is
  * the one place a silent drop changes meaning: a `coordinationVerbs` that lost
@@ -646,10 +664,13 @@ function validateActor(
   const row = value as Record<string, unknown>;
   rejectUnknownKeys(row, ["coordinationVerbs", "peek", "awaitable"], `${path}.`, errors);
   const actor: AuthorityActorPolicyOverride = {};
-  for (const key of ["coordinationVerbs", "awaitable"] as const) {
-    if (row[key] === undefined) continue;
-    const list = validateStringList(row[key], `${path}.${key}`, errors);
-    if (list !== undefined) actor[key] = list;
+  if (row.coordinationVerbs !== undefined) {
+    const list = validateStringList(row.coordinationVerbs, `${path}.coordinationVerbs`, errors);
+    if (list !== undefined) actor.coordinationVerbs = list;
+  }
+  if (row.awaitable !== undefined) {
+    const list = validateAwaitableList(row.awaitable, `${path}.awaitable`, errors);
+    if (list !== undefined) actor.awaitable = list;
   }
   if (row.peek !== undefined) {
     const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
@@ -683,4 +704,24 @@ function validateStringList(
     return undefined;
   }
   return value as string[];
+}
+
+function validateAwaitableList(
+  value: unknown,
+  path: string,
+  errors: string[],
+): AuthorityAwaitableOverride | undefined {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array.`);
+    return undefined;
+  }
+  const allowed = [...TICKET_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
+  const invalid = value.filter(
+    (entry) => typeof entry !== "string" || !(allowed as readonly string[]).includes(entry),
+  );
+  if (invalid.length > 0) {
+    errors.push(`${path} entries must be one of: ${allowed.join(", ")}.`);
+    return undefined;
+  }
+  return value as AuthorityAwaitableOverride;
 }

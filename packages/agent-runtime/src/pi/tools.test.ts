@@ -867,7 +867,7 @@ describe("createVerbTool", () => {
     expect((properties.model as { type?: string }).type).toBe("object");
   });
 
-  it("compiles ticket.await's schema, including the number field (VC-85)", () => {
+  it("compiles ticket.await's number timeout and opaque string cursor (VC-85)", () => {
     const tool = createVerbTool({
       verb: "ticket.await",
       port: async () => ({ text: "" }),
@@ -875,10 +875,12 @@ describe("createVerbTool", () => {
 
     expect(tool.name).toBe("ticket_await");
     const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(properties)).toEqual(["tickets", "for", "timeoutSeconds", "sinceMs"]);
+    expect(Object.keys(properties)).toEqual(["tickets", "for", "timeoutSeconds", "cursor"]);
     expect((tool.parameters as { required?: string[] }).required).toEqual(["tickets"]);
-    // The number field arrives as a number schema, not a string to parse.
+    // Neither field degrades to argv-shaped text: timeout is numeric while the
+    // host-owned cursor is an opaque string the model only copies.
     expect((properties.timeoutSeconds as { type?: string }).type).toBe("number");
+    expect((properties.cursor as { type?: string }).type).toBe("string");
   });
 
   it("refuses to build a tool for a verb this build does not project", () => {

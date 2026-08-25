@@ -24,7 +24,7 @@ function wake(kind: "commented" | "archived" = "commented"): TicketWake {
     createdAt: 1_700_000_000_000,
     payload: kind === "commented" ? { kind, commentId: "comment-1" } : { kind },
   };
-  return { event, projectId: "project-1" };
+  return { event, projectId: "project-1", cursor: "ticket-event-v1:1" };
 }
 
 describe("the ticket wake bus", () => {
@@ -115,6 +115,7 @@ describe("marking and emitting what a mutation committed", () => {
     });
 
     expect(seen.map((notice) => notice.event.payload.kind)).toEqual(["status_changed", "signaled"]);
+    expect(seen.map((notice) => notice.cursor)).toEqual(["ticket-event-v1:1", "ticket-event-v1:2"]);
     // The project rides along so a subscriber can filter without a second read.
     expect(seen.every((notice) => notice.projectId === projectId)).toBe(true);
   });

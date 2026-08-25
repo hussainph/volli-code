@@ -1063,7 +1063,10 @@ describe("agent command service", () => {
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
       service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
-    await execute("ticket.create", { title: "Ship CLI" });
+    await execute("ticket.create", {
+      title: "Ship CLI",
+      body: "A long static body never needed by a poll.",
+    });
     for (const priority of ["high", "low", "medium", "high", "low", "medium"] as const) {
       await execute("ticket.update", {
         id: "VC-1",
@@ -1083,7 +1086,30 @@ describe("agent command service", () => {
     // back to the command's default rather than slicing from the wrong end.
     const nonsense = await execute("ticket.show", { id: "VC-1", events: -3, comments: 1.5 });
 
-    expect(quiet).toMatchObject({ ok: true, data: { events: [], comments: [] } });
+    expect(quiet).toMatchObject({
+      ok: true,
+      data: {
+        ticket: { id: "VC-1", status: "backlog", title: "Ship CLI" },
+        events: [],
+        comments: [],
+      },
+    });
+    if (quiet.ok) {
+      const data = quiet.data as { ticket: Record<string, unknown> };
+      expect(data.ticket).not.toHaveProperty("body");
+      expect(data.ticket).not.toHaveProperty("worktreePath");
+    }
+    const commentsOnly = await execute("ticket.show", {
+      id: "VC-1",
+      events: 0,
+      commentsOnly: true,
+    });
+    expect(commentsOnly.ok).toBe(true);
+    if (commentsOnly.ok) {
+      const data = commentsOnly.data as { ticket: Record<string, unknown>; comments: unknown[] };
+      expect(data.ticket).not.toHaveProperty("body");
+      expect(data.comments).toHaveLength(1);
+    }
     expect(nonsense.ok).toBe(true);
     if (nonsense.ok) {
       const data = nonsense.data as { events: unknown[]; comments: unknown[] };

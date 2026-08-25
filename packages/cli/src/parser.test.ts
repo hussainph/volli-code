@@ -156,10 +156,9 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("types a zero count on ticket show, and spells --comments-only as that zero", () => {
-    // VC-85: the cheapest poll a read-tier verb can offer. `0` is a real count
-    // here, and the sugar lands on the SAME argument rather than a second one
-    // main would have to learn — which is what keeps the two from drifting.
+  it("types zero-count and compact comments polling on ticket show", () => {
+    // VC-85: `0` suppresses a history query. The named projection also carries
+    // a marker so main can omit the static ticket body from every poll.
     expect(parseCliArgs(["ticket", "show", "VC-12", "--events", "0"])).toEqual({
       ok: true,
       invocation: { command: "ticket.show", args: { id: "VC-12", events: 0 }, json: false },
@@ -170,9 +169,13 @@ describe("parseCliArgs", () => {
     });
     expect(parseCliArgs(["ticket", "show", "VC-12", "--comments-only"])).toEqual({
       ok: true,
-      invocation: { command: "ticket.show", args: { id: "VC-12", events: 0 }, json: false },
+      invocation: {
+        command: "ticket.show",
+        args: { id: "VC-12", commentsOnly: true, events: 0 },
+        json: false,
+      },
     });
-    // Last one wins, like every other option the walker sets.
+    // An explicit event count asks for the ordinary full-ticket projection.
     expect(parseCliArgs(["ticket", "show", "VC-12", "--comments-only", "--events", "3"])).toEqual({
       ok: true,
       invocation: { command: "ticket.show", args: { id: "VC-12", events: 3 }, json: false },

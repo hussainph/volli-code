@@ -1145,6 +1145,47 @@ CREATE TABLE ticket_signals (
 CREATE INDEX ticket_signals_latest ON ticket_signals(ticket_id, kind, created_at);
 `;
 
+/**
+ * Migration 029: a durable total order for Ticket Events (VC-85 review).
+ *
+ * `created_at` is metadata, not a cursor: two commits can share one
+ * millisecond, clocks can move, and imported events can arrive out of timestamp
+ * order. SQLite's implicit `rowid` distinguishes local inserts but may be
+ * reused after a cascading delete, so it cannot back the public "miss
+ * nothing" promise either.
+ *
+ * This sidecar gives every appended event an AUTOINCREMENT sequence. The
+ * sequence remains host-private — `ticket.await` exposes an opaque encoded
+ * cursor — so a future cloud event store may replace it without changing the
+ * tool contract. Ticket and kind are repeated deliberately to make a
+ * multi-ticket/kind replay one indexed, bounded query rather than a fold over
+ * each Ticket's history. The trigger keeps every existing event writer on the
+ * invariant without making each mutation door remember a second insert.
+ */
+const MIGRATION_029_TICKET_EVENT_SEQUENCE = `
+CREATE TABLE ticket_event_sequence (
+  sequence  INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id  TEXT NOT NULL UNIQUE REFERENCES ticket_events(id) ON DELETE CASCADE,
+  ticket_id TEXT NOT NULL,
+  kind      TEXT NOT NULL
+);
+INSERT INTO ticket_event_sequence (event_id, ticket_id, kind)
+SELECT id, ticket_id, kind FROM ticket_events ORDER BY rowid ASC;
+CREATE INDEX ticket_event_sequence_match
+  ON ticket_event_sequence(ticket_id, kind, sequence);
+CREATE TRIGGER ticket_event_sequence_insert
+AFTER INSERT ON ticket_events
+BEGIN
+  INSERT INTO ticket_event_sequence (event_id, ticket_id, kind)
+  VALUES (NEW.id, NEW.ticket_id, NEW.kind);
+END;
+CREATE TRIGGER ticket_event_sequence_identity_immutable
+BEFORE UPDATE OF id, ticket_id, kind ON ticket_events
+BEGIN
+  SELECT RAISE(ABORT, 'ticket event identity is immutable');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1284,6 +1325,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 28,
     name: "ticket_signals — typed verdicts, queryable where a comment convention was not",
     sql: MIGRATION_028_TICKET_SIGNALS,
+  },
+  {
+    version: 29,
+    name: "ticket_event_sequence — durable opaque cursors for lossless waits",
+    sql: MIGRATION_029_TICKET_EVENT_SEQUENCE,
   },
 ];
 

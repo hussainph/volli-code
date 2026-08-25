@@ -282,11 +282,17 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
     options: {
       "--events": { kind: "value", key: "events", parse: countValue },
       "--comments": { kind: "value", key: "comments", parse: countValue },
-      // Sugar, and literally so: it lands on the same argument the long form
-      // writes, so main answers one request shape and cannot drift from the
-      // shorthand. Last flag wins, like every other option the walker sets —
-      // `--comments-only --events 3` asks for three events, in that order.
-      "--comments-only": { kind: "flag", key: "events", value: 0 },
+      // A named polling projection, not merely an output count: main uses the
+      // marker to omit the static ticket body as well as the event log. An
+      // explicit --events still wins, so callers can ask for comments plus a
+      // small event tail without losing the ordinary full-ticket shape.
+      "--comments-only": { kind: "flag", key: "commentsOnly", value: true },
+    },
+    finalize: (args) => {
+      if (args["commentsOnly"] !== true) return null;
+      if (args["events"] === undefined) args["events"] = 0;
+      else delete args["commentsOnly"];
+      return null;
     },
   },
   "ticket.events": {

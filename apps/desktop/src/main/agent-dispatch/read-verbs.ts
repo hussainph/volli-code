@@ -16,8 +16,8 @@ import {
 import type { AgentRequest, AgentResponse, SessionEvent } from "@volli/shared";
 
 import { listMaterializableLinks } from "../db/blobs-repo";
-import { listComments } from "../db/comments-repo";
-import { listTicketEvents } from "../db/events-repo";
+import { listRecentComments } from "../db/comments-repo";
+import { listRecentTicketEvents } from "../db/events-repo";
 import { listAllLabels } from "../db/labels-repo";
 import { listLatestSignals } from "../db/signals-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
@@ -30,7 +30,6 @@ import {
   invalidPriorityResponse,
   positiveIntOr,
   projectForCreate,
-  tail,
   ticketForDisplayId,
 } from "./resolution";
 import { agentTicket, boardData, publicEvent } from "./wire";
@@ -277,10 +276,10 @@ export async function ticketShowVerb(
   const eventLimit = countOr(request.args["events"], 5);
   const commentLimit = countOr(request.args["comments"], 5);
   const displayId = displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber);
-  const events = tail(listTicketEvents(options.db, resolved.ticket.id), eventLimit).map((event) =>
+  const events = listRecentTicketEvents(options.db, resolved.ticket.id, eventLimit).map((event) =>
     publicEvent(options.db, projects, event),
   );
-  const comments = tail(listComments(options.db, resolved.ticket.id), commentLimit).map(
+  const comments = listRecentComments(options.db, resolved.ticket.id, commentLimit).map(
     (comment) => ({
       ticket: displayId,
       body: comment.body,
@@ -302,10 +301,18 @@ export async function ticketShowVerb(
     session: signal.sessionId ? shortSessionId(signal.sessionId) : null,
     createdAt: signal.createdAt,
   }));
+  // A polling projection must not resend a static ticket body every cycle.
+  // `--comments-only` marks that intent explicitly; zeroing both logs is the
+  // signal-only equivalent. Keep the three fields plaintext rendering needs,
+  // while the full `ticket show` shape remains unchanged for ordinary reads.
+  const compact = request.args["commentsOnly"] === true || (eventLimit === 0 && commentLimit === 0);
+  const ticket = compact
+    ? { id: displayId, status: resolved.ticket.status, title: resolved.ticket.title }
+    : agentTicket(resolved.ticket, resolved.project);
   return {
     v: 1,
     ok: true,
-    data: { ticket: agentTicket(resolved.ticket, resolved.project), signals, events, comments },
+    data: { ticket, signals, events, comments },
   };
 }
 
@@ -318,9 +325,9 @@ export async function ticketEventsVerb(
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
   const limit = positiveIntOr(request.args["limit"], 50);
-  const events = listTicketEvents(options.db, resolved.ticket.id)
-    .slice(-limit)
-    .map((event) => publicEvent(options.db, projects, event));
+  const events = listRecentTicketEvents(options.db, resolved.ticket.id, limit).map((event) =>
+    publicEvent(options.db, projects, event),
+  );
   return { v: 1, ok: true, data: { events } };
 }
 

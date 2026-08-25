@@ -22,21 +22,23 @@
  * ## Nothing is ever missed
  *
  * A wake is an in-memory event, but every event a wake reports is ALSO a
- * durable Ticket Event. `sinceMs` closes the gap between the two: subscribe
- * first, then scan planner history for a match that already happened after the
- * cursor, and only park when the scan comes back empty. A model that chains
- * each wake's `occurredAt` into the next call's `sinceMs` holds a continuous
- * window over the fleet it is watching, with no polling loop anywhere.
+ * durable Ticket Event. An opaque, total-order cursor closes the gap between
+ * the two: subscribe first, then ask the event store for the first match after
+ * the cursor, and only park when that bounded query comes back empty. Every
+ * wake and timeout returns a cursor, so chaining calls holds a continuous
+ * window even when two events share a millisecond or a timeout falls between
+ * the event and the next tool call.
  */
 
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   displayTicketId,
+  isTicketAwaitFor,
+  MAX_TICKET_AWAIT_TARGETS,
   parseTicketAwaitTargets,
   shortSessionId,
   TICKET_AWAIT_EVENT_KINDS,
-  isTicketAwaitFor,
   ticketAwaitKindsFor,
   type AuthorityPolicy,
   type Project,
@@ -48,14 +50,19 @@ import {
   type TicketEventKind,
 } from "@volli/shared";
 
-import { ticketForDisplayId } from "./agent-dispatch/resolution";
 import { getComment } from "./db/comments-repo";
-import { listTicketEvents } from "./db/events-repo";
+import {
+  currentTicketEventCursor,
+  decodeTicketEventCursor,
+  firstMatchingTicketEventAfter,
+} from "./db/events-repo";
+import { listLiveTicketRefsByNumber } from "./db/tickets-repo";
 
 /** One post-commit planner fact, as the wake bus (slice C, `ticket-wake.ts`) fans it out. */
 export interface TicketWake {
   event: TicketEvent;
   projectId: string;
+  cursor: string;
 }
 
 /** Slice C's contract: subscribe to post-commit Ticket Events; returns unsubscribe. */
@@ -125,10 +132,16 @@ function untrustedProse(kind: string, text: string): string[] {
 
 /**
  * One waking event as the model reads it: typed facts bare, prose enveloped,
- * and the cursor (`occurredAt`) last so chaining it into the next call's
- * `sinceMs` is the obvious move rather than a documented one.
+ * and the opaque cursor last so chaining it into the next call is the obvious
+ * move rather than a documented one. `occurredAt` remains useful metadata; it
+ * is never used as ledger order.
  */
-function wakeText(db: Database.Database, display: string, event: TicketEvent): string {
+function wakeText(
+  db: Database.Database,
+  display: string,
+  event: TicketEvent,
+  cursor: string,
+): string {
   const lines: string[] = [];
   const payload = event.payload;
   if (payload.kind === "signaled") {
@@ -155,36 +168,40 @@ function wakeText(db: Database.Database, display: string, event: TicketEvent): s
     lines.push(`Ticket ${display} recorded a ${payload.kind} event.`, byLine(event));
   }
   lines.push(
-    `occurredAt: ${event.createdAt}. Pass this as sinceMs on your next ticket_await to miss nothing in between.`,
+    `occurredAt: ${event.createdAt}.`,
+    `cursor: ${cursor}. Pass this cursor unchanged on your next ticket_await to miss nothing in between.`,
   );
   return lines.join("\n");
 }
 
 /**
- * The earliest already-durable match after the cursor, or null.
+ * The first already-durable match after the cursor, or null.
  *
  * Runs AFTER the live subscription opens, and synchronously — better-sqlite3
  * does not yield, so no wake can interleave with the scan and the two sources
- * cannot drop an event between them. Earliest-first across all watched tickets,
- * because a wake is one event and the model reconstructs order by chaining.
+ * cannot drop an event between them. The repository performs one indexed
+ * `LIMIT 1` query across the watched set rather than loading any full history.
  */
 function replayedWake(
   db: Database.Database,
   watched: ReadonlyMap<string, string>,
-  eventKinds: ReadonlySet<TicketEventKind>,
-  sinceMs: number,
-): { event: TicketEvent; display: string } | null {
-  let earliest: { event: TicketEvent; display: string } | null = null;
-  for (const [ticketId, display] of watched) {
-    for (const event of listTicketEvents(db, ticketId)) {
-      if (event.createdAt <= sinceMs || !eventKinds.has(event.payload.kind)) continue;
-      if (earliest === null || event.createdAt < earliest.event.createdAt) {
-        earliest = { event, display };
-      }
-      break; // Events are ordered oldest-first; the first match per ticket is its earliest.
-    }
-  }
-  return earliest;
+  eventKinds: readonly TicketEventKind[],
+  cursor: string,
+): { event: TicketEvent; display: string; cursor: string } | null {
+  const sequenced = firstMatchingTicketEventAfter(db, [...watched.keys()], eventKinds, cursor);
+  if (sequenced === undefined) return null;
+  const display = watched.get(sequenced.event.ticketId);
+  return display === undefined ? null : { ...sequenced, display };
+}
+
+/** A display id's number when it belongs to exactly this project prefix. */
+function ticketNumberForProject(display: string, project: Project): number | null {
+  const prefix = `${project.ticketPrefix}-`;
+  if (!display.startsWith(prefix)) return null;
+  const raw = display.slice(prefix.length);
+  if (!/^\d+$/.test(raw)) return null;
+  const number = Number(raw);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
 /**
@@ -199,9 +216,17 @@ export function awaitTicketTool(
   signal: AbortSignal,
 ): Promise<RuntimeVerbResult> {
   const ticketsRaw = request.input.tickets;
-  if (typeof ticketsRaw !== "string" || parseTicketAwaitTargets(ticketsRaw).length === 0) {
+  const targets = typeof ticketsRaw === "string" ? parseTicketAwaitTargets(ticketsRaw) : [];
+  if (targets.length === 0) {
     return Promise.resolve(
       refusal("`tickets` must name at least one ticket display id, for example 'VC-12 VC-14'."),
+    );
+  }
+  if (targets.length > MAX_TICKET_AWAIT_TARGETS) {
+    return Promise.resolve(
+      refusal(
+        `\`tickets\` may name at most ${MAX_TICKET_AWAIT_TARGETS} tickets in one wait; split this fleet into smaller waits.`,
+      ),
     );
   }
   const forRaw = request.input.for ?? "any";
@@ -210,8 +235,16 @@ export function awaitTicketTool(
   }
   const timeout = optionalPositiveNumber(request.input, "timeoutSeconds");
   if (!timeout.ok) return Promise.resolve(refusal(timeout.text));
-  const since = optionalPositiveNumber(request.input, "sinceMs");
-  if (!since.ok) return Promise.resolve(refusal(since.text));
+  const cursorRaw = request.input.cursor;
+  let cursor: string | undefined;
+  if (cursorRaw !== undefined && cursorRaw !== null) {
+    if (typeof cursorRaw !== "string" || decodeTicketEventCursor(cursorRaw) === null) {
+      return Promise.resolve(
+        refusal("`cursor` must be an opaque cursor returned by a previous ticket_await call."),
+      );
+    }
+    cursor = cursorRaw;
+  }
 
   // Scoped to the caller's own project BEFORE any display id is parsed — the
   // same authority bound `session_start` holds: no other project is ever a
@@ -222,18 +255,30 @@ export function awaitTicketTool(
       refusal("This Session's project is no longer registered, so nothing can be awaited."),
     );
   }
-  const watched = new Map<string, string>();
-  for (const target of parseTicketAwaitTargets(ticketsRaw)) {
-    const resolved = ticketForDisplayId(ports.db, [project], target);
-    if (!resolved.ok) {
+  const targetNumbers = new Map<string, number>();
+  for (const target of targets) {
+    const number = ticketNumberForProject(target, project);
+    if (number === null) {
       return Promise.resolve(
         refusal(`No ticket ${target} in this project, so nothing was awaited.`),
       );
     }
-    watched.set(
-      resolved.ticket.id,
-      displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
-    );
+    targetNumbers.set(target, number);
+  }
+  const refsByNumber = new Map(
+    listLiveTicketRefsByNumber(ports.db, project.id, [...new Set(targetNumbers.values())]).map(
+      (ticket) => [ticket.ticketNumber, ticket] as const,
+    ),
+  );
+  const watched = new Map<string, string>();
+  for (const [target, number] of targetNumbers) {
+    const ticket = refsByNumber.get(number);
+    if (ticket === undefined) {
+      return Promise.resolve(
+        refusal(`No ticket ${target} in this project, so nothing was awaited.`),
+      );
+    }
+    watched.set(ticket.id, displayTicketId(project.ticketPrefix, ticket.ticketNumber));
   }
 
   // The per-call policy judgement VC-92 separated from bundle membership: the
@@ -250,9 +295,10 @@ export function awaitTicketTool(
       ),
     );
   }
-  const eventKinds = new Set<TicketEventKind>(
-    kinds.map((kind: TicketAwaitKind) => TICKET_AWAIT_EVENT_KINDS[kind]),
+  const eventKinds = kinds.map(
+    (kind: TicketAwaitKind): TicketEventKind => TICKET_AWAIT_EVENT_KINDS[kind],
   );
+  const eventKindSet = new Set<TicketEventKind>(eventKinds);
   const displays = [...watched.values()].join(", ");
 
   return new Promise<RuntimeVerbResult>((resolve, reject) => {
@@ -271,17 +317,24 @@ export function awaitTicketTool(
     const unsubscribe = ports.subscribeTicketWake((wake) => {
       if (wake.projectId !== project.id) return;
       const display = watched.get(wake.event.ticketId);
-      if (display === undefined || !eventKinds.has(wake.event.payload.kind)) return;
-      settle(() => resolve({ text: wakeText(ports.db, display, wake.event) }));
+      if (display === undefined || !eventKindSet.has(wake.event.payload.kind)) return;
+      settle(() => resolve({ text: wakeText(ports.db, display, wake.event, wake.cursor) }));
     });
 
-    // Subscribe first, replay second: the scan is synchronous, so an event is
-    // either durable when it runs or arrives through the live subscription —
-    // never neither.
-    if (since.value !== undefined) {
-      const replayed = replayedWake(ports.db, watched, eventKinds, since.value);
+    // Subscribe first, establish/replay the cursor second: the read is
+    // synchronous, so an event is either included in the durable query or
+    // arrives through the live subscription — never neither. A first call
+    // intentionally starts at "now", while still returning that baseline on a
+    // timeout so the gap before a retry is replayable.
+    const continuousCursor = cursor ?? currentTicketEventCursor(ports.db);
+    if (cursor !== undefined) {
+      const replayed = replayedWake(ports.db, watched, eventKinds, cursor);
       if (replayed !== null) {
-        settle(() => resolve({ text: wakeText(ports.db, replayed.display, replayed.event) }));
+        settle(() =>
+          resolve({
+            text: wakeText(ports.db, replayed.display, replayed.event, replayed.cursor),
+          }),
+        );
         return;
       }
     }
@@ -293,7 +346,7 @@ export function awaitTicketTool(
             resolve({
               text: [
                 `No matching event within ${timeout.value} seconds on ${displays} (waiting for: ${kinds.join(", ")}).`,
-                "Nothing was missed: call ticket_await again with the same sinceMs to keep the window continuous.",
+                `cursor: ${continuousCursor}. Pass this cursor unchanged to the next ticket_await; events committed after this wait began will be replayed.`,
               ].join("\n"),
             }),
           ),

@@ -1771,3 +1771,75 @@ describe("migration 028 — the typed verdict channel", () => {
     db.close();
   });
 });
+
+describe("migration 029 — durable Ticket Event sequence", () => {
+  it("backfills commit order and never reuses a cursor after deletion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 28)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 28");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    const insertEvent = db.prepare(
+      `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+       VALUES (?, 't1', ?, 'user', '{}', 100)`,
+    );
+    insertEvent.run("event-a", "archived");
+    insertEvent.run("event-b", "unarchived");
+
+    migrate(db, dbPath);
+
+    expect(
+      db.prepare("SELECT sequence, event_id FROM ticket_event_sequence ORDER BY sequence").all(),
+    ).toEqual([
+      { sequence: 1, event_id: "event-a" },
+      { sequence: 2, event_id: "event-b" },
+    ]);
+
+    db.prepare("DELETE FROM ticket_events WHERE id = 'event-b'").run();
+    insertEvent.run("event-c", "archived");
+    expect(
+      db.prepare("SELECT sequence, event_id FROM ticket_event_sequence ORDER BY sequence").all(),
+    ).toEqual([
+      { sequence: 1, event_id: "event-a" },
+      { sequence: 3, event_id: "event-c" },
+    ]);
+    db.close();
+  });
+
+  it("keeps event identity immutable while allowing body-edit timestamp coalescing", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+       VALUES ('event-a', 't1', 'body_edited', 'user', '{}', 1)`,
+    ).run();
+
+    expect(() =>
+      db.prepare("UPDATE ticket_events SET kind = 'archived' WHERE id = 'event-a'").run(),
+    ).toThrow("ticket event identity is immutable");
+    expect(() =>
+      db.prepare("UPDATE ticket_events SET created_at = 2 WHERE id = 'event-a'").run(),
+    ).not.toThrow();
+    db.close();
+  });
+});

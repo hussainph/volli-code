@@ -116,13 +116,13 @@ Usage: volli ticket show <id> [options]
 Options:
   --events <n>     How many recent events to include; 0 for none.
   --comments <n>   How many recent comments to include; 0 for none.
-  --comments-only  Drop the event log — sugar for --events 0.
+  --comments-only  Show comments/signals with a compact ticket header; read no event history.
 
 Example: volli ticket show VC-12 --comments-only
 
 Notes:
 - Latest signal per kind is always printed: signals carry state, comments carry prose.
-- Either count takes 0, which drops that section entirely — a poll costs what it reads.
+- Either count takes 0 and performs no history query; zeroing both returns a compact ticket header for signal polling.
 
 ============================================================================
 volli help ticket events
