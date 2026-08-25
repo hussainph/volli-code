@@ -78,10 +78,11 @@ export const AGENT_CONCEPT_SECTIONS: readonly AgentConceptSection[] = [
     ],
   },
   {
-    heading: "Actors and the current socket boundary",
+    heading: "Actors and the socket boundary",
     paragraphs: [
-      "An Actor is user, session, or automation. The app derives attribution from the door a mutation arrived through; callers do not declare themselves to be a user. Ticket events keep that attribution and may cite the originating Session.",
-      "In this compiled baseline, the local socket attributes VOLLI_SESSION but does not authenticate it. No environment variable is treated as the user. Any process running as the signed-in macOS user can reach the socket, which is why operations that cannot tolerate that ambient caller belong on the Agent Tool Surface instead. A future authenticated actor seam can strengthen admission without changing these Actor names.",
+      "An Actor is user, session, automation, or unauthenticated. The app derives attribution from the door a mutation arrived through; callers never declare themselves. Ticket events keep that attribution and may cite the originating Session.",
+      "The local socket authenticates a Session by a per-attachment token, exported into that Session's environment beside VOLLI_SESSION. A caller with no valid token is the unauthenticated Actor: never the user, and never the Session it names. Its default posture is reads only, and what it may write beyond that is per-project policy a person sets in the app.",
+      "Scope that claim honestly. The token defeats an injected string and cross-session confusion; it does not defeat a hostile process running as the signed-in macOS user, which can read the token out of any environment it can see. That is precisely why the control tier is absent from the socket rather than gated on the token: a named tool call is bound to the attachment that made it and never crosses a socket, so there is no credential to steal.",
     ],
   },
   {
@@ -121,6 +122,26 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-162",
+    build: "VC-163",
+    added: [
+      "Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.",
+      "The unauthenticated Actor, for a socket caller Volli cannot identify. It may read the board and, by default, write nothing — a posture a person can widen per project, per verb.",
+      "FORBIDDEN_ACTOR (exit class 1), the refusal for a caller the project's policy does not let run a verb. Distinct from WRONG_DOOR, which is about the surface rather than the caller.",
+    ],
+    changed: [
+      "No environment variable is read as the user any more. An absent or forged VOLLI_SESSION resolves to the unauthenticated Actor rather than to the highest-trust Actor in the system.",
+      "Coordination-tier verbs — ticket create/update/move/comment, notify, session done/blocked/link/harness, hook — require an authenticated Session unless a project grants them more widely.",
+      "ticket.comment stamps its comment row from the authenticated Actor rather than from raw VOLLI_SESSION, so a comment can no longer cite a Session that did not write it.",
+      "Command detail no longer prints shell usage, argv options, or a copyable example for a verb the shell does not execute. A tool-only verb shows its callable name and input fields instead; an app-only verb names the app.",
+    ],
+    fixed: [],
+    removed: [
+      "session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.",
+      "ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.",
+    ],
+  },
+  {
     baseline: "VC-91",
     build: "VC-162",
     added: [
@@ -129,7 +150,7 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "A SESSION TOOLS block in every Session's first message, naming the Volli verbs that Session holds under their callable names, and stating that what is absent will not become available mid-Session.",
     ],
     changed: [
-      "session.start is reachable through two doors: volli session start on the Agent CLI, and the named session_start tool on the Agent Tool Surface. One registry key, one handler, two doors — its verb tier stays coordination while the CLI door remains open.",
+      "session.start gained the named session_start tool on the Agent Tool Surface beside its Agent CLI door. One registry key, one handler, two doors — its verb tier stayed coordination while the CLI door remained open. VC-163 then closed that door; see the entry above.",
       "A Session's frozen tool surface can now name Verb Registry keys alongside coding and interaction tools. The durable record spells the dot-key; only the provider wire uses the underscored form.",
       "A Ticket Session's tool array contains no agent-control tool, and cannot acquire one while it runs. Availability is decided once, when the Session is created.",
     ],
@@ -194,6 +215,10 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
   WRONG_DOOR: {
     why: "The verb exists, but the shell is not the surface that executes it.",
     next: "Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.",
+  },
+  FORBIDDEN_ACTOR: {
+    why: "The verb is on this surface, and this caller is not one the project's policy lets run it. Coordination-tier verbs want an authenticated Volli Session; a process that merely runs as your user is not one.",
+    next: "Run the command from inside a Volli Session. If you already are, the project's per-actor policy withholds this verb and only a person can widen it in Settings — do not work around the refusal.",
   },
   APP_UNREACHABLE: {
     why: "The local desktop host or one of its required runtimes could not answer.",

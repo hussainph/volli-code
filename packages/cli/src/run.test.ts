@@ -365,6 +365,96 @@ describe("runCli", () => {
     expect(requests).toEqual([]);
   });
 
+  // VC-163: the CLI is the transport for a Session's authentication. If it
+  // drops `VOLLI_SESSION_TOKEN` on the floor, every Session in the product
+  // becomes an unauthenticated caller that may read and may not write — a
+  // failure that would look like a policy bug rather than a plumbing one.
+  it("carries the session token from the environment onto the wire", async () => {
+    const requests: AgentRequest[] = [];
+
+    await runCli(["ticket", "comment", "VC-4", "-m", "Working"], {
+      env: {
+        VOLLI_SOCKET: "/profiles/volli.sock",
+        VOLLI_SESSION: "session-7",
+        VOLLI_SESSION_TOKEN: "tok-abc",
+      },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socketPath, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { comment: { ticket: "VC-4" } } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.ctx.env).toEqual({
+      socket: "/profiles/volli.sock",
+      session: "session-7",
+      token: "tok-abc",
+    });
+  });
+
+  // The optional Role read a wrong door pays for is a socket call like any
+  // other, so it authenticates like one — otherwise a Session asking which
+  // tools it holds would ask as a stranger.
+  it("carries the session token on the wrong-door Role read too", async () => {
+    const helpRequests: AgentRequest[] = [];
+
+    await runCli(["session", "start", "VC-4"], {
+      env: {
+        VOLLI_SOCKET: "/profiles/volli.sock",
+        VOLLI_SESSION: "session-7",
+        VOLLI_SESSION_TOKEN: "tok-abc",
+        VOLLI_TICKET: "VC-4",
+      },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async () => {
+        throw new Error("a parse refusal must not use the command transport");
+      },
+      helpRequest: async (_socketPath, request) => {
+        helpRequests.push(request);
+        return { v: 1, ok: true, data: { appVersion: "0.1.1" } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(helpRequests[0]?.ctx.env).toEqual({
+      socket: "/profiles/volli.sock",
+      session: "session-7",
+      token: "tok-abc",
+      ticket: "VC-4",
+    });
+  });
+
+  // Absent and empty must stay distinguishable all the way to the door: an
+  // exported-but-blank token is what a caller supplies, not what Volli mints.
+  it("sends no token field at all when the environment carries none", async () => {
+    const requests: AgentRequest[] = [];
+
+    await runCli(["board"], {
+      env: { VOLLI_SOCKET: "/profiles/volli.sock", VOLLI_SESSION_TOKEN: "" },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socketPath, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { columns: {} } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.ctx.env).not.toHaveProperty("token");
+  });
+
   it("identifies environment context in degraded mode when the app is down", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

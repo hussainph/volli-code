@@ -768,9 +768,10 @@ Board state, Session signals, and human effects
 Ticket state and Session state are separate ledgers. A Ticket comment appears in the Ticket activity feed. A Ticket move changes the board. A Session signal appears on that Session and can raise attention. Each write documents where a person sees the result and the important actions it does not imply.
 notify calls Electron's native Notification API. It raises a native macOS notification, not an in-app Sonner toast. A Session start received through the agent path raises an actionable in-app toast with Open session. It does not steal focus or navigate until the person uses that action.
 
-Actors and the current socket boundary
-An Actor is user, session, or automation. The app derives attribution from the door a mutation arrived through; callers do not declare themselves to be a user. Ticket events keep that attribution and may cite the originating Session.
-In this compiled baseline, the local socket attributes VOLLI_SESSION but does not authenticate it. No environment variable is treated as the user. Any process running as the signed-in macOS user can reach the socket, which is why operations that cannot tolerate that ambient caller belong on the Agent Tool Surface instead. A future authenticated actor seam can strengthen admission without changing these Actor names.
+Actors and the socket boundary
+An Actor is user, session, automation, or unauthenticated. The app derives attribution from the door a mutation arrived through; callers never declare themselves. Ticket events keep that attribution and may cite the originating Session.
+The local socket authenticates a Session by a per-attachment token, exported into that Session's environment beside VOLLI_SESSION. A caller with no valid token is the unauthenticated Actor: never the user, and never the Session it names. Its default posture is reads only, and what it may write beyond that is per-project policy a person sets in the app.
+Scope that claim honestly. The token defeats an injected string and cross-session confusion; it does not defeat a hostile process running as the signed-in macOS user, which can read the token out of any environment it can see. That is precisely why the control tier is absent from the socket rather than gated on the token: a named tool call is bound to the attachment that made it and never crosses a socket, so there is no credential to steal.
 
 The three product surfaces
 The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session's Role bundle. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role was or was not handed that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.
@@ -797,13 +798,29 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
+VC-163 (after VC-162)
+Added
+- Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.
+- The unauthenticated Actor, for a socket caller Volli cannot identify. It may read the board and, by default, write nothing — a posture a person can widen per project, per verb.
+- FORBIDDEN_ACTOR (exit class 1), the refusal for a caller the project's policy does not let run a verb. Distinct from WRONG_DOOR, which is about the surface rather than the caller.
+Changed
+- No environment variable is read as the user any more. An absent or forged VOLLI_SESSION resolves to the unauthenticated Actor rather than to the highest-trust Actor in the system.
+- Coordination-tier verbs — ticket create/update/move/comment, notify, session done/blocked/link/harness, hook — require an authenticated Session unless a project grants them more widely.
+- ticket.comment stamps its comment row from the authenticated Actor rather than from raw VOLLI_SESSION, so a comment can no longer cite a Session that did not write it.
+- Command detail no longer prints shell usage, argv options, or a copyable example for a verb the shell does not execute. A tool-only verb shows its callable name and input fields instead; an app-only verb names the app.
+Fixed
+- None in this record.
+Removed
+- session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
+- ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.
+
 VC-162 (after VC-91)
 Added
 - A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.
 - session_start as a named tool in the project Role's bundle. A Project Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.
 - A SESSION TOOLS block in every Session's first message, naming the Volli verbs that Session holds under their callable names, and stating that what is absent will not become available mid-Session.
 Changed
-- session.start is reachable through two doors: volli session start on the Agent CLI, and the named session_start tool on the Agent Tool Surface. One registry key, one handler, two doors — its verb tier stays coordination while the CLI door remains open.
+- session.start gained the named session_start tool on the Agent Tool Surface beside its Agent CLI door. One registry key, one handler, two doors — its verb tier stayed coordination while the CLI door remained open. VC-163 then closed that door; see the entry above.
 - A Session's frozen tool surface can now name Verb Registry keys alongside coding and interaction tools. The durable record spells the dot-key; only the provider wire uses the underscored form.
 - A Ticket Session's tool array contains no agent-control tool, and cannot acquire one while it runs. Availability is decided once, when the Session is created.
 Fixed
@@ -846,6 +863,9 @@ Error codes:
   WRONG_DOOR           2 usage
     Why: The verb exists, but the shell is not the surface that executes it.
     Next: Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.
+  FORBIDDEN_ACTOR      1 failure
+    Why: The verb is on this surface, and this caller is not one the project's policy lets run it. Coordination-tier verbs want an authenticated Volli Session; a process that merely runs as your user is not one.
+    Next: Run the command from inside a Volli Session. If you already are, the project's per-actor policy withholds this verb and only a person can widen it in Settings — do not work around the refusal.
   APP_UNREACHABLE      3 app unreachable (retryable)
     Why: The local desktop host or one of its required runtimes could not answer.
     Next: Run `volli app launch`, wait for readiness, then retry the same command once.

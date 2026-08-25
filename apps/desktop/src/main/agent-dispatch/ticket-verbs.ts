@@ -52,9 +52,9 @@ import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import {
   actorSessionTicketDisplay,
+  attributedActor,
   invalidPriorityResponse,
   projectForCreate,
-  requestActor,
   ticketForDisplayId,
 } from "./resolution";
 import { agentTicket } from "./wire";
@@ -136,7 +136,10 @@ export async function ticketCreateVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now, newId } = context;
+  const { options, projects, envSession, now, newId, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = projectForCreate(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   const createPriorityError = invalidPriorityResponse(request.args["priority"]);
@@ -159,8 +162,6 @@ export async function ticketCreateVerb(
   ) {
     return failure("INVALID_REQUEST", "Invalid ticket create arguments.");
   }
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const createPreview = dryRunResponse(request, {
     kind: "project",
     id: resolved.project.ticketPrefix,
@@ -188,7 +189,7 @@ export async function ticketCreateVerb(
         // automation at use time, NOT stamped here from a snapshot.
         baseBranch: typeof base === "string" ? base : null,
       },
-      { now: createdAt, actor: actor.actor },
+      { now: createdAt, actor },
     );
     // The wake goes out after the create's transaction returned, and with no
     // mark to take: a ticket that did not exist a moment ago has no events its
@@ -214,11 +215,12 @@ export async function ticketUpdateVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
+  const { options, projects, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const title = request.args["title"];
   const priority = request.args["priority"];
   const base = request.args["base"];
@@ -268,13 +270,13 @@ export async function ticketUpdateVerb(
             ? { preferredHarnessId: requestedHarness.harnessId }
             : {}),
         },
-        { now: updatedAt, actor: actor.actor },
+        { now: updatedAt, actor },
       );
       if (isTicketPriority(priority) && priority !== resolved.ticket.priority) {
         ticket = setTicketPriorityCommand(
           options.db,
           { ticketId: resolved.ticket.id, priority },
-          { now: updatedAt, actor: actor.actor },
+          { now: updatedAt, actor },
         );
       }
       const currentLabels = resolved.ticket.labels;
@@ -284,7 +286,7 @@ export async function ticketUpdateVerb(
       ticket = setTicketLabelsCommand(
         options.db,
         { ticketId: resolved.ticket.id, labels: requestedLabels },
-        { now: updatedAt, actor: actor.actor },
+        { now: updatedAt, actor },
       );
       return ticket;
     });
@@ -312,11 +314,12 @@ export async function ticketMoveVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
+  const { options, projects, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const to = request.args["to"];
   if (!isTicketStatus(to)) {
     return failure("INVALID_REQUEST", "ticket move requires a valid destination column.");
@@ -369,7 +372,7 @@ export async function ticketMoveVerb(
           toStatus: to,
           toIndex,
         },
-        { now: movedAt, actor: actor.actor },
+        { now: movedAt, actor },
       ),
     );
     const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
@@ -403,18 +406,18 @@ export async function ticketMoveVerb(
     // pushing work into the active column, is the told-to-work-on-changes
     // vector VC-92 §3 named. It notifies, and the body says what is unknown
     // about it rather than inventing a party.
-    if (to === "doing" && actor.actor.kind !== "user") {
+    if (to === "doing" && actor.kind !== "user") {
       const movedDisplay = displayTicketId(
         resolved.project.ticketPrefix,
         resolved.ticket.ticketNumber,
       );
       let body: string;
-      if (actor.actor.kind === "automation") {
+      if (actor.kind === "automation") {
         body = "Moved by automation";
-      } else if (actor.actor.kind === "unauthenticated") {
+      } else if (actor.kind === "unauthenticated") {
         body = "Moved by an unauthenticated caller";
       } else {
-        const via = actorSessionTicketDisplay(options.db, projects, actor.actor.ticketId);
+        const via = actorSessionTicketDisplay(options.db, projects, actor.ticketId);
         body = via ? `Moved via ${via}'s session` : "Moved via a session";
       }
       options.notify?.(`${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`, body);
@@ -439,11 +442,12 @@ export async function ticketCommentVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
+  const { options, projects, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const message = request.args["message"];
   if (typeof message !== "string" || message.trim().length === 0) {
     return failure("INVALID_REQUEST", "ticket comment requires a message.");
@@ -461,10 +465,16 @@ export async function ticketCommentVerb(
         {
           ticketId: resolved.ticket.id,
           body: message,
-          commentActor: request.ctx.env.session ? "session" : "user",
-          sessionId: request.ctx.env.session ?? null,
+          // From the RESOLVED actor, never from `request.ctx.env.session` (VC-163).
+          // Reading the raw claim here was a second, independent derivation of
+          // the same fact, and the two could disagree in exactly the case that
+          // matters: a forged `VOLLI_SESSION` with no token attributes the EVENT
+          // as unauthenticated while stamping the COMMENT with the Session it
+          // named — a row citing a Session that did not write it.
+          commentActor: actor.kind === "session" ? "session" : actor.kind,
+          sessionId: actor.kind === "session" ? actor.sessionId : null,
         },
-        { now: now(), actor: actor.actor },
+        { now: now(), actor },
       ),
     );
     options.onMutation?.({
@@ -494,33 +504,37 @@ export async function ticketCommentVerb(
  *
  * The verb that replaces the `VERDICT: FIRST-LINE` comment convention, and the
  * three refusals below are what a convention could not have. A kind outside the
- * vocabulary is named with the vocabulary; a missing `VOLLI_SESSION` is refused
- * outright rather than attributed to "user", because a verdict is worth what
- * its signer is; and the board is not touched on any path.
+ * vocabulary is named with the vocabulary; a caller without an authenticated
+ * attachment token is refused outright, because a verdict is worth what its
+ * signer is; and the board is not touched on any path.
  *
- * The session requirement is the one thing here that is not like
- * `ticket.comment`, and it is deliberate (VC-92): comments are prose anybody
- * may leave, signals are state a machine will act on. VC-163 turns the
- * `VOLLI_SESSION` this reads from an attribution into an authentication; the
- * shape of the refusal does not change when it does.
+ * This check remains hard even if a project grants another coordination verb
+ * to unauthenticated callers: policy may widen who can comment, but cannot mint
+ * a signer for a machine-readable verdict. The authenticated Session also
+ * scopes the target project, so neither admission nor attribution can be
+ * borrowed across projects.
  */
 export async function ticketSignalVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
-  const envSessionId = request.ctx.env.session;
-  if (!envSessionId) {
+  const { options, projects, envSession, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
+  if (actor.kind !== "session" || envSession === null) {
     return failure(
-      "CONTEXT_REQUIRED",
-      "ticket signal requires VOLLI_SESSION context: a verdict records who reached it.",
-      "Run it from inside a Volli session, or use ticket comment to leave prose from an unattributed shell.",
+      "FORBIDDEN_ACTOR",
+      "ticket.signal requires an authenticated Volli Session; an unauthenticated caller cannot sign a verdict.",
+      "Run it from inside the live Session attachment whose VOLLI_SESSION_TOKEN authenticates the signer.",
     );
   }
-  const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
+  const project = projects.find(({ id }) => id === envSession.projectId);
+  if (project === undefined) {
+    return failure("PROJECT_NOT_FOUND", "The authenticated Session's project no longer exists.");
+  }
+  const resolved = ticketForDisplayId(options.db, [project], request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const kind = request.args["kind"];
   if (!isTicketSignalKind(kind)) {
     return failure(
@@ -566,9 +580,9 @@ export async function ticketSignalVerb(
           verdict,
           detail,
           signalActor: "session",
-          sessionId: envSessionId,
+          sessionId: actor.sessionId,
         },
-        { now: now(), actor: actor.actor },
+        { now: now(), actor },
       ),
     );
     options.onMutation?.({

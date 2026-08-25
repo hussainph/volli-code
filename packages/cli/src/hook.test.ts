@@ -66,6 +66,26 @@ describe("runHook", () => {
     ]);
   });
 
+  // VC-163: `hook` is coordination tier, so a hook fired from inside a Session
+  // authenticates with the token that Session's attachment holds. The hook
+  // process is a descendant of that attachment, so it inherits it.
+  it("carries the session token a hook inherits from its attachment", async () => {
+    const { recorded, dependencies } = deps({
+      env: {
+        VOLLI_SESSION: "session-7",
+        VOLLI_SOCKET: "/profiles/volli.sock",
+        VOLLI_SESSION_TOKEN: "tok-abc",
+      },
+    });
+
+    await runHook(["claude-code", "turn.started"], dependencies);
+
+    expect(recorded.requests[0]?.ctx.env).toMatchObject({
+      session: "session-7",
+      token: "tok-abc",
+    });
+  });
+
   it("takes the payload off argv for a harness that hands it there", async () => {
     const { recorded, dependencies } = deps();
 

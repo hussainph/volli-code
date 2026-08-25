@@ -17,8 +17,10 @@ import {
   type AgentSocketServer,
 } from "./agent-socket";
 import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
+import { openTestDb, testProject, testSession, type TestDb } from "./db/test-helpers";
 import { createDesktopSessionEngine } from "./session-control";
+import { insertSession } from "./session-control/test-support";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;
 let server: AgentSocketServer | undefined;
@@ -440,22 +442,30 @@ describe("agent socket", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     let timestamp = 100;
+    // A real Session on the other end of the real socket: these are
+    // coordination-tier writes, so the caller carries the token Volli exported
+    // into its attachment (VC-163). The wire field is what makes the round trip
+    // end to end — the token has to survive JSON, the socket and the parse, not
+    // just the in-process call.
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+    const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
       db: ctx.db,
       sessionEngine: createDesktopSessionEngine(ctx.db),
       appVersion: "1.2.3",
       now: () => timestamp++,
       newId: () => "ticket-internal",
+      verifySessionToken: tokens.verify,
     });
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");
     server = await startAgentSocket({ socketPath, execute: (request) => service.execute(request) });
+    const env = {
+      session: sessionId,
+      token: tokens.mint({ sessionId, attachmentId: "attachment-1" }),
+    };
     const request = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      roundTrip(socketPath, {
-        v: 1,
-        cmd,
-        args,
-        ctx: { cwd: "/repo/volli", env: {} },
-      });
+      roundTrip(socketPath, { v: 1, cmd, args, ctx: { cwd: "/repo/volli", env } });
 
     expect(await request("ticket.create", { title: "Ship CLI" })).toMatchObject({
       ok: true,

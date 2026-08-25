@@ -260,12 +260,106 @@ export function ticketForDisplayId(
   return { ok: false, response: failure("TICKET_NOT_FOUND", `No ticket matches ${displayId}.`) };
 }
 
-export function requestActor(
+/**
+ * Who the caller IS at the door — authenticated, or not (VC-163).
+ *
+ * Attribution used to happen here and authentication never did. This door read
+ * `VOLLI_SESSION` out of the request environment and believed it, and read the
+ * ABSENCE of that variable as `{ kind: "user" }` — the highest-trust actor in
+ * the system, granted on no evidence whatsoever. Every process running as the
+ * signed-in user reached the socket, and every one of them was the user.
+ *
+ * Now the token decides, and there are exactly three outcomes:
+ *
+ * - A token this launch minted, naming the Session the caller claims → the
+ *   authenticated session actor.
+ * - Anything else — no token, a forged one, a revoked one, or a valid one for a
+ *   DIFFERENT Session than the claim → `unauthenticated`. Never `session`,
+ *   which would make the token decorative, and never `user`, which is the
+ *   grant-by-absence this ticket exists to remove.
+ * - A token whose Session the Engine can no longer resolve → an error.
+ *
+ * What the caller may then DO is not decided here. Read-tier verbs take any
+ * actor; coordination-tier verbs are judged against the per-project policy in
+ * `admission.ts`. These two answer identity, and only identity.
+ *
+ * Scope the guarantee honestly: see `session-tokens.ts`. A token defeats an
+ * injected string and cross-session confusion. It does not defeat a hostile
+ * process running as the same user, which is why the control tier is absent
+ * from this socket rather than gated on this check.
+ */
+/**
+ * The attribution a verb is entitled to, or the refusal to hand it one.
+ *
+ * `AgentCommandContext.actor` is `null` for the three verbs whose table entry
+ * skips identity resolution, so a verb that WRITES ticket history has to say
+ * that it expects one. Every current caller declares `envSession: "resolve"`
+ * and can therefore never see the refusal — but the alternative was a non-null
+ * assertion at each write site, which would turn a future table edit into a
+ * silent `undefined` in durable history instead of a legible refusal.
+ */
+export function attributedActor(
+  actor: TicketEventActor | null,
+): { ok: true; actor: TicketEventActor } | { ok: false; response: AgentResponse } {
+  return actor === null
+    ? {
+        ok: false,
+        response: failure(
+          "INVALID_REQUEST",
+          "This verb writes attributed history but its dispatch entry resolves no identity.",
+        ),
+      }
+    : { ok: true, actor };
+}
+
+/**
+ * Who the caller is, from the token alone — no database, no Session Engine.
+ *
+ * Split from {@link requestActor} because the two questions have different
+ * costs and different consumers. ADMISSION needs only the kind, and needs it
+ * for every verb including `hook`, which arrives on a process-per-event hot
+ * path and must not pay for an identity lookup it does not use. ATTRIBUTION
+ * needs the Session's ticket as well, and only the verbs that write ticket
+ * events need that.
+ */
+export type DoorActor =
+  | { readonly kind: "session"; readonly sessionId: string }
+  | { readonly kind: "unauthenticated" };
+
+export function doorActor(
   request: AgentRequest,
+  verifyToken: (token: string | undefined) => string | null,
+): DoorActor {
+  const authenticated = verifyToken(request.ctx.env.token);
+  if (authenticated === null) return { kind: "unauthenticated" };
+  // A token proves WHICH Session holds it, so a claim that disagrees with it is
+  // not a claim this door reconciles: it takes neither side and authenticates
+  // nobody. Believing the token over the claim would let a caller act on its
+  // own authority while addressing another Session's context; believing the
+  // claim over the token is the forgery the token exists to stop.
+  const claimed = request.ctx.env.session;
+  if (claimed !== undefined && claimed !== authenticated) return { kind: "unauthenticated" };
+  return { kind: "session", sessionId: authenticated };
+}
+
+/**
+ * The actor a write is ATTRIBUTED to, for the verbs that write ticket history.
+ *
+ * Takes the already-decided {@link DoorActor} rather than re-deriving one, so
+ * the actor a write is stamped with is by construction the actor the admission
+ * gate admitted. Two derivations could disagree, and the disagreement would be
+ * invisible in exactly the case that matters.
+ *
+ * The one refusal here is a token that authenticates a Session the Engine can
+ * no longer resolve. That caller IS authenticated, so answering "you are
+ * anonymous" would misdescribe the fault and hide a Session that ended
+ * underneath a live attachment.
+ */
+export function requestActor(
+  door: DoorActor,
   envSession: EnvSessionIdentity | null,
 ): { ok: true; actor: TicketEventActor } | { ok: false; response: AgentResponse } {
-  const sessionId = request.ctx.env.session;
-  if (!sessionId) return { ok: true, actor: { kind: "user" } };
+  if (door.kind === "unauthenticated") return { ok: true, actor: { kind: "unauthenticated" } };
   return envSession
     ? {
         ok: true,
@@ -273,6 +367,6 @@ export function requestActor(
       }
     : {
         ok: false,
-        response: failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`),
+        response: failure("SESSION_NOT_FOUND", `No session matches ${door.sessionId}.`),
       };
 }

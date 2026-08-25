@@ -181,6 +181,15 @@ export interface AuthorityPolicy {
  * signal it is done or blocked, get someone's attention. Spelled as the Verb
  * Registry spells them, because VC-92 pinned the dot-name as the verb's identity
  * on every surface that projects it.
+ *
+ * The last two are INVOLUNTARY and were missing from this list until VC-163
+ * wired it to the door — a gap that was invisible while nothing read the
+ * policy. Neither is a verb an agent chooses: `session.harness` is fired by a
+ * harness's own launch wrapper one step before it execs, and `hook` by a
+ * harness hook reporting what the agent is doing. VC-92 §3 assigns both to the
+ * coordination tier, and omitting them here would have refused every Session
+ * the two channels its own harness reports through — silently, since `hook`
+ * discards its answer by design so as never to wedge the agent it fired from.
  */
 const DEFAULT_SESSION_COORDINATION_VERBS = [
   "ticket.comment",
@@ -198,6 +207,8 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
   "session.done",
   "session.link",
   "notify",
+  "session.harness",
+  "hook",
 ] as const;
 
 /**
@@ -264,6 +275,33 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
     }),
   }),
 }) as AuthorityPolicy;
+
+/**
+ * Whether one kind of caller may run one coordination-tier verb (VC-163).
+ *
+ * The read VC-44 built this store for, and the whole of the socket door's
+ * write-side judgement. Deliberately a plain membership test rather than a
+ * cascade of special cases:
+ *
+ * - **An unlisted verb is refused.** Not "unknown, so allow" — a caller
+ *   holding no list holds nothing, which is what makes the default posture
+ *   (`unauthenticated: { coordinationVerbs: [] }`) mean reads-only with no
+ *   further code.
+ * - **Read-tier verbs never reach here.** Callers gate on the verb's registry
+ *   actor requirement first, so absence from a list is never mistaken for
+ *   withholding a read that no policy withholds.
+ * - **The tier is not consulted, because it is not stored.** VC-92 pinned tier
+ *   as derived from access modes plus actor requirement; a policy that also
+ *   recorded one could disagree with the registry, and one of them would be
+ *   wrong.
+ */
+export function coordinationVerbAllowed(
+  policy: AuthorityPolicy,
+  kind: AuthorityActorKind,
+  verbKey: string,
+): boolean {
+  return policy.actors[kind].coordinationVerbs.includes(verbKey);
+}
 
 /**
  * The token a project's list splices its own defaults in at.

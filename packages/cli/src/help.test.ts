@@ -127,6 +127,29 @@ describe("renderHelp command detail", () => {
     expect(detail).not.toContain("Example: volli session start");
   });
 
+  // A tool that takes nothing is a legal projection — `VerbToolProjection.input`
+  // is explicitly allowed to be empty — so the Input heading has to be
+  // conditional rather than always printed above nothing.
+  it("prints no Input heading for a tool that takes nothing", () => {
+    const nullary: VerbEntry = {
+      key: "session.ping",
+      accessModes: ["tool"],
+      actor: "role",
+      handler: { site: "main", id: "session.ping" },
+      listed: true,
+      referenceOrder: 0,
+      group: "Session",
+      summary: "Take nothing and answer.",
+      tool: { name: "session_ping", description: "Answers.", input: [] },
+      options: [],
+    };
+
+    const detail = renderHelp(["session", "ping"], [nullary]);
+
+    expect(detail).toContain("Tool: session_ping");
+    expect(detail).not.toContain("Input:");
+  });
+
   it("renders a command that has options but no notes", () => {
     const detail = renderHelp(["ticket", "list"]);
     expect(detail).toContain("Options:");

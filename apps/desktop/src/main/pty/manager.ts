@@ -553,6 +553,19 @@ export class PtyManager {
             { ...scope.env, ...this.agentRuntime.harnessEnv, ...this.agentRuntime.shellEnv },
             {
               sessionId,
+              // Minted per ATTACHMENT, against the id this spawn is about to
+              // record, so the token dies with the terminal that holds it
+              // (VC-163). It sits UNDER nothing: `agentSessionEnv` writes the
+              // agent contract over the harness layers precisely so a wrapper
+              // cannot shadow the values a `volli` call resolves itself by.
+              ...(this.agentRuntime.mintSessionToken
+                ? {
+                    sessionToken: this.agentRuntime.mintSessionToken({
+                      sessionId,
+                      attachmentId,
+                    }),
+                  }
+                : {}),
               socketPath: this.agentRuntime.socketPath,
               binDir: this.agentRuntime.binDir,
               inheritedPath: process.env["PATH"] ?? "",
@@ -1226,6 +1239,16 @@ function foregroundProcess(session: Session): string | null {
 export interface AgentRuntimeEnvironment {
   socketPath: string;
   binDir: string;
+  /**
+   * Mints the token this attachment's shell authenticates with (VC-163).
+   *
+   * A seam rather than a direct registry import, because the VERIFYING half
+   * lives with the agent socket and only main's composition root holds both.
+   * Absent means no token is exported, which is fail-closed rather than
+   * fail-open: that terminal's `volli` becomes an unauthenticated caller, so it
+   * can read the board and change nothing.
+   */
+  mintSessionToken?: (input: { sessionId: string; attachmentId: string }) => string;
   /**
    * What the wrappers in `binDir` READ at run time: `VOLLI_HARNESS_ARGV_<SLUG>`,
    * one namespaced variable per harness. Nothing a HARNESS reads is here — a

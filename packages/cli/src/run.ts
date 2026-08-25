@@ -220,6 +220,9 @@ async function readHelpRuntime(dependencies: RunCliDependencies): Promise<AgentH
       env: {
         socket: socketPath,
         ...(sessionId === undefined ? {} : { session: sessionId }),
+        ...(dependencies.env["VOLLI_SESSION_TOKEN"]
+          ? { token: dependencies.env["VOLLI_SESSION_TOKEN"] }
+          : {}),
         ...(dependencies.env["VOLLI_TICKET"] === undefined
           ? {}
           : { ticket: dependencies.env["VOLLI_TICKET"] }),
@@ -409,6 +412,15 @@ export async function runCli(
           ...(dependencies.env["VOLLI_SOCKET"] ? { socket: dependencies.env["VOLLI_SOCKET"] } : {}),
           ...(dependencies.env["VOLLI_SESSION"]
             ? { session: dependencies.env["VOLLI_SESSION"] }
+            : {}),
+          // The Session's authentication, forwarded verbatim (VC-163). The CLI
+          // never inspects it and cannot mint one: it is the transport for a
+          // secret Volli exported into this attachment, and the door is the
+          // only thing that can say whether it means anything. An empty value
+          // is treated as absent, so `VOLLI_SESSION_TOKEN=""` cannot arrive as
+          // a token-shaped field the door has to reason about.
+          ...(dependencies.env["VOLLI_SESSION_TOKEN"]
+            ? { token: dependencies.env["VOLLI_SESSION_TOKEN"] }
             : {}),
           ...(dependencies.env["VOLLI_TICKET"] ? { ticket: dependencies.env["VOLLI_TICKET"] } : {}),
         },

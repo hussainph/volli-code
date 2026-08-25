@@ -523,8 +523,8 @@ describe("REFERENCE_VERBS", () => {
 
   it("still lets help name the two verbs the shell cannot run", () => {
     const discoverable = DISCOVERABLE_VERBS.map((entry) => entry.key);
-    const reference = REFERENCE_VERBS.map((entry) => entry.key);
-    expect(discoverable.filter((key) => !reference.includes(key))).toEqual([
+    const reference = new Set(REFERENCE_VERBS.map((entry) => entry.key));
+    expect(discoverable.filter((key) => !reference.has(key))).toEqual([
       "ticket.archive",
       "session.start",
     ]);

@@ -80,6 +80,7 @@ import {
   watchSessionActivity,
 } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
+import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
@@ -856,6 +857,19 @@ app.whenReady().then(async () => {
    * should: every path between here and the assignment is a handler body that
    * cannot run before the window exists.
    */
+  /**
+   * The one place both halves of the session-token seam are known (VC-163).
+   *
+   * Minting belongs to whatever spawns an attachment — the PTY manager and the
+   * Pi execution environment — and verifying belongs to the agent socket. Only
+   * this composition root sees both, which is why the registry is created here
+   * and passed to each side as a narrow function rather than imported by them.
+   *
+   * Process-lived, like the attachments it issues for: see `session-tokens.ts`
+   * for why that lifetime is the design rather than a limitation.
+   */
+  const sessionTokens = createSessionTokenRegistry();
+
   let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
@@ -902,6 +916,14 @@ app.whenReady().then(async () => {
               pathPrefixes: [runtimePaths.binDir],
               identity: {
                 sessionId: identity.sessionId,
+                // Minted per ATTACHMENT, which is what `identity.attachmentId`
+                // names, so a structured Session's shell authenticates exactly
+                // as a spawned PTY's does (VC-163) — and the token dies with
+                // the attachment rather than with the Session.
+                sessionToken: sessionTokens.mint({
+                  sessionId: identity.sessionId,
+                  attachmentId: identity.attachmentId,
+                }),
                 ticketDisplayId:
                   ticket && ticketProject
                     ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
@@ -1801,6 +1823,7 @@ app.whenReady().then(async () => {
   const agentRuntime: AgentRuntimeEnvironment = {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
+    mintSessionToken: sessionTokens.mint,
   };
   /** Wrappers refused this launch because the name would shadow a system tool. */
   let harnessRuntimeRefused: RefusedWrapper[] = [];
@@ -2371,6 +2394,10 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
+          // The verifying half of the same registry the attachments mint from.
+          // Without it every socket caller is unauthenticated by default, which
+          // is the fail-closed direction (VC-163).
+          verifySessionToken: sessionTokens.verify,
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.
