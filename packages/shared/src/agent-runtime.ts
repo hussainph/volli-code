@@ -430,7 +430,11 @@ export interface RuntimeAskUserRequest {
 export interface RuntimeWebDocument {
   /** The URL that was asked for, canonical as admission normalized it. */
   requestedUrl: string;
-  /** The URL the bytes came from. Equal to {@link requestedUrl} while no redirect is followed. */
+  /**
+   * The URL the bytes came from: the last hop of the redirect chain, or
+   * {@link requestedUrl} when the first request answered with the document.
+   * Every hop passed the same admission, address and pinning policy.
+   */
   finalUrl: string;
   /** Scheme, host and port of the final URL. */
   origin: string;

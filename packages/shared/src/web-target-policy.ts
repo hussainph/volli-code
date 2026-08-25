@@ -35,6 +35,8 @@ export interface AdmittedWebTarget {
  * in the same words.
  */
 export const WEB_TARGET_RULE_IDS = [
+  /** Longer than any real URL, and long enough to be a message rather than an address. */
+  "target.length",
   /** Not a URL at all, or one carrying characters a parser and a client would read differently. */
   "target.unparsable",
   /** A scheme that is not an ordinary web read. */
@@ -55,6 +57,32 @@ export type WebTargetRuleId = (typeof WEB_TARGET_RULE_IDS)[number];
 export type WebTargetAdmission =
   | { outcome: "admit"; target: AdmittedWebTarget }
   | { outcome: "refuse"; rule: WebTargetRuleId; reason: string };
+
+/**
+ * The longest a URL may be and still be a URL.
+ *
+ * A length rule reads like housekeeping and is not. An admitted URL is quoted
+ * back in two places that sit *outside* the untrusted-content envelope and are
+ * therefore delivered in Volli's own voice: the refusal text a caller reads
+ * when a read is declined, and the provenance line above a document that says
+ * which URL answered. Once redirects are followed, that URL may have been
+ * chosen by the previous hop rather than by the caller — and a `Location`
+ * header is bounded only by the 16 KiB header limit.
+ *
+ * Measured before this rule existed: a server that redirected to its own URL
+ * with a long query string put 10,003 characters of its own text into a refusal
+ * message, and a server that redirected once before answering put 10,600
+ * characters into the envelope preamble above a twenty-character document. Both
+ * read as Volli's words, which is exactly the claim the envelope makes and the
+ * one thing a page must not be able to borrow.
+ *
+ * Two kibibytes is far above any real URL — the de-facto browser ceiling is
+ * about 2,083 characters, and signed storage URLs, the longest ordinary case,
+ * run to roughly one — and far below room to write an instruction. The research
+ * note that specified this boundary asked for a bound here and suggested 8 KiB;
+ * nothing legitimate lives between the two figures.
+ */
+const MAX_URL_CHARS = 2048;
 
 /** The only two schemes that describe reading a public document over the network. */
 const PERMITTED_SCHEMES = new Set(["http:", "https:"]);
@@ -142,6 +170,15 @@ function isBlockedHost(hostname: string): boolean {
  * to disagree about what they are talking about.
  */
 export function admitWebTarget(input: string): WebTargetAdmission {
+  // Before parsing, because the parser is happy to build a URL out of a
+  // document's worth of text and every later step would then be carrying it.
+  if (input.length > MAX_URL_CHARS) {
+    return {
+      outcome: "refuse",
+      rule: "target.length",
+      reason: `A URL Volli reads is at most ${MAX_URL_CHARS} characters; this one is ${input.length}.`,
+    };
+  }
   let url: URL;
   try {
     url = new URL(input);

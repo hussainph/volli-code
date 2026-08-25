@@ -482,3 +482,158 @@ before being folded in. They originated in a scratch comparison file
 (`opencode-webfetch-optimization.md`, a test artifact that leaked into the main
 checkout rather than this branch); every specific in it held up, and its
 content now lives here where the rest of the comparison does.
+
+## Addendum — VC-175, measured coverage against the real web
+
+The boundary above was correct and unusable. Run against thirty real
+documentation and article URLs, it returned a document for twenty-four of them,
+and several of those were a few hundred characters of a page worth tens of
+thousands. The tool's own users had drawn the obvious conclusion and gone back
+to `curl`, which is the one outcome this design exists to prevent — so the
+numbers below are the point of this section, not the prose.
+
+**The lossy conversion was not Turndown.** `structureBoundOffset` tracked
+nesting as a counter decremented on `</x>`, and HTML makes the end tag optional
+for `li`, `p`, `td`, `th`, `tr`, `thead`, `tbody`, `dt`, `dd` and `option`.
+Every minifier omits them, so on ordinary served markup the counter only ever
+rose: it was measuring omitted end tags, not depth, and tripped `maxDepth: 64`
+a few hundred elements into the document. The markup was then cut at that byte
+offset and the entire tail discarded.
+
+| page | scan stopped at | delivered | available |
+| --- | --- | ---: | ---: |
+| electronjs.org `api/session` | 5.2% (unclosed `<li>` sidebar) | 1,165 ch | 84,489 ch |
+| undici.nodejs.org | 18.2% (unclosed `<li>` nav) | 542 ch | 32,456 ch |
+| nodejs.org `api/globals.html` | 31.2% (`<thead><tr><th>`) | 2,701 ch | 33,471 ch |
+
+The scan now walks a stack of open element names and applies the implied-end-tag
+rules a browser applies. The existing tests missed this because their fixtures
+nest `<div>`, which closes properly; the fixtures added alongside the fix are
+the shapes the web actually serves.
+
+**The bounds were tuned against synthetic documents and cut real ones.** The
+figures in the old comments ("8,000 cost 2.5s, 16,000 cost 10.8s") came from
+all-`<div>` documents, which is the shape `maxDepth` already bounds. Measured
+against real pages instead, 8,000 elements cost 0.5-1.2s, and the worst case
+across the shapes Readability is slowest on was *2.3s at 8,000 against 2.5s at
+3,000* — raising the bound did not raise the ceiling. At 3,000, vitest.dev's
+`expect` page returned 21,895 characters when the output bound allowed 25,000
+and the page held 64,128: the limit was spending a budget it did not need to
+spend. `maxElements` is now 8,000 (12,000 was measured at 5.4s and rejected).
+
+`htmlChars` went back to the 2 MiB this note originally specified, from the 512
+KiB it had been tightened to, because the two expensive shapes are now bounded
+elsewhere: element-dense documents are cut by `maxElements` first, and diagram
+subtrees — `svg`, `math`, which the sanitiser discards wholesale anyway — are
+stepped over by the scan rather than counted. sqlite.org's `lang_select.html`
+is the case that forced it: 2 MB of inline SVG railroad diagrams around its
+prose, of which 512 KiB yielded 839 characters of a 37,269-character page.
+
+**Redirects were the single largest cause of outright failure**, at five of
+thirty URLs, and every one was benign — `vitejs.dev` → `vite.dev`,
+`docs.anthropic.com` → `platform.claude.com`, a `www.` strip, two path
+canonicalisations. Two of the five are the very URLs this note cites. Following
+them was confirmed with the driver as an explicit policy decision, which is
+what the "Gaps and decisions still required" section above asked for: up to
+four hops, any origin, **every hop re-admitted from scratch** — admission,
+DNS classification, address pinning, all of it — so a redirect can reach no
+target the caller could not have named directly. A redirect onto the cloud
+metadata service is refused by `target.address`, not by a redirect rule, and the
+test asserts exactly that. Two rules are about the move rather than the
+destination and live in the loop: an https read is never downgraded onto plain
+http, and a destination already visited is named as a loop instead of spending
+the budget rediscovering it. The whole chain shares one `totalMs` clock, so hops
+cannot renew their own deadline. `finalUrl` was already in the contract for this;
+the envelope now states it when it differs from what was asked for.
+
+**The type and charset gates refused far more than they protected.** The charset
+allowlist held seven labels, so a page in Japanese, Chinese, Korean, Greek,
+Hebrew or Cyrillic that had not moved to UTF-8 was answered with "Volli does not
+decode that" — while `TextDecoder`, already in the process, implements the whole
+WHATWG encoding set. Decoding is not parsing: whatever comes out is sanitised,
+extracted and bounded like any other page, so the cost of guessing wrong is
+mojibake and the cost of refusing is the document. Encoding is now taken from
+the byte-order mark, then the header, then the document's own `<meta charset>`,
+falling back to UTF-8 rather than refusing. The media gate gained
+`application/xhtml+xml`, the `+xml` and `+json` structured suffixes, the
+`text/*` family, and content sniffing when the server sends no type at all;
+families that are never text are still refused by name, and a body holding NUL
+bytes is refused whatever it claims to be. `Accept` gained `*/*;q=0.1`, without
+which a strict negotiator answers 406 for a document Volli reads perfectly well.
+
+**An empty result is now impossible by construction.** Extraction falls back
+from Readability's article to the whole converted body, and then to the page's
+own `<title>` and description metas for a client-rendered shell whose body is an
+empty mounting point. If even that is empty the transport refuses with
+`fetch.unreadable` and says the content is probably script-rendered — because an
+empty envelope reads as a broken tool rather than as a fact about the page, and
+that is precisely what sends a model to the shell. For the same reason the tool
+description now says outright that `curl` is not the fallback.
+
+After all of it: **36 of 36** URLs return a document, across the original thirty
+plus JSON APIs, XHTML, and CJK and Cyrillic Wikipedia. The two pages that still
+refuse in the original set — stackoverflow.com and npmjs.com — answer 403 to any
+non-browser client, and the fixed product identity that causes that remains a
+deliberate choice recorded above.
+
+## Addendum — VC-175, what the security review of that work found
+
+The coverage work above was reviewed against this note's own threat model before
+it merged. The SSRF core held: resolve-once-then-pin is a real rebinding
+defence, every resolved address is classified rather than just the one a client
+would pick, the IANA registries are followed rather than the three RFC 1918
+ranges, and the redirect design re-admits every hop — the metadata-service test
+proves the socket is never opened. Four findings sat outside that core, and all
+four are fixed. They are recorded here because three of them were introduced or
+widened by the coverage work itself, which is the honest shape of the trade.
+
+**The bound that cost more than the work it bounded.** `structureBoundOffset`
+folded the entire document to lower case to search for a closing tag — inside
+the scan loop, once per raw-text element and once per skipped subtree. The scan
+was therefore quadratic in the size of the document while bounding nothing, and
+`RAW_TEXT_ELEMENTS` were recognised *before* the element counter ran, so
+`script`, `style`, `textarea` and `title` cost nothing against `maxElements` and
+a page could serve any number of them. Measured: 2 MiB of `<script></script>`
+pairs — comfortably inside `htmlChars`, and inside the 5 MiB body bound on the
+wire — held the thread for **59 seconds**. Extraction is synchronous and
+`webPortsFor` builds the fetcher in Electron's main process, so `totalMs` cannot
+interrupt it: SQLite, the IPC bridge, the `volli` CLI socket and every terminal
+were frozen for the duration, from one fetched URL. This is precisely the
+failure `extract.ts` warns about in its own header — "a bound that is not
+enforced before the work begins is not enforced at all" — reached by making the
+enforcement itself the expensive part.
+
+The fold is now built once per scan and shared, and raw-text elements are
+counted. 59,246 ms → **370 ms**. The fold is restricted to `[A-Z]` rather than
+`toLowerCase()` because the scan returns offsets into the *original* markup and
+the two strings must line up character for character; `toLowerCase()` does not
+promise that, since U+0130 lowercases to two code units.
+
+**The envelope was the half of the injection surface that stayed open.** The
+commit before this one identified both places this boundary writes outside the
+untrusted-content markers in Volli's own voice — "refusal text and the
+envelope's provenance line" — and bounded only the refusal, through `named()`.
+`envelope()` went on printing `finalUrl` in full, and a server chooses `finalUrl`
+by redirecting. Measured: a redirect to the server's own long URL put **1,900
+characters** of its choosing above the marker line, inside a sentence beginning
+"Volli read", for a two-character document — a 2,584-character preamble. The
+2,048-character `target.length` rule was the only thing bounding it, and 2,048
+characters is not "far below room to write an instruction". Every URL the
+envelope states now goes through `shownUrl`: origin and path, query dropped
+entirely, 96 characters, ellipsis when anything was lost. The same preamble is
+now 685 characters and carries none of the server's text.
+
+**A refusal quoted a URL nothing had bounded.** `refusalText` was handed the
+caller's own string rather than the admitted one — a refusal can happen because
+there was no admissible URL at all — so a 50,021-character URL produced a
+50,272-character refusal, in Volli's voice, having been refused by the very rule
+that exists to keep a URL short. Same fix, same helper: 272 characters.
+
+**What the tests had not been asked.** `safe-fetch.test.ts` pinned the invariant
+for refusals ("never lets %s in a redirect write into the refusal") and there
+was no equivalent on the success path, which is why the envelope stayed open
+while the refusal was closed. The regression tests added alongside these fixes
+were each run against the unfixed code first: the raw-text counting test, the
+quadratic-scan test (41.8 s before the threshold caught it), the envelope test
+and the refusal test all fail without their fix. A cost ceiling is now a thing
+this module's tests assert, not only a thing its comments claim.
