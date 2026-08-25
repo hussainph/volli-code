@@ -391,6 +391,12 @@ describe("validateAuthorityPolicyOverride", () => {
       ok: false,
       errors: ["actors.session.coordinationVerbs must contain only strings."],
     });
+    expect(
+      validateAuthorityPolicyOverride({ actors: { session: { coordinationVerbs: "all" } } }),
+    ).toEqual({
+      ok: false,
+      errors: ["actors.session.coordinationVerbs must be an array of strings."],
+    });
     expect(validateAuthorityPolicyOverride({ actors: { session: { awaitable: "all" } } })).toEqual({
       ok: false,
       errors: ["actors.session.awaitable must be an array."],
