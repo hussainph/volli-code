@@ -417,6 +417,30 @@ describe("the registry table", () => {
     }
   });
 
+  // `positionalSubject` is what lets the socket's admission gate resolve the
+  // project a write LANDS IN, rather than only the one the caller is standing
+  // in (VC-163). A coordination verb that takes a Ticket and forgets to declare
+  // it would be judged by the caller's policy alone — which is the bug the
+  // field was added to close, so it is worth failing here rather than there.
+  it("declares the subject of every Ticket positional", () => {
+    // Widened off the `as const` table, whose per-entry literal types omit an
+    // optional field entirely rather than typing it `undefined`.
+    const entries: readonly VerbEntry[] = VERB_REGISTRY;
+    for (const entry of entries.filter(({ key }) => key.startsWith("ticket."))) {
+      // `ticket.create` names its project by flag and takes no positional.
+      if (entry.positionalId === undefined) continue;
+      expect(entry.positionalSubject, entry.key).toBe("ticket");
+    }
+  });
+
+  it("never declares a subject for a positional it does not take", () => {
+    const entries: readonly VerbEntry[] = VERB_REGISTRY;
+    for (const entry of entries) {
+      if (entry.positionalSubject === undefined) continue;
+      expect(entry.positionalId, entry.key).toBeDefined();
+    }
+  });
+
   it("keys are dot-names that spell their own CLI form", () => {
     for (const entry of VERB_REGISTRY) {
       expect(entry.key).toMatch(/^[a-z]+(\.[a-z]+)?$/);

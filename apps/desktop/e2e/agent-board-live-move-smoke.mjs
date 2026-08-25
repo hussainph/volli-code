@@ -17,6 +17,7 @@
  */
 import {
   createTicketViaBridge,
+  grantUnauthenticatedWrites,
   makeShortScratch,
   runVolliShim,
   shimPathFor,
@@ -61,6 +62,11 @@ async function main() {
       title: "Live move ticket",
       status: "todo",
     });
+    // This probe's subject is the LIVE board update, not the socket's admission
+    // posture: since VC-163 a bare shell is the unauthenticated actor and may
+    // not write, so the project has to say it may before `ticket move` is a
+    // move at all. `agent-cli-roundtrip-smoke.mjs` owns the posture itself.
+    await grantUnauthenticatedWrites(page, "brd-project", ["ticket.move"]);
 
     // Hydrate the board store with the new ticket, then land on the board.
     await page.reload();

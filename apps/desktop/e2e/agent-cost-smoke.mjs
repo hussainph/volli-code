@@ -16,7 +16,13 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
-import { makeShortScratch, runVolliShim, shimPathFor, socketPathFor } from "./lib/agent-kit.mjs";
+import {
+  grantUnauthenticatedWrites,
+  makeShortScratch,
+  runVolliShim,
+  shimPathFor,
+  socketPathFor,
+} from "./lib/agent-kit.mjs";
 import {
   assertProfileIsolated,
   createRunner,
@@ -49,6 +55,10 @@ async function main() {
       "shim + socket to exist",
       async () => (await pathExists(shimPath)) && (await pathExists(socketPath)),
     );
+    // The subject here is cost reporting, and every assertion below needs a
+    // Ticket to spend against. A bare shell is the unauthenticated actor since
+    // VC-163, so the project grants it the one write this probe performs.
+    await grantUnauthenticatedWrites(page, "cost-project", ["ticket.create"]);
 
     let displayId = null;
 

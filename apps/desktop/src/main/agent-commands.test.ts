@@ -80,10 +80,10 @@ const ACTING_TOKEN = DOOR_TOKENS.mint({
 /**
  * A caller the door authenticates as {@link ACTING_SESSION}.
  *
- * Since VC-163 a socket caller is a Session or it is nobody: `env: ACTING_ENV` now
- * means the unauthenticated actor, which may read and may not write. Most tests
- * in this file are about a verb's behaviour rather than about admission, so
- * they act as an ordinary authenticated Session and this is how they say so.
+ * Since VC-163 a socket caller is a Session or it is nobody: `env: {}` now means
+ * the unauthenticated actor, which may read and may not write. Most tests in
+ * this file are about a verb's behaviour rather than about admission, so they
+ * act as an ordinary authenticated Session, and passing this is how they say so.
  */
 const ACTING_ENV: AgentRequest["ctx"]["env"] = {
   session: ACTING_SESSION,

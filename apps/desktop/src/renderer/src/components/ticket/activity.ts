@@ -17,6 +17,7 @@ import {
   isAgentActor,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
+  UNAUTHENTICATED_ACTOR,
   USER_ACTOR,
   type TicketComment,
   type TicketEvent,
@@ -112,9 +113,18 @@ export function pickBunchLabel(events: readonly TicketEvent[]): TicketEvent {
  * A comment/event author's display name: the human is "You"; a first-class
  * harness shows its label (via @volli/shared's `harnessLabel`); a custom
  * `agent:<id>` harness shows its bare id; any other actor is shown verbatim.
+ *
+ * `unauthenticated` is spelled out rather than shown raw (VC-163). The column
+ * is a plain string, so a new actor kind reaches this function with nothing to
+ * fail the build — and the fallback would have printed the bare enum token as
+ * a person's name, on a row that a reader has every reason to read as a name.
+ * A caller Volli could not identify is the one author whose label has to say so
+ * on the row itself: it is the only kind that means an absence of evidence, and
+ * a default install never writes one at all.
  */
 export function commentAuthorLabel(actor: string): string {
   if (actor === USER_ACTOR) return "You";
+  if (actor === UNAUTHENTICATED_ACTOR) return "Unauthenticated caller";
   const harnessId = actorHarnessId(actor);
   if (harnessId !== null) return harnessLabel(harnessId);
   if (isAgentActor(actor)) return actor.slice(AGENT_ACTOR_PREFIX.length);

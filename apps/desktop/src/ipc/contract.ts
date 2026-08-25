@@ -1882,7 +1882,14 @@ export interface SessionStartedNotice {
   ticketId: string;
   /** The started ticket's display id, precomputed so the toast never joins. */
   ticketDisplayId: string;
-  /** Who started it, as the door derived it (`requestActor`) — never self-declared. */
+  /**
+   * Who started it, as the door that started it derived them — never
+   * self-declared.
+   *
+   * Two doors produce this since VC-163: the `session_start` tool, which binds
+   * its caller from the attachment the call arrived on, and the app, which is
+   * the person. The shell was a third until VC-163 closed it.
+   */
   actor: TicketEventActorKind;
   /** Display id of the ticket the starting session was itself working, when known. */
   actorTicket: string | null;

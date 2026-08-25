@@ -71,10 +71,22 @@ function scenario() {
     cmd: AgentRequest["cmd"],
     args: Record<string, unknown>,
     env: AgentRequest["ctx"]["env"],
-  ): Promise<AgentResponse> =>
-    service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env } });
+    cwd = "/repo/volli",
+  ): Promise<AgentResponse> => service.execute({ v: 1, cmd, args, ctx: { cwd, env } });
 
-  return { service, tokens, session, run };
+  /** A second project, so "which project's policy" stops being one answer. */
+  const addSecondProject = () => {
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-two", path: "/repo/bravo", ticketPrefix: "BB" }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket("project-two", { id: "ticket-two", ticketNumber: 1, title: "Their work" }),
+    );
+  };
+
+  return { service, tokens, session, run, addSecondProject };
 }
 
 describe("a process that is not a Volli Session", () => {
@@ -255,6 +267,55 @@ describe("per-project policy, which is what decides all of it", () => {
     expect(listComments(ctx.db, "ticket-one")).toMatchObject([
       { actor: "unauthenticated", sessionId: null },
     ]);
+  });
+
+  // A policy is a statement a project makes about its OWN board, so the project
+  // a write lands in has to allow it — even when the caller is standing
+  // somewhere else. Judging by the caller's project alone let a grant in one
+  // project spend itself on another project's tickets, which is a boundary
+  // crossing rather than a preference.
+  it("does not let one project's grant reach another project's ticket", async () => {
+    const { run, addSecondProject } = scenario();
+    addSecondProject();
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "project-one",
+      { actors: { unauthenticated: { coordinationVerbs: ["ticket.comment"] } } },
+      100,
+    );
+
+    // Standing in the project that granted it, naming the project that did not.
+    expect(await run("ticket.comment", { id: "BB-1", message: "From CI" }, {})).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN_ACTOR" },
+    });
+    expect(listComments(ctx.db, "ticket-two")).toEqual([]);
+    // And the grant still works where it was actually made.
+    expect(await run("ticket.comment", { id: "VC-1", message: "From CI" }, {})).toMatchObject({
+      ok: true,
+    });
+  });
+
+  // The same rule in the other direction: the target's narrowing binds a
+  // Session that belongs to a different project, whose own policy says nothing.
+  it("applies the target project's narrowing to a Session from elsewhere", async () => {
+    const { run, session, addSecondProject } = scenario();
+    addSecondProject();
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "project-two",
+      { actors: { session: { coordinationVerbs: ["ticket.comment"] } } },
+      100,
+    );
+
+    expect(await run("ticket.move", { id: "BB-1", to: "doing" }, session)).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN_ACTOR" },
+    });
+    // Its own project never narrowed anything, so its own board is untouched.
+    expect(await run("ticket.move", { id: "VC-1", to: "doing" }, session)).toMatchObject({
+      ok: true,
+    });
   });
 
   it("lets a project withdraw a verb from its own Sessions", async () => {

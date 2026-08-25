@@ -92,11 +92,11 @@ export interface SessionCreateInput {
    * default by the server and validated against Model Access before anything
    * durable exists.
    *
-   * The same parameter `volli session start --model/--reasoning` already
-   * carried, reaching the create door because a UI can now state it too: the
-   * New-ticket composer's Create & start picks a model and an effort for the
-   * Session it is about to open (VC-56). Absent means the configured default
-   * for the Role, which is what every other chat start still sends.
+   * The same parameter the `session_start` tool carries as `model`/`reasoning`,
+   * reaching the create door because a UI can now state it too: the New-ticket
+   * composer's Create & start picks a model and an effort for the Session it is
+   * about to open (VC-56). Absent means the configured default for the Role,
+   * which is what every other chat start still sends.
    */
   modelOverride?: {
     model?: { providerId: string; modelId: string };

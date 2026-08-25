@@ -81,7 +81,13 @@ import {
   readStdinLog,
   runShadowSanityCheck,
 } from "./lib/fake-harness.mjs";
-import { makeShortScratch, runVolliShim, shimPathFor, socketPathFor } from "./lib/agent-kit.mjs";
+import {
+  grantUnauthenticatedWrites,
+  makeShortScratch,
+  runVolliShim,
+  shimPathFor,
+  socketPathFor,
+} from "./lib/agent-kit.mjs";
 import {
   assertProfileIsolated,
   cardById,
@@ -399,6 +405,12 @@ async function main() {
       "shim + socket to exist",
       async () => (await pathExists(shimPath)) && (await pathExists(socketPath)),
     );
+    // This probe's subject is interrupt and resume semantics. It drives the
+    // shim as a separate process with a hand-built environment — a real harness
+    // wrapper runs INSIDE the PTY and inherits the `VOLLI_SESSION_TOKEN` Volli
+    // exported there, which a spawned sibling cannot see. Granting the two
+    // verbs it fires keeps the probe about what it is about (VC-163).
+    await grantUnauthenticatedWrites(page, projectId, ["ticket.move", "session.link"]);
 
     // === 0. Precondition: the fake harness deterministically shadows claude ===
     await attempt(
@@ -553,9 +565,16 @@ async function main() {
         );
         liveSessionIds.push(session.id);
 
-        const link = await runVolliShim(shimPath, ["session", "link", LINKED_UUID], {
-          VOLLI_SESSION: session.id,
-        });
+        // From inside the project root, which is how a real harness wrapper
+        // runs. `session.link` resolves its own terminal record and so skips
+        // identity resolution (VC-163) — leaving the cwd as the only rung the
+        // admission gate can read a project's policy from.
+        const link = await runVolliShim(
+          shimPath,
+          ["session", "link", LINKED_UUID],
+          { VOLLI_SESSION: session.id },
+          { cwd: projectPathForBoot },
+        );
         const linkOk = link.code === 0;
 
         const kill = await killSession(page, session.id);
