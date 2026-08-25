@@ -9,7 +9,6 @@ import {
   parseColumnToken,
   parseHarnessId,
   parseSessionUsageWindow,
-  REASONING_LEVELS,
   SESSION_USAGE_GROUPINGS,
   TICKET_PRIORITIES,
   TICKET_SIGNAL_KINDS,
@@ -80,32 +79,6 @@ const harnessValue: ValueParser = (raw) => {
       }
     : { ok: true, value: parsed };
 };
-
-/**
- * `--model` splits on the FIRST `/` into providerId/modelId: a provider id
- * never contains one, while a gateway-routed model id may. Whether the pair
- * names a model this profile can actually run is Model Access's judgement,
- * made in the app — the parser only vets the shape, exactly like `--harness`.
- */
-const modelValue: ValueParser = (raw) => {
-  const slash = raw.indexOf("/");
-  const providerId = slash === -1 ? "" : raw.slice(0, slash);
-  const modelId = slash === -1 ? "" : raw.slice(slash + 1);
-  return providerId.length === 0 || modelId.length === 0
-    ? {
-        ok: false,
-        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
-      }
-    : { ok: true, value: { providerId, modelId } };
-};
-
-const reasoningValue: ValueParser = (raw) =>
-  (REASONING_LEVELS as readonly string[]).includes(raw)
-    ? { ok: true, value: raw }
-    : {
-        ok: false,
-        message: `Unknown reasoning level ${JSON.stringify(raw)} (valid: ${REASONING_LEVELS.join(", ")})`,
-      };
 
 const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);
@@ -389,7 +362,6 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       verdict: "ticket signal requires --verdict",
     },
   },
-  "ticket.archive": { options: {} },
   "ticket.brief": { options: {} },
   "worktree.status": { options: {} },
   "worktree.diff": {
@@ -429,15 +401,6 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   "session.peek": {
     options: { "--lines": { kind: "value", key: "lines", parse: positiveIntValue } },
-  },
-  "session.start": {
-    options: {
-      "-m": { kind: "value", key: "message" },
-      "--message": { kind: "value", key: "message" },
-      "--title": { kind: "value", key: "title" },
-      "--model": { kind: "value", key: "model", parse: modelValue },
-      "--reasoning": { kind: "value", key: "reasoning", parse: reasoningValue },
-    },
   },
   "session.done": REASON_ONLY,
   "session.blocked": REASON_ONLY,

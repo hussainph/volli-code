@@ -128,6 +128,45 @@ describe("agentSessionEnv", () => {
     });
   });
 
+  // VC-163: the token rides beside `VOLLI_SESSION` rather than replacing it.
+  // The id stays the addressing every verb resolves against; the token is the
+  // only thing that turns that claim into an authenticated session actor.
+  it("exports the attachment's token beside the session id", () => {
+    expect(
+      agentSessionEnv(
+        {},
+        {
+          sessionId: "session-full-id",
+          sessionToken: "tok-abc",
+          socketPath: "/profile/volli.sock",
+          binDir: "/profile/bin",
+          inheritedPath: "/usr/bin:/bin",
+        },
+      ),
+    ).toEqual({
+      VOLLI_SESSION: "session-full-id",
+      VOLLI_SESSION_TOKEN: "tok-abc",
+      VOLLI_SOCKET: "/profile/volli.sock",
+      PATH: "/profile/bin:/usr/bin:/bin",
+    });
+  });
+
+  // A launch that minted no token exports no variable at all, rather than an
+  // empty one: absent and empty must not be two spellings of the same state at
+  // the door, and `VOLLI_SESSION_TOKEN=""` is the spelling an attacker supplies.
+  it("omits the token variable entirely when no token was minted", () => {
+    const env = agentSessionEnv(
+      {},
+      {
+        sessionId: "session-full-id",
+        socketPath: "/profile/volli.sock",
+        binDir: "/profile/bin",
+        inheritedPath: "/usr/bin:/bin",
+      },
+    );
+    expect(env).not.toHaveProperty("VOLLI_SESSION_TOKEN");
+  });
+
   it("does not leave a trailing PATH separator when the inherited PATH is empty", () => {
     expect(
       agentSessionEnv(

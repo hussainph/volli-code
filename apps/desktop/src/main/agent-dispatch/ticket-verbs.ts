@@ -37,7 +37,6 @@ import type {
 import { getRegisteredHarness } from "../db/harness-registry-repo";
 import { listTicketsByProject } from "../db/tickets-repo";
 import {
-  archiveTicketCommand,
   createTicketCommand,
   createTicketCommentCommand,
   createTicketSignalCommand,
@@ -393,9 +392,17 @@ export async function ticketMoveVerb(
     }
     // Guardrail is visibility, not caps (decision 2): an agent- or
     // automation-initiated entry into Doing fires a native notification.
-    // A plain CLI move (no session env → user actor, "the door not the
-    // keyboard") stays silent; same-column moves already returned above,
-    // so reaching here with to === "doing" means the prior status wasn't.
+    // A move the person themselves made stays silent ("the door not the
+    // keyboard"); same-column moves already returned above, so reaching here
+    // with to === "doing" means the prior status wasn't.
+    //
+    // The `user` actor no longer arrives over this door at all (VC-163) — the
+    // socket cannot authenticate a person, so the plain-CLI move that used to
+    // be attributed to one is now `unauthenticated`. That case is the loudest
+    // of the three rather than the quietest: a caller Volli could not identify,
+    // pushing work into the active column, is the told-to-work-on-changes
+    // vector VC-92 §3 named. It notifies, and the body says what is unknown
+    // about it rather than inventing a party.
     if (to === "doing" && actor.actor.kind !== "user") {
       const movedDisplay = displayTicketId(
         resolved.project.ticketPrefix,
@@ -404,6 +411,8 @@ export async function ticketMoveVerb(
       let body: string;
       if (actor.actor.kind === "automation") {
         body = "Moved by automation";
+      } else if (actor.actor.kind === "unauthenticated") {
+        body = "Moved by an unauthenticated caller";
       } else {
         const via = actorSessionTicketDisplay(options.db, projects, actor.actor.ticketId);
         body = via ? `Moved via ${via}'s session` : "Moved via a session";
@@ -480,7 +489,6 @@ export async function ticketCommentVerb(
     return failure("MUTATION_FAILED", errorMessage(error));
   }
 }
-
 /**
  * `volli ticket signal` — one typed verdict on a ticket (VC-85).
  *
@@ -579,45 +587,6 @@ export async function ticketSignalVerb(
           detail: signal.detail,
           session: signal.sessionId ? shortSessionId(signal.sessionId) : null,
           createdAt: signal.createdAt,
-        },
-      },
-    };
-  } catch (error) {
-    return failure("MUTATION_FAILED", errorMessage(error));
-  }
-}
-
-/** `volli ticket archive` — a ticket, its worktree preserved. */
-export async function ticketArchiveVerb(
-  context: AgentCommandContext,
-  request: AgentRequest,
-): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
-  const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
-  if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
-  try {
-    const archivedAt = now();
-    withTicketWake(options.db, resolved.ticket.id, () =>
-      archiveTicketCommand(options.db, resolved.ticket.id, {
-        now: archivedAt,
-        actor: actor.actor,
-      }),
-    );
-    options.onMutation?.({
-      ticketId: resolved.ticket.id,
-      projectId: resolved.project.id,
-      kind: "ticket",
-    });
-    return {
-      v: 1,
-      ok: true,
-      data: {
-        ticket: {
-          id: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
-          archived: true,
-          archivedAt,
         },
       },
     };

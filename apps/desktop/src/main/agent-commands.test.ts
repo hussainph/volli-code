@@ -4,12 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import {
-  ACTIVITY_METADATA_KEY,
-  DEFAULT_KICKOFF_MESSAGE,
-  makeAgentError,
-  MUTATION_PLAN_CONTRACT,
-} from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, makeAgentError, MUTATION_PLAN_CONTRACT } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -19,12 +14,7 @@ import type {
   SessionUsage,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-import type {
-  HarnessEventNotice,
-  SessionHarnessNotice,
-  SessionStartedNotice,
-} from "../ipc/contract";
-import { StructuredSessionsError, type SessionStartInput } from "./session-runtime/sessions";
+import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
 
 import { importBlob } from "./blob-import";
 import { blobsRoot } from "./blob-store";
@@ -40,7 +30,12 @@ import {
   insertSession,
   setActiveHarnessId,
 } from "./session-control/test-support";
-import { archiveTicket, getTicket, insertTicket, listTicketsByProject } from "./db/tickets-repo";
+import {
+  getTicket,
+  insertTicket,
+  listArchivedTicketsByProject,
+  listTicketsByProject,
+} from "./db/tickets-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -52,7 +47,7 @@ import {
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "./session-control";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
-import { updateTicketFieldsCommand } from "./ticket-commands";
+import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
@@ -962,6 +957,12 @@ describe("agent command service", () => {
   // The bundled parser refuses this, but the socket is a public door and a
   // registry-projected tool builds its own arguments. Silently ignoring dryRun
   // on the way to a real write is the one outcome a preview cannot allow.
+  //
+  // `session.harness` is the subject because it is a socket-projected WRITE
+  // that declares no `--dry-run` option — which is the whole condition under
+  // test. The refusal is registry-generic and names no verb, so any such verb
+  // proves it; this one used to be `ticket.archive`, until VC-163 took that
+  // verb off the socket altogether.
   it("refuses a preview for a verb that declares none instead of writing anyway", async () => {
     ctx = openTestDb();
     insertProject(
@@ -976,20 +977,14 @@ describe("agent command service", () => {
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
       service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
-    await execute("ticket.create", { title: "Ship CLI" });
 
-    expect(await execute("ticket.archive", { id: "VC-1", dryRun: true })).toMatchObject({
+    expect(await execute("session.harness", { id: "claude-code", dryRun: true })).toMatchObject({
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        reason: expect.stringContaining("ticket.archive declares no side-effect preview"),
-        next: expect.stringContaining("volli help ticket archive"),
+        reason: expect.stringContaining("session.harness declares no side-effect preview"),
+        next: expect.stringContaining("volli help session harness"),
       },
-    });
-    // Still on the board: the refusal happened instead of the archive, not
-    // after it.
-    expect(await execute("board", {})).toMatchObject({
-      data: { columns: { backlog: [{ id: "VC-1" }] } },
     });
   });
 
@@ -1215,7 +1210,14 @@ describe("agent command service", () => {
     });
   });
 
-  it("archives a ticket reversibly without exposing a delete command", async () => {
+  // VC-163 took archiving off every agent surface — it is app-only curation, a
+  // person deciding a Ticket has stopped being live work. What is proved here
+  // is that the CAPABILITY is untouched and only the door is gone: the app's
+  // own `archiveTicketCommand` still archives, and the board still reflects it.
+  // That the socket no longer names the verb is pinned in `verb-registry.test`,
+  // where the projection lives; here it could only be asserted by writing a
+  // command this door's types no longer admit.
+  it("still archives through the app's own command, with no socket door left", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1231,19 +1233,15 @@ describe("agent command service", () => {
       service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
     await execute("ticket.create", { title: "Ship CLI" });
 
-    const archived = await execute("ticket.archive", { id: "VC-1" });
-    const board = await execute("board", {});
+    archiveTicketCommand(ctx.db, "ticket-one", { now: 100, actor: { kind: "user" } });
 
-    expect(archived).toEqual({
-      v: 1,
-      ok: true,
-      data: { ticket: { id: "VC-1", archived: true, archivedAt: 100 } },
+    expect(await execute("board", {})).toMatchObject({
+      data: { columns: { backlog: [] } },
     });
-    expect(board).toMatchObject({ data: { columns: { backlog: [] } } });
-    expect(await execute("ticket.archive", { id: "VC-1" })).toMatchObject({
-      ok: false,
-      error: { code: "ARCHIVED_TICKET" },
-    });
+    // Reversible, and still reachable by explicit id from the read verbs.
+    expect(listArchivedTicketsByProject(ctx.db, "project-one")).toMatchObject([
+      { id: "ticket-one", archivedAt: 100 },
+    ]);
   });
 
   it("composes a ticket brief that guarantees the bundled Volli skill is loaded", async () => {
@@ -3784,12 +3782,8 @@ describe("agent command service", () => {
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
-    await service.execute({
-      v: 1,
-      cmd: "ticket.archive",
-      args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
-    });
+    // Archived through the app's own command: VC-163 left no socket door for it.
+    archiveTicketCommand(ctx.db, "ticket-one", { now: 100, actor: { kind: "user" } });
 
     // Read-only worktree verbs serve an archived ticket by explicit id —
     // retention deliberately retains worktrees past archive (decision #76).
@@ -4713,393 +4707,30 @@ describe("model.list", () => {
   });
 });
 
-describe("session.start", () => {
+/**
+ * What the socket still answers ABOUT a Session it did not start (VC-163).
+ *
+ * `session.start` left this door entirely: it is control tier now, a named tool
+ * in the `project` Role's bundle, and the application act it shares with that
+ * tool is tested in `session-runtime/start-session.test.ts`. These two are what
+ * remained here, because neither was ever about starting one — they are a read
+ * of a Session's public handle and a read of the Session list.
+ */
+describe("reads over a session the socket did not start", () => {
   const startedSessionId = "abcdef12-3456-7890-abcd-ef1234567890";
 
-  /**
-   * The door under test with the facade faked out: `session.start` owns
-   * resolution, provenance, the kickoff, and the fan-outs; the product start
-   * route itself is the facade's contract, tested beside it.
-   */
-  function startHarness(
-    overrides: {
-      state?: "ready" | "needs-recovery";
-      startError?: unknown;
-      withoutFacade?: boolean;
-    } = {},
-  ) {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({
-        id: "project-one",
-        name: "Volli Code",
-        path: "/repo/volli",
-        ticketPrefix: "VC",
-      }),
-    );
-    insertTicket(
-      ctx.db,
-      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
-    );
-    const startInputs: SessionStartInput[] = [];
-    const kickoffs: {
-      sessionId: string;
-      text: string;
-      commandId: string;
-      messageId: string;
-    }[] = [];
-    const refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[] = [];
-    const mutations: unknown[] = [];
-    const notices: SessionStartedNotice[] = [];
-    let id = 0;
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.2.3",
-      now: () => 1_000,
-      newId: () => `generated-${++id}`,
-      ...(overrides.withoutFacade
-        ? {}
-        : {
-            sessions: {
-              start: async (input: SessionStartInput) => {
-                startInputs.push(input);
-                if (overrides.startError !== undefined) throw overrides.startError;
-                return {
-                  sessionId: startedSessionId,
-                  state: overrides.state ?? ("ready" as const),
-                  receipt: null,
-                  throughSequence: 2,
-                  model: {
-                    providerId: "openai-codex",
-                    modelId: "gpt-5.6-sol",
-                    reasoningLevel: "high" as const,
-                  },
-                };
-              },
-            },
-          }),
-      submitSessionMessage: async (input) => {
-        kickoffs.push(input);
-      },
-      refineAutoTitle: (input) => refinements.push(input),
-      onMutation: (change) => mutations.push(change),
-      onSessionStarted: (notice) => notices.push(notice),
-    });
-    const execute = (args: Record<string, unknown>, env: Record<string, string> = {}) =>
-      service.execute({ v: 1, cmd: "session.start", args, ctx: { cwd: "/repo/volli", env } });
-    return { service, execute, startInputs, kickoffs, refinements, mutations, notices };
-  }
-
-  it("starts through the product facade and answers in public ids only", async () => {
-    const harness = startHarness();
-
-    const response = await harness.execute({ id: "VC-1" });
-
-    expect(response).toEqual({
-      v: 1,
-      ok: true,
-      data: {
-        session: "abcdef12",
-        ticket: "VC-1",
-        state: "ready",
-        model: "openai-codex/gpt-5.6-sol",
-        reasoning: "high",
-      },
-    });
-    expect(harness.startInputs).toEqual([
-      {
-        operationId: "generated-1",
-        projectId: "project-one",
-        ticketId: "ticket-one",
-        title: "Work on VC-1",
-        actor: { kind: "user" },
-      },
-    ]);
-    expect(JSON.stringify(response)).not.toMatch(/project-one|ticket-one|abcdef12-3456/);
-  });
-
-  it("submits the default kickoff turn once the attach is ready", async () => {
-    const harness = startHarness();
-
-    await harness.execute({ id: "VC-1" });
-
-    // The turn's ids are DERIVED from the start's operation id, never minted at
-    // the delivery seam (VC-162). The Session Engine deduplicates a
-    // `message.submit` on its command id, so this is the whole mechanism that
-    // makes a replayed start submit one kickoff instead of two — the socket's
-    // own operation id is random, but the tool door's is not.
-    expect(harness.kickoffs).toEqual([
-      {
-        sessionId: startedSessionId,
-        text: DEFAULT_KICKOFF_MESSAGE,
-        commandId: "generated-1:kickoff",
-        messageId: "generated-1:kickoff-message",
-      },
-    ]);
-    expect(harness.startInputs[0]?.operationId).toBe("generated-1");
-  });
-
-  it("names a -m kickoff and threads the model/reasoning override", async () => {
-    const harness = startHarness();
-
-    await harness.execute({
-      id: "VC-1",
-      message: "Validate VC-52 before release",
-      model: { providerId: "anthropic", modelId: "claude-opus" },
-      reasoning: "low",
-    });
-
-    expect(harness.kickoffs).toEqual([
-      {
-        sessionId: startedSessionId,
-        text: "Validate VC-52 before release",
-        commandId: "generated-1:kickoff",
-        messageId: "generated-1:kickoff-message",
-      },
-    ]);
-    expect(harness.startInputs[0]).toMatchObject({
-      title: "Validate VC-52",
-      modelOverride: {
-        model: { providerId: "anthropic", modelId: "claude-opus" },
-        reasoningLevel: "low",
-      },
-    });
-  });
-
-  it("uses --title unchanged instead of replacing a user-set name", async () => {
-    const harness = startHarness();
-
-    await harness.execute({
-      id: "VC-1",
-      message: "Validate VC-52 before release",
-      title: "My review",
-    });
-
-    expect(harness.startInputs[0]).toMatchObject({ title: "My review" });
-  });
-
-  it("requests one model refinement behind a heuristic kickoff title", async () => {
-    const harness = startHarness();
-
-    await harness.execute({
-      id: "VC-1",
-      message: "Validate VC-52 before release",
-    });
-
-    expect(harness.refinements).toEqual([
-      {
-        sessionId: startedSessionId,
-        firstMessage: "Validate VC-52 before release",
-        heuristicTitle: "Validate VC-52",
-      },
-    ]);
-  });
-
-  it("refines the stock kickoff too, from the message it actually sent", async () => {
-    const harness = startHarness();
-
-    await harness.execute({ id: "VC-1" });
-
-    expect(harness.refinements).toEqual([
-      {
-        sessionId: startedSessionId,
-        firstMessage: DEFAULT_KICKOFF_MESSAGE,
-        heuristicTitle: "Work on VC-1",
-      },
-    ]);
-  });
-
-  it("makes zero refinement requests for an explicit --title", async () => {
-    const harness = startHarness();
-
-    await harness.execute({ id: "VC-1", title: "My review" });
-
-    expect(harness.refinements).toEqual([]);
-  });
-
-  it("makes zero refinement requests when the kickoff never went out", async () => {
-    const harness = startHarness({ state: "needs-recovery" });
-
-    await harness.execute({ id: "VC-1", message: "Validate VC-52 before release" });
-
-    // A Session held for recovery has not sent this message and may never
-    // send it — titling from text nobody submitted would spend a model call
-    // on a conversation that did not happen. Same gate as the kickoff itself.
-    expect(harness.kickoffs).toEqual([]);
-    expect(harness.refinements).toEqual([]);
-  });
-
-  it("announces the start to every surface without moving the board", async () => {
-    const harness = startHarness();
-
-    await harness.execute({ id: "VC-1" });
-
-    expect(harness.mutations).toEqual([
-      { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
-    ]);
-    expect(harness.notices).toEqual([
-      {
-        sessionId: startedSessionId,
-        projectId: "project-one",
-        ticketId: "ticket-one",
-        ticketDisplayId: "VC-1",
-        actor: "user",
-        actorTicket: null,
-        at: 1_000,
-      },
-    ]);
-    const ticket = getTicket(ctx.db, "ticket-one");
-    expect(ticket?.status).toBe("backlog");
-  });
-
-  it("derives the actor from the door, never from a self-declaration", async () => {
-    const harness = startHarness();
-    const driver = "12345678-aaaa-bbbb-cccc-000000000000";
-    insertTicket(
-      ctx.db,
-      testTicket("project-one", { id: "ticket-two", ticketNumber: 2, title: "Orchestrator" }),
-    );
-    insertSession(
-      ctx.db,
-      testSession("project-one", "ticket-two", { id: driver, cwd: "/repo/volli" }),
-    );
-
-    await harness.execute({ id: "VC-1" }, { session: driver });
-
-    expect(harness.startInputs[0]).toMatchObject({
-      actor: { kind: "session", sessionId: driver, ticketId: "ticket-two" },
-    });
-    expect(harness.notices[0]).toMatchObject({ actor: "session", actorTicket: "VC-2" });
-  });
-
-  it("holds the kickoff back from a Session that needs recovery, but still prints it", async () => {
-    const harness = startHarness({ state: "needs-recovery" });
-
-    const response = await harness.execute({ id: "VC-1" });
-
-    expect(response).toMatchObject({
-      ok: true,
-      data: { session: "abcdef12", state: "needs-recovery" },
-    });
-    expect(harness.kickoffs).toEqual([]);
-    // The Session exists durably either way, so the surfaces still learn of it.
-    expect(harness.mutations).toHaveLength(1);
-    expect(harness.notices).toHaveLength(1);
-  });
-
-  it("refuses an archived ticket before anything starts", async () => {
-    const harness = startHarness();
-    archiveTicket(ctx.db, "ticket-one", 60);
-
-    const response = await harness.execute({ id: "VC-1" });
-
-    expect(response).toMatchObject({ ok: false, error: { code: "ARCHIVED_TICKET" } });
-    expect(harness.startInputs).toEqual([]);
-    expect(harness.notices).toEqual([]);
-  });
-
-  it("refuses an unknown ticket", async () => {
-    const harness = startHarness();
-    expect(await harness.execute({ id: "VC-99" })).toMatchObject({
-      ok: false,
-      error: { code: "TICKET_NOT_FOUND" },
-    });
-  });
-
-  it.each([
-    [
-      new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", "Choose a default model."),
-      "MODEL_REQUIRED",
-    ],
-    [new StructuredSessionsError("MODEL_UNAVAILABLE", "Sign in first."), "MODEL_UNAVAILABLE"],
-    [new StructuredSessionsError("MODEL_SELECTION_REJECTED", "Not recorded."), "MUTATION_FAILED"],
-    [new Error("engine exploded"), "MUTATION_FAILED"],
-  ] as const)("maps a refused start into the fixed error vocabulary (%#)", async (thrown, code) => {
-    const harness = startHarness({ startError: thrown });
-
-    const response = await harness.execute({ id: "VC-1" });
-
-    expect(response).toMatchObject({ ok: false, error: { code } });
-    if (!response.ok) expect(response.error.message).toBe((thrown as Error).message);
-    expect(harness.kickoffs).toEqual([]);
-    expect(harness.mutations).toEqual([]);
-    expect(harness.notices).toEqual([]);
-  });
-
-  it("answers APP_UNREACHABLE when the Session runtime never came up this launch", async () => {
-    const harness = startHarness({ withoutFacade: true });
-    expect(await harness.execute({ id: "VC-1" })).toMatchObject({
-      ok: false,
-      error: { code: "APP_UNREACHABLE" },
-    });
-  });
-
-  it.each([
-    [{ id: "VC-1", message: "   " }],
-    [{ id: "VC-1", title: "   " }],
-    [{ id: "VC-1", model: "openai/gpt" }],
-    [{ id: "VC-1", model: { providerId: "openai" } }],
-    [{ id: "VC-1", reasoning: "ultra" }],
-  ] as const)("rejects malformed raw-socket arguments %#", async (args) => {
-    const harness = startHarness();
-    expect(await harness.execute(args as Record<string, unknown>)).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST" },
-    });
-    expect(harness.startInputs).toEqual([]);
-  });
-
-  it("survives a kickoff the runtime refuses after the reply", async () => {
+  it("shortens the session id a session_started event cites in the public feed", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const service = createAgentCommandService({
-        db: ctx.db,
-        appVersion: "1.2.3",
-        now: () => 1_000,
-        newId: () => "generated-1",
-        sessions: {
-          start: async () => ({
-            sessionId: startedSessionId,
-            state: "ready" as const,
-            receipt: null,
-            throughSequence: 2,
-            model: {
-              providerId: "openai-codex",
-              modelId: "gpt-5.6-sol",
-              reasoningLevel: "high" as const,
-            },
-          }),
-        },
-        submitSessionMessage: async () => {
-          throw new Error("attachment closed");
-        },
-      });
-
-      const response = await service.execute({
-        v: 1,
-        cmd: "session.start",
-        args: { id: "VC-1" },
-        ctx: { cwd: "/repo/volli", env: {} },
-      });
-
-      expect(response).toMatchObject({ ok: true, data: { session: "abcdef12" } });
-      // Drain the detached kickoff so its failure lands in the log, not the run.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(errors).toHaveBeenCalled();
-    } finally {
-      errors.mockRestore();
-    }
-  });
-
-  it("shortens the session id a session_started event cites in the public feed", async () => {
-    const harness = startHarness();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+    });
     recordTicketEvent(
       ctx.db,
       "ticket-one",
@@ -5108,7 +4739,7 @@ describe("session.start", () => {
       { kind: "user" },
     );
 
-    const events = await harness.service.execute({
+    const events = await service.execute({
       v: 1,
       cmd: "ticket.events",
       args: { id: "VC-1" },
@@ -5122,7 +4753,7 @@ describe("session.start", () => {
     expect(JSON.stringify(events)).not.toContain(startedSessionId);
   });
 
-  it("lists a chat session it started, scoped to its ticket", async () => {
+  it("lists a chat session, scoped to its ticket", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,

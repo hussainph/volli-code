@@ -46,10 +46,8 @@ import {
   sessionDoneVerb,
   sessionListVerb,
   sessionPeekVerb,
-  sessionStartVerb,
 } from "./session-verbs";
 import {
-  ticketArchiveVerb,
   ticketCommentVerb,
   ticketCreateVerb,
   ticketMoveVerb,
@@ -116,7 +114,11 @@ export const AGENT_VERB_TABLE: {
   // signals below: a verdict needs a signer, not a terminal attachment, so the
   // multi-project fold buys this verb nothing.
   "ticket.signal": { handle: ticketSignalVerb, projections: "skip", envSession: "resolve" },
-  "ticket.archive": { handle: ticketArchiveVerb, projections: "load", envSession: "resolve" },
+  // No `ticket.archive` and no `session.start` (VC-163). Neither is an omission
+  // to be filled in: this table is a TOTAL mapping over the binding ids the
+  // registry projects onto the socket, so a handler for either would be an
+  // excess property and would not compile. Their application acts remain
+  // available through the app and Agent Tool Surface respectively.
   "ticket.brief": { handle: ticketBriefVerb, projections: "load", envSession: "resolve" },
   "worktree.status": { handle: worktreeStatusVerb, projections: "load", envSession: "resolve" },
   "worktree.diff": { handle: worktreeDiffVerb, projections: "load", envSession: "resolve" },
@@ -133,7 +135,6 @@ export const AGENT_VERB_TABLE: {
   // The one verb that reads BOTH halves of the snapshot (VC-79), from this one
   // fold rather than by listing the world twice.
   "session.peek": { handle: sessionPeekVerb, projections: "load", envSession: "resolve" },
-  "session.start": { handle: sessionStartVerb, projections: "load", envSession: "resolve" },
   // Identity is the whole requirement (VC-51): the signal needs no terminal
   // attachment, so it needs no terminal snapshot to find one in.
   "session.done": { handle: sessionDoneVerb, projections: "skip", envSession: "resolve" },

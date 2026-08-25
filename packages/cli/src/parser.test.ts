@@ -4,7 +4,6 @@ import {
   cliVerbName,
   COLUMN_VOCABULARY,
   HARNESS_VOCABULARY,
-  REASONING_LEVELS,
   REFERENCE_VERBS,
   VERB_REGISTRY,
   verbEntry,
@@ -233,7 +232,7 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("routes comments, archive, lifecycle signals, and notifications", () => {
+  it("routes comments, lifecycle signals, and notifications", () => {
     expect(parseCliArgs(["ticket", "comment", "VC-12", "-m", "Ready for review"])).toEqual({
       ok: true,
       invocation: {
@@ -241,10 +240,6 @@ describe("parseCliArgs", () => {
         args: { id: "VC-12", message: "Ready for review" },
         json: false,
       },
-    });
-    expect(parseCliArgs(["ticket", "archive", "VC-12", "--json"])).toEqual({
-      ok: true,
-      invocation: { command: "ticket.archive", args: { id: "VC-12" }, json: true },
     });
     expect(parseCliArgs(["session", "blocked", "--reason", "Needs permission"])).toEqual({
       ok: true,
@@ -272,85 +267,48 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("parses session start with kickoff, model, and reasoning overrides", () => {
-    expect(parseCliArgs(["session", "start", "VC-4"])).toEqual({
-      ok: true,
-      invocation: { command: "session.start", args: { id: "VC-4" }, json: false },
-    });
-    expect(
-      parseCliArgs([
-        "session",
-        "start",
-        "VC-4",
-        "-m",
-        "Focus on the failing tests",
-        "--title",
-        "Validate VC-4",
-        "--model",
-        "openai-codex/gpt-5.2-sol",
-        "--reasoning",
-        "high",
-        "--json",
-      ]),
-    ).toEqual({
-      ok: true,
-      invocation: {
-        command: "session.start",
-        args: {
-          id: "VC-4",
-          message: "Focus on the failing tests",
-          title: "Validate VC-4",
-          model: { providerId: "openai-codex", modelId: "gpt-5.2-sol" },
-          reasoning: "high",
-        },
-        json: true,
-      },
-    });
-    // --message stays the hidden alias every other message flag has.
-    expect(parseCliArgs(["session", "start", "VC-4", "--message", "go"])).toMatchObject({
-      ok: true,
-      invocation: { args: { id: "VC-4", message: "go" } },
-    });
-    expect(parseCliArgs(["session", "start", "VC-4", "--title", "Validate VC-4"])).toMatchObject({
-      ok: true,
-      invocation: { args: { id: "VC-4", title: "Validate VC-4" } },
-    });
+  // VC-163 took both verbs off the Agent CLI, so neither parses any more. What
+  // replaces the parse is the refusal, and the refusal is the point: an agent
+  // that typed one of these must learn WHICH surface holds the verb. A bare
+  // UNSUPPORTED_COMMAND would read as "no such verb" and send it hunting for a
+  // workaround — killing a PID, writing a verdict comment by hand — which is
+  // the failure mode VC-92 §7 named and this ticket had to avoid.
+  it("refuses session start with the door that does hold it", () => {
+    const result = parseCliArgs(["session", "start", "VC-4"]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
+    expect(result.verb).toBe("session.start");
+    expect(result.message).toBe(
+      "volli session start exists on the Agent Tool Surface as session.start; the Agent CLI does not execute it.",
+    );
   });
 
-  it("splits --model on the FIRST slash so a model id may itself contain one", () => {
-    expect(
-      parseCliArgs(["session", "start", "VC-4", "--model", "gateway/vendor/model-x"]),
-    ).toMatchObject({
-      ok: true,
-      invocation: { args: { model: { providerId: "gateway", modelId: "vendor/model-x" } } },
-    });
+  it("refuses ticket archive by naming the app as the only surface", () => {
+    const result = parseCliArgs(["ticket", "archive", "VC-12"]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
+    expect(result.verb).toBe("ticket.archive");
+    // No bundle carries it, so there is no Role to redirect to and the message
+    // must not imply one. It names the app, which is the whole remaining door.
+    expect(result.message).toBe(
+      "volli ticket archive exists in the app only; no agent surface executes it.",
+    );
   });
 
-  it.each(["gpt-5", "/gpt-5", "openai/", "/"])(
-    "rejects the malformed --model %j and teaches the shape",
-    (raw) => {
-      expect(parseCliArgs(["session", "start", "VC-4", "--model", raw])).toEqual({
-        ok: false,
-        code: "USAGE",
-        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
-      });
-    },
-  );
-
-  it("rejects an unknown --reasoning level and enumerates the vocabulary", () => {
-    expect(parseCliArgs(["session", "start", "VC-4", "--reasoning", "ultra"])).toEqual({
-      ok: false,
-      code: "USAGE",
-      message: `Unknown reasoning level "ultra" (valid: ${REASONING_LEVELS.join(", ")})`,
-    });
-  });
-
-  it("requires the ticket id positional for session start", () => {
-    expect(parseCliArgs(["session", "start"])).toEqual({
-      ok: false,
-      code: "USAGE",
-      message: "session start requires <id>",
-    });
+  // A wrong door is refused at the NAME, before any argument is looked at.
+  // Otherwise `--model gpt-5` would be answered with a usage error about the
+  // model shape — a confident, irrelevant refusal about a verb this surface
+  // was never going to run.
+  it.each([
+    [["session", "start"]],
+    [["session", "start", "VC-4", "--model", "gpt-5"]],
+    [["session", "start", "VC-4", "--reasoning", "ultra"]],
+    [["ticket", "archive"]],
+    [["ticket", "archive", "VC-1", "--bad"]],
+  ])("refuses %j at the name, never at its arguments", (argv) => {
+    const result = parseCliArgs(argv as string[]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
   });
 
   it("requires the harness session id positional for session link", () => {
@@ -502,7 +460,6 @@ describe("parseCliArgs", () => {
   it.each([
     [["board", "--project"], "--project requires a value"],
     [["app", "launch", "--timeout", "0"], "--timeout requires a positive integer"],
-    [["ticket", "archive"], "ticket archive requires <id>"],
     [["ticket", "show"], "ticket show requires <id>"],
     [["ticket", "show", "VC-1", "--events"], "--events requires a value"],
     // 0 is accepted (VC-85); what a count still refuses is a negative or a
@@ -624,8 +581,6 @@ describe("parseCliArgs", () => {
   it.each([
     [["identify", "--bad"], "identify", "--project"],
     [["board", "--bad", "x"], "board", "--project"],
-    // ticket archive has no options, so no "(options: …)" list is appended.
-    [["ticket", "archive", "VC-1", "--bad"], "ticket archive", "--bad"],
     [["ticket", "show", "VC-1", "--bad", "1"], "ticket show", "--events"],
     [["ticket", "move", "VC-1", "--to", "doing", "--bad"], "ticket move", "--to"],
     [["ticket", "comment", "VC-1", "--bad", "x"], "ticket comment", "-m"],
@@ -962,17 +917,14 @@ describe("registry ↔ argv mechanics", () => {
     }
   });
 
-  // Which verbs the walker cannot serve, named rather than inferred: `hook`
-  // takes two bare positionals and never walks the parser, `help` takes a
-  // command path or a topic word instead of an option table, and `ticket.await`
-  // is not on the shell at all — it is control tier, because a CLI verb must
-  // never wait (VC-85). The first two are shapes argv cannot express; the third
-  // is a door this process does not have.
-  it("leaves exactly the verbs the walker cannot serve without mechanics", () => {
+  // `hook` bypasses the walker, `help` has its own command-path grammar,
+  // ticket.archive is app-only, session.start is tool-only, and ticket.await
+  // is the blocking control-tier tool a CLI must never execute.
+  it("leaves exactly the verbs the CLI cannot execute without mechanics", () => {
     const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
       (entry) => entry.key,
     );
-    expect(missing).toEqual(["hook", "help", "ticket.await"]);
+    expect(missing).toEqual(["ticket.archive", "session.start", "hook", "help", "ticket.await"]);
   });
 });
 

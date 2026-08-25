@@ -299,63 +299,70 @@ describe("runCli", () => {
     ]);
   });
 
-  it("carries session start's overrides over the socket and prints the short id line", async () => {
+  // VC-163's acceptance, end to end through the real parser: `volli session
+  // start` refuses with the wrong-door error AND STARTS NOTHING. The second
+  // half is the one worth a test — a refusal that had already sent the command
+  // would be a message, not a door.
+  it("refuses session start at the wrong door and sends no start over the socket", async () => {
     const stdout: string[] = [];
+    const stderr: string[] = [];
     const requests: AgentRequest[] = [];
 
     const exitCode = await runCli(
-      [
-        "session",
-        "start",
-        "VC-4",
-        "-m",
-        "Fix the flaky test",
-        "--title",
-        "Validate VC-4",
-        "--model",
-        "openai-codex/gpt-5.2",
-        "--reasoning",
-        "high",
-      ],
+      ["session", "start", "VC-4", "-m", "Fix the flaky test", "--model", "openai-codex/gpt-5.2"],
       {
-        env: { VOLLI_SOCKET: "/profiles/volli.sock" },
+        env: { VOLLI_SOCKET: "/profiles/volli.sock", VOLLI_SESSION: "session-7" },
         cwd: "/work/volli",
         stdout: (text) => stdout.push(text),
-        stderr: () => undefined,
+        stderr: (text) => stderr.push(text),
         readText: async () => "",
         observe: async () => ({}),
         request: async (_socketPath, request) => {
           requests.push(request);
-          return {
-            v: 1,
-            ok: true,
-            data: {
-              session: "abcdef12",
-              ticket: "VC-4",
-              state: "ready",
-              model: "openai-codex/gpt-5.2",
-              reasoning: "high",
-            },
-          };
+          return { v: 1, ok: true, data: { appVersion: "0.1.1" } };
         },
         launch: async () => ({ alreadyRunning: true }),
       },
     );
 
-    expect(exitCode).toBe(0);
-    expect(requests).toEqual([
-      expect.objectContaining({
-        cmd: "session.start",
-        args: {
-          id: "VC-4",
-          message: "Fix the flaky test",
-          title: "Validate VC-4",
-          model: { providerId: "openai-codex", modelId: "gpt-5.2" },
-          reasoning: "high",
-        },
-      }),
-    ]);
-    expect(stdout).toEqual(["abcdef12  VC-4  ready  openai-codex/gpt-5.2 high\n"]);
+    // Exit 2 is the usage class: the caller must change what it typed.
+    expect(exitCode).toBe(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("")).toContain(
+      "volli session start exists on the Agent Tool Surface as session.start",
+    );
+    // The only thing that reached the socket is the OPTIONAL Role read the
+    // teaching error uses to say whether this Session's bundle carries the
+    // verb. No `session.start` was sent, with or without its overrides.
+    expect(requests.map((request) => request.cmd)).toEqual(["identify"]);
+  });
+
+  it("refuses ticket archive as app-only, and sends nothing at all", async () => {
+    const stderr: string[] = [];
+    const requests: AgentRequest[] = [];
+
+    const exitCode = await runCli(["ticket", "archive", "VC-4"], {
+      env: { VOLLI_SOCKET: "/profiles/volli.sock" },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socketPath, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { appVersion: "0.1.1" } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(exitCode).toBe(2);
+    expect(stderr.join("")).toContain(
+      "volli ticket archive exists in the app only; no agent surface executes it.",
+    );
+    // Not even the Role read: with no `tool` access mode there is no bundle
+    // membership to report, so the refusal is answered entirely locally and
+    // nothing at all reaches the socket.
+    expect(requests).toEqual([]);
   });
 
   it("identifies environment context in degraded mode when the app is down", async () => {

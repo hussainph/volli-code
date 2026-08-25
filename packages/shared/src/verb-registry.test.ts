@@ -6,6 +6,7 @@ import {
   agentCommandBindingsFrom,
   agentCommandsFrom,
   cliVerbName,
+  DISCOVERABLE_VERBS,
   REFERENCE_VERBS,
   referenceVerbsFrom,
   VERB_REGISTRY,
@@ -15,17 +16,12 @@ import {
 import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
 
 /**
- * The socket surface as it stood before the registry existed: the 27 strings
- * `AGENT_COMMANDS` was authored with, in the order it authored them, plus what
- * has been ADDED to the socket since. The projection has to reproduce this
- * exactly — VC-161 re-seated the surface without redesigning it, and every
- * later addition is named here in the open, where growing the agent surface is
- * a line somebody has to write.
- *
- * Added since: `ticket.signal` (VC-85), declared beside the other ticket
- * writes, which is where declaration order puts it.
+ * The socket surface as VC-85 and VC-163 leave it. VC-85 adds the typed
+ * `ticket.signal` coordination verb; VC-163 removes `session.start` (tool-only
+ * control tier) and `ticket.archive` (app-only curation). Every change is named
+ * here so growing or shrinking the socket remains an explicit tier decision.
  */
-const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
+const SOCKET_SURFACE = [
   "identify",
   "board",
   "ticket.list",
@@ -36,7 +32,6 @@ const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
   "ticket.move",
   "ticket.comment",
   "ticket.signal",
-  "ticket.archive",
   "ticket.brief",
   "worktree.status",
   "worktree.diff",
@@ -46,7 +41,6 @@ const SOCKET_SURFACE_BEFORE_THE_REGISTRY = [
   "cost",
   "session.list",
   "session.peek",
-  "session.start",
   "session.done",
   "session.blocked",
   "session.link",
@@ -76,8 +70,6 @@ const REFERENCE_SURFACE = [
   "ticket.move",
   "ticket.comment",
   "ticket.signal",
-  "ticket.archive",
-  "session.start",
   "session.list",
   "session.peek",
   "session.done",
@@ -95,21 +87,19 @@ const REFERENCE_SURFACE = [
  * every key, so a new verb cannot be added without a tier answer — that is the
  * "adding a verb is a tier decision" discipline, enforced by the compiler.
  *
- * Two rows deliberately disagree with VC-92's target assignment, because both
- * verbs are still on the socket right now:
+ * Every row now agrees with VC-92's target. The two that used to disagree were
+ * the ones VC-163 moved, and they are the whole of what this ticket changed
+ * here:
  *
- * - `ticket.archive` — target: off the agent surface entirely (no access mode,
- *   no tier). VC-163 empties its access modes; until then it is a coordination
- *   write like the other ticket writes.
- * - `session.start` — target: control tier, a named tool in the `project`
- *   bundle, absent from the socket. VC-162 ADDED the `tool` access mode and
- *   `project` bundle membership; it did not flip one, and it did not make this
- *   a control verb. The socket door stays open, so the verb is dual-surface
- *   (`["cli", "tool"]`) and `verbTier` reads that as coordination — a tier is
- *   the WEAKEST door a verb is reachable through, and claiming control while
- *   any authenticated socket caller still reaches it would be a claim about a
- *   door standing open. VC-163 removes `cli` and flips the actor to `role`,
- *   and THAT is the moment this row becomes `control`.
+ * - `ticket.archive` — `null`. Not a tier of `none`: no access mode at all, so
+ *   the verb is on no agent surface and holds no governance class to be
+ *   assigned. App-only curation.
+ * - `session.start` — `control`. VC-162 added the `tool` access mode beside
+ *   `cli`, which left the verb dual-surface and therefore still coordination:
+ *   a tier is the WEAKEST door a verb is reachable through, and claiming
+ *   control while any socket caller reached it would have been a claim about a
+ *   door standing open. Removing `cli` and flipping the actor to `role` is what
+ *   shut that door, and only then does the row read `control`.
  *
  * `app.launch` and `help` are not in VC-92's audit — they never reach the
  * socket. They are read tier by the same rule as any other any-caller verb.
@@ -149,9 +139,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.link": "coordination",
   "session.harness": "coordination",
   hook: "coordination",
-  // The two deltas from VC-92's target, named above.
-  "ticket.archive": "coordination",
-  "session.start": "coordination",
+  // The two VC-163 moved, named above.
+  "ticket.archive": null,
+  "session.start": "control",
   // The first verb born on VC-92's target assignment directly: tool-only,
   // Role-gated, never on the socket (VC-85). No delta to grow out of.
   "ticket.await": "control",
@@ -208,8 +198,25 @@ const SYNTHETIC: readonly VerbEntry[] = [
 ];
 
 describe("AGENT_COMMANDS projection", () => {
-  it("reproduces the socket surface exactly, in its original order", () => {
-    expect([...AGENT_COMMANDS]).toEqual(SOCKET_SURFACE_BEFORE_THE_REGISTRY);
+  it("reproduces the socket surface exactly, in its declared order", () => {
+    expect([...AGENT_COMMANDS]).toEqual(SOCKET_SURFACE);
+  });
+
+  // The acceptance line, as an assertion rather than as prose: "No agent-control
+  // verb exists on the socket." Absence is the enforcement — a tool call is
+  // bound to the attachment that made it, and a socket call can only ever be
+  // attributed, so the control tier is not gated on the socket, it is missing
+  // from it (VC-92 §6.1).
+  it("carries no control-tier verb at all", () => {
+    const onSocket = VERB_REGISTRY.filter((entry) =>
+      (AGENT_COMMANDS as readonly string[]).includes(entry.key),
+    );
+    expect(onSocket.filter((entry) => verbTier(entry) === "control")).toEqual([]);
+  });
+
+  it("no longer answers session.start or ticket.archive", () => {
+    expect(AGENT_COMMANDS).not.toContain("session.start");
+    expect(AGENT_COMMANDS).not.toContain("ticket.archive");
   });
 
   it("is derived from the registry rather than authored beside it", () => {
@@ -311,10 +318,9 @@ describe("verbTier", () => {
     // 15 in VC-92's audit, plus `cost` — which the amendment staged read tier
     // in the same breath, on the grounds that spend has to be cheap to sample.
     expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(16);
-    // VC-92 assigns 10 coordination verbs; `ticket.archive` and `session.start`
-    // ride here too until VC-163 and VC-162 move them, and `ticket.signal`
-    // (VC-85) was born into the class.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(13);
+    // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
+    // to the remaining coordination surface.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(11);
     expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
   });
 
@@ -388,12 +394,26 @@ describe("the registry table", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("gives every verb a handler binding and at least one access mode", () => {
+  it("gives every verb a handler binding, whatever surfaces project it", () => {
     for (const entry of VERB_REGISTRY) {
       expect(["main", "cli"]).toContain(entry.handler.site);
       expect(entry.handler.id.length).toBeGreaterThan(0);
-      expect(entry.accessModes.length).toBeGreaterThan(0);
       expect(entry.summary.length).toBeGreaterThan(0);
+    }
+  });
+
+  // VC-161 required at least one access mode on every entry, because at the
+  // time no verb could be on zero agent surfaces. VC-163 made one: an app-only
+  // verb keeps its whole entry — binding, options, effects — and simply
+  // projects onto nothing. The binding requirement above is what still holds
+  // universally, and it is the one that matters: the entry stays resolvable, so
+  // restoring a surface is putting a string back rather than rebuilding a verb.
+  it("lets a verb be on no agent surface, and keeps its binding when it is", () => {
+    const appOnly = VERB_REGISTRY.filter((entry) => entry.accessModes.length === 0);
+    expect(appOnly.map((entry) => entry.key)).toEqual(["ticket.archive"]);
+    for (const entry of appOnly) {
+      expect(entry.handler.id).toBe(entry.key);
+      expect(verbTier(entry)).toBeNull();
     }
   });
 
@@ -486,9 +506,28 @@ describe("REFERENCE_VERBS", () => {
     expect(REFERENCE_VERBS.map((entry) => entry.key)).toEqual(REFERENCE_SURFACE);
   });
 
-  it("covers every listed verb exactly once, and nothing unlisted", () => {
-    const listed = VERB_REGISTRY.filter((entry) => entry.listed).map((entry) => entry.key);
-    expect(REFERENCE_VERBS.map((entry) => entry.key).toSorted()).toEqual(listed.toSorted());
+  // The reference is what the SHELL executes, which is no longer the same set
+  // as what help may name (VC-163). `session.start` and `ticket.archive` are
+  // still listed, and still discoverable, precisely so a wrong door can be
+  // told apart from no door — but neither is executable here, so neither
+  // belongs in the executable projection.
+  it("covers every listed CLI verb exactly once, and nothing unlisted", () => {
+    const listedOnCli = VERB_REGISTRY.filter(
+      // Widened because `ticket.archive` now declares `readonly []`, whose own
+      // `includes` accepts `never` — the const table proving, at the type level,
+      // that the verb is on no surface.
+      (entry) => entry.listed && (entry.accessModes as readonly string[]).includes("cli"),
+    ).map((entry) => entry.key);
+    expect(REFERENCE_VERBS.map((entry) => entry.key).toSorted()).toEqual(listedOnCli.toSorted());
+  });
+
+  it("still lets help name the two verbs the shell cannot run", () => {
+    const discoverable = DISCOVERABLE_VERBS.map((entry) => entry.key);
+    const reference = REFERENCE_VERBS.map((entry) => entry.key);
+    expect(discoverable.filter((key) => !reference.includes(key))).toEqual([
+      "ticket.archive",
+      "session.start",
+    ]);
   });
 
   it("is a different surface from the socket, by two verbs each way", () => {

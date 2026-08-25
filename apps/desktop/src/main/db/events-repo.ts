@@ -1,7 +1,13 @@
 /**
  * `ticket_events` repo: the append-only log every ticket mutation writes to
- * in the same transaction as its row change. `actor` is always `'user'`
- * today; `'agent'`/`'automation'` arrive with the volli CLI.
+ * in the same transaction as its row change.
+ *
+ * `actor` stores one of two shapes: a bare token (`user`, `automation`,
+ * `unauthenticated`) for the kinds that carry no Session context, or JSON for
+ * the ones that do. {@link parseActor} is tolerant on read because history
+ * outlives the build that wrote it — but note the asymmetry it cannot avoid:
+ * an unreadable token degrades to `user`, so every kind that must NOT be read
+ * as the user has to be named in that branch explicitly.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -57,15 +63,21 @@ function parseActor(actor: string): {
   } catch {
     // Older rows may contain a plain actor token.
   }
-  return actor === "automation" || actor === "session"
+  // `unauthenticated` joins the bare-token set (VC-163). It must be listed here
+  // explicitly rather than fall through: the fallback below reads an
+  // unrecognised token as `user`, which for THIS token would restore the exact
+  // attribution the kind was added to replace.
+  return actor === "automation" || actor === "session" || actor === "unauthenticated"
     ? { actor, context: null }
     : { actor: "user", context: null };
 }
 
 function serializeActor(actor: TicketEventActor): string {
   if (actor.kind === "user") return "user";
-  // A context-less system automation stores as the bare token (like "user"), so
-  // parseActor's plain-token branch round-trips it back to "automation".
+  // Two bare tokens beside "user", both round-tripped by parseActor's
+  // plain-token branch: a context-less system automation, and an
+  // unauthenticated caller, which has no context to carry by construction.
+  if (actor.kind === "unauthenticated") return "unauthenticated";
   if (actor.kind === "automation" && !("sessionId" in actor)) return "automation";
   return JSON.stringify(actor);
 }
