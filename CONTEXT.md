@@ -170,9 +170,12 @@ _Avoid_: web search setting, browsing, internet permission
 The bash-composable `volli` verb surface a Session's shell (or a person's
 terminal) reaches through the local agent socket. It is the discovery surface
 and the low-risk coordination surface: reads, plus writes that are visible,
-attributable, and reversible. It attributes its caller and cannot authenticate
-one — any process running as the user can reach it — so a verb whose misuse
-cannot be tolerated from an arbitrary such process does not belong here.
+attributable, and reversible. Any process running as the user can reach it, so
+a Session proves itself with a per-attachment token rather than by naming
+itself; a caller without one is the unauthenticated Actor and reads only. The
+token defeats an injected string and cross-session confusion, not a hostile
+same-uid process — so a verb whose misuse cannot be tolerated from an arbitrary
+such process still does not belong here.
 _Avoid_: agent surface (alone), planning CLI
 
 **Agent Tool Surface**:
@@ -208,8 +211,9 @@ surface's projection)
 The governance class a verb's access modes imply, never a stored field. Read
 tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
 session actor, judged by per-actor policy. Control tier: named tool only,
-Role-bundled, absent from the agent socket. No verb needs a higher tier than
-the ambient authority its effect already lies within.
+Role-bundled, absent from the agent socket. A verb on no agent surface at all
+holds no tier. No verb needs a higher tier than the ambient authority its
+effect already lies within.
 _Avoid_: dangerous tier, middle tier
 
 **Cache Prefix**:
@@ -423,6 +427,31 @@ One append-only planner-history record of something that happened to a Ticket
 planner-level consequences only; executor conversation facts live in the
 Session Event ledger. A Ticket Event may cite a Session as provenance.
 
+**Ticket Signal**:
+A typed verdict on a Ticket — a fixed kind (validate, implement, review,
+merge, human-gate, budget), a verdict (pass, fail, blocked), and optional
+prose detail — recorded as a `signaled` Ticket Event by an authenticated
+Session actor (VC-85). Signals carry state; comments carry prose. A signal
+never moves the board: Deliberate moves and Run Outcomes own movement.
+_Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
+
+**Ticket Wake**:
+One committed Ticket Event, fanned out in-process after its transaction
+commits (`ticket-wake.ts`). The wake bus is main's canonical post-commit
+stream: every mutation door feeds it, and the await tool parks on it. A wake
+is never a source of truth — the durable event it reports already is.
+_Avoid_: notification, broadcast (that is the window fan-out)
+
+**Await**:
+The control-tier wait: a Session's `ticket_await` tool call parks its turn
+until a watched Ticket signals, is commented on, or moves — then wakes with
+that one event (VC-85). Runtime-native like `ask_user`: no bash sleeps, no
+polling, and never a CLI verb, because a CLI verb must never wait. What may
+be awaited is per-actor policy data (`awaitable`); chaining the opaque `cursor`
+returned by every wake or timeout makes the watch window continuous. A cursor
+is ledger order; `occurredAt` is metadata and must never be used as one.
+_Avoid_: watch verb, `volli ticket wait`, polling loop
+
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
@@ -447,7 +476,7 @@ _Avoid_: artifact, diff (when referring to the whole body of work)
 The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
-Who a ticket event is attributed to: `user`, `session`, or `automation`. The app derives this from how the mutation arrived; callers never self-declare it.
+Who a ticket event is attributed to: `user`, `session`, `automation`, or `unauthenticated`. The app derives this from how the mutation arrived; callers never self-declare it. `unauthenticated` is the honest name for a socket caller Volli could not identify — it is neither the person nor the Session it may have named, and by default it writes nothing at all.
 _Avoid_: agent (as an actor value — the app cannot know an agent typed it, only which session it came from)
 
 **Deliberate move**:

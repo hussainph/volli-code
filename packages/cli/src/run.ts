@@ -220,6 +220,9 @@ async function readHelpRuntime(dependencies: RunCliDependencies): Promise<AgentH
       env: {
         socket: socketPath,
         ...(sessionId === undefined ? {} : { session: sessionId }),
+        ...(dependencies.env["VOLLI_SESSION_TOKEN"]
+          ? { token: dependencies.env["VOLLI_SESSION_TOKEN"] }
+          : {}),
         ...(dependencies.env["VOLLI_TICKET"] === undefined
           ? {}
           : { ticket: dependencies.env["VOLLI_TICKET"] }),
@@ -293,16 +296,28 @@ export function teachingErrorForParseResult(
 }
 
 /**
- * Renders one parse refusal. A wrong door alone pays for the optional Role
- * read, because it is the one refusal whose teaching depends on live facts;
- * every other parse error stays local and instant.
+ * Renders one parse refusal. A wrong door onto a TOOL alone pays for the
+ * optional Role read, because it is the one refusal whose teaching depends on
+ * live facts — whether this Session's frozen bundle carries the verb. Every
+ * other parse error stays local and instant.
+ *
+ * The tool test is not a micro-optimization; it is what keeps the round-trip
+ * honest. VC-163 introduced the first verb on NO agent surface
+ * (`ticket.archive`), and for that one there is no bundle membership to report:
+ * `teachingErrorForParseResult` returns before it looks at the runtime, so
+ * reading one would be spending a socket call to answer a question the refusal
+ * does not ask.
  */
 export async function renderParseRefusal(
   parsed: Extract<ReturnType<typeof parseCliArgs>, { ok: false }>,
   argv: readonly string[],
   dependencies: RunCliDependencies,
 ): Promise<0 | 1 | 2 | 3> {
-  const runtime = parsed.code === "WRONG_DOOR" ? await readHelpRuntime(dependencies) : null;
+  const teachableByRole =
+    parsed.code === "WRONG_DOOR" &&
+    parsed.verb !== undefined &&
+    verbEntry(parsed.verb)?.accessModes.includes("tool") === true;
+  const runtime = teachableByRole ? await readHelpRuntime(dependencies) : null;
   const error = teachingErrorForParseResult(parsed, runtime);
   dependencies.stderr(renderCliError(error, { json: argv.includes("--json") }));
   return exitCodeForError(error.code);
@@ -397,6 +412,15 @@ export async function runCli(
           ...(dependencies.env["VOLLI_SOCKET"] ? { socket: dependencies.env["VOLLI_SOCKET"] } : {}),
           ...(dependencies.env["VOLLI_SESSION"]
             ? { session: dependencies.env["VOLLI_SESSION"] }
+            : {}),
+          // The Session's authentication, forwarded verbatim (VC-163). The CLI
+          // never inspects it and cannot mint one: it is the transport for a
+          // secret Volli exported into this attachment, and the door is the
+          // only thing that can say whether it means anything. An empty value
+          // is treated as absent, so `VOLLI_SESSION_TOKEN=""` cannot arrive as
+          // a token-shaped field the door has to reason about.
+          ...(dependencies.env["VOLLI_SESSION_TOKEN"]
+            ? { token: dependencies.env["VOLLI_SESSION_TOKEN"] }
             : {}),
           ...(dependencies.env["VOLLI_TICKET"] ? { ticket: dependencies.env["VOLLI_TICKET"] } : {}),
         },

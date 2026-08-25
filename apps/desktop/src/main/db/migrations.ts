@@ -1109,6 +1109,83 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 028: `ticket_signals` — the typed verdict channel (VC-85).
+ *
+ * Shaped after `ticket_comments` (migration 003) because it is the same kind
+ * of thing: durable content about a ticket, written by one actor, paired with
+ * a ticket event recorded in the same transaction. What differs is what a
+ * reader may assume. A comment is prose and its meaning is whatever it says; a
+ * signal is a fact with a fixed vocabulary, and the whole reason it exists is
+ * that a machine can read it without parsing anybody's sentence.
+ *
+ * So the vocabulary is a CHECK, following `tickets.status` rather than
+ * `ticket_comments.actor`. A kind or verdict outside the fixed list is not a
+ * value this product has an opinion about — it is a writer disagreeing with the
+ * schema, and the database is the last place that can say no. Widening the
+ * vocabulary later costs one migration, which is the correct price for
+ * changing what a verdict can mean.
+ *
+ * No UPDATE or DELETE path exists and none is intended: signals are
+ * append-only, and a later signal of the same kind supersedes an earlier one by
+ * being newer. The index is what makes "latest per kind" one read rather than a
+ * fold over a ticket's whole signal history.
+ */
+const MIGRATION_028_TICKET_SIGNALS = `
+CREATE TABLE ticket_signals (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('validate','implement','review','merge','human-gate','budget')),
+  verdict    TEXT NOT NULL CHECK (verdict IN ('pass','fail','blocked')),
+  detail     TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX ticket_signals_latest ON ticket_signals(ticket_id, kind, created_at);
+`;
+
+/**
+ * Migration 029: a durable total order for Ticket Events (VC-85 review).
+ *
+ * `created_at` is metadata, not a cursor: two commits can share one
+ * millisecond, clocks can move, and imported events can arrive out of timestamp
+ * order. SQLite's implicit `rowid` distinguishes local inserts but may be
+ * reused after a cascading delete, so it cannot back the public "miss
+ * nothing" promise either.
+ *
+ * This sidecar gives every appended event an AUTOINCREMENT sequence. The
+ * sequence remains host-private — `ticket.await` exposes an opaque encoded
+ * cursor — so a future cloud event store may replace it without changing the
+ * tool contract. Ticket and kind are repeated deliberately to make a
+ * multi-ticket/kind replay one indexed, bounded query rather than a fold over
+ * each Ticket's history. The trigger keeps every existing event writer on the
+ * invariant without making each mutation door remember a second insert.
+ */
+const MIGRATION_029_TICKET_EVENT_SEQUENCE = `
+CREATE TABLE ticket_event_sequence (
+  sequence  INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id  TEXT NOT NULL UNIQUE REFERENCES ticket_events(id) ON DELETE CASCADE,
+  ticket_id TEXT NOT NULL,
+  kind      TEXT NOT NULL
+);
+INSERT INTO ticket_event_sequence (event_id, ticket_id, kind)
+SELECT id, ticket_id, kind FROM ticket_events ORDER BY rowid ASC;
+CREATE INDEX ticket_event_sequence_match
+  ON ticket_event_sequence(ticket_id, kind, sequence);
+CREATE TRIGGER ticket_event_sequence_insert
+AFTER INSERT ON ticket_events
+BEGIN
+  INSERT INTO ticket_event_sequence (event_id, ticket_id, kind)
+  VALUES (NEW.id, NEW.ticket_id, NEW.kind);
+END;
+CREATE TRIGGER ticket_event_sequence_identity_immutable
+BEFORE UPDATE OF id, ticket_id, kind ON ticket_events
+BEGIN
+  SELECT RAISE(ABORT, 'ticket event identity is immutable');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1243,6 +1320,16 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 27,
     name: "session_usage — the rebuildable index of what each model operation consumed",
     sql: MIGRATION_027_SESSION_USAGE,
+  },
+  {
+    version: 28,
+    name: "ticket_signals — typed verdicts, queryable where a comment convention was not",
+    sql: MIGRATION_028_TICKET_SIGNALS,
+  },
+  {
+    version: 29,
+    name: "ticket_event_sequence — durable opaque cursors for lossless waits",
+    sql: MIGRATION_029_TICKET_EVENT_SEQUENCE,
   },
 ];
 

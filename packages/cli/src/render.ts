@@ -162,6 +162,12 @@ function renderDetail(data: unknown): string | null {
   if (typeof ticket["body"] === "string" && ticket["body"].length > 0) {
     lines.push("", ticket["body"]);
   }
+  // Signals lead the three logs because they are the only one that says where
+  // the ticket STANDS (VC-85): at most one line per kind, and the line an
+  // orchestrator polling this ticket came to read.
+  for (const signal of recordsAt(data, "signals") ?? []) {
+    lines.push(`signal  ${JSON.stringify(signal)}`);
+  }
   for (const event of recordsAt(data, "events") ?? [])
     lines.push(`event  ${JSON.stringify(event)}`);
   for (const comment of recordsAt(data, "comments") ?? []) {
@@ -499,6 +505,15 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "ticket.comment" && isRecord(data["comment"])) {
     const ticket = data["comment"]["ticket"];
     return typeof ticket === "string" ? `${terminalSafeInline(ticket)}  comment added` : null;
+  }
+  // The receipt echoes the recorded verdict rather than saying "signal added":
+  // what was written is the whole content of the acknowledgement, and a signer
+  // reading it back is how a wrong `--kind` gets caught one line later.
+  if (command === "ticket.signal" && isRecord(data["signal"])) {
+    const signal = data["signal"];
+    return typeof signal["ticket"] === "string"
+      ? `${terminalSafeInline(signal["ticket"])}  ${terminalSafeInline(signal["kind"])}  ${terminalSafeInline(signal["verdict"])}`
+      : null;
   }
   if (command === "project.list") {
     const projects = recordsAt(data, "projects");

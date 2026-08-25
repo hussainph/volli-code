@@ -58,6 +58,7 @@ describe("scrubInheritedSessionEnv", () => {
     const scrubbed = scrubInheritedSessionEnv(
       {
         VOLLI_SESSION: "outer-session",
+        VOLLI_SESSION_TOKEN: "outer-token",
         VOLLI_SOCKET: "/outer/volli.sock",
         VOLLI_TICKET: "VC-99",
         VOLLI_ARTIFACTS_DIR: "/outer/.volli/artifacts",
@@ -70,6 +71,18 @@ describe("scrubInheritedSessionEnv", () => {
       [],
     );
     expect(scrubbed).toEqual({ HOME: "/Users/x" });
+  });
+
+  // The token's own entry in the contract, named on its own because it is the
+  // one whose survival would be a security bug rather than a wrong attribution
+  // (VC-163). Volli is routinely launched from a terminal inside another Volli
+  // Session; an inherited token would authenticate every terminal this app ever
+  // opens AS that outer Session — which is precisely the cross-session
+  // confusion the token exists to defeat.
+  it("clears an inherited session token, so no terminal authenticates as an outer Session", () => {
+    expect(
+      scrubInheritedSessionEnv({ VOLLI_SESSION_TOKEN: "outer-token", HOME: "/Users/x" }, []),
+    ).toEqual({ HOME: "/Users/x" });
   });
 
   it("clears another agent manager's surface markers", () => {

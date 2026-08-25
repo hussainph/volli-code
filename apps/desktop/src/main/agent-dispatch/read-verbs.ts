@@ -16,15 +16,17 @@ import {
 import type { AgentRequest, AgentResponse, SessionEvent } from "@volli/shared";
 
 import { listMaterializableLinks } from "../db/blobs-repo";
-import { listComments } from "../db/comments-repo";
-import { listTicketEvents } from "../db/events-repo";
+import { listRecentComments } from "../db/comments-repo";
+import { listRecentTicketEvents } from "../db/events-repo";
 import { listAllLabels } from "../db/labels-repo";
+import { listLatestSignals } from "../db/signals-repo";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
 import { isInside } from "../worktree/paths";
 import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import {
+  countOr,
   invalidPriorityResponse,
   positiveIntOr,
   projectForCreate,
@@ -268,26 +270,49 @@ export async function ticketShowVerb(
   const { options, projects } = context;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const eventLimit = positiveIntOr(request.args["events"], 5);
-  const commentLimit = positiveIntOr(request.args["comments"], 5);
+  // Zero is a real count here, not an absent one: an orchestrator polling this
+  // ticket for a verdict wants neither log, and paying for one is the cost
+  // VC-85 measured at ~60% of an orchestration pass.
+  const eventLimit = countOr(request.args["events"], 5);
+  const commentLimit = countOr(request.args["comments"], 5);
   const displayId = displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber);
-  const events = listTicketEvents(options.db, resolved.ticket.id)
-    .slice(-eventLimit)
-    .map((event) => publicEvent(options.db, projects, event));
-  const comments = listComments(options.db, resolved.ticket.id)
-    .slice(-commentLimit)
-    .map((comment) => ({
+  const events = listRecentTicketEvents(options.db, resolved.ticket.id, eventLimit).map((event) =>
+    publicEvent(options.db, projects, event),
+  );
+  const comments = listRecentComments(options.db, resolved.ticket.id, commentLimit).map(
+    (comment) => ({
       ticket: displayId,
       body: comment.body,
       actor: comment.actor,
       session: comment.sessionId ? shortSessionId(comment.sessionId) : null,
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
-    }));
+    }),
+  );
+  // Unconditional, and uncapped by either count: this is where the ticket
+  // STANDS, and it is at most one row per kind (VC-85). Capping it would be
+  // capping the answer rather than the history, and hiding it behind a flag
+  // would leave the cheapest poll unable to see the thing it polls for.
+  const signals = listLatestSignals(options.db, resolved.ticket.id).map((signal) => ({
+    ticket: displayId,
+    kind: signal.kind,
+    verdict: signal.verdict,
+    detail: signal.detail,
+    session: signal.sessionId ? shortSessionId(signal.sessionId) : null,
+    createdAt: signal.createdAt,
+  }));
+  // A polling projection must not resend a static ticket body every cycle.
+  // `--comments-only` marks that intent explicitly; zeroing both logs is the
+  // signal-only equivalent. Keep the three fields plaintext rendering needs,
+  // while the full `ticket show` shape remains unchanged for ordinary reads.
+  const compact = request.args["commentsOnly"] === true || (eventLimit === 0 && commentLimit === 0);
+  const ticket = compact
+    ? { id: displayId, status: resolved.ticket.status, title: resolved.ticket.title }
+    : agentTicket(resolved.ticket, resolved.project);
   return {
     v: 1,
     ok: true,
-    data: { ticket: agentTicket(resolved.ticket, resolved.project), events, comments },
+    data: { ticket, signals, events, comments },
   };
 }
 
@@ -300,9 +325,9 @@ export async function ticketEventsVerb(
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
   const limit = positiveIntOr(request.args["limit"], 50);
-  const events = listTicketEvents(options.db, resolved.ticket.id)
-    .slice(-limit)
-    .map((event) => publicEvent(options.db, projects, event));
+  const events = listRecentTicketEvents(options.db, resolved.ticket.id, limit).map((event) =>
+    publicEvent(options.db, projects, event),
+  );
   return { v: 1, ok: true, data: { events } };
 }
 

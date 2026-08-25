@@ -80,6 +80,7 @@ import {
   watchSessionActivity,
 } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
+import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
@@ -151,6 +152,7 @@ import {
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
 import type { AgentToolDoor } from "./agent-tool-door";
+import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanSweep } from "./orphan-sweep";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -855,6 +857,19 @@ app.whenReady().then(async () => {
    * should: every path between here and the assignment is a handler body that
    * cannot run before the window exists.
    */
+  /**
+   * The one place both halves of the session-token seam are known (VC-163).
+   *
+   * Minting belongs to whatever spawns an attachment — the PTY manager and the
+   * Pi execution environment — and verifying belongs to the agent socket. Only
+   * this composition root sees both, which is why the registry is created here
+   * and passed to each side as a narrow function rather than imported by them.
+   *
+   * Process-lived, like the attachments it issues for: see `session-tokens.ts`
+   * for why that lifetime is the design rather than a limitation.
+   */
+  const sessionTokens = createSessionTokenRegistry();
+
   let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
@@ -901,11 +916,23 @@ app.whenReady().then(async () => {
               pathPrefixes: [runtimePaths.binDir],
               identity: {
                 sessionId: identity.sessionId,
+                // Minted per ATTACHMENT, which is what `identity.attachmentId`
+                // names, so a structured Session's shell authenticates exactly
+                // as a spawned PTY's does (VC-163) — and the token dies with
+                // the attachment rather than with the Session.
+                sessionToken: sessionTokens.mint({
+                  sessionId: identity.sessionId,
+                  attachmentId: identity.attachmentId,
+                }),
                 ticketDisplayId:
                   ticket && ticketProject
                     ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
                     : null,
               },
+              // The execution environment is owned by this attachment and its
+              // cleanup runs on every close path. Revoke there so a copied
+              // token cannot outlive the structured attachment that held it.
+              onCleanup: () => sessionTokens.revoke(identity.attachmentId),
             });
           },
           // What this profile can honestly bind now, read once per attachment.
@@ -931,7 +958,10 @@ app.whenReady().then(async () => {
               throw new Error("This launch has no Volli verb handlers.");
             }
             signal.throwIfAborted();
-            return agentToolDoor(caller, request);
+            // Forwarded, not just read: `ticket.await` parks on it, and the
+            // signal firing is the only notice a suspended wait ever gets
+            // that its turn was interrupted (VC-85).
+            return agentToolDoor(caller, request, signal);
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
@@ -1385,6 +1415,11 @@ app.whenReady().then(async () => {
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
+          // `ticket.await`'s two ports (VC-85): the wait is judged against the
+          // caller's project policy when it starts, and parks on the
+          // post-commit wake bus until a planner fact matches.
+          authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+          subscribeTicketWake,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),
@@ -1792,6 +1827,8 @@ app.whenReady().then(async () => {
   const agentRuntime: AgentRuntimeEnvironment = {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
+    mintSessionToken: sessionTokens.mint,
+    revokeSessionToken: sessionTokens.revoke,
   };
   /** Wrappers refused this launch because the name would shadow a system tool. */
   let harnessRuntimeRefused: RefusedWrapper[] = [];
@@ -2362,6 +2399,10 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
+          // The verifying half of the same registry the attachments mint from.
+          // Without it every socket caller is unauthenticated by default, which
+          // is the fail-closed direction (VC-163).
+          verifySessionToken: sessionTokens.verify,
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.

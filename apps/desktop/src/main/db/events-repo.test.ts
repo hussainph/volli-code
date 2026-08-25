@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  currentTicketEventCursor,
+  decodeTicketEventCursor,
+  firstMatchingTicketEventAfter,
+  listRecentTicketEvents,
   listTicketEvents,
   listTicketStatusEntries,
   recordSessionStartedOnce,
@@ -100,6 +104,81 @@ describe("listTicketEvents", () => {
       actor: "automation",
       actorContext: null,
     });
+  });
+
+  // VC-163: a socket caller Volli could not authenticate. It has no session id
+  // to carry, so it stores as a bare token beside "user" and "automation".
+  it("round-trips an unauthenticated caller as the bare token", () => {
+    const { ticketId } = setup();
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 100, { kind: "unauthenticated" });
+
+    expect(listTicketEvents(ctx.db, ticketId)[0]).toMatchObject({
+      actor: "unauthenticated",
+      actorContext: null,
+    });
+  });
+
+  // The reason this kind had to be added rather than folded into an existing
+  // one: history outlives the build that wrote it, and every other value is a
+  // claim Volli cannot support. "user" says a person typed it — the exact lie
+  // VC-163 exists to remove. "automation" says Volli's own machinery did it.
+  it("never reads an unauthenticated row back as the user", () => {
+    const { ticketId } = setup();
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 100, { kind: "unauthenticated" });
+
+    expect(listTicketEvents(ctx.db, ticketId)[0]?.actor).not.toBe("user");
+  });
+});
+
+describe("Ticket Event cursors and bounded tails", () => {
+  it("orders equal-millisecond events by durable sequence", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    const first = testTicket(project.id, { id: "ticket-a", ticketNumber: 1 });
+    const second = testTicket(project.id, { id: "ticket-b", ticketNumber: 2 });
+    insertTicket(ctx.db, first);
+    insertTicket(ctx.db, second);
+    const before = currentTicketEventCursor(ctx.db);
+
+    recordTicketEvent(ctx.db, second.id, { kind: "archived" }, 100);
+    const middle = currentTicketEventCursor(ctx.db);
+    recordTicketEvent(ctx.db, first.id, { kind: "unarchived" }, 100);
+
+    expect(decodeTicketEventCursor(before)).toBe(0);
+    expect(decodeTicketEventCursor(middle)).toBe(1);
+    expect(
+      firstMatchingTicketEventAfter(
+        ctx.db,
+        [first.id, second.id],
+        ["archived", "unarchived"],
+        before,
+      )?.event,
+    ).toMatchObject({ ticketId: second.id, payload: { kind: "archived" }, createdAt: 100 });
+    expect(
+      firstMatchingTicketEventAfter(
+        ctx.db,
+        [first.id, second.id],
+        ["archived", "unarchived"],
+        middle,
+      )?.event,
+    ).toMatchObject({ ticketId: first.id, payload: { kind: "unarchived" }, createdAt: 100 });
+
+    const highWater = currentTicketEventCursor(ctx.db);
+    ctx.db.prepare("DELETE FROM ticket_events").run();
+    expect(currentTicketEventCursor(ctx.db)).toBe(highWater);
+  });
+
+  it("returns a chronological SQL-limited tail and short-circuits zero", () => {
+    const { ticketId } = setup();
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 100);
+    recordTicketEvent(ctx.db, ticketId, { kind: "unarchived" }, 300);
+    recordTicketEvent(ctx.db, ticketId, { kind: "archived" }, 200);
+
+    expect(listRecentTicketEvents(ctx.db, ticketId, 0)).toEqual([]);
+    expect(listRecentTicketEvents(ctx.db, ticketId, 2).map((event) => event.createdAt)).toEqual([
+      200, 300,
+    ]);
   });
 });
 

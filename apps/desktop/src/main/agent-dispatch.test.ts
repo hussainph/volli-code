@@ -35,6 +35,7 @@ import { insertSession } from "./session-control/test-support";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createDesktopSessionEngine } from "./session-control";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;
 
@@ -97,12 +98,14 @@ describe("the dispatch table (VC-167)", () => {
 
 describe("the preload policy each entry declares", () => {
   /**
-   * The verbs that take no Session snapshot. Six, exactly as the chain's
+   * The verbs that take no Session snapshot. Six were exactly what the chain's
    * ternary listed — this is the same policy, moved beside the handlers it
-   * governs rather than restated.
+   * governs rather than restated — and `ticket.signal` (VC-85) joined them by
+   * being the same shape: it needs a signer's identity, never a terminal.
    */
   const NO_PROJECTIONS = [
     "model.list",
+    "ticket.signal",
     "session.done",
     "session.blocked",
     "session.link",
@@ -152,21 +155,36 @@ describe("what the hot path actually resolves", () => {
     const sessionEngine = createDesktopSessionEngine(ctx.db);
     const listSessions = vi.spyOn(sessionEngine, "listSessions");
     const getSession = vi.spyOn(sessionEngine, "getSession");
-    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
-    return { service, listSessions, getSession };
+    // Both verbs below are coordination tier, so both need an authenticated
+    // caller (VC-163). The token registry is the real one: `verify` is a map
+    // lookup that touches neither engine door, which is exactly why admission
+    // can be decided on the hot path without disturbing the counts asserted
+    // here.
+    const tokens = createSessionTokenRegistry();
+    const env = {
+      session: SESSION_ID,
+      token: tokens.mint({ sessionId: SESSION_ID, attachmentId: "attachment-1" }),
+    };
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+      verifySessionToken: tokens.verify,
+    });
+    return { service, listSessions, getSession, env };
   }
 
   it("folds no project's Sessions and resolves no identity for a hook", async () => {
     // The hottest involuntary path in the app: one process per event,
     // addressing one durable Session directly. It resolves that Session's
     // terminal record itself — one lookup, not two, and no fold at all.
-    const { service, listSessions, getSession } = scenario();
+    const { service, listSessions, getSession, env } = scenario();
 
     const response = await service.execute({
       v: 1,
       cmd: "hook",
       args: { harness: "claude-code", event: "turn.started" },
-      ctx: { cwd: "/repo/volli", env: { session: SESSION_ID } },
+      ctx: { cwd: "/repo/volli", env },
     });
 
     expect(response).toMatchObject({ ok: true, data: { session: "abcdef12" } });
@@ -178,13 +196,13 @@ describe("what the hot path actually resolves", () => {
     // The other half of the two-axis policy: identity is the whole requirement
     // for a signal (VC-51), and a terminal snapshot would answer nothing it
     // asks — a structured Session has no terminal attachment to find in one.
-    const { service, listSessions, getSession } = scenario();
+    const { service, listSessions, getSession, env } = scenario();
 
     const response = await service.execute({
       v: 1,
       cmd: "session.done",
       args: { reason: "Tests pass" },
-      ctx: { cwd: "/repo/volli", env: { session: SESSION_ID } },
+      ctx: { cwd: "/repo/volli", env },
     });
 
     expect(response).toMatchObject({ ok: true, data: { signal: "done", recorded: true } });

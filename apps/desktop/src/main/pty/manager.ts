@@ -553,6 +553,19 @@ export class PtyManager {
             { ...scope.env, ...this.agentRuntime.harnessEnv, ...this.agentRuntime.shellEnv },
             {
               sessionId,
+              // Minted per ATTACHMENT, against the id this spawn is about to
+              // record, so the token dies with the terminal that holds it
+              // (VC-163). It sits UNDER nothing: `agentSessionEnv` writes the
+              // agent contract over the harness layers precisely so a wrapper
+              // cannot shadow the values a `volli` call resolves itself by.
+              ...(this.agentRuntime.mintSessionToken
+                ? {
+                    sessionToken: this.agentRuntime.mintSessionToken({
+                      sessionId,
+                      attachmentId,
+                    }),
+                  }
+                : {}),
               socketPath: this.agentRuntime.socketPath,
               binDir: this.agentRuntime.binDir,
               inheritedPath: process.env["PATH"] ?? "",
@@ -767,6 +780,10 @@ export class PtyManager {
           const payload: TerminalExitEvent = { sessionId, exitCode };
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
         }
+        // The shell is dead before any durable close observation is needed.
+        // Revoke synchronously with that fact so a copied credential cannot
+        // keep writing while the best-effort ledger close is still pending.
+        this.agentRuntime?.revokeSessionToken?.(session.attachmentId);
         this.forget(sessionId);
         void this.closeTerminalAttachment(sessionEngine, sessionId, session, exitCode);
       });
@@ -778,6 +795,9 @@ export class PtyManager {
       }
       return { ok: true, sessionId, session: record };
     } catch (error) {
+      // A token may have been minted before spawn or launch setup failed. No
+      // PTY onExit callback owns that path, so retire it here.
+      this.agentRuntime?.revokeSessionToken?.(attachmentId);
       await recordAttachmentFailure(error, scope.cwd);
       return { ok: false, error: errorMessage(error) };
     }
@@ -1157,7 +1177,10 @@ export class PtyManager {
     // forget(). killAll() inherits this via kill().
     if (session.parkedPids !== null) this.parkController.wake(sessionId);
     // Forget first so the pty's own onExit (which also calls forget) is a
-    // no-op, and so a kill() that throws still drops the session.
+    // no-op, and so a kill() that throws still drops the session. Token
+    // revocation cannot wait for onExit either: a failed native kill may never
+    // produce one.
+    this.agentRuntime?.revokeSessionToken?.(session.attachmentId);
     this.forget(sessionId);
     try {
       session.pty.kill();
@@ -1226,6 +1249,18 @@ function foregroundProcess(session: Session): string | null {
 export interface AgentRuntimeEnvironment {
   socketPath: string;
   binDir: string;
+  /**
+   * Mints the token this attachment's shell authenticates with (VC-163).
+   *
+   * A seam rather than a direct registry import, because the VERIFYING half
+   * lives with the agent socket and only main's composition root holds both.
+   * Absent means no token is exported, which is fail-closed rather than
+   * fail-open: that terminal's `volli` becomes an unauthenticated caller, so it
+   * can read the board and change nothing.
+   */
+  mintSessionToken?: (input: { sessionId: string; attachmentId: string }) => string;
+  /** Retires the token when that terminal attachment exits or fails to open. */
+  revokeSessionToken?: (attachmentId: string) => void;
   /**
    * What the wrappers in `binDir` READ at run time: `VOLLI_HARNESS_ARGV_<SLUG>`,
    * one namespaced variable per harness. Nothing a HARNESS reads is here — a

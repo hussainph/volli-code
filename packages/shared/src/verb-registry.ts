@@ -39,6 +39,8 @@ import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
+import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 
 /**
  * Where a verb is projected. `cli` is the Agent CLI (the local agent socket),
@@ -184,6 +186,7 @@ export type VerbToolField = {
   readonly required?: boolean;
 } & (
   | { readonly type: "string" }
+  | { readonly type: "number" }
   | { readonly type: "enum"; readonly values: readonly string[] }
   | { readonly type: "object"; readonly fields: readonly VerbToolField[] }
 );
@@ -345,20 +348,29 @@ export const VERB_REGISTRY = [
     referenceOrder: 3,
     group: "Read",
     summary: "Show one ticket with recent events and comments.",
-    example: "volli ticket show VC-12 --comments 5",
+    example: "volli ticket show VC-12 --comments-only",
+    notes: [
+      "Latest signal per kind is always printed: signals carry state, comments carry prose.",
+      "Either count takes 0 and performs no history query; zeroing both returns a compact ticket header for signal polling.",
+    ],
     positionalId: "required",
     options: [
       {
         name: "--events",
         kind: "value",
         placeholder: "<n>",
-        help: "How many recent events to include.",
+        help: "How many recent events to include; 0 for none.",
       },
       {
         name: "--comments",
         kind: "value",
         placeholder: "<n>",
-        help: "How many recent comments to include.",
+        help: "How many recent comments to include; 0 for none.",
+      },
+      {
+        name: "--comments-only",
+        kind: "flag",
+        help: "Show comments/signals with a compact ticket header; read no event history.",
       },
     ],
   },
@@ -614,16 +626,100 @@ export const VERB_REGISTRY = [
     ],
   },
   {
-    // VC-92 ruled this one off the agent surface entirely — an app-only
-    // curation act, no bundle and no CLI access mode. It is still on the socket
-    // here because this table records today's surface; VC-163 empties its
-    // access modes, at which point it holds no tier at all.
-    key: "ticket.archive",
+    // The typed verdict channel (VC-85), and the pattern-setting coordination
+    // verb. It replaces the `VERDICT: FIRST-LINE` comment convention the
+    // rc-0.1.0 orchestration pass invented: a convention any reader had to
+    // parse by eye, any writer could spell wrong, and no query could reach.
+    //
+    // Coordination tier, and VC-92 pinned WHY it is the first verb that must
+    // require an authenticated session actor rather than merely attributing
+    // one: an unforgeable verdict channel is the entire point, and a signal
+    // any same-uid process can mint is the convention again with better
+    // syntax. Today the socket attributes; VC-163 is where it authenticates.
+    //
+    // Deliberately no `--dry-run`. The ratified preview matrix covers writes
+    // whose blast radius is worth rehearsing; this one appends a single typed
+    // row that supersedes nothing and moves nothing, and a preview of it would
+    // cost a round trip to be told exactly what the verb says it does.
+    key: "ticket.signal",
     accessModes: ["cli"],
+    actor: "session",
+    handler: { site: "main", id: "ticket.signal" },
+    listed: true,
+    referenceOrder: 16,
+    group: "Write",
+    summary: "Record a typed verdict on a ticket: which stage, and how it went.",
+    example: 'volli ticket signal VC-12 --kind review --verdict pass --detail "Two nits, fixed"',
+    notes: [
+      "Acts as this session; needs a Volli session, because a verdict is only worth what its signer is.",
+      "Signals carry state and comments carry prose — post both when a verdict needs an argument.",
+      "The board does not move. Use ticket move for that, deliberately.",
+      "Append-only: a later signal of the same kind supersedes an earlier one by being newer.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-signal",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket signal and its signaled Ticket event, in one transaction.",
+        },
+      ],
+      humanVisible: [
+        "The verdict appears in the Ticket activity feed and in ticket show's latest-signal lines.",
+      ],
+      nonEffects: [
+        "The Ticket does not move: signals are orthogonal to the board by design.",
+        "No Session starts, no notification fires, and no earlier signal is edited or erased.",
+      ],
+    },
+    positionalId: "required",
+    options: [
+      {
+        name: "--kind",
+        kind: "value",
+        placeholder: "<kind>",
+        values: `valid: ${TICKET_SIGNAL_KINDS.join(", ")}`,
+        required: true,
+        help: "Which stage this verdict is about.",
+      },
+      {
+        name: "--verdict",
+        kind: "value",
+        placeholder: "<verdict>",
+        values: `valid: ${TICKET_SIGNAL_VERDICTS.join(", ")}`,
+        required: true,
+        help: "How that stage went.",
+      },
+      {
+        name: "--detail",
+        kind: "value",
+        placeholder: "<text>",
+        help: "One line of prose for a reader; the verdict is what machines read.",
+      },
+    ],
+  },
+  {
+    // OFF every agent surface (VC-92 §3, done in VC-163). Archiving is app-only
+    // curation: a person deciding a Ticket has stopped being live work. No
+    // bundle carries it, no CLI access mode projects it, and `verbTier` reads
+    // the empty list as no governance class at all rather than as a tier.
+    //
+    // The entry stays HERE, whole, rather than being deleted — that is what
+    // makes the door teach instead of lying. `declaredVerb` finds it and
+    // answers WRONG_DOOR ("exists in the app only; no agent surface executes
+    // it"); deleting the entry would produce UNSUPPORTED_COMMAND, which reads
+    // as "no such verb" and sends an agent looking for a way to do it by hand.
+    // `listed: true` is load-bearing for exactly that reason.
+    //
+    // Reversible the day a workflow needs it: put `"cli"` back. The handler,
+    // the options and the effects contract are all still here and still bound.
+    key: "ticket.archive",
+    accessModes: [],
     actor: "session",
     handler: { site: "main", id: "ticket.archive" },
     listed: true,
-    referenceOrder: 16,
+    referenceOrder: 17,
     group: "Write",
     summary: "Archive a ticket (its worktree is preserved).",
     example: "volli ticket archive VC-12",
@@ -812,7 +908,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 18,
+    referenceOrder: 19,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
@@ -830,7 +926,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 19,
+    referenceOrder: 20,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -857,22 +953,31 @@ export const VERB_REGISTRY = [
     // deliberately no headless path — app not running is APP_UNREACHABLE, and
     // `volli app launch` is the sanctioned recovery.
     //
-    // VC-92 ruled it control tier — a named tool in the `project` bundle, off
-    // the socket for every caller. VC-162 added the `tool` mode and `project`
-    // bundle membership; the socket door stays until VC-163 removes `cli` and
-    // flips the actor to `role`, which is the moment the tier becomes control.
+    // CONTROL TIER, and now actually so (VC-92 §3, completed in VC-163).
     //
-    // Dual-surface in the meantime, and `verbTier` reads that honestly as
-    // coordination: a tier is the WEAKEST door a verb is reachable through,
-    // and this one is still reachable by any authenticated socket caller. A
-    // control-tier claim while the socket answers would be a claim about a
-    // door that is standing open.
+    // VC-162 added the `tool` mode and `project` bundle membership beside the
+    // `cli` one, which left the verb dual-surface — and `verbTier` read that
+    // honestly as coordination, because a tier is the WEAKEST door a verb is
+    // reachable through. Removing `cli` and flipping the actor to `role` is
+    // what shuts the socket door, and only now is the control claim true.
+    //
+    // Why it had to leave the socket rather than be gated on it: a socket call
+    // can be attributed but never authenticated, so "only a Project Session may
+    // start Sessions" would have rested on an environment variable any process
+    // running as the user can set. VC-163's per-attachment token narrows that
+    // to injected strings and cross-session confusion; it does not close it
+    // against a hostile same-uid process, and starting agent work is the one
+    // verb whose misuse cannot tolerate that residue. A tool call carries its
+    // caller in the binding instead of in the request.
+    //
+    // Both doors still resolve ONE handler id. The agent path is the `project`
+    // bundle's `session_start` tool; the human path is the app.
     key: "session.start",
-    accessModes: ["cli", "tool"],
-    actor: "session",
+    accessModes: ["tool"],
+    actor: "role",
     handler: { site: "main", id: "session.start" },
     listed: true,
-    referenceOrder: 17,
+    referenceOrder: 18,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
@@ -997,7 +1102,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 20,
+    referenceOrder: 21,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -1032,7 +1137,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 22,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -1063,7 +1168,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 23,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -1123,7 +1228,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 24,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -1182,7 +1287,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 27,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1227,7 +1332,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 26,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1264,7 +1369,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 25,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1289,12 +1394,80 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 27,
+    referenceOrder: 28,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
     notes: [`Topics: ${HELP_TOPIC_NAMES.join(", ")}.`],
     extraUsage: "[<command> | <topic>]",
+    options: [],
+  },
+  {
+    // The watch/wake tool (VC-85), appended so no frozen surface shifts. The
+    // first tool-only entry: no cli access mode, because a CLI verb must never
+    // wait — a blocking socket request is the `gh pr checks --watch` wedge that
+    // killed two merge sessions, and the socket's own 10-second request timeout
+    // enforces the same rule mechanically. Blocking belongs where the runtime
+    // can suspend the turn and wake it, which is the Agent Tool Surface.
+    key: "ticket.await",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "ticket.await" },
+    listed: false,
+    group: "Session",
+    summary: "Block until a watched ticket signals, is commented on, or moves.",
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+      ],
+      nonEffects: [
+        "No ticket changes: nothing is written, nothing moves, and no other Session is contacted.",
+        "Waiting costs no model turns; the Session is suspended until it wakes.",
+      ],
+    },
+    tool: {
+      name: "ticket_await",
+      // Written for the model, and mostly about when to stop doing something
+      // else: an orchestrator that cannot wait polls, and a poll is a full
+      // turn re-sending the whole conversation. The last two lines carry what
+      // the schema cannot: that the alternative patterns are the failure modes
+      // this tool exists to end, and that project policy — not the tool —
+      // decides what may be awaited.
+      description: [
+        "Wait until one of the named tickets receives a verdict signal, a new comment, or a board move, then wake with that event.",
+        "Use it after delegating work: it replaces polling in a loop and sleeping in bash, both of which waste turns or wedge the session.",
+        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
+        "What may be awaited is project policy; a refusal names what the policy allows.",
+      ].join(" "),
+      input: [
+        {
+          name: "tickets",
+          type: "string",
+          required: true,
+          description: `One to ${MAX_TICKET_AWAIT_TARGETS} ticket display ids in this project, separated by spaces or commas, for example 'VC-12 VC-14'.`,
+        },
+        {
+          name: "for",
+          type: "enum",
+          values: TICKET_AWAIT_FOR,
+          description:
+            "What wakes the wait: a verdict signal, a comment, a board move, or any of the three. Defaults to any.",
+        },
+        {
+          name: "timeoutSeconds",
+          type: "number",
+          description:
+            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+        },
+        {
+          name: "cursor",
+          type: "string",
+          description:
+            "Wake immediately on the first matching event after this opaque cursor. Copy the cursor returned by the previous wake or timeout unchanged; omit it on the first wait to start watching from now.",
+        },
+      ],
+    },
     options: [],
   },
 ] as const satisfies readonly VerbEntry[];

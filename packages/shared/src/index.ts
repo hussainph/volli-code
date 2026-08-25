@@ -28,6 +28,7 @@ export * from "./ticket-branch";
 export * from "./ticket-comment";
 export * from "./blob";
 export * from "./ticket-events";
+export * from "./ticket-await";
 export * from "./change-set";
 export * from "./ticket-filter";
 export * from "./ticket-sort";

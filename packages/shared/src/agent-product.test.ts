@@ -67,7 +67,13 @@ describe("agent product guidance", () => {
       "Create & start",
       "Main checkout",
       "VOLLI_SESSION",
-      "does not authenticate",
+      // VC-163 replaced "does not authenticate" with the seam that does, and
+      // with the honest bound on it. Both are pinned: a concepts page that
+      // claimed authentication without naming what it cannot stop would invite
+      // putting dangerous verbs behind it.
+      "per-attachment token",
+      "unauthenticated Actor",
+      "hostile process running as the signed-in macOS user",
       "Agent CLI",
       "Agent Tool Surface",
       "Verb Tier",

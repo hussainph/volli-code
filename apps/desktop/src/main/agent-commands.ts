@@ -18,12 +18,14 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import { AGENT_COMMAND_BINDINGS } from "@volli/shared";
-import type { AgentResponse } from "@volli/shared";
+import { AGENT_COMMAND_BINDINGS, verbEntry } from "@volli/shared";
+import type { AgentResponse, TicketEventActor } from "@volli/shared";
 
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
+import { coordinationRefusal } from "./agent-dispatch/admission";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
+import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import { listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturing } from "./worktree";
@@ -61,6 +63,18 @@ export function createAgentCommandService(
   const worktreeExists = options.worktreeExists ?? existsSync;
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
+  /**
+   * How this door decides whether `VOLLI_SESSION` is a claim or an
+   * authentication (VC-163).
+   *
+   * Injected, because the registry's minting half lives with the attachments —
+   * the PTY manager and the Pi adapter — and only the composition root sees
+   * both. Absent (tests, and any launch that wired no attachments) means no
+   * token can verify, so every socket caller is the unauthenticated actor and
+   * may read but not write. That is the fail-closed default, and it is the
+   * right one: a door that cannot check credentials must not assume good ones.
+   */
+  const verifyToken = options.verifySessionToken ?? (() => null);
 
   return {
     async execute(request): Promise<AgentResponse> {
@@ -76,6 +90,10 @@ export function createAgentCommandService(
       // every id the socket projects, and the socket refuses a command outside
       // that vocabulary before `execute` is ever called.
       const binding = AGENT_VERB_TABLE[AGENT_COMMAND_BINDINGS[request.cmd]];
+      // Identity first, and it costs a map lookup: no database, no Session
+      // Engine. That is what lets the `hook` hot path be judged without paying
+      // for the identity resolution its table entry deliberately skips.
+      const door = doorActor(request, verifyToken);
       const projects = listProjects(options.db);
       // Every Session of every project, folded once — unless this verb's entry
       // declares it takes no snapshot. `sessions` narrows it to the terminal
@@ -98,7 +116,12 @@ export function createAgentCommandService(
       // rather than the terminal-only snapshot above: a structured (chat)
       // Session exports `VOLLI_SESSION` too (VC-51), and it has no terminal
       // attachment for `terminalSessionRecord` to answer with.
-      const envSessionId = request.ctx.env.session;
+      // The token's own Session when the caller sent one, falling back to the
+      // bare `VOLLI_SESSION` claim otherwise (VC-163). Token first because it
+      // is the stronger statement: it NAMES the Session rather than asserting
+      // one, so a caller that presents a token and no claim is fully resolved
+      // rather than left half-authenticated.
+      const envSessionId = door.kind === "session" ? door.sessionId : request.ctx.env.session;
       let envSession: EnvSessionIdentity | null = null;
       if (envSessionId !== undefined && binding.envSession === "resolve") {
         const projection = await sessionEngine.getSession({ sessionId: envSessionId });
@@ -109,6 +132,30 @@ export function createAgentCommandService(
             ticketId: projection.session.ticketId,
           };
         }
+      }
+      // Admission, before any handler runs (VC-163). This used to live inside
+      // the verbs, which meant a verb could forget it. Here nothing can: every
+      // request passes through this line, and the gate reads the verb's own
+      // registry declaration, so a verb added later is judged by what it
+      // declares rather than by whether someone remembered to list it.
+      const refusal = coordinationRefusal(options.db, projects, envSession, request, door);
+      if (refusal !== null) return refusal;
+      // Attribution is resolved only for a verb that will WRITE attributed
+      // history — a coordination verb whose table entry also resolved the
+      // identity. Both halves of that condition are load-bearing:
+      //
+      // - A READ verb must not be refused for attribution it never uses. Its
+      //   caller may be anonymous by design, so failing one because a token's
+      //   Session has since ended would refuse a read that an unauthenticated
+      //   caller would have been served.
+      // - The three verbs that skip identity resolution (`hook`,
+      //   `session.link`, `session.harness`) resolve their own terminal record
+      //   and write no ticket history, so they need no attribution either.
+      let actor: TicketEventActor | null = null;
+      if (binding.envSession === "resolve" && verbEntry(request.cmd)?.actor === "session") {
+        const resolved = requestActor(door, envSession);
+        if (!resolved.ok) return resolved.response;
+        actor = resolved.actor;
       }
       const context: AgentCommandContext = {
         options,
@@ -123,6 +170,7 @@ export function createAgentCommandService(
         projections,
         sessions,
         envSession,
+        actor,
       };
       return binding.handle(context, request);
     },

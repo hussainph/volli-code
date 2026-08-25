@@ -70,6 +70,25 @@ export const VOLLI_GITIGNORE_CONTENT = "*\n";
 export const VOLLI_TICKET_ENV = "VOLLI_TICKET";
 export const VOLLI_ARTIFACTS_DIR_ENV = "VOLLI_ARTIFACTS_DIR";
 export const VOLLI_SESSION_ENV = "VOLLI_SESSION";
+/**
+ * The per-attachment secret that turns `VOLLI_SESSION`'s CLAIM into an
+ * authenticated session actor (VC-92 §6, built in VC-163).
+ *
+ * `VOLLI_SESSION` names WHICH Session a caller says it is; this proves the
+ * caller was handed that name by Volli. Minted when a PTY or an attachment is
+ * spawned, exported here, and verified at the socket door — a caller with the
+ * id and no valid token is not that Session, and is not the user either.
+ *
+ * **Scope the claim honestly.** This defeats two things and no more: an
+ * injected string that names someone else's Session, and cross-session
+ * confusion where an inherited environment makes one Session speak as another.
+ * It does NOT defeat a hostile process running as the same user — that process
+ * can read this variable out of any environment it can see, exactly as it can
+ * read the socket path. That limit is not a gap to be closed here; it is the
+ * reason VC-92 put the control tier on the Agent Tool Surface instead, where a
+ * call is bound to its attachment and never crosses a socket at all.
+ */
+export const VOLLI_SESSION_TOKEN_ENV = "VOLLI_SESSION_TOKEN";
 export const VOLLI_SOCKET_ENV = "VOLLI_SOCKET";
 /**
  * The MAIN checkout's absolute path (worktree-support §8) — injected so an
@@ -111,6 +130,17 @@ export function projectSessionEnv(projectPath: string): Record<string, string> {
 
 export interface AgentSessionEnvironmentInput {
   sessionId: string;
+  /**
+   * This attachment's {@link VOLLI_SESSION_TOKEN_ENV} value, or absent when the
+   * launch minted none.
+   *
+   * Optional rather than required so a caller that cannot mint one says so by
+   * omission, and the variable is then absent from the child's environment
+   * rather than present and empty. The door must be able to tell "Volli issued
+   * nothing" from "a caller supplied a blank string", and an exported
+   * `VOLLI_SESSION_TOKEN=""` collapses the two.
+   */
+  sessionToken?: string;
   socketPath: string;
   binDir: string;
   inheritedPath: string;
@@ -124,6 +154,7 @@ export function agentSessionEnv(
   return {
     ...scopeEnv,
     [VOLLI_SESSION_ENV]: input.sessionId,
+    ...(input.sessionToken === undefined ? {} : { [VOLLI_SESSION_TOKEN_ENV]: input.sessionToken }),
     [VOLLI_SOCKET_ENV]: input.socketPath,
     PATH: input.inheritedPath ? `${input.binDir}:${input.inheritedPath}` : input.binDir,
   };

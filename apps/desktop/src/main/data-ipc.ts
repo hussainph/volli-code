@@ -144,6 +144,7 @@ import {
 } from "./ticket-commands";
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
+import { withTicketWake } from "./ticket-wake";
 import { orphanReport } from "./orphan-sweep";
 import { exportDatabase } from "./menu";
 import {
@@ -598,25 +599,34 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
+    // Every ticket write below announces what it committed on the ticket wake
+    // bus (VC-85). The renderer door has to feed it for the same reason the
+    // agent door does: a waiter cares that a ticket moved, not who moved it,
+    // and a person dragging a card is a legitimate wake. `broadcastDataChanged`
+    // is untouched — the bus is additive, and a UI refresh and an agent wake
+    // are different needs that only look alike today.
     "volli:ticket-create": (input: TicketCreateInput): TicketResult => {
       const now = Date.now();
+      const ticketId = randomUUID();
       return {
         ok: true,
-        ticket: createTicketCommand(
-          db,
-          {
-            id: randomUUID(),
-            projectId: input.projectId,
-            title: input.title,
-            status: input.status,
-            priority: input.priority,
-            body: input.body,
-            labels: input.labels,
-            usesWorktree: input.usesWorktree,
-            preferredHarnessId: input.preferredHarnessId,
-            baseBranch: input.baseBranch,
-          },
-          { now, actor: { kind: "user" } },
+        ticket: withTicketWake(db, ticketId, () =>
+          createTicketCommand(
+            db,
+            {
+              id: ticketId,
+              projectId: input.projectId,
+              title: input.title,
+              status: input.status,
+              priority: input.priority,
+              body: input.body,
+              labels: input.labels,
+              usesWorktree: input.usesWorktree,
+              preferredHarnessId: input.preferredHarnessId,
+              baseBranch: input.baseBranch,
+            },
+            { now, actor: { kind: "user" } },
+          ),
         ),
       };
     },
@@ -628,7 +638,9 @@ export function registerDataIpcHandlers(
       // interrupt can decide whether the move left the active columns. Reading
       // the raw row (never trusting the renderer) keeps the from-status honest.
       const before = getTicketRow(db, input.ticketId);
-      const tickets = moveTicketCommand(db, input, { now, actor });
+      const tickets = withTicketWake(db, input.ticketId, () =>
+        moveTicketCommand(db, input, { now, actor }),
+      );
       // The move committed above (its own transaction); the interrupt is the
       // side effect, fired only for a real backward move (issue #78).
       if (before !== undefined) {
@@ -662,7 +674,9 @@ export function registerDataIpcHandlers(
       const now = Date.now();
       return {
         ok: true,
-        ticket: setTicketPriorityCommand(db, input, { now, actor: { kind: "user" } }),
+        ticket: withTicketWake(db, input.ticketId, () =>
+          setTicketPriorityCommand(db, input, { now, actor: { kind: "user" } }),
+        ),
       };
     },
 
@@ -684,7 +698,9 @@ export function registerDataIpcHandlers(
       // which cannot tell "just switched on" from "was already on" — and only
       // the transition materializes.
       const before = getTicketRow(db, input.ticketId);
-      const ticket = updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } });
+      const ticket = withTicketWake(db, input.ticketId, () =>
+        updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
+      );
       // Only the one transition goes async. Every other update — a title, a
       // body, a branch stamp — stays the synchronous write it has always been,
       // the same split `volli:ticket-move` makes for its interrupt side effect.
@@ -698,21 +714,27 @@ export function registerDataIpcHandlers(
       const now = Date.now();
       return {
         ok: true,
-        ticket: setTicketLabelsCommand(db, input, { now, actor: { kind: "user" } }),
+        ticket: withTicketWake(db, input.ticketId, () =>
+          setTicketLabelsCommand(db, input, { now, actor: { kind: "user" } }),
+        ),
       };
     },
 
     "volli:ticket-archive": (input: TicketIdInput): Result => {
       const now = Date.now();
-      archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } });
+      withTicketWake(db, input.ticketId, () =>
+        archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
+      );
       return { ok: true };
     },
 
     "volli:ticket-unarchive": (input: TicketIdInput): TicketResult => {
-      const ticket = unarchiveTicketCommand(db, input.ticketId, {
-        now: Date.now(),
-        actor: { kind: "user" },
-      });
+      const ticket = withTicketWake(db, input.ticketId, () =>
+        unarchiveTicketCommand(db, input.ticketId, {
+          now: Date.now(),
+          actor: { kind: "user" },
+        }),
+      );
       return { ok: true, ticket };
     },
 
@@ -747,18 +769,20 @@ export function registerDataIpcHandlers(
     },
 
     "volli:comment-create": (input: CommentCreateInput): TicketCommentResult => {
-      const comment = createTicketCommentCommand(
-        db,
-        {
-          ticketId: input.ticketId,
-          body: input.body,
-          // UI-originated: every comment posted through this renderer-facing
-          // channel is authored by the user. Agent-posted session summaries
-          // arrive later via the volli CLI, a different (not-yet-built) path.
-          commentActor: USER_ACTOR,
-          sessionId: input.sessionId,
-        },
-        { now: Date.now(), actor: { kind: "user" } },
+      const comment = withTicketWake(db, input.ticketId, () =>
+        createTicketCommentCommand(
+          db,
+          {
+            ticketId: input.ticketId,
+            body: input.body,
+            // UI-originated: every comment posted through this renderer-facing
+            // channel is authored by the user. Agent-posted session summaries
+            // arrive later via the volli CLI, a different (not-yet-built) path.
+            commentActor: USER_ACTOR,
+            sessionId: input.sessionId,
+          },
+          { now: Date.now(), actor: { kind: "user" } },
+        ),
       );
       return { ok: true, comment };
     },

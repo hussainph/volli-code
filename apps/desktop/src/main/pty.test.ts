@@ -114,6 +114,7 @@ import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
 import { createDesktopSessionEngine } from "./session-control";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */
@@ -237,6 +238,7 @@ const tick = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
 let root: string;
 let outside: string;
+let sessionTokens: ReturnType<typeof createSessionTokenRegistry>;
 let manager: ReturnType<typeof registerTerminalIpcHandlers>;
 let testDb: TestDb;
 let project: Project;
@@ -287,9 +289,15 @@ beforeEach(() => {
   project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
   insertProject(testDb.db, project);
   // Fresh manager + handlers each test (Map overwrites); reset roots.
+  sessionTokens = createSessionTokenRegistry();
   manager = registerTerminalIpcHandlers(
     { ok: true, db: testDb.db },
-    { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+    {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+      mintSessionToken: sessionTokens.mint,
+      revokeSessionToken: sessionTokens.revoke,
+    },
   );
   syncProjectRoots([root]);
 });
@@ -1266,6 +1274,12 @@ describe("ticket sessions", () => {
     expect(env["VOLLI_ARTIFACTS_DIR"]).toBe(`${root}/.volli/artifacts`);
     expect(env["VOLLI_SESSION"]).toBe(result.sessionId);
     expect(env["VOLLI_SOCKET"]).toBe("/profile/volli.sock");
+    // VC-163: the terminal carries the token that authenticates it, minted for
+    // THIS attachment and verifiable at the socket door. Without it the shell
+    // could name its Session and not be one.
+    const token = env["VOLLI_SESSION_TOKEN"];
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(sessionTokens.verify(token)).toBe(result.sessionId);
     expect(env["PATH"]?.split(":")[0]).toBe("/profile/bin");
     expect(env["TERM"]).toBe("xterm-256color");
     const [, , options] = spawn.mock.calls[0] as [string, string[], { cwd: string }];
@@ -1294,6 +1308,28 @@ describe("ticket sessions", () => {
 
     // Session evidence is private ledger history, never a planner event.
     expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+  });
+
+  it("revokes the attachment token when its PTY exits", async () => {
+    const { result, pty } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    const token = lastSpawnEnv()["VOLLI_SESSION_TOKEN"];
+    expect(sessionTokens.verify(token)).toBe(result.sessionId);
+
+    pty.emitExit(0);
+
+    expect(sessionTokens.verify(token)).toBeNull();
+  });
+
+  it("revokes the attachment token even when a native kill emits no exit", async () => {
+    const { result } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    const token = lastSpawnEnv()["VOLLI_SESSION_TOKEN"];
+    expect(sessionTokens.verify(token)).toBe(result.sessionId);
+
+    expect(manager.kill(result.sessionId)).toEqual({ ok: true });
+
+    expect(sessionTokens.verify(token)).toBeNull();
   });
 
   it("persists split placement for a pane created inside an existing tab", async () => {
@@ -1738,18 +1774,23 @@ describe("resume launch (issue #78)", () => {
       prompt: "go",
     });
     if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
+    // Both verbs are coordination tier, so the caller has to authenticate as
+    // the Session it is announcing about (VC-163) — which is what a real
+    // wrapper does, since Volli exported the token into that terminal.
+    const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
       db: testDb.db,
       sessionEngine,
       appVersion: "1.2.3",
+      verifySessionToken: tokens.verify,
     });
+    const env = {
+      session: launched.sessionId,
+      token: tokens.mint({ sessionId: launched.sessionId, attachmentId: "attachment-1" }),
+      ticket: "VC-50",
+    };
     const request = (cmd: "session.harness" | "session.link", args: Record<string, unknown>) =>
-      service.execute({
-        v: 1,
-        cmd,
-        args,
-        ctx: { cwd: root, env: { session: launched.sessionId, ticket: "VC-50" } },
-      });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: root, env } });
 
     await request("session.harness", { id: "codex" });
     await request("session.link", { id: "latest-native-id" });
@@ -1786,17 +1827,26 @@ describe("resume launch (issue #78)", () => {
       prompt: "go",
     });
     if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
+    const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
       db: testDb.db,
       sessionEngine,
       appVersion: "1.2.3",
+      verifySessionToken: tokens.verify,
     });
 
     const signal = service.execute({
       v: 1,
       cmd: "session.done",
       args: {},
-      ctx: { cwd: root, env: { session: launched.sessionId, ticket: "VC-50" } },
+      ctx: {
+        cwd: root,
+        env: {
+          session: launched.sessionId,
+          token: tokens.mint({ sessionId: launched.sessionId, attachmentId: "attachment-1" }),
+          ticket: "VC-50",
+        },
+      },
     });
     pty.emitExit(0);
     await expect(signal).resolves.toMatchObject({ ok: true, data: { signal: "done" } });

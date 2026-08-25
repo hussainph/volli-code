@@ -35,6 +35,7 @@
  */
 
 import type { AuthorityFallback } from "./authority";
+import { TICKET_AWAIT_KINDS, type TicketAwaitKind } from "./ticket-await";
 
 /**
  * What the deterministic rule pack does to a Session, as a per-project posture.
@@ -153,7 +154,7 @@ export interface AuthorityActorPolicy {
    * ships in both bundles and waiting is not itself an act of authority — so
    * what may be *awaited* is policy data, and the tool's presence is not.
    */
-  awaitable: readonly string[];
+  awaitable: readonly TicketAwaitKind[];
 }
 
 /**
@@ -180,16 +181,34 @@ export interface AuthorityPolicy {
  * signal it is done or blocked, get someone's attention. Spelled as the Verb
  * Registry spells them, because VC-92 pinned the dot-name as the verb's identity
  * on every surface that projects it.
+ *
+ * The last two are INVOLUNTARY and were missing from this list until VC-163
+ * wired it to the door — a gap that was invisible while nothing read the
+ * policy. Neither is a verb an agent chooses: `session.harness` is fired by a
+ * harness's own launch wrapper one step before it execs, and `hook` by a
+ * harness hook reporting what the agent is doing. VC-92 §3 assigns both to the
+ * coordination tier, and omitting them here would have refused every Session
+ * the two channels its own harness reports through — silently, since `hook`
+ * discards its answer by design so as never to wedge the agent it fired from.
  */
 const DEFAULT_SESSION_COORDINATION_VERBS = [
   "ticket.comment",
   "ticket.create",
   "ticket.move",
+  // The verdict channel (VC-85). A default rather than a grant, for the same
+  // reason `session.done` is one: reporting how your own stage went is the job,
+  // not a privilege on top of it. What makes a signal worth reading is that its
+  // signer is authenticated, which is VC-163's door to close — not a shorter
+  // list here, which would only push the report back into a comment nobody can
+  // query.
+  "ticket.signal",
   "ticket.update",
   "session.blocked",
   "session.done",
   "session.link",
   "notify",
+  "session.harness",
+  "hook",
 ] as const;
 
 /**
@@ -224,9 +243,12 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
  * rather than by this table, so their entry is permissive and is here to be
  * a complete table rather than a live restriction.
  *
- * `awaitable` is empty everywhere because VC-85 has not landed: there is nothing
- * to wait on yet, and a default naming await kinds that do not exist would be a
- * guess written down as policy.
+ * `awaitable` names the whole await vocabulary for the user and for
+ * authenticated Sessions (VC-85): waiting is not itself an act of authority —
+ * VC-92 ruled blocking a runtime property, not a privilege — so the default
+ * withholds nothing and a project that wants a narrower list writes one. The
+ * unauthenticated caller keeps the empty list for the reason its whole row is
+ * empty: it holds no tool surface, so there is nothing the list could admit.
  */
 export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
   enforcement: "observe",
@@ -239,12 +261,12 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
     user: Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
       peek: "project",
-      awaitable: Object.freeze([]),
+      awaitable: Object.freeze([...TICKET_AWAIT_KINDS]),
     }),
     session: Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
       peek: "own",
-      awaitable: Object.freeze([]),
+      awaitable: Object.freeze([...TICKET_AWAIT_KINDS]),
     }),
     unauthenticated: Object.freeze({
       coordinationVerbs: Object.freeze([]),
@@ -253,6 +275,33 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
     }),
   }),
 }) as AuthorityPolicy;
+
+/**
+ * Whether one kind of caller may run one coordination-tier verb (VC-163).
+ *
+ * The read VC-44 built this store for, and the whole of the socket door's
+ * write-side judgement. Deliberately a plain membership test rather than a
+ * cascade of special cases:
+ *
+ * - **An unlisted verb is refused.** Not "unknown, so allow" — a caller
+ *   holding no list holds nothing, which is what makes the default posture
+ *   (`unauthenticated: { coordinationVerbs: [] }`) mean reads-only with no
+ *   further code.
+ * - **Read-tier verbs never reach here.** Callers gate on the verb's registry
+ *   actor requirement first, so absence from a list is never mistaken for
+ *   withholding a read that no policy withholds.
+ * - **The tier is not consulted, because it is not stored.** VC-92 pinned tier
+ *   as derived from access modes plus actor requirement; a policy that also
+ *   recorded one could disagree with the registry, and one of them would be
+ *   wrong.
+ */
+export function coordinationVerbAllowed(
+  policy: AuthorityPolicy,
+  kind: AuthorityActorKind,
+  verbKey: string,
+): boolean {
+  return policy.actors[kind].coordinationVerbs.includes(verbKey);
+}
 
 /**
  * The token a project's list splices its own defaults in at.
@@ -269,14 +318,20 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
  */
 export const AUTHORITY_DEFAULTS_TOKEN = "$defaults";
 
-/** One list-valued field, as a project may state it. */
+/** One coordination-verb list, as a project may state it. */
 export type AuthorityListOverride = readonly string[];
+
+/** An await list can name only the fixed await vocabulary or splice defaults. */
+export type AuthorityAwaitableOverride = readonly (
+  | TicketAwaitKind
+  | typeof AUTHORITY_DEFAULTS_TOKEN
+)[];
 
 /** The per-actor half of an override; every field optional. */
 export interface AuthorityActorPolicyOverride {
   coordinationVerbs?: AuthorityListOverride;
   peek?: PeekDisclosure;
-  awaitable?: AuthorityListOverride;
+  awaitable?: AuthorityAwaitableOverride;
 }
 
 /**
@@ -300,14 +355,16 @@ export interface AuthorityPolicyOverride {
  * defaults already carry does not get it twice — the list is a set with an order
  * and a reader should not have to know whether a duplicate meant anything.
  */
-function spliceList(
-  override: AuthorityListOverride | undefined,
-  defaults: readonly string[],
-): readonly string[] {
+function spliceList<T extends string>(
+  override: readonly (T | typeof AUTHORITY_DEFAULTS_TOKEN)[] | undefined,
+  defaults: readonly T[],
+): readonly T[] {
   if (override === undefined) return defaults;
-  const spliced = override.flatMap((entry) =>
-    entry === AUTHORITY_DEFAULTS_TOKEN ? defaults : [entry],
-  );
+  const spliced: T[] = [];
+  for (const entry of override) {
+    if (entry === AUTHORITY_DEFAULTS_TOKEN) spliced.push(...defaults);
+    else spliced.push(entry as T);
+  }
   return Object.freeze([...new Set(spliced)]);
 }
 
@@ -438,13 +495,23 @@ function parseActor(value: unknown): AuthorityActorPolicyOverride | undefined {
   if (coordinationVerbs !== undefined) actor.coordinationVerbs = coordinationVerbs;
   const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
   if (peek !== undefined) actor.peek = peek;
-  const awaitable = parseStringList(row.awaitable);
+  const awaitable = parseAwaitableList(row.awaitable);
   if (awaitable !== undefined) actor.awaitable = awaitable;
   return Object.keys(actor).length === 0 ? undefined : actor;
 }
 
+function parseAwaitableList(value: unknown): AuthorityAwaitableOverride | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const allowed = [...TICKET_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
+  return value.every(
+    (entry) => typeof entry === "string" && (allowed as readonly string[]).includes(entry),
+  )
+    ? (value as AuthorityAwaitableOverride)
+    : undefined;
+}
+
 /**
- * A list is kept only when every entry is a string.
+ * A coordination-verb list is kept only when every entry is a string.
  *
  * All-or-nothing rather than filtering the bad entries out, because a list is
  * the one place a silent drop changes meaning: a `coordinationVerbs` that lost
@@ -635,10 +702,13 @@ function validateActor(
   const row = value as Record<string, unknown>;
   rejectUnknownKeys(row, ["coordinationVerbs", "peek", "awaitable"], `${path}.`, errors);
   const actor: AuthorityActorPolicyOverride = {};
-  for (const key of ["coordinationVerbs", "awaitable"] as const) {
-    if (row[key] === undefined) continue;
-    const list = validateStringList(row[key], `${path}.${key}`, errors);
-    if (list !== undefined) actor[key] = list;
+  if (row.coordinationVerbs !== undefined) {
+    const list = validateStringList(row.coordinationVerbs, `${path}.coordinationVerbs`, errors);
+    if (list !== undefined) actor.coordinationVerbs = list;
+  }
+  if (row.awaitable !== undefined) {
+    const list = validateAwaitableList(row.awaitable, `${path}.awaitable`, errors);
+    if (list !== undefined) actor.awaitable = list;
   }
   if (row.peek !== undefined) {
     const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
@@ -672,4 +742,24 @@ function validateStringList(
     return undefined;
   }
   return value as string[];
+}
+
+function validateAwaitableList(
+  value: unknown,
+  path: string,
+  errors: string[],
+): AuthorityAwaitableOverride | undefined {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array.`);
+    return undefined;
+  }
+  const allowed = [...TICKET_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
+  const invalid = value.filter(
+    (entry) => typeof entry !== "string" || !(allowed as readonly string[]).includes(entry),
+  );
+  if (invalid.length > 0) {
+    errors.push(`${path} entries must be one of: ${allowed.join(", ")}.`);
+    return undefined;
+  }
+  return value as AuthorityAwaitableOverride;
 }

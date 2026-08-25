@@ -211,7 +211,19 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
           firedAt,
           ...(harnessSessionId === null ? {} : { harnessSessionId }),
         },
-        ctx: { cwd: currentDirectory(deps), env: { socket: socketPath, session } },
+        ctx: {
+          cwd: currentDirectory(deps),
+          env: {
+            socket: socketPath,
+            session,
+            // `hook` is coordination tier (VC-92 §3), so it authenticates like
+            // any other write. A hook process is a descendant of the Session's
+            // own attachment, so it inherits the token Volli exported there —
+            // and a hook that somehow does not is refused at the door and
+            // discarded in silence, exactly as every other hook failure is.
+            ...(deps.env["VOLLI_SESSION_TOKEN"] ? { token: deps.env["VOLLI_SESSION_TOKEN"] } : {}),
+          },
+        },
       },
       { timeoutMs: requestMs },
     );

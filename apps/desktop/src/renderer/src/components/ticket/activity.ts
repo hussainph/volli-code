@@ -59,6 +59,11 @@ function belongsToSameBunch(previousAt: number, nextAt: number, now: number): bo
 export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "worktree_failed",
   "status_changed",
+  // A verdict outranks everything except a broken worktree and a board move
+  // (VC-85): it is the one line in a bunch that says where the work STANDS,
+  // and a bunch fronted by "edited the description" while a review failed
+  // inside it is the feed hiding its own headline.
+  "signaled",
   "pr_merged",
   "pr_opened",
   "created",
@@ -228,6 +233,13 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "pull request merged";
     case "commented":
       return null;
+    // The detail rides the line rather than being dropped to a second one: a
+    // verdict without its reason is the `VERDICT:` convention again, and the
+    // whole point of the typed channel is that the reason travels WITH it.
+    case "signaled":
+      return payload.detail === null
+        ? `signalled ${payload.signalKind}: ${payload.verdict}`
+        : `signalled ${payload.signalKind}: ${payload.verdict} — ${payload.detail}`;
     case "session_started":
       return "started a session";
     case "attachment_added":

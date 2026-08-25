@@ -7,12 +7,23 @@ import { parseCliArgs } from "./parser";
  * The reference oracle: every byte `volli help` and the parser's teaching
  * errors can print, captured in one file.
  *
- * VC-161 re-seats the CLI reference onto the Verb Registry in `@volli/shared`,
- * and the one thing that must survive that move untouched is the text. So this
- * file was written and captured BEFORE the rewiring, against the hand-authored
- * `COMMAND_HELP` table, and the rewired reference has to reproduce it byte for
- * byte. The installed `volli` on PATH is not the oracle — it is version 0.1.0
- * and already predates this tree (VC-157 changed `identify` and `doctor`).
+ * VC-161 re-seated the CLI reference onto the Verb Registry in `@volli/shared`,
+ * and the one thing that had to survive that move untouched was the text. So
+ * this file was written and captured BEFORE the rewiring, against the
+ * hand-authored `COMMAND_HELP` table, and the rewired reference reproduced it
+ * byte for byte. The installed `volli` on PATH is not the oracle — it is
+ * version 0.1.0 and already predates this tree (VC-157 changed `identify` and
+ * `doctor`).
+ *
+ * **VC-163 is the first ticket that legitimately moved these bytes**, and the
+ * diff is the ticket's own acceptance rendered as text. Nothing in `help.ts`
+ * changed to produce it: two registry fields moved, and every line below
+ * followed, which is what "each surface is a projection of one table" was for.
+ * `ticket archive` left the executable list for a new App-only section;
+ * `session start` moved under the tool-only heading; both detail pages now
+ * name their real door and their derived tier; and typing either at a shell
+ * answers WRONG_DOOR with the surface that does hold it, instead of a usage
+ * error about options the caller was never going to get to use.
  *
  * The command list, group words and topics below are LITERAL on purpose. If
  * they were derived from whatever table currently backs help, a verb silently
@@ -21,7 +32,15 @@ import { parseCliArgs } from "./parser";
  * order itself, and a change to either has to be made here in the open.
  */
 
-/** The 28 listed commands, in the order the compact reference prints them. */
+/**
+ * The 29 listed commands, in the order the compact reference prints them.
+ *
+ * `ticket archive` and `session start` are still HERE after VC-163, and that is
+ * the point rather than an oversight: help must go on naming a verb the shell
+ * cannot run, or a wrong door becomes indistinguishable from no door. What
+ * changed is where each one prints and what its detail says — not whether help
+ * knows it exists.
+ */
 const REFERENCE_COMMANDS = [
   "identify",
   "board",
@@ -39,6 +58,7 @@ const REFERENCE_COMMANDS = [
   "ticket update",
   "ticket move",
   "ticket comment",
+  "ticket signal",
   "ticket archive",
   "session start",
   "session list",
@@ -61,6 +81,7 @@ const TAKES_ID: ReadonlySet<string> = new Set([
   "ticket update",
   "ticket move",
   "ticket comment",
+  "ticket signal",
   "ticket archive",
   "session start",
   "session peek",

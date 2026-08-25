@@ -24,11 +24,12 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
   it("gives a Project Session the agent-control family and a Ticket Session none", () => {
-    expect(roleVerbBundle("project")).toEqual(["session.start"]);
-    // The property this ticket exists to make true, asserted as emptiness
+    expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await"]);
+    // The property this ticket exists to make true, asserted as absence
     // rather than described. An injected instruction telling a Ticket Session
-    // to start ten Sessions has nothing to call.
-    expect(roleVerbBundle("ticket")).toEqual([]);
+    // to start ten Sessions has nothing to call. `ticket.await` is not of the
+    // agent-control family — waiting controls nobody (VC-85/VC-92).
+    expect(roleVerbBundle("ticket")).toEqual(["ticket.await"]);
     // VC-9 defines this one; until then an empty bundle is the honest answer.
     expect(roleVerbBundle("subagent")).toEqual([]);
   });
@@ -53,13 +54,17 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_fetch",
       "web_search",
       "session.start",
+      "ticket.await",
     ]);
   });
 
   it("puts a Ticket Session in a room with no agent-control tool in it", () => {
     const surface = resolveAgentToolSurface(capabilities({ role: "ticket" }));
     expect(surface).not.toContain("session.start");
-    expect(verbToolsOf(surface)).toEqual([]);
+    // The await tool is deliberately in this room too (VC-92's ruling on
+    // VC-85): blocking is a runtime property, not a privilege, and what may
+    // be awaited is policy data judged at call time.
+    expect(verbToolsOf(surface)).toEqual(["ticket.await"]);
     // Its capability half is untouched: Role scopes the verbs, not the tools a
     // Session needs to do the work it was given.
     expect(surface).toEqual([
@@ -70,6 +75,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "ask_user",
       "web_fetch",
       "web_search",
+      "ticket.await",
     ]);
   });
 
@@ -80,7 +86,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       resolveAgentToolSurface(
         capabilities({ capabilities: { coding: EVERY_CODING, interaction: ["ask_user"] } }),
       ),
-    ).toEqual(["read", "edit", "write", "execute", "ask_user", "session.start"]);
+    ).toEqual(["read", "edit", "write", "execute", "ask_user", "session.start", "ticket.await"]);
   });
 
   it("orders interaction tools by the vocabulary, not by the caller's array", () => {
@@ -93,7 +99,16 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
           capabilities: { coding: EVERY_CODING, interaction: ["web_search", "ask_user"] },
         }),
       ),
-    ).toEqual(["read", "edit", "write", "execute", "ask_user", "web_search", "session.start"]);
+    ).toEqual([
+      "read",
+      "edit",
+      "write",
+      "execute",
+      "ask_user",
+      "web_search",
+      "session.start",
+      "ticket.await",
+    ]);
   });
 });
 
@@ -250,15 +265,45 @@ describe("the registry's tool projection (VC-162)", () => {
   });
 });
 
-describe("Verb Tier while both doors are open (VC-162 → VC-163)", () => {
-  it("reads session.start as coordination, not control, while the socket answers", () => {
+describe("Verb Tier once the socket door is shut (VC-162 → VC-163)", () => {
+  it("reads session.start as control, now that no socket caller reaches it", () => {
     const entry = verbEntry("session.start");
-    expect(entry?.accessModes).toEqual(["cli", "tool"]);
-    // A tier is the WEAKEST door a verb is reachable through. Claiming control
-    // here would claim a closed door that is standing open: any authenticated
-    // socket caller still reaches this verb. VC-163 removes `cli`, flips the
-    // actor to `role`, and that is the moment the tier changes.
-    expect(verbTier(entry!)).toBe("coordination");
-    expect(verbTier({ accessModes: ["tool"], actor: "role" })).toBe("control");
+    // VC-162 left this `["cli", "tool"]` and the tier read as coordination — a
+    // tier is the WEAKEST door a verb is reachable through, and claiming
+    // control while any socket caller still reached it would have claimed a
+    // closed door that was standing open. VC-163 removed `cli` and flipped the
+    // actor to `role`, and that is what makes the control claim true.
+    expect(entry?.accessModes).toEqual(["tool"]);
+    expect(entry?.actor).toBe("role");
+    expect(verbTier(entry!)).toBe("control");
+  });
+
+  // The ticket names this one in as many words: "`ticket.archive` is absent
+  // from the CLI projection and from every bundle". The type system already
+  // makes it unsayable — `VerbToolKey` is derived from the `tool` access mode,
+  // so no bundle CAN name a verb that has none — but the acceptance is worth an
+  // assertion that does not depend on reading the type to see it.
+  it("puts ticket.archive in no Role's bundle at all", () => {
+    for (const role of ["project", "ticket", "subagent"] as const) {
+      expect(roleVerbBundle(role) as readonly string[], role).not.toContain("ticket.archive");
+    }
+    expect(VERB_TOOL_KEYS as readonly string[]).not.toContain("ticket.archive");
+    // And a grant cannot smuggle it in either: the resolver fails closed on a
+    // key this build cannot project as a tool.
+    expect(() =>
+      resolveAgentToolSurface({
+        role: "project",
+        capabilities: { coding: [], interaction: [] },
+        grants: ["ticket.archive"],
+      }),
+    ).toThrow("is not a verb this build can offer as a tool");
+  });
+
+  it("keeps the verb in the `project` bundle it was put in", () => {
+    // Closing the socket door did not move the tool. The Role that could start
+    // Sessions before this ticket is the Role that can start them after it;
+    // what changed is that nothing ELSE can.
+    expect(roleVerbBundle("project")).toContain("session.start");
+    expect(roleVerbBundle("ticket")).not.toContain("session.start");
   });
 });

@@ -299,63 +299,160 @@ describe("runCli", () => {
     ]);
   });
 
-  it("carries session start's overrides over the socket and prints the short id line", async () => {
+  // VC-163's acceptance, end to end through the real parser: `volli session
+  // start` refuses with the wrong-door error AND STARTS NOTHING. The second
+  // half is the one worth a test — a refusal that had already sent the command
+  // would be a message, not a door.
+  it("refuses session start at the wrong door and sends no start over the socket", async () => {
     const stdout: string[] = [];
+    const stderr: string[] = [];
     const requests: AgentRequest[] = [];
 
     const exitCode = await runCli(
-      [
-        "session",
-        "start",
-        "VC-4",
-        "-m",
-        "Fix the flaky test",
-        "--title",
-        "Validate VC-4",
-        "--model",
-        "openai-codex/gpt-5.2",
-        "--reasoning",
-        "high",
-      ],
+      ["session", "start", "VC-4", "-m", "Fix the flaky test", "--model", "openai-codex/gpt-5.2"],
       {
-        env: { VOLLI_SOCKET: "/profiles/volli.sock" },
+        env: { VOLLI_SOCKET: "/profiles/volli.sock", VOLLI_SESSION: "session-7" },
         cwd: "/work/volli",
         stdout: (text) => stdout.push(text),
-        stderr: () => undefined,
+        stderr: (text) => stderr.push(text),
         readText: async () => "",
         observe: async () => ({}),
         request: async (_socketPath, request) => {
           requests.push(request);
-          return {
-            v: 1,
-            ok: true,
-            data: {
-              session: "abcdef12",
-              ticket: "VC-4",
-              state: "ready",
-              model: "openai-codex/gpt-5.2",
-              reasoning: "high",
-            },
-          };
+          return { v: 1, ok: true, data: { appVersion: "0.1.1" } };
         },
         launch: async () => ({ alreadyRunning: true }),
       },
     );
 
-    expect(exitCode).toBe(0);
-    expect(requests).toEqual([
-      expect.objectContaining({
-        cmd: "session.start",
-        args: {
-          id: "VC-4",
-          message: "Fix the flaky test",
-          title: "Validate VC-4",
-          model: { providerId: "openai-codex", modelId: "gpt-5.2" },
-          reasoning: "high",
-        },
-      }),
-    ]);
-    expect(stdout).toEqual(["abcdef12  VC-4  ready  openai-codex/gpt-5.2 high\n"]);
+    // Exit 2 is the usage class: the caller must change what it typed.
+    expect(exitCode).toBe(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("")).toContain(
+      "volli session start exists on the Agent Tool Surface as session.start",
+    );
+    // The only thing that reached the socket is the OPTIONAL Role read the
+    // teaching error uses to say whether this Session's bundle carries the
+    // verb. No `session.start` was sent, with or without its overrides.
+    expect(requests.map((request) => request.cmd)).toEqual(["identify"]);
+  });
+
+  it("refuses ticket archive as app-only, and sends nothing at all", async () => {
+    const stderr: string[] = [];
+    const requests: AgentRequest[] = [];
+
+    const exitCode = await runCli(["ticket", "archive", "VC-4"], {
+      env: { VOLLI_SOCKET: "/profiles/volli.sock" },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: (text) => stderr.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socketPath, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { appVersion: "0.1.1" } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(exitCode).toBe(2);
+    expect(stderr.join("")).toContain(
+      "volli ticket archive exists in the app only; no agent surface executes it.",
+    );
+    // Not even the Role read: with no `tool` access mode there is no bundle
+    // membership to report, so the refusal is answered entirely locally and
+    // nothing at all reaches the socket.
+    expect(requests).toEqual([]);
+  });
+
+  // VC-163: the CLI is the transport for a Session's authentication. If it
+  // drops `VOLLI_SESSION_TOKEN` on the floor, every Session in the product
+  // becomes an unauthenticated caller that may read and may not write — a
+  // failure that would look like a policy bug rather than a plumbing one.
+  it("carries the session token from the environment onto the wire", async () => {
+    const requests: AgentRequest[] = [];
+
+    await runCli(["ticket", "comment", "VC-4", "-m", "Working"], {
+      env: {
+        VOLLI_SOCKET: "/profiles/volli.sock",
+        VOLLI_SESSION: "session-7",
+        VOLLI_SESSION_TOKEN: "tok-abc",
+      },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socketPath, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { comment: { ticket: "VC-4" } } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.ctx.env).toEqual({
+      socket: "/profiles/volli.sock",
+      session: "session-7",
+      token: "tok-abc",
+    });
+  });
+
+  // The optional Role read a wrong door pays for is a socket call like any
+  // other, so it authenticates like one — otherwise a Session asking which
+  // tools it holds would ask as a stranger.
+  it("carries the session token on the wrong-door Role read too", async () => {
+    const helpRequests: AgentRequest[] = [];
+
+    await runCli(["session", "start", "VC-4"], {
+      env: {
+        VOLLI_SOCKET: "/profiles/volli.sock",
+        VOLLI_SESSION: "session-7",
+        VOLLI_SESSION_TOKEN: "tok-abc",
+        VOLLI_TICKET: "VC-4",
+      },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async () => {
+        throw new Error("a parse refusal must not use the command transport");
+      },
+      helpRequest: async (_socketPath, request) => {
+        helpRequests.push(request);
+        return { v: 1, ok: true, data: { appVersion: "0.1.1" } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(helpRequests[0]?.ctx.env).toEqual({
+      socket: "/profiles/volli.sock",
+      session: "session-7",
+      token: "tok-abc",
+      ticket: "VC-4",
+    });
+  });
+
+  // Absent and empty must stay distinguishable all the way to the door: an
+  // exported-but-blank token is what a caller supplies, not what Volli mints.
+  it("sends no token field at all when the environment carries none", async () => {
+    const requests: AgentRequest[] = [];
+
+    await runCli(["board"], {
+      env: { VOLLI_SOCKET: "/profiles/volli.sock", VOLLI_SESSION_TOKEN: "" },
+      cwd: "/work/volli",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socketPath, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { columns: {} } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.ctx.env).not.toHaveProperty("token");
   });
 
   it("identifies environment context in degraded mode when the app is down", async () => {

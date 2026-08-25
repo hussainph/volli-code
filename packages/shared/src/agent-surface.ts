@@ -24,6 +24,10 @@ export const AGENT_ERROR_CODES = [
   "INVALID_REQUEST",
   "UNSUPPORTED_COMMAND",
   "WRONG_DOOR",
+  // The verb exists on this surface and this caller may not run it (VC-163).
+  // Distinct from WRONG_DOOR, which is about the SURFACE, and from every
+  // not-found code, which is about the subject: this one is about the caller.
+  "FORBIDDEN_ACTOR",
   "APP_UNREACHABLE",
   "DB_UNAVAILABLE",
   "PROJECT_REQUIRED",
@@ -58,6 +62,17 @@ export interface AgentRequestContext {
   cwd: string;
   env: {
     session?: string;
+    /**
+     * `VOLLI_SESSION_TOKEN` — the per-attachment secret that turns `session`
+     * from a claim into an authentication (VC-163).
+     *
+     * A separate field from `session` rather than a signed form of it, because
+     * the two answer different questions and the door needs both: `session`
+     * says which Session the caller means, and this says whether Volli issued
+     * that name to this caller. A caller supplying one without the other is
+     * the unauthenticated actor.
+     */
+    token?: string;
     ticket?: string;
     socket?: string;
   };

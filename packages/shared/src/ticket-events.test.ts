@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  isTicketSignalKind,
+  isTicketSignalVerdict,
   MAX_WORKTREE_FAILURE_STDERR,
   TICKET_EVENT_KINDS,
+  TICKET_SIGNAL_KINDS,
+  TICKET_SIGNAL_VERDICTS,
   trimWorktreeFailureStderr,
 } from "./ticket-events";
 import type {
@@ -25,6 +29,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "archived",
       "unarchived",
       "commented",
+      "signaled",
       "worktree_changed",
       "worktree_scope_changed",
       "worktree_failed",
@@ -63,6 +68,7 @@ describe("TicketEventPayload", () => {
       { kind: "archived" },
       { kind: "unarchived" },
       { kind: "commented", commentId: "comment-1" },
+      { kind: "signaled", signalKind: "review", verdict: "pass", detail: "Gates green" },
       { kind: "worktree_changed", from: worktreeA, to: worktreeB },
       { kind: "worktree_scope_changed", from: true, to: false },
       { kind: "worktree_failed", stage: "copy", stderr: "fatal: could not copy" },
@@ -75,6 +81,24 @@ describe("TicketEventPayload", () => {
       { kind: "session_started", sessionId: "session-1" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
+  });
+});
+
+describe("the signal vocabulary (VC-85)", () => {
+  it("admits every fixed kind and verdict, because fixed is what makes them queryable", () => {
+    for (const kind of TICKET_SIGNAL_KINDS) {
+      expect(isTicketSignalKind(kind)).toBe(true);
+    }
+    for (const verdict of TICKET_SIGNAL_VERDICTS) {
+      expect(isTicketSignalVerdict(verdict)).toBe(true);
+    }
+  });
+
+  it("refuses words outside the vocabulary, and anything that is not a string", () => {
+    expect(isTicketSignalKind("deploy")).toBe(false);
+    expect(isTicketSignalKind(7)).toBe(false);
+    expect(isTicketSignalVerdict("maybe")).toBe(false);
+    expect(isTicketSignalVerdict(null)).toBe(false);
   });
 });
 

@@ -4,6 +4,7 @@ import {
   AUTHORITY_ACTOR_KINDS,
   AUTHORITY_DEFAULTS_TOKEN,
   AUTHORITY_ENFORCEMENTS,
+  coordinationVerbAllowed,
   DEFAULT_AUTHORITY_POLICY,
   JUDGMENT_MODES,
   PEEK_DISCLOSURES,
@@ -12,6 +13,8 @@ import {
   resolveAuthorityPolicy,
   validateAuthorityPolicyOverride,
 } from "./authority-config";
+import { TICKET_AWAIT_KINDS } from "./ticket-await";
+import { VERB_REGISTRY, verbTier } from "./verb-registry";
 
 describe("DEFAULT_AUTHORITY_POLICY", () => {
   it("observes rather than enforces, which is VC-44's recorded day-one posture", () => {
@@ -42,12 +45,16 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
   it("grants a Session the coordination verbs it already uses to report progress", () => {
     expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("ticket.comment");
     expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("session.done");
+    // Reporting a verdict is the same act as reporting progress (VC-85), so it
+    // is a default rather than something a project has to grant — otherwise the
+    // report goes back into a comment and nothing can query it.
+    expect(DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs).toContain("ticket.signal");
   });
 
-  it("awaits nothing anywhere, because VC-85 has not defined anything to await", () => {
-    for (const kind of AUTHORITY_ACTOR_KINDS) {
-      expect(DEFAULT_AUTHORITY_POLICY.actors[kind].awaitable).toEqual([]);
-    }
+  it("lets the user and a Session await the whole vocabulary, and an unauthenticated caller nothing (VC-85)", () => {
+    expect(DEFAULT_AUTHORITY_POLICY.actors.user.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
+    expect(DEFAULT_AUTHORITY_POLICY.actors.session.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
+    expect(DEFAULT_AUTHORITY_POLICY.actors.unauthenticated.awaitable).toEqual([]);
   });
 
   it("names a policy for every actor kind, so no caller falls through the table", () => {
@@ -151,11 +158,11 @@ describe("additive inheritance", () => {
     expect(resolved.actors.session.coordinationVerbs).toEqual([...defaults]);
   });
 
-  it("splices the awaitable list on the same terms", () => {
+  it("splices the typed awaitable list on the same terms", () => {
     const resolved = resolveAuthorityPolicy({
-      actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "ticket.signal"] } },
+      actors: { session: { awaitable: ["status", AUTHORITY_DEFAULTS_TOKEN] } },
     });
-    expect(resolved.actors.session.awaitable).toEqual(["ticket.signal"]);
+    expect(resolved.actors.session.awaitable).toEqual(["status", "signal", "comment"]);
   });
 });
 
@@ -241,10 +248,17 @@ describe("parseAuthorityPolicyOverride", () => {
     ).toEqual({ actors: { session: { coordinationVerbs: [] } } });
   });
 
-  it("reads an awaitable list", () => {
-    expect(parseAuthorityPolicyOverride({ actors: { session: { awaitable: ["x"] } } })).toEqual({
-      actors: { session: { awaitable: ["x"] } },
+  it("reads only the fixed awaitable vocabulary", () => {
+    expect(
+      parseAuthorityPolicyOverride({
+        actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "comment"] } },
+      }),
+    ).toEqual({
+      actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "comment"] } },
     });
+    expect(
+      parseAuthorityPolicyOverride({ actors: { session: { awaitable: ["ticket.signal"] } } }),
+    ).toEqual({});
   });
 
   it("ignores an actor kind it does not know, and a malformed actor entry", () => {
@@ -379,10 +393,36 @@ describe("validateAuthorityPolicyOverride", () => {
       ok: false,
       errors: ["actors.session.coordinationVerbs must contain only strings."],
     });
+    expect(
+      validateAuthorityPolicyOverride({ actors: { session: { coordinationVerbs: "all" } } }),
+    ).toEqual({
+      ok: false,
+      errors: ["actors.session.coordinationVerbs must be an array of strings."],
+    });
     expect(validateAuthorityPolicyOverride({ actors: { session: { awaitable: "all" } } })).toEqual({
       ok: false,
-      errors: ["actors.session.awaitable must be an array of strings."],
+      errors: ["actors.session.awaitable must be an array."],
     });
+  });
+
+  it("refuses inert awaitable names instead of persisting a silent typo", () => {
+    for (const awaitable of [["ticket.signal"], ["x"], ["signal", 3]]) {
+      expect(validateAuthorityPolicyOverride({ actors: { session: { awaitable } } })).toEqual({
+        ok: false,
+        errors: [
+          `actors.session.awaitable entries must be one of: ${[
+            ...TICKET_AWAIT_KINDS,
+            AUTHORITY_DEFAULTS_TOKEN,
+          ].join(", ")}.`,
+        ],
+      });
+    }
+
+    expect(
+      validateAuthorityPolicyOverride({
+        actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "status"] } },
+      }).ok,
+    ).toBe(true);
   });
 
   it("accepts the $defaults token as the ordinary string it is", () => {
@@ -468,6 +508,87 @@ describe("validateAuthorityPolicyOverride", () => {
     }
     for (const judgmentMode of JUDGMENT_MODES) {
       expect(validateAuthorityPolicyOverride({ judgmentMode }).ok).toBe(true);
+    }
+  });
+});
+
+/**
+ * The policy read VC-44 wrote this store for, and VC-163 wired to the door.
+ *
+ * VC-44's own comment named the split: "Read by VC-163 at the socket door …
+ * nothing in this ticket enforces any of it." These are the enforcement tests.
+ */
+describe("coordinationVerbAllowed", () => {
+  const policy = DEFAULT_AUTHORITY_POLICY;
+
+  it("lets an authenticated Session run the verbs it works with", () => {
+    for (const verb of ["ticket.comment", "ticket.move", "session.done", "notify"]) {
+      expect(coordinationVerbAllowed(policy, "session", verb)).toBe(true);
+    }
+  });
+
+  // The ticket's default posture, as one assertion: reads only. Every
+  // coordination verb in the product is refused for a caller Volli could not
+  // authenticate, without a project having to say anything.
+  it("refuses every coordination verb to an unauthenticated caller by default", () => {
+    for (const verb of [
+      "ticket.create",
+      "ticket.update",
+      "ticket.move",
+      "ticket.comment",
+      "notify",
+      "session.done",
+      "session.blocked",
+      "session.link",
+      "session.harness",
+      "hook",
+    ]) {
+      expect(coordinationVerbAllowed(policy, "unauthenticated", verb)).toBe(false);
+    }
+  });
+
+  it("honours a project that granted one verb to unauthenticated callers", () => {
+    const granted = resolveAuthorityPolicy({
+      actors: { unauthenticated: { coordinationVerbs: ["ticket.comment"] } },
+    });
+
+    expect(coordinationVerbAllowed(granted, "unauthenticated", "ticket.comment")).toBe(true);
+    // Granting one grants exactly one: the list replaces, and nothing about
+    // commenting implies moving a Ticket.
+    expect(coordinationVerbAllowed(granted, "unauthenticated", "ticket.move")).toBe(false);
+  });
+
+  it("lets a project withdraw a verb from its own Sessions", () => {
+    const narrowed = resolveAuthorityPolicy({
+      actors: { session: { coordinationVerbs: ["ticket.comment"] } },
+    });
+
+    expect(coordinationVerbAllowed(narrowed, "session", "ticket.comment")).toBe(true);
+    expect(coordinationVerbAllowed(narrowed, "session", "ticket.move")).toBe(false);
+  });
+
+  // The invariant that would have caught VC-163's own bug. The default session
+  // list was hand-written by VC-44 while nothing read it, and it had drifted
+  // from VC-92 §3: `session.harness` and `hook` were missing, so wiring the
+  // policy to the door would have silently refused every Session the two
+  // involuntary channels its harness reports through.
+  //
+  // Derived from the registry rather than restated, so a coordination verb
+  // added later fails here until someone decides whether a Session holds it.
+  it("grants a Session every coordination-tier verb the registry declares", () => {
+    const coordination = VERB_REGISTRY.filter((entry) => verbTier(entry) === "coordination").map(
+      (entry) => entry.key,
+    );
+
+    expect(coordination.length).toBeGreaterThan(0);
+    for (const verb of coordination) {
+      expect(coordinationVerbAllowed(policy, "session", verb), verb).toBe(true);
+    }
+  });
+
+  it("refuses a verb no policy lists, whoever asks", () => {
+    for (const kind of AUTHORITY_ACTOR_KINDS) {
+      expect(coordinationVerbAllowed(policy, kind, "verb.that.does.not.exist")).toBe(false);
     }
   });
 });

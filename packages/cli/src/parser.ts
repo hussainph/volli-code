@@ -4,12 +4,15 @@ import {
   HELP_TOPIC_NAMES,
   isSessionUsageGrouping,
   isTicketPriority,
+  isTicketSignalKind,
+  isTicketSignalVerdict,
   parseColumnToken,
   parseHarnessId,
   parseSessionUsageWindow,
-  REASONING_LEVELS,
   SESSION_USAGE_GROUPINGS,
   TICKET_PRIORITIES,
+  TICKET_SIGNAL_KINDS,
+  TICKET_SIGNAL_VERDICTS,
   VERB_REGISTRY,
 } from "@volli/shared";
 import type { VerbEntry, VerbKey } from "@volli/shared";
@@ -77,42 +80,62 @@ const harnessValue: ValueParser = (raw) => {
     : { ok: true, value: parsed };
 };
 
-/**
- * `--model` splits on the FIRST `/` into providerId/modelId: a provider id
- * never contains one, while a gateway-routed model id may. Whether the pair
- * names a model this profile can actually run is Model Access's judgement,
- * made in the app — the parser only vets the shape, exactly like `--harness`.
- */
-const modelValue: ValueParser = (raw) => {
-  const slash = raw.indexOf("/");
-  const providerId = slash === -1 ? "" : raw.slice(0, slash);
-  const modelId = slash === -1 ? "" : raw.slice(slash + 1);
-  return providerId.length === 0 || modelId.length === 0
-    ? {
-        ok: false,
-        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
-      }
-    : { ok: true, value: { providerId, modelId } };
-};
-
-const reasoningValue: ValueParser = (raw) =>
-  (REASONING_LEVELS as readonly string[]).includes(raw)
-    ? { ok: true, value: raw }
-    : {
-        ok: false,
-        message: `Unknown reasoning level ${JSON.stringify(raw)} (valid: ${REASONING_LEVELS.join(", ")})`,
-      };
-
 const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);
   return result.ok ? { ok: true, value: result.status } : { ok: false, message: result.message };
 };
+
+/**
+ * The two halves of a verdict (VC-85), both closed vocabularies.
+ *
+ * Vetted here as well as in main, unlike `--harness`: a harness slug names
+ * something only the app's registry knows about, but a signal kind is a fixed
+ * word in `@volli/shared` that this process can read. Catching the typo before
+ * the socket is what makes the fixed vocabulary cheap to live with — the
+ * refusal names every valid word, from the same list the door checks against.
+ */
+const signalKindValue: ValueParser = (raw) =>
+  isTicketSignalKind(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown signal kind ${JSON.stringify(raw)} (valid: ${TICKET_SIGNAL_KINDS.join(", ")})`,
+      };
+
+const signalVerdictValue: ValueParser = (raw) =>
+  isTicketSignalVerdict(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown verdict ${JSON.stringify(raw)} (valid: ${TICKET_SIGNAL_VERDICTS.join(", ")})`,
+      };
 
 const positiveIntValue: ValueParser = (raw, token) => {
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0
     ? { ok: true, value: parsed }
     : { ok: false, message: `${token} requires a positive integer` };
+};
+
+/**
+ * A count whose zero is a real answer (VC-85).
+ *
+ * `ticket show --events 0` means "do not read the event log at all", which is
+ * the cheapest poll the read tier can offer and was refused here as a usage
+ * error until this parser existed. It is deliberately NOT the parser every
+ * count option uses: `--limit 0` on a listing verb asks for an empty answer,
+ * which is a question nobody means to ask, so those keep
+ * {@link positiveIntValue} and its refusal.
+ *
+ * The rejection is two-sided by construction — main's own count reader had to
+ * stop treating 0 as "unset" in the same change, or a request this parser now
+ * accepts would still come back with five events.
+ */
+const countValue: ValueParser = (raw, token) => {
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0
+    ? { ok: true, value: parsed }
+    : { ok: false, message: `${token} requires a whole number, 0 or more` };
 };
 
 /**
@@ -230,8 +253,19 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   "ticket.show": {
     options: {
-      "--events": { kind: "value", key: "events", parse: positiveIntValue },
-      "--comments": { kind: "value", key: "comments", parse: positiveIntValue },
+      "--events": { kind: "value", key: "events", parse: countValue },
+      "--comments": { kind: "value", key: "comments", parse: countValue },
+      // A named polling projection, not merely an output count: main uses the
+      // marker to omit the static ticket body as well as the event log. An
+      // explicit --events still wins, so callers can ask for comments plus a
+      // small event tail without losing the ordinary full-ticket shape.
+      "--comments-only": { kind: "flag", key: "commentsOnly", value: true },
+    },
+    finalize: (args) => {
+      if (args["commentsOnly"] !== true) return null;
+      if (args["events"] === undefined) args["events"] = 0;
+      else delete args["commentsOnly"];
+      return null;
     },
   },
   "ticket.events": {
@@ -314,7 +348,20 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
         ? "ticket comment requires exactly one of -m or --file"
         : null,
   },
-  "ticket.archive": { options: {} },
+  "ticket.signal": {
+    options: {
+      "--kind": { kind: "value", key: "kind", parse: signalKindValue },
+      "--verdict": { kind: "value", key: "verdict", parse: signalVerdictValue },
+      "--detail": { kind: "value", key: "detail" },
+    },
+    // Both are required because a signal with either half missing is not a
+    // weaker signal, it is not one: "review" says nothing without a verdict,
+    // and "pass" says nothing without a stage.
+    required: {
+      kind: "ticket signal requires --kind",
+      verdict: "ticket signal requires --verdict",
+    },
+  },
   "ticket.brief": { options: {} },
   "worktree.status": { options: {} },
   "worktree.diff": {
@@ -354,15 +401,6 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   "session.peek": {
     options: { "--lines": { kind: "value", key: "lines", parse: positiveIntValue } },
-  },
-  "session.start": {
-    options: {
-      "-m": { kind: "value", key: "message" },
-      "--message": { kind: "value", key: "message" },
-      "--title": { kind: "value", key: "title" },
-      "--model": { kind: "value", key: "model", parse: modelValue },
-      "--reasoning": { kind: "value", key: "reasoning", parse: reasoningValue },
-    },
   },
   "session.done": REASON_ONLY,
   "session.blocked": REASON_ONLY,

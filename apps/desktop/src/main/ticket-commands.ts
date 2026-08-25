@@ -8,12 +8,16 @@ import {
   type TicketEventActor,
   type HarnessId,
   type TicketPriority,
+  type TicketSignal,
+  type TicketSignalKind,
+  type TicketSignalVerdict,
   type TicketStatus,
   type WorktreeIdentity,
 } from "@volli/shared";
 
 import { createComment } from "./db/comments-repo";
 import { recordTicketEvent } from "./db/events-repo";
+import { createSignal } from "./db/signals-repo";
 import {
   addTicketLabel,
   findLabelByName,
@@ -367,6 +371,43 @@ export function createTicketCommentCommand(
       ticketId: input.ticketId,
       body: input.body,
       actor: input.commentActor,
+      sessionId: input.sessionId,
+      eventActor: context.actor,
+    },
+    context.now,
+  );
+}
+
+/**
+ * Record one typed verdict on a live ticket (VC-85).
+ *
+ * The comment command's twin, and refused on the same ground: an archived
+ * ticket is off the board, so a verdict about its stage is a verdict about
+ * work nobody is doing. Vocabulary is checked before this — at the door, where
+ * a refusal can teach — and again by the table's CHECK, which is what makes a
+ * caller that skips the door unable to invent a kind.
+ */
+export function createTicketSignalCommand(
+  db: Database.Database,
+  input: {
+    ticketId: string;
+    kind: TicketSignalKind;
+    verdict: TicketSignalVerdict;
+    detail?: string | null;
+    sessionId?: string | null;
+    signalActor: string;
+  },
+  context: TicketCommandContext,
+): TicketSignal {
+  requireLiveTicket(db, input.ticketId, "signal on");
+  return createSignal(
+    db,
+    {
+      ticketId: input.ticketId,
+      kind: input.kind,
+      verdict: input.verdict,
+      detail: input.detail,
+      actor: input.signalActor,
       sessionId: input.sessionId,
       eventActor: context.actor,
     },
