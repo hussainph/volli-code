@@ -89,8 +89,8 @@ export function isModelHidden(
  *
  * Visibility is a curation of choices, not of facts: a Session already pinned
  * to a hidden model still runs it and still names it, and an explicit
- * invocation-time override (`volli session start --model`) is an exact id the
- * user typed, so neither consults this.
+ * invocation-time override (the `session_start` tool's `model` field, or the
+ * composer's own picker) names an exact id, so neither consults this.
  */
 export function visibleModels<T extends { providerId: string; modelId: string }>(
   models: readonly T[],

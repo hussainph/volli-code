@@ -212,6 +212,15 @@ describe("commentAuthorLabel", () => {
     expect(commentAuthorLabel("agent:my-harness")).toBe("my-harness");
     expect(commentAuthorLabel("automation")).toBe("automation");
   });
+
+  // VC-163: the actor column is a plain string, so this kind arrives here with
+  // nothing to fail the build. Left to the verbatim fallback it would print the
+  // bare enum token as an author's name, on a row a reader has every reason to
+  // read as a name — and this is the one actor that means Volli could not
+  // establish who wrote it.
+  it("spells out an unauthenticated caller rather than printing the raw token", () => {
+    expect(commentAuthorLabel("unauthenticated")).toBe("Unauthenticated caller");
+  });
 });
 
 describe("EVENT_KIND_PRIORITY", () => {

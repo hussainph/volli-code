@@ -261,34 +261,6 @@ export function ticketForDisplayId(
 }
 
 /**
- * Who the caller IS at the door — authenticated, or not (VC-163).
- *
- * Attribution used to happen here and authentication never did. This door read
- * `VOLLI_SESSION` out of the request environment and believed it, and read the
- * ABSENCE of that variable as `{ kind: "user" }` — the highest-trust actor in
- * the system, granted on no evidence whatsoever. Every process running as the
- * signed-in user reached the socket, and every one of them was the user.
- *
- * Now the token decides, and there are exactly three outcomes:
- *
- * - A token this launch minted, naming the Session the caller claims → the
- *   authenticated session actor.
- * - Anything else — no token, a forged one, a revoked one, or a valid one for a
- *   DIFFERENT Session than the claim → `unauthenticated`. Never `session`,
- *   which would make the token decorative, and never `user`, which is the
- *   grant-by-absence this ticket exists to remove.
- * - A token whose Session the Engine can no longer resolve → an error.
- *
- * What the caller may then DO is not decided here. Read-tier verbs take any
- * actor; coordination-tier verbs are judged against the per-project policy in
- * `admission.ts`. These two answer identity, and only identity.
- *
- * Scope the guarantee honestly: see `session-tokens.ts`. A token defeats an
- * injected string and cross-session confusion. It does not defeat a hostile
- * process running as the same user, which is why the control tier is absent
- * from this socket rather than gated on this check.
- */
-/**
  * The attribution a verb is entitled to, or the refusal to hand it one.
  *
  * `AgentCommandContext.actor` is `null` for the three verbs whose table entry
@@ -326,6 +298,35 @@ export type DoorActor =
   | { readonly kind: "session"; readonly sessionId: string }
   | { readonly kind: "unauthenticated" };
 
+/**
+ * Who the caller IS at the door — authenticated, or not (VC-163).
+ *
+ * Attribution used to happen at this door and authentication never did. It read
+ * `VOLLI_SESSION` out of the request environment and believed it, and read the
+ * ABSENCE of that variable as `{ kind: "user" }` — the highest-trust actor in
+ * the system, granted on no evidence whatsoever. Every process running as the
+ * signed-in user reached the socket, and every one of them was the user.
+ *
+ * Now the token decides, and there are exactly three outcomes — the third of
+ * them {@link requestActor}'s, since only attribution needs the Session:
+ *
+ * - A token this launch minted, naming the Session the caller claims → the
+ *   authenticated session actor.
+ * - Anything else — no token, a forged one, a revoked one, or a valid one for a
+ *   DIFFERENT Session than the claim → `unauthenticated`. Never `session`,
+ *   which would make the token decorative, and never `user`, which is the
+ *   grant-by-absence this ticket exists to remove.
+ * - A token whose Session the Engine can no longer resolve → an error.
+ *
+ * What the caller may then DO is not decided here. Read-tier verbs take any
+ * actor; coordination-tier verbs are judged against the per-project policy in
+ * `admission.ts`. This answers identity, and only identity.
+ *
+ * Scope the guarantee honestly: see `session-tokens.ts`. A token defeats an
+ * injected string and cross-session confusion. It does not defeat a hostile
+ * process running as the same user, which is why the control tier is absent
+ * from this socket rather than gated on this check.
+ */
 export function doorActor(
   request: AgentRequest,
   verifyToken: (token: string | undefined) => string | null,

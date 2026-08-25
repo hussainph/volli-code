@@ -2,16 +2,23 @@
  * E2e probe: real CLI against the running app.
  *
  * Drives the ACTUAL generated `volli` shim (Electron-as-node over the built CLI
- * bundle) against a live app's Unix socket and asserts the full
- * write→read round-trip an agent performs, including the display-ID and
- * exit-code contracts:
- *   1. `ticket create` prints the new display ID first, in Backlog, exit 0.
- *   2. `ticket move --to doing` reports the same ID now in Doing, exit 0.
- *   3. `ticket comment -m` acknowledges against the same ID, exit 0.
- *   4. `board` shows that ID under Doing, exit 0.
- *   5. `--json` create yields machine output whose ticket.id matches the
- *      pretty display ID (parallel code path, not munged pretty-print).
- *   6. A dead VOLLI_SOCKET yields error[APP_UNREACHABLE] on stderr, exit 3
+ * bundle) against a live app's Unix socket.
+ *
+ * This process is NOT a Volli Session — it is a plain shell running as the
+ * user, holding no `VOLLI_SESSION_TOKEN`, which since VC-163 is the
+ * unauthenticated actor. So the probe runs in two acts, and the first one is
+ * VC-163's acceptance sentence measured end to end rather than in-process:
+ *
+ *   1. Reads are served and writes are refused, with the teaching refusal and
+ *      the exit-1 failure class. `socket-honesty.test.ts` proves this against
+ *      the service; this proves it through the real shim, the real socket and
+ *      the real exit code an agent's shell actually sees.
+ *   2. A PERSON then widens the project's policy through the app's own
+ *      Configure Authority door — the only door that writes it — and the
+ *      original write→read round-trip contracts hold unchanged:
+ *      display ID first + Backlog, move to Doing, comment acknowledged, board
+ *      placement, and `--json` whose ticket.id matches the pretty display ID.
+ *   3. A dead VOLLI_SOCKET yields error[APP_UNREACHABLE] on stderr, exit 3
  *      (the retryable infra class hooks branch on).
  *
  * Consent is pre-answered "defer" via the test seam.
@@ -24,7 +31,13 @@
  */
 import { join } from "node:path";
 
-import { makeShortScratch, runVolliShim, shimPathFor, socketPathFor } from "./lib/agent-kit.mjs";
+import {
+  grantUnauthenticatedWrites,
+  makeShortScratch,
+  runVolliShim,
+  shimPathFor,
+  socketPathFor,
+} from "./lib/agent-kit.mjs";
 import {
   assertProfileIsolated,
   createRunner,
@@ -66,6 +79,61 @@ async function main() {
     );
 
     let displayId = null;
+
+    // === 0a. An unauthenticated shell may READ =============================
+    await attempt(0, "an unauthenticated shell reads the board (exit 0)", async () => {
+      const r = await runVolliShim(shimPath, ["board", "--project", PREFIX]);
+      return {
+        ok: r.code === 0,
+        detail: `code=${r.code} stderr=${JSON.stringify(r.stderr.trim())}`,
+      };
+    });
+
+    // === 0b. … and may not WRITE, with a refusal that teaches ==============
+    await attempt(0.5, "an unauthenticated shell is refused every write (exit 1)", async () => {
+      const failures = [];
+      for (const argv of [
+        ["ticket", "create", "--title", "Should not exist", "--project", PREFIX, "--no-worktree"],
+        ["ticket", "move", `${PREFIX}-1`, "--to", "doing"],
+        ["ticket", "comment", `${PREFIX}-1`, "-m", "nope"],
+      ]) {
+        const r = await runVolliShim(shimPath, argv);
+        // Exit class 1 (failure), FORBIDDEN_ACTOR, and a Next that names the
+        // one thing that changes the answer.
+        if (
+          r.code !== 1 ||
+          !r.stderr.includes("error[FORBIDDEN_ACTOR]") ||
+          !r.stderr.includes("not an authenticated Volli Session") ||
+          !r.stderr.includes("from inside a Volli Session")
+        ) {
+          failures.push(
+            `${argv[0]} ${argv[1]}: code=${r.code} stderr=${JSON.stringify(r.stderr.trim())}`,
+          );
+        }
+      }
+      return { ok: failures.length === 0, detail: failures.join(" | ") || "all three refused" };
+    });
+
+    // === 0c. A person widens the policy, through the app's own door =========
+    // The agent must never be able to author the policy that governs it, so
+    // there is no verb for this and no socket path to it: the Configure
+    // Authority pane is the whole surface. Driving the same preload API the
+    // pane does is how this probe plays the person.
+    await attempt(
+      0.75,
+      "the app grants unauthenticated callers this project's writes",
+      async () => {
+        const result = await grantUnauthenticatedWrites(page, "cli-project", [
+          "ticket.create",
+          "ticket.move",
+          "ticket.comment",
+        ]);
+        return {
+          ok: result.ok === true,
+          detail: JSON.stringify(result.project?.authorityPolicy),
+        };
+      },
+    );
 
     // === 1. ticket create → new display ID first, Backlog, exit 0 ============
     await attempt(1, "ticket create prints new display ID in Backlog (exit 0)", async () => {

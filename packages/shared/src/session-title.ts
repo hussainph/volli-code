@@ -36,8 +36,9 @@ export function autoTitleFromMessage(text: string): string | null {
  * is prepended to the FIRST delivered message, not sent on attach — so this is
  * what makes the agent begin as the Session opens. It says nothing the Brief
  * does not already guarantee is above it, which is why the same sentence serves
- * both doors that start a Ticket Session without an instruction: the socket's
- * `volli session start` and the composer's Create & start.
+ * both doors that start a Ticket Session without an instruction: the
+ * `session_start` tool on the Agent Tool Surface and the composer's Create &
+ * start. (The shell had a third door until VC-163 closed it.)
  *
  * Shared rather than declared at each door, and here rather than beside either
  * of them, because {@link autoTitleFromKickoff} is written AGAINST this

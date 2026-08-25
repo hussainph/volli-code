@@ -449,6 +449,11 @@ Effects:
 - Does not: The Ticket does not move.
 - Does not: The app does not steal focus or navigate until the person uses Open session.
 
+Notes:
+- Runs in the app: attended-only, never headless; the board does not move.
+- Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.
+- An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.
+
 ============================================================================
 volli help session list
 ============================================================================

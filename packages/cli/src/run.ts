@@ -21,7 +21,7 @@ import type {
   AgentResponse,
 } from "@volli/shared";
 
-import { AgentClientError } from "./client";
+import { agentRequestEnv, AgentClientError } from "./client";
 import { bareHelpText, resolveHelp } from "./help";
 import { parseCliArgs } from "./parser";
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
@@ -217,16 +217,12 @@ async function readHelpRuntime(dependencies: RunCliDependencies): Promise<AgentH
     args: { agentSurface: true },
     ctx: {
       cwd: dependencies.cwd,
-      env: {
+      // The socket path and Session id are stated rather than read: both were
+      // resolved above through this function's own fallbacks.
+      env: agentRequestEnv(dependencies.env, {
         socket: socketPath,
         ...(sessionId === undefined ? {} : { session: sessionId }),
-        ...(dependencies.env["VOLLI_SESSION_TOKEN"]
-          ? { token: dependencies.env["VOLLI_SESSION_TOKEN"] }
-          : {}),
-        ...(dependencies.env["VOLLI_TICKET"] === undefined
-          ? {}
-          : { ticket: dependencies.env["VOLLI_TICKET"] }),
-      },
+      }),
     },
   };
   try {
@@ -406,25 +402,7 @@ export async function runCli(
       v: 1,
       cmd: command,
       args,
-      ctx: {
-        cwd: dependencies.cwd,
-        env: {
-          ...(dependencies.env["VOLLI_SOCKET"] ? { socket: dependencies.env["VOLLI_SOCKET"] } : {}),
-          ...(dependencies.env["VOLLI_SESSION"]
-            ? { session: dependencies.env["VOLLI_SESSION"] }
-            : {}),
-          // The Session's authentication, forwarded verbatim (VC-163). The CLI
-          // never inspects it and cannot mint one: it is the transport for a
-          // secret Volli exported into this attachment, and the door is the
-          // only thing that can say whether it means anything. An empty value
-          // is treated as absent, so `VOLLI_SESSION_TOKEN=""` cannot arrive as
-          // a token-shaped field the door has to reason about.
-          ...(dependencies.env["VOLLI_SESSION_TOKEN"]
-            ? { token: dependencies.env["VOLLI_SESSION_TOKEN"] }
-            : {}),
-          ...(dependencies.env["VOLLI_TICKET"] ? { ticket: dependencies.env["VOLLI_TICKET"] } : {}),
-        },
-      },
+      ctx: { cwd: dependencies.cwd, env: agentRequestEnv(dependencies.env) },
     };
     if (args["dryRun"] === true) {
       const refusal = await previewContractRefusal(socketPath, request, dependencies);

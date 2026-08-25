@@ -5,6 +5,49 @@ import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared"
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
+/**
+ * The Volli contract variables, as the `ctx.env` block a request carries.
+ *
+ * One builder for every caller, because there are four of them — `probe`,
+ * `readHelpRuntime`, `runCli` and `runHook` — and each hand-rolled the same
+ * four-way spread. VC-163 had to add `token` to all four, which is the tell: a
+ * field the door reads is a field every door-facing request needs, and a
+ * caller that forgets one does not fail, it silently sends less. For `token`
+ * that means silently dropping to the unauthenticated actor.
+ *
+ * Empty strings are treated as absent throughout. The door has to be able to
+ * tell "Volli exported nothing" from "a caller supplied a blank string", and an
+ * exported `VOLLI_SESSION_TOKEN=""` would otherwise arrive as a token-shaped
+ * field it has to reason about.
+ *
+ * Overrides let a caller state a value it resolved itself rather than read —
+ * `readHelpRuntime` and `runHook` both resolve a socket path through their own
+ * fallbacks before they get here. They are spread last and plainly: a caller
+ * that has nothing to say omits the key rather than passing `undefined`, which
+ * is what every caller already does and what keeps this a spread rather than a
+ * merge with a rule in it.
+ */
+export function agentRequestEnv(
+  env: Record<string, string | undefined>,
+  overrides: AgentRequest["ctx"]["env"] = {},
+): AgentRequest["ctx"]["env"] {
+  const named = (name: string): string | undefined => env[name] || undefined;
+  const socket = named("VOLLI_SOCKET");
+  const session = named("VOLLI_SESSION");
+  // Forwarded verbatim, never inspected: the CLI cannot mint one and cannot say
+  // whether one means anything. It is transport for a secret Volli exported
+  // into this attachment, and the door is the only judge of it.
+  const token = named("VOLLI_SESSION_TOKEN");
+  const ticket = named("VOLLI_TICKET");
+  return {
+    ...(socket === undefined ? {} : { socket }),
+    ...(session === undefined ? {} : { session }),
+    ...(token === undefined ? {} : { token }),
+    ...(ticket === undefined ? {} : { ticket }),
+    ...overrides,
+  };
+}
+
 export class AgentClientError extends Error {
   constructor(
     readonly code: AgentErrorCode,

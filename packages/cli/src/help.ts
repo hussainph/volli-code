@@ -315,6 +315,13 @@ function toolInputLines(fields: readonly VerbToolField[], prefix = ""): string[]
  * verb gets its callable wire name and its real input fields, and an app-only
  * verb gets one sentence saying the app is the whole surface. The effects
  * contract prints for all three, because it is the reason the page is read.
+ *
+ * Notes print for all three too. They carry semantics the option table cannot
+ * express — "attended-only, never headless", "at most one body mutation per
+ * call" — and none of that stops being true because the shell is the wrong
+ * door. The registry keeps them argv-free for exactly that reason; suppressing
+ * them here instead would have cost a tool-only verb its behavioural teaching
+ * to avoid naming a flag the data no longer names.
  */
 function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   const onCli = entry.accessModes.includes("cli");
@@ -361,8 +368,10 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
     for (const effect of entry.effects.humanVisible) lines.push(`- Human sees: ${effect}`);
     for (const nonEffect of entry.effects.nonEffects) lines.push(`- Does not: ${nonEffect}`);
   }
+  // The example stays gated: it is a literal shell invocation by construction,
+  // so there is no door-neutral form of it to print.
   if (onCli && entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
-  if (onCli && entry.notes !== undefined && entry.notes.length > 0) {
+  if (entry.notes !== undefined && entry.notes.length > 0) {
     lines.push("", "Notes:");
     for (const note of entry.notes) lines.push(`- ${note}`);
   }

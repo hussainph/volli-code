@@ -33,6 +33,7 @@ import type {
   HarnessId,
   Ticket,
   TicketBodyMutation,
+  TicketEventActorKind,
 } from "@volli/shared";
 
 import { getRegisteredHarness } from "../db/harness-registry-repo";
@@ -310,6 +311,34 @@ export async function ticketUpdateVerb(
   }
 }
 
+/**
+ * What the into-Doing notification says about who moved it.
+ *
+ * Total over {@link TicketEventActorKind} so a kind added later fails to
+ * compile here rather than falling into someone else's sentence — which is
+ * exactly how `unauthenticated` would have been announced as a Session had the
+ * old `else` branch survived it.
+ *
+ * `via` is the display id of the Ticket the DRIVING Session is itself working,
+ * and only the session sentence has ever named it.
+ *
+ * `user` is unreachable over the socket (VC-163) and is kept for totality
+ * rather than for behaviour: this door cannot authenticate a person, and the
+ * app's own moves never reach this verb.
+ */
+function moveNotificationBody(kind: TicketEventActorKind, via: string | null): string {
+  switch (kind) {
+    case "automation":
+      return "Moved by automation";
+    case "unauthenticated":
+      return "Moved by an unauthenticated caller";
+    case "session":
+      return via ? `Moved via ${via}'s session` : "Moved via a session";
+    case "user":
+      return "Moved by you";
+  }
+}
+
 /** `volli ticket move` — a ticket to another column. */
 export async function ticketMoveVerb(
   context: AgentCommandContext,
@@ -394,34 +423,34 @@ export async function ticketMoveVerb(
         `[volli] failed to interrupt sessions after moving ${resolved.ticket.id}: ${errorMessage(error)}`,
       );
     }
-    // Guardrail is visibility, not caps (decision 2): an agent- or
-    // automation-initiated entry into Doing fires a native notification.
-    // A move the person themselves made stays silent ("the door not the
-    // keyboard"); same-column moves already returned above, so reaching here
-    // with to === "doing" means the prior status wasn't.
+    // Guardrail is visibility, not caps (decision 2): an entry into Doing that
+    // a person did not make at the keyboard fires a native notification.
+    // Same-column moves already returned above, so reaching here with
+    // to === "doing" means the prior status wasn't.
     //
-    // The `user` actor no longer arrives over this door at all (VC-163) — the
-    // socket cannot authenticate a person, so the plain-CLI move that used to
-    // be attributed to one is now `unauthenticated`. That case is the loudest
-    // of the three rather than the quietest: a caller Volli could not identify,
-    // pushing work into the active column, is the told-to-work-on-changes
-    // vector VC-92 §3 named. It notifies, and the body says what is unknown
-    // about it rather than inventing a party.
-    if (to === "doing" && actor.kind !== "user") {
+    // Every actor this door can produce is notifiable, which is why there is no
+    // "stays silent" case left to test for. The `user` actor no longer arrives
+    // over this door at all (VC-163): the socket cannot authenticate a person,
+    // so the plain-CLI move that used to be attributed to one is now
+    // `unauthenticated` — and that case is the loudest of the three rather than
+    // the quietest. A caller Volli could not identify, pushing work into the
+    // active column, is the told-to-work-on-changes vector VC-92 §3 named. The
+    // body says what is unknown about it rather than inventing a party.
+    if (to === "doing") {
       const movedDisplay = displayTicketId(
         resolved.project.ticketPrefix,
         resolved.ticket.ticketNumber,
       );
-      let body: string;
-      if (actor.kind === "automation") {
-        body = "Moved by automation";
-      } else if (actor.kind === "unauthenticated") {
-        body = "Moved by an unauthenticated caller";
-      } else {
-        const via = actorSessionTicketDisplay(options.db, projects, actor.ticketId);
-        body = via ? `Moved via ${via}'s session` : "Moved via a session";
-      }
-      options.notify?.(`${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`, body);
+      // Resolved only for the one sentence that names it, so an automation
+      // move costs no ticket lookup — exactly as before.
+      const via =
+        actor.kind === "session"
+          ? actorSessionTicketDisplay(options.db, projects, actor.ticketId)
+          : null;
+      options.notify?.(
+        `${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`,
+        moveNotificationBody(actor.kind, via),
+      );
     }
     options.onMutation?.({
       ticketId: resolved.ticket.id,
@@ -472,7 +501,10 @@ export async function ticketCommentVerb(
           // matters: a forged `VOLLI_SESSION` with no token attributes the EVENT
           // as unauthenticated while stamping the COMMENT with the Session it
           // named — a row citing a Session that did not write it.
-          commentActor: actor.kind === "session" ? "session" : actor.kind,
+          //
+          // The comment's actor column stores the kind verbatim; only a
+          // `session` carries an id to cite beside it.
+          commentActor: actor.kind,
           sessionId: actor.kind === "session" ? actor.sessionId : null,
         },
         { now: now(), actor },
