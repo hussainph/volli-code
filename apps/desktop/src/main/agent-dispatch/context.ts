@@ -21,6 +21,7 @@ import type {
   AgentErrorCode,
   AgentRequest,
   AgentResponse,
+  AuthorityPolicy,
   DoctorFacts,
   ModelAccessSnapshot,
   Project,
@@ -213,6 +214,16 @@ export interface AgentCommandServiceOptions {
    * than an accidental grant.
    */
   verifySessionToken?: (token: string | undefined) => string | null;
+  /**
+   * Reads one project's resolved authority policy for the admission gate
+   * (VC-163).
+   *
+   * Defaults to this service's own database. Overridable so the gate can be
+   * driven from a policy store that is not this SQLite file — which is what a
+   * host serving the External Agent Surface will have — and so a test can state
+   * a policy without writing a row.
+   */
+  readAuthorityPolicy?: (projectId: string) => AuthorityPolicy;
   /**
    * The skills index a fresh Session with no explicit skills would carry — the
    * SAME port `session start` composes through (`SessionSkillPorts.index` with

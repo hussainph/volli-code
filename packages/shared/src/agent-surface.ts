@@ -237,7 +237,21 @@ export function applyTicketBodyMutation(
   return { ok: true, body: `${current}${current.length === 0 ? "" : "\n\n"}${mutation.text}` };
 }
 
-function pathContains(root: string, candidate: string): boolean {
+/**
+ * Whether `candidate` is `root` itself or sits underneath it.
+ *
+ * Exported because the context ladder is not the only thing that has to answer
+ * "is this cwd inside that project": the socket's admission gate resolves a
+ * policy project the same way, from the same roots (VC-163). It was copied
+ * there first, and two copies of a containment rule are two chances to disagree
+ * about a trailing slash — in one case about which project's policy governs a
+ * write, which is not a difference anything should discover at runtime.
+ *
+ * Purely lexical: no `realpath`, no case folding, no symlink resolution. Every
+ * caller compares roots this process already recorded against a cwd the caller
+ * supplied, and neither side is normalized anywhere else either.
+ */
+export function pathContains(root: string, candidate: string): boolean {
   const normalized = root.endsWith("/") ? root.slice(0, -1) : root;
   return candidate === normalized || candidate.startsWith(`${normalized}/`);
 }

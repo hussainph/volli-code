@@ -25,13 +25,16 @@
  *    any caller, coordination writes want an authenticated session actor, and
  *    a control-tier verb does not get a `cli` access mode AT ALL — agent
  *    control, credential custody, and anything that blocks are named tools in
- *    a Role bundle. The socket attributes its caller and cannot authenticate
- *    one, so a verb whose misuse cannot be tolerated from an arbitrary process
- *    running as the user does not go on it.
+ *    a Role bundle. Since VC-163 the socket AUTHENTICATES a session actor by
+ *    per-attachment token rather than merely attributing one — but that token
+ *    does not survive a hostile process running as the same user, so a verb
+ *    whose misuse cannot be tolerated from such a process still does not go on
+ *    it. Absence is the enforcement; the token only raises the floor.
  *
- * The table records TODAY'S surface, not VC-92's target. `session.start` and
- * `ticket.archive` are on the socket right now, so that is what they declare;
- * VC-162 and VC-163 move them, and `verb-registry.test.ts` names both deltas.
+ * The table records TODAY'S surface. VC-163 moved the last two rows off it:
+ * `session.start` is `tool`-only control tier, and `ticket.archive` is on no
+ * agent surface at all. `verb-registry.test.ts` pins both, and {@link verbTier}
+ * reads an empty access-mode list as no tier rather than as one.
  */
 
 import { REASONING_LEVELS } from "./agent-runtime";
@@ -244,6 +247,21 @@ export interface VerbEntry {
   readonly tool?: VerbToolProjection;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
+  /**
+   * What that leading `<id>` NAMES, when it names something a per-project
+   * authority policy has to be resolved from (VC-163).
+   *
+   * `ticket` means the positional is a Ticket display id, and its prefix names
+   * the project the verb's write LANDS IN — which is not necessarily the
+   * project the caller is standing in. Admission needs both, because a policy
+   * is a statement about a project's own board: see `agent-dispatch/admission.ts`.
+   *
+   * Declared rather than inferred from the key or the argument's shape. A verb
+   * added later states what its positional is, and is judged on that; guessing
+   * from `args.id` would silently mis-resolve the day a non-Ticket verb takes
+   * an id that happens to parse as `PREFIX-123`.
+   */
+  readonly positionalSubject?: "ticket";
   /** Rendered after `<id>` for positionals the option table cannot express. */
   readonly extraUsage?: string;
   readonly options: readonly VerbOption[];
@@ -354,6 +372,7 @@ export const VERB_REGISTRY = [
       "Either count takes 0 and performs no history query; zeroing both returns a compact ticket header for signal polling.",
     ],
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--events",
@@ -385,6 +404,7 @@ export const VERB_REGISTRY = [
     summary: "Print a ticket's event log.",
     example: "volli ticket events VC-12 --limit 20",
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of events." },
     ],
@@ -484,6 +504,7 @@ export const VERB_REGISTRY = [
       nonEffects: ["The Ticket does not move, no Session starts, and no worktree is materialized."],
     },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       { name: "--title", kind: "value", placeholder: "<text>", help: "Replace the title." },
       {
@@ -564,6 +585,7 @@ export const VERB_REGISTRY = [
       ],
     },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--to",
@@ -599,6 +621,7 @@ export const VERB_REGISTRY = [
       nonEffects: ["The Ticket does not move and no Session starts."],
     },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "-m",
@@ -674,6 +697,7 @@ export const VERB_REGISTRY = [
       ],
     },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--kind",
@@ -737,6 +761,7 @@ export const VERB_REGISTRY = [
       nonEffects: ["The Ticket worktree is preserved and active Sessions are not ended."],
     },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [],
   },
   {
@@ -750,6 +775,7 @@ export const VERB_REGISTRY = [
     summary: "Print the agent kickoff prompt for a ticket.",
     example: "volli ticket brief VC-12",
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [],
   },
   {
@@ -764,6 +790,7 @@ export const VERB_REGISTRY = [
     example: "volli worktree status VC-12",
     notes: ["Read-only; defaults to the ticket owning the current directory."],
     positionalId: "optional",
+    positionalSubject: "ticket",
     options: [],
   },
   {
@@ -782,6 +809,7 @@ export const VERB_REGISTRY = [
       "--working-tree switches to the uncommitted working-tree view.",
     ],
     positionalId: "optional",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--working-tree",
@@ -981,10 +1009,15 @@ export const VERB_REGISTRY = [
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
+    // Argv-free since VC-163, because this verb has no argv any more. Notes are
+    // printed on every door (see `commandDetail`), so a note naming `-m` would
+    // teach a flag the shell will refuse — the same lie the suppressed usage
+    // line was suppressed for. What each note says is true of the tool call and
+    // of the app alike.
     notes: [
       "Runs in the app: attended-only, never headless; the board does not move.",
-      "Submits a kickoff turn; -m replaces the default kickoff text and names the session.",
-      "--title sets a permanent title; --model/--reasoning override the app default.",
+      "Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.",
+      "An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.",
     ],
     effects: {
       durableWrites: [
@@ -1064,6 +1097,7 @@ export const VERB_REGISTRY = [
       ],
     },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "-m",
@@ -1548,8 +1582,10 @@ export function agentCommandBindingsFrom(
  * the socket surface cannot drift from the registry.
  *
  * The cast restores the literal union {@link agentCommandsFrom} widens to
- * `string`; `verb-registry.test.ts` pins the runtime value to the same 27
- * strings, in the same order, that this list has always held.
+ * `string`; `verb-registry.test.ts` pins the exact runtime value, in order.
+ * That test carries the list rather than this comment carrying a count — the
+ * count was written once and then wrong twice, because a projection changes
+ * whenever a row's access modes do.
  */
 export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly AgentCommand[];
 

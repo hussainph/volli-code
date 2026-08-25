@@ -26,7 +26,7 @@ import { coordinationRefusal } from "./agent-dispatch/admission";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
-import { listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturing } from "./worktree";
 
@@ -75,6 +75,18 @@ export function createAgentCommandService(
    * right one: a door that cannot check credentials must not assume good ones.
    */
   const verifyToken = options.verifySessionToken ?? (() => null);
+  /**
+   * Where the admission gate reads a project's authority policy (VC-163).
+   *
+   * Defaulted from this service's own database rather than required, because
+   * the store is this host's private materialization and every caller already
+   * hands one in. The seam exists so `admission.ts` holds no store at all: the
+   * same judgement has to run in whatever host serves the External Agent
+   * Surface, and that host's policy will not live in this SQLite file.
+   */
+  const readPolicy =
+    options.readAuthorityPolicy ??
+    ((projectId: string) => getProjectAuthorityPolicy(options.db, projectId));
 
   return {
     async execute(request): Promise<AgentResponse> {
@@ -138,7 +150,7 @@ export function createAgentCommandService(
       // request passes through this line, and the gate reads the verb's own
       // registry declaration, so a verb added later is judged by what it
       // declares rather than by whether someone remembered to list it.
-      const refusal = coordinationRefusal(options.db, projects, envSession, request, door);
+      const refusal = coordinationRefusal(readPolicy, projects, envSession, request, door);
       if (refusal !== null) return refusal;
       // Attribution is resolved only for a verb that will WRITE attributed
       // history — a coordination verb whose table entry also resolved the
