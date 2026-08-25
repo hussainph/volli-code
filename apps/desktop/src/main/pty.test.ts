@@ -296,6 +296,7 @@ beforeEach(() => {
       socketPath: "/profile/volli.sock",
       binDir: "/profile/bin",
       mintSessionToken: sessionTokens.mint,
+      revokeSessionToken: sessionTokens.revoke,
     },
   );
   syncProjectRoots([root]);
@@ -1307,6 +1308,28 @@ describe("ticket sessions", () => {
 
     // Session evidence is private ledger history, never a planner event.
     expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+  });
+
+  it("revokes the attachment token when its PTY exits", async () => {
+    const { result, pty } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    const token = lastSpawnEnv()["VOLLI_SESSION_TOKEN"];
+    expect(sessionTokens.verify(token)).toBe(result.sessionId);
+
+    pty.emitExit(0);
+
+    expect(sessionTokens.verify(token)).toBeNull();
+  });
+
+  it("revokes the attachment token even when a native kill emits no exit", async () => {
+    const { result } = await createTicketSession("tk1");
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    const token = lastSpawnEnv()["VOLLI_SESSION_TOKEN"];
+    expect(sessionTokens.verify(token)).toBe(result.sessionId);
+
+    expect(manager.kill(result.sessionId)).toEqual({ ok: true });
+
+    expect(sessionTokens.verify(token)).toBeNull();
   });
 
   it("persists split placement for a pane created inside an existing tab", async () => {

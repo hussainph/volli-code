@@ -107,6 +107,7 @@ function byLine(event: TicketEvent): string {
   }
   if (event.actor === "automation") return "By automation.";
   if (event.actor === "session") return "By a session.";
+  if (event.actor === "unauthenticated") return "By an unauthenticated caller.";
   return "By the user.";
 }
 

@@ -929,6 +929,10 @@ app.whenReady().then(async () => {
                     ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
                     : null,
               },
+              // The execution environment is owned by this attachment and its
+              // cleanup runs on every close path. Revoke there so a copied
+              // token cannot outlive the structured attachment that held it.
+              onCleanup: () => sessionTokens.revoke(identity.attachmentId),
             });
           },
           // What this profile can honestly bind now, read once per attachment.
@@ -1824,6 +1828,7 @@ app.whenReady().then(async () => {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
     mintSessionToken: sessionTokens.mint,
+    revokeSessionToken: sessionTokens.revoke,
   };
   /** Wrappers refused this launch because the name would shadow a system tool. */
   let harnessRuntimeRefused: RefusedWrapper[] = [];

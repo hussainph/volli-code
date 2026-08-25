@@ -14,7 +14,7 @@
  *   3. `ticket show --comments-only` prints the signal and no event log.
  *   4. `ticket show --events 0 --comments 0` is the cheapest poll: signals only.
  *   5. A signal never moves the board — the ticket is where it was.
- *   6. No VOLLI_SESSION is CONTEXT_REQUIRED, exit 1, with a next step.
+ *   6. No attachment token is FORBIDDEN_ACTOR, exit 1, with a next step.
  *   7. An invented kind is refused by the CLI itself, exit 2, naming the
  *      whole vocabulary.
  *
@@ -25,6 +25,7 @@
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
 import { promises as fs } from "node:fs";
+import { join } from "node:path";
 
 import {
   createTicketViaBridge,
@@ -55,6 +56,10 @@ function parseJson(stdout) {
   } catch {
     return null;
   }
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 async function main() {
@@ -98,25 +103,51 @@ async function main() {
       { workspaceId: projectId, cwd: projectPath, tid: ticketId },
     );
     if (!created?.ok) throw new Error(`terminal.create failed: ${created?.error}`);
-    const session = { VOLLI_SESSION: created.sessionId };
+
+    // Run writes INSIDE that PTY rather than copying its Session id into this
+    // process. The attachment token intentionally never crosses the renderer;
+    // executing in the shell that received it is what proves the real CLI can
+    // authenticate its signer end to end.
+    let terminalCommand = 0;
+    const runAuthenticatedVolli = async (args) => {
+      terminalCommand += 1;
+      const stem = join(scratch, `signal-cli-${terminalCommand}`);
+      const stdoutPath = `${stem}.stdout`;
+      const stderrPath = `${stem}.stderr`;
+      const codePath = `${stem}.code`;
+      const command = [shellQuote(shimPath), ...args.map(shellQuote)].join(" ");
+      const script = `${command} >${shellQuote(stdoutPath)} 2>${shellQuote(stderrPath)}; printf '%s' "$?" >${shellQuote(codePath)}`;
+      // The user's interactive shell may be zsh, bash, or fish. Delegate the
+      // status/file plumbing to /bin/sh while inheriting the PTY's token.
+      const line = `/bin/sh -c ${shellQuote(script)}\n`;
+      await page.evaluate(({ sessionId, input }) => window.api.terminal.write(sessionId, input), {
+        sessionId: created.sessionId,
+        input: line,
+      });
+      await waitUntil(`authenticated CLI command ${terminalCommand}`, () => pathExists(codePath), {
+        timeout: 20_000,
+      });
+      const [code, stdout, stderr] = await Promise.all([
+        fs.readFile(codePath, "utf8"),
+        fs.readFile(stdoutPath, "utf8"),
+        fs.readFile(stderrPath, "utf8"),
+      ]);
+      return { code: Number(code), stdout, stderr };
+    };
 
     // === 1. a verdict is recorded, and the receipt echoes it ================
     await must(1, "ticket signal records a verdict and echoes what it wrote", async () => {
-      const { code, stdout, stderr } = await runVolliShim(
-        shimPath,
-        [
-          "ticket",
-          "signal",
-          displayId,
-          "--kind",
-          "review",
-          "--verdict",
-          "fail",
-          "--detail",
-          "Missing tests",
-        ],
-        session,
-      );
+      const { code, stdout, stderr } = await runAuthenticatedVolli([
+        "ticket",
+        "signal",
+        displayId,
+        "--kind",
+        "review",
+        "--verdict",
+        "fail",
+        "--detail",
+        "Missing tests",
+      ]);
       const ok = code === 0 && stdout.trim() === `${displayId}  review  fail`;
       return {
         ok,
@@ -126,12 +157,16 @@ async function main() {
 
     // === 2. a later signal of the same kind supersedes the earlier one ======
     await attempt(2, "the newest signal per kind is what the ticket reads back", async () => {
-      const signalled = await runVolliShim(
-        shimPath,
-        ["ticket", "signal", displayId, "--kind", "review", "--verdict", "pass"],
-        session,
-      );
-      const shown = await runVolliShim(shimPath, ["ticket", "show", displayId, "--json"], session);
+      const signalled = await runAuthenticatedVolli([
+        "ticket",
+        "signal",
+        displayId,
+        "--kind",
+        "review",
+        "--verdict",
+        "pass",
+      ]);
+      const shown = await runVolliShim(shimPath, ["ticket", "show", displayId, "--json"]);
       const data = parseJson(shown.stdout);
       const signals = data?.signals ?? [];
       const ok =
@@ -146,11 +181,13 @@ async function main() {
 
     // === 3. --comments-only drops the event log and keeps the verdict =======
     await attempt(3, "ticket show --comments-only prints the signal and no events", async () => {
-      const { code, stdout } = await runVolliShim(
-        shimPath,
-        ["ticket", "show", displayId, "--comments-only", "--json"],
-        session,
-      );
+      const { code, stdout } = await runVolliShim(shimPath, [
+        "ticket",
+        "show",
+        displayId,
+        "--comments-only",
+        "--json",
+      ]);
       const data = parseJson(stdout);
       const ok =
         code === 0 &&
@@ -168,11 +205,15 @@ async function main() {
       4,
       "--events 0 --comments 0 is accepted and answers with signals only",
       async () => {
-        const { code, stdout } = await runVolliShim(
-          shimPath,
-          ["ticket", "show", displayId, "--events", "0", "--comments", "0"],
-          session,
-        );
+        const { code, stdout } = await runVolliShim(shimPath, [
+          "ticket",
+          "show",
+          displayId,
+          "--events",
+          "0",
+          "--comments",
+          "0",
+        ]);
         const lines = stdout.trim().split("\n");
         const ok =
           code === 0 &&
@@ -185,7 +226,12 @@ async function main() {
 
     // === 5. signals are orthogonal to the board =============================
     await attempt(5, "two verdicts later, the ticket has not moved", async () => {
-      const { code, stdout } = await runVolliShim(shimPath, ["board", "--json"], session);
+      const { code, stdout } = await runVolliShim(shimPath, [
+        "board",
+        "--project",
+        PREFIX,
+        "--json",
+      ]);
       const data = parseJson(stdout);
       const todo = (data?.columns?.todo ?? []).map((ticket) => ticket.id);
       const elsewhere = ["backlog", "doing", "needs_review", "done"].flatMap((column) =>
@@ -195,8 +241,8 @@ async function main() {
       return { ok, detail: `todo=${JSON.stringify(todo)} elsewhere=${JSON.stringify(elsewhere)}` };
     });
 
-    // === 6. an unattributed caller is refused, with a next step =============
-    await attempt(6, "no VOLLI_SESSION is CONTEXT_REQUIRED with a recovery, exit 1", async () => {
+    // === 6. an unauthenticated caller is refused, with a next step ==========
+    await attempt(6, "no attachment token is FORBIDDEN_ACTOR with a recovery, exit 1", async () => {
       const { code, stderr } = await runVolliShim(shimPath, [
         "ticket",
         "signal",
@@ -208,19 +254,23 @@ async function main() {
       ]);
       const ok =
         code === 1 &&
-        stderr.includes("error[CONTEXT_REQUIRED]") &&
+        stderr.includes("error[FORBIDDEN_ACTOR]") &&
         stderr.includes("Next:") &&
-        stderr.includes("ticket comment");
+        stderr.includes("authenticated Volli Session");
       return { ok, detail: `code=${code} stderr=${JSON.stringify(stderr.trim())}` };
     });
 
     // === 7. an invented kind never reaches the socket =======================
     await attempt(7, "an unknown kind is refused as usage, naming the vocabulary", async () => {
-      const { code, stderr } = await runVolliShim(
-        shimPath,
-        ["ticket", "signal", displayId, "--kind", "vibes", "--verdict", "pass"],
-        session,
-      );
+      const { code, stderr } = await runVolliShim(shimPath, [
+        "ticket",
+        "signal",
+        displayId,
+        "--kind",
+        "vibes",
+        "--verdict",
+        "pass",
+      ]);
       const ok =
         code === 2 &&
         stderr.includes("Unknown signal kind") &&

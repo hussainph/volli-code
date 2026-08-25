@@ -120,6 +120,20 @@ describe("piExecutionEnv", () => {
     }
   });
 
+  it("runs the attachment cleanup hook exactly once", async () => {
+    let cleanups = 0;
+    const env = await piExecutionEnv(workspace(), {
+      onCleanup: () => {
+        cleanups += 1;
+      },
+    });
+
+    await env.cleanup();
+    await env.cleanup();
+
+    expect(cleanups).toBe(1);
+  });
+
   it("exports no token variable when the host minted none", async () => {
     const env = await piExecutionEnv(workspace(), {
       identity: { sessionId: "session-uuid-1", ticketDisplayId: null },

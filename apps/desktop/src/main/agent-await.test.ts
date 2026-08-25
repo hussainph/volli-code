@@ -12,6 +12,7 @@ import type {
   RuntimeSessionIdentity,
   RuntimeVerbResult,
   TicketAwaitKind,
+  TicketEventActor,
   TicketEventPayload,
 } from "@volli/shared";
 
@@ -83,13 +84,18 @@ function harness(options: { awaitable?: readonly TicketAwaitKind[] } = {}) {
     signal: AbortSignal = new AbortController().signal,
   ) => awaitTicketTool(ports, CALLER, { verb: "ticket.await", input, toolCallId: "tc-1" }, signal);
   /** Record the durable event AND fan it out, the way a fed door does (slice C). */
-  const commit = (ticketId: string, payload: TicketEventPayload, at: number): void => {
-    const mark = markTicketWake(db, ticketId);
-    recordTicketEvent(db, ticketId, payload, at, {
+  const commit = (
+    ticketId: string,
+    payload: TicketEventPayload,
+    at: number,
+    actor: TicketEventActor = {
       kind: "session",
       sessionId: "worker",
       ticketId,
-    });
+    },
+  ): void => {
+    const mark = markTicketWake(db, ticketId);
+    recordTicketEvent(db, ticketId, payload, at, actor);
     emitTicketWakesSince(db, ticketId, mark);
   };
   return { db, call, commit };
@@ -155,6 +161,17 @@ describe("ticket.await — waking", () => {
     h.commit("ticket-one", { kind: "status_changed", from: "doing", to: "needs_review" }, 4_000);
     const result = await pending;
     expect(result.text).toContain("Ticket VC-1 moved from doing to needs_review.");
+  });
+
+  it("never misattributes a policy-granted unauthenticated write to the user", async () => {
+    const h = harness();
+    const pending = h.call({ tickets: "VC-1", for: "status" });
+    h.commit("ticket-one", { kind: "status_changed", from: "todo", to: "doing" }, 4_500, {
+      kind: "unauthenticated",
+    });
+    const result = await pending;
+    expect(result.text).toContain("By an unauthenticated caller.");
+    expect(result.text).not.toContain("By the user.");
   });
 
   it("reads any as the union of what POLICY allows, not of the whole vocabulary", async () => {

@@ -56,6 +56,13 @@ export interface PiExecutionEnvOptions {
    * contract a Volli-spawned PTY gets from `agentSessionEnv` (VC-51).
    */
   identity?: PiSessionEnvIdentity;
+  /**
+   * Runs exactly once when the attachment cleans this environment up. Main
+   * uses it to revoke the per-attachment Session token exported above; keeping
+   * cleanup on the environment ties credential lifetime to the same owner that
+   * closes every child process.
+   */
+  onCleanup?: () => void | Promise<void>;
 }
 
 /**
@@ -172,15 +179,19 @@ function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<s
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
   readonly #identityVariables: Record<string, string>;
+  readonly #onCleanup: (() => void | Promise<void>) | undefined;
+  #cleaned = false;
 
   constructor(options: {
     cwd: string;
     pathPrefixes?: readonly string[];
     identity?: PiSessionEnvIdentity;
+    onCleanup?: () => void | Promise<void>;
   }) {
     super({ cwd: options.cwd });
     this.#pathPrefixes = options.pathPrefixes ?? [];
     this.#identityVariables = identityVariables(options.identity);
+    this.#onCleanup = options.onCleanup;
   }
 
   /** Pi's bash tool asks for the host environment; here is the only place that can decline. */
@@ -198,6 +209,16 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
       },
       inheritEnv: false,
     });
+  }
+
+  override async cleanup(): Promise<void> {
+    if (this.#cleaned) return;
+    this.#cleaned = true;
+    try {
+      await super.cleanup();
+    } finally {
+      await this.#onCleanup?.();
+    }
   }
 }
 
@@ -254,5 +275,6 @@ export async function piExecutionEnv(
     cwd: workspacePath,
     pathPrefixes: options?.pathPrefixes,
     identity: options?.identity,
+    onCleanup: options?.onCleanup,
   });
 }
