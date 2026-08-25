@@ -485,7 +485,7 @@ describe("the registry table", () => {
     }
   });
 
-  it("keeps the ratified preview matrix on the verbs themselves", () => {
+  it("keeps a preview on every voluntary coordination write", () => {
     const previewed = VERB_REGISTRY.filter((entry) =>
       entry.options.some((option) => option.name === "--dry-run"),
     ).map((entry) => entry.key);
@@ -494,6 +494,7 @@ describe("the registry table", () => {
       "ticket.update",
       "ticket.move",
       "ticket.comment",
+      "ticket.signal",
       "session.done",
       "session.blocked",
       "session.link",

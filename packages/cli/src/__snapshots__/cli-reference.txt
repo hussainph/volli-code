@@ -22,7 +22,7 @@ Write
   ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>] [--dry-run]
   ticket move <id> --to <column> [--dry-run]
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
-  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>]
+  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
 
 Session
   session list [--project <p>] [--ticket <id>]
@@ -393,6 +393,7 @@ Options:
   --kind <kind>        Which stage this verdict is about. (valid: validate, implement, review, merge, human-gate, budget)
   --verdict <verdict>  How that stage went. (valid: pass, fail, blocked)
   --detail <text>      One line of prose for a reader; the verdict is what machines read.
+  --dry-run            Validate and preview without side effects.
 
 Effects:
 - Durable write: Create one attributed Ticket signal and its signaled Ticket event, in one transaction.
@@ -1156,7 +1157,7 @@ USAGE Unknown option --not-an-option (options: -m, --message, --file, --dry-run)
 ============================================================================
 volli ticket signal ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail) — see volli help ticket signal
+USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail, --dry-run) — see volli help ticket signal
 
 ============================================================================
 volli ticket archive ORACLE-1 --not-an-option

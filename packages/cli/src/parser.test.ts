@@ -673,6 +673,7 @@ describe("parseCliArgs", () => {
       ["ticket", "update", "VC-1", "--dry-run"],
       ["ticket", "move", "VC-1", "--to", "doing", "--dry-run"],
       ["ticket", "comment", "VC-1", "-m", "note", "--dry-run"],
+      ["ticket", "signal", "VC-1", "--kind", "implement", "--verdict", "pass", "--dry-run"],
       ["session", "done", "--dry-run"],
       ["session", "blocked", "--dry-run"],
       ["session", "link", "native-id", "--dry-run"],

@@ -273,6 +273,11 @@ describe("agent command service", () => {
       execute("ticket.update", { id: "VC-1", title: "After", dryRun: true }),
       execute("ticket.move", { id: "VC-1", to: "doing", dryRun: true }),
       execute("ticket.comment", { id: "VC-1", message: "Preview comment", dryRun: true }),
+      execute(
+        "ticket.signal",
+        { id: "VC-1", kind: "implement", verdict: "pass", dryRun: true },
+        true,
+      ),
       execute("session.done", { reason: "Preview done", dryRun: true }, true),
       execute("session.blocked", { reason: "Preview blocked", dryRun: true }, true),
       execute("session.link", { id: "native-conversation", dryRun: true }, true),
@@ -304,6 +309,7 @@ describe("agent command service", () => {
     await execute("ticket.update", { id: "VC-1", title: "After" });
     await execute("ticket.move", { id: "VC-1", to: "doing" });
     await execute("ticket.comment", { id: "VC-1", message: "Real comment" });
+    await execute("ticket.signal", { id: "VC-1", kind: "implement", verdict: "pass" }, true);
     await execute("session.done", { reason: "Real done" }, true);
     await execute("session.blocked", { reason: "Real blocked" }, true);
     await execute("session.link", { id: "native-conversation" }, true);
@@ -319,6 +325,7 @@ describe("agent command service", () => {
     expect(listTicketsByProject(ctx.db, "project-one")).toHaveLength(2);
     expect(getTicket(ctx.db, "ticket-one")).toMatchObject({ title: "After", status: "doing" });
     expect(listComments(ctx.db, "ticket-one")).toHaveLength(1);
+    expect(listLatestSignals(ctx.db, "ticket-one")).toHaveLength(1);
     // Twice: the `notify` verb itself, plus the Doing-entry guardrail. Since
     // VC-163 every socket move is made by an authenticated Session rather than
     // by an unattributable "user", and a Session moving work into Doing is
@@ -328,7 +335,7 @@ describe("agent command service", () => {
     expect(doctorFacts).toHaveBeenCalledTimes(1);
     expect(interruptTicketSessions).not.toHaveBeenCalled();
     expect(newId).toHaveBeenCalledTimes(3);
-    expect(onMutation).toHaveBeenCalledTimes(6);
+    expect(onMutation).toHaveBeenCalledTimes(7);
   });
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
