@@ -210,7 +210,27 @@ export function trimWorktreeFailureStderr(stderr: string): string {
     : stderr.slice(stderr.length - MAX_WORKTREE_FAILURE_STDERR);
 }
 
-export type TicketEventActorKind = "user" | "session" | "automation";
+/**
+ * Who a ticket event is attributed to.
+ *
+ * `unauthenticated` was added by VC-163 and is the only one of the four that
+ * describes an ABSENCE of evidence rather than a known party. It means: a
+ * process reached the agent socket, Volli could not establish which Session (if
+ * any) it was, and a per-project policy nonetheless permitted the write.
+ *
+ * It exists because the three values beside it were each a claim Volli cannot
+ * support for such a caller. `user` says a person typed it — that attribution
+ * is precisely the lie VC-92 §6 ruled dead, because it granted the highest
+ * trust in the system on the strength of a missing environment variable.
+ * `session` needs a Session id there is none of. `automation` says Volli's own
+ * machinery acted. Recording the absence honestly is the whole point of the
+ * ticket that introduced it.
+ *
+ * Note that a default install never writes one: the built-in policy gives the
+ * unauthenticated caller no coordination verb at all, so reaching this value
+ * requires a person to have granted one per project.
+ */
+export type TicketEventActorKind = "user" | "session" | "automation" | "unauthenticated";
 
 export interface TicketEventActorContext {
   sessionId: string;
@@ -220,9 +240,12 @@ export interface TicketEventActorContext {
 // `session` always carries its context; `automation` may (a session-driven
 // automation) or may NOT (a system-level automation — the worktree ensure/
 // remove/sweep pipeline has no session and stores as a bare token, like `user`).
+// `unauthenticated` never carries one and structurally cannot: a caller Volli
+// could not identify has no Session to cite, which is what makes it that kind.
 // Each `kind` lives in exactly one arm so it stays a clean discriminant.
 export type TicketEventActor =
   | { kind: "user" }
+  | { kind: "unauthenticated" }
   | ({ kind: "session" } & TicketEventActorContext)
   | ({ kind: "automation" } & Partial<TicketEventActorContext>);
 

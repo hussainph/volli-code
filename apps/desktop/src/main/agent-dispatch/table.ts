@@ -46,10 +46,8 @@ import {
   sessionDoneVerb,
   sessionListVerb,
   sessionPeekVerb,
-  sessionStartVerb,
 } from "./session-verbs";
 import {
-  ticketArchiveVerb,
   ticketCommentVerb,
   ticketCreateVerb,
   ticketMoveVerb,
@@ -111,7 +109,14 @@ export const AGENT_VERB_TABLE: {
   "ticket.update": { handle: ticketUpdateVerb, projections: "load", envSession: "resolve" },
   "ticket.move": { handle: ticketMoveVerb, projections: "load", envSession: "resolve" },
   "ticket.comment": { handle: ticketCommentVerb, projections: "load", envSession: "resolve" },
-  "ticket.archive": { handle: ticketArchiveVerb, projections: "load", envSession: "resolve" },
+  // No `ticket.archive` and no `session.start` (VC-163). Neither is an omission
+  // to be filled in: this table is a TOTAL mapping over the binding ids the
+  // registry projects onto the socket, so a handler for either would be an
+  // excess property and would not compile. That is the door being shut in the
+  // one place the compiler can hold it shut — archiving is app-only curation
+  // through `archiveTicketCommand`, and starting a Session is the `project`
+  // Role's `session_start` tool through `startSessionOperation`. Both
+  // application acts are untouched; only their socket envelopes are gone.
   "ticket.brief": { handle: ticketBriefVerb, projections: "load", envSession: "resolve" },
   "worktree.status": { handle: worktreeStatusVerb, projections: "load", envSession: "resolve" },
   "worktree.diff": { handle: worktreeDiffVerb, projections: "load", envSession: "resolve" },
@@ -128,7 +133,6 @@ export const AGENT_VERB_TABLE: {
   // The one verb that reads BOTH halves of the snapshot (VC-79), from this one
   // fold rather than by listing the world twice.
   "session.peek": { handle: sessionPeekVerb, projections: "load", envSession: "resolve" },
-  "session.start": { handle: sessionStartVerb, projections: "load", envSession: "resolve" },
   // Identity is the whole requirement (VC-51): the signal needs no terminal
   // attachment, so it needs no terminal snapshot to find one in.
   "session.done": { handle: sessionDoneVerb, projections: "skip", envSession: "resolve" },

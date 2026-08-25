@@ -22,10 +22,8 @@ Write
   ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>] [--dry-run]
   ticket move <id> --to <column> [--dry-run]
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
-  ticket archive <id>
 
 Session
-  session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
   session list [--project <p>] [--ticket <id>]
   session peek <id> [--lines <n>]
   session done [--reason <text>] [--dry-run]
@@ -40,7 +38,10 @@ App
   help [<command> | <topic>]
 
 Agent Tool Surface
-  (no registry-projected tool-only verbs in this build)
+  session start  Start an agent chat session on a ticket.
+
+App-only verbs
+  ticket archive  Archive a ticket (its worktree is preserved).
 Session Role availability: not claimed outside a resolved Session.
 
 Context: --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd.
@@ -377,46 +378,41 @@ volli help ticket archive
 ============================================================================
 ticket archive — Archive a ticket (its worktree is preserved).
 
-Door: Agent CLI
-Verb tier: coordination
+Door: app only (no agent door)
+Verb tier: none
 
-Usage: volli ticket archive <id>
+The app is the only door. Neither the Agent CLI nor the Agent Tool Surface runs this verb.
 
 Effects:
 - Durable write: Mark the Ticket archived and append its attributed archive event.
 - Human sees: The Ticket leaves the active board and remains available as archived history.
 - Does not: The Ticket worktree is preserved and active Sessions are not ended.
 
-Example: volli ticket archive VC-12
-
 ============================================================================
 volli help session start
 ============================================================================
 session start — Start an agent chat session on a ticket.
 
-Door: Agent CLI and Agent Tool Surface
-Verb tier: coordination
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Role availability: not claimed outside a resolved Session.
 
-Usage: volli session start <id> [options]
+Tool: session_start
 
-Options:
-  -m <text>                 Kickoff message.
-  --title <text>            Explicit session title.
-  --model <provider/model>  Model override.
-  --reasoning <level>       Reasoning level override. (valid: off, minimal, low, medium, high, xhigh, max)
+Input:
+  ticket  The display id of the Ticket to work, for example VC-12.
+  message (optional)  The kickoff instruction the new Session opens with. Omit to send Volli's default kickoff.
+  title (optional)  A permanent title for the Session. Omit to let Volli name it from the kickoff.
+  model (optional)  Run the Session on a specific model instead of the configured default.
+  model.providerId  Provider id, as `model list` prints it.
+  model.modelId  Model id, as `model list` prints it.
+  reasoning (optional)  Reasoning level override; the chosen model must support it. (valid: off, minimal, low, medium, high, xhigh, max)
 
 Effects:
 - Durable write: Create one durable Ticket Session, freeze its start inputs, and submit its kickoff turn after a ready attachment.
 - Human sees: The app raises an actionable in-app toast with Open session for an agent-originated start.
 - Does not: The Ticket does not move.
 - Does not: The app does not steal focus or navigate until the person uses Open session.
-
-Example: volli session start VC-12 -m "Fix the flaky auth test"
-
-Notes:
-- Runs in the app: attended-only, never headless; the board does not move.
-- Submits a kickoff turn; -m replaces the default kickoff text and names the session.
-- --title sets a permanent title; --model/--reasoning override the app default.
 
 ============================================================================
 volli help session list
@@ -653,7 +649,7 @@ ticket subcommands:
   ticket update   Update a ticket's fields or body. [Agent CLI]
   ticket move     Move a ticket to another column. [Agent CLI]
   ticket comment  Add a comment to a ticket. [Agent CLI]
-  ticket archive  Archive a ticket (its worktree is preserved). [Agent CLI]
+  ticket archive  Archive a ticket (its worktree is preserved). [app only (no agent door)]
 Run volli help ticket <subcommand> for detail.
 
 ============================================================================
@@ -689,7 +685,7 @@ Run volli help model <subcommand> for detail.
 volli help session
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent CLI and Agent Tool Surface]
+  session start    Start an agent chat session on a ticket. [Agent Tool Surface (named tool; not shell-executable)]
   session list     List a project's active terminal and chat sessions. [Agent CLI]
   session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
   session done     Record that this session's work is finished. [Agent CLI]
@@ -903,7 +899,7 @@ Read before writing; work your own board unless instructed; use comments and del
 volli help session harness
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent CLI and Agent Tool Surface]
+  session start    Start an agent chat session on a ticket. [Agent Tool Surface (named tool; not shell-executable)]
   session list     List a project's active terminal and chat sessions. [Agent CLI]
   session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
   session done     Record that this session's work is finished. [Agent CLI]
@@ -1084,12 +1080,12 @@ USAGE Unknown option --not-an-option (options: -m, --message, --file, --dry-run)
 ============================================================================
 volli ticket archive ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option — see volli help ticket archive
+WRONG_DOOR volli ticket archive exists in the app only; no agent surface executes it.
 
 ============================================================================
 volli session start ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: -m, --message, --title, --model, --reasoning) — see volli help session start
+WRONG_DOOR volli session start exists on the Agent Tool Surface as session.start; the Agent CLI does not execute it.
 
 ============================================================================
 volli session list --not-an-option

@@ -92,7 +92,39 @@ describe("renderHelp command detail", () => {
     expect(detail).not.toContain("Notes:");
     expect(detail).toContain("Effects:");
     expect(detail).toContain("The Ticket worktree is preserved");
-    expect(detail).toContain("Example: volli ticket archive VC-12");
+  });
+
+  // VC-163 / VC-92 §7: the CLI never lies about the tool surface. A verb the
+  // shell cannot run must not be described in shell syntax — an agent shown a
+  // usage line and a copyable example WILL type them, and be refused. Help's
+  // job for these two is to name the real door, not to rehearse a command.
+  it("describes an app-only verb without a shell usage line or example", () => {
+    const detail = renderHelp(["ticket", "archive"]);
+    expect(detail).toContain("Door: app only (no agent door)");
+    expect(detail).toContain("Verb tier: none");
+    // What it must NOT contain: anything a caller could copy into a shell.
+    expect(detail).not.toContain("Usage:");
+    expect(detail).not.toContain("Example:");
+    expect(detail).toContain(
+      "The app is the only door. Neither the Agent CLI nor the Agent Tool Surface runs this verb.",
+    );
+    // The effects contract survives — it is why someone reads this page.
+    expect(detail).toContain("Effects:");
+  });
+
+  it("describes a tool-only verb by its callable name, not by argv", () => {
+    const detail = renderHelp(["session", "start"]);
+    expect(detail).toContain("Door: Agent Tool Surface (named tool; not shell-executable)");
+    expect(detail).toContain("Verb tier: control");
+    // The wire name a model actually calls, and its real input fields.
+    expect(detail).toContain("Tool: session_start");
+    expect(detail).toContain("ticket");
+    // No argv anywhere: a model shown `-m` writes `-m`, which is the whole
+    // reason VerbToolProjection is a separate table from the option table.
+    expect(detail).not.toContain("Usage: volli session start");
+    expect(detail).not.toContain("-m <text>");
+    expect(detail).not.toContain("--model <provider/model>");
+    expect(detail).not.toContain("Example: volli session start");
   });
 
   it("renders a command that has options but no notes", () => {
@@ -117,13 +149,17 @@ describe("renderHelp command detail", () => {
     expect(diff).toContain("Default range is the merge-base diff");
   });
 
-  it("renders session start with the reasoning vocabulary and hides the -m alias", () => {
-    const detail = renderHelp(["session", "start"]);
-    expect(detail).toContain("Usage: volli session start <id> [options]");
-    expect(detail).toContain("--title <text>");
-    expect(detail).toContain("--model <provider/model>");
-    expect(detail).toContain("(valid: off, minimal, low, medium, high, xhigh, max)");
+  it("renders the reasoning vocabulary and hides an alias on a verb the shell runs", () => {
+    // Was `session start` until VC-163 took it off the CLI. `ticket create` is
+    // the same shape: a values hint the placeholder cannot carry, plus a hidden
+    // alias that must stay out of generated help.
+    const detail = renderHelp(["ticket", "comment"]);
+    expect(detail).toContain("Usage: volli ticket comment <id> [options]");
+    expect(detail).toContain("-m <text>");
     expect(detail).not.toContain("--message");
+
+    const created = renderHelp(["ticket", "create"]);
+    expect(created).toContain("(valid: backlog, todo, doing, needs-review|review, done)");
   });
 
   it("carries a command's extra usage tail into its detail", () => {

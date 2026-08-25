@@ -14,19 +14,14 @@
  */
 
 import {
-  autoTitleFromKickoff,
-  DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,
-  errorMessage,
-  REASONING_LEVELS,
   shortSessionId,
 } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
-  ReasoningLevel,
   SessionProjection,
   SessionRecord,
   SessionUsageSummary,
@@ -35,18 +30,10 @@ import { readSessionTranscriptTail } from "@volli/session-engine";
 
 import { getTicket } from "../db/tickets-repo";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
-import { StructuredSessionsError } from "../session-runtime/sessions";
-import { startSessionModelOverride, startSessionOperation } from "../session-runtime/start-session";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
-import {
-  actorSessionTicketDisplay,
-  positiveIntOr,
-  projectForCreate,
-  requestActor,
-  ticketForDisplayId,
-} from "./resolution";
+import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
 
 /**
  * How many transcript messages a chat `session peek` shows when the caller
@@ -58,24 +45,6 @@ import {
  * around it — enough to see what is happening now, not enough to be a replay.
  */
 export const CHAT_PEEK_ENTRIES = 12;
-
-/**
- * The provider/model pair a `session.start` override names — shape only, like
- * every other raw-socket argument here. Whether Model Access can actually run
- * it is the facade's judgement, refused as MODEL_UNAVAILABLE.
- */
-function isModelRef(value: unknown): value is { providerId: string; modelId: string } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "providerId" in value &&
-    typeof value.providerId === "string" &&
-    value.providerId.length > 0 &&
-    "modelId" in value &&
-    typeof value.modelId === "string" &&
-    value.modelId.length > 0
-  );
-}
 
 function sessionForPublicId(
   sessions: readonly SessionRecord[],
@@ -334,116 +303,6 @@ export async function sessionPeekVerb(
       })),
     },
   };
-}
-
-/**
- * `volli session start` — an agent chat Session on a ticket.
- *
- * VC-92 ruled this one control tier: a named tool in the `project` bundle, off
- * the socket for every caller. That move happens in ACCESS MODES, never in this
- * function — and it happens in two steps, not one. VC-162 ADDED a `tool` access
- * mode beside `cli`, so the verb is dual-surface and this door still answers.
- * VC-163 removes `cli`, at which point the verb leaves `AGENT_COMMAND_BINDINGS`
- * and stops being reachable over the wire at all.
- *
- * What survives both steps is the binding. The registry binds `session.start`
- * to one handler id, and the tool surface resolves that SAME id rather than
- * growing a second implementation — which is why the application act moved to
- * `start-session.ts` and this function kept only argv parsing and the wire
- * envelope. Two verbs wearing one name is exactly what the registry's
- * one-binding-per-verb rule exists to prevent.
- */
-export async function sessionStartVerb(
-  context: AgentCommandContext,
-  request: AgentRequest,
-): Promise<AgentResponse> {
-  const { options, projects, envSession, now, newId } = context;
-  // Attended-only by structure (VC-13): this door's only transport is the
-  // app-owned socket and the Pi runtime lives in Electron main, so an
-  // unreachable app already failed as APP_UNREACHABLE before this line.
-  // A launch whose Session runtime never came up reports the same
-  // retryable class — relaunching the app is the sanctioned recovery.
-  const sessionsFacade = options.sessions;
-  if (!sessionsFacade) {
-    return failure("APP_UNREACHABLE", "The Session runtime is not available this launch.");
-  }
-  const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
-  if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
-  const message = request.args["message"];
-  const title = request.args["title"];
-  const model = request.args["model"];
-  const reasoning = request.args["reasoning"];
-  if (
-    (message !== undefined && (typeof message !== "string" || message.trim().length === 0)) ||
-    (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
-    (model !== undefined && !isModelRef(model)) ||
-    (reasoning !== undefined && !(REASONING_LEVELS as readonly unknown[]).includes(reasoning))
-  ) {
-    return failure("INVALID_REQUEST", "Invalid session start arguments.");
-  }
-  try {
-    // The application act is shared with the Agent Tool Surface's door
-    // (VC-162); what is left in this function is the socket's own half — argv
-    // shapes in, a wire envelope out, and an actor this door can only
-    // attribute. `newId()` stays: the socket has no stable call identity to
-    // derive an operation id from, so every socket start is a new operation.
-    const started = await startSessionOperation(
-      {
-        db: options.db,
-        projects,
-        sessions: sessionsFacade,
-        submitSessionMessage: options.submitSessionMessage,
-        refineAutoTitle: options.refineAutoTitle,
-        onMutation: options.onMutation,
-        onSessionStarted: options.onSessionStarted,
-        actorTicketDisplay: (ticketId) => actorSessionTicketDisplay(options.db, projects, ticketId),
-        now,
-      },
-      {
-        operationId: newId(),
-        project: resolved.project,
-        ticket: resolved.ticket,
-        ...(typeof message === "string" ? { message } : {}),
-        ...(typeof title === "string" ? { title } : {}),
-        ...(() => {
-          const override = startSessionModelOverride(
-            isModelRef(model) ? model : undefined,
-            reasoning === undefined ? undefined : (reasoning as ReasoningLevel),
-          );
-          return override === undefined ? {} : { modelOverride: override };
-        })(),
-        actor: actor.actor,
-      },
-      { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
-    );
-    return {
-      v: 1,
-      ok: true,
-      data: {
-        session: shortSessionId(started.sessionId),
-        ticket: started.ticketDisplayId,
-        state: started.state,
-        model: `${started.model.providerId}/${started.model.modelId}`,
-        reasoning: started.model.reasoningLevel,
-      },
-    };
-  } catch (error) {
-    // The facade's refusals land in the fixed vocabulary: the two model
-    // errors keep their own names (exit class 1, auto-rendered into
-    // `volli help exit-codes`); everything else failed to mutate.
-    if (error instanceof StructuredSessionsError) {
-      if (error.code === "DEFAULT_MODEL_REQUIRED") {
-        return failure("MODEL_REQUIRED", error.message);
-      }
-      if (error.code === "MODEL_UNAVAILABLE") {
-        return failure("MODEL_UNAVAILABLE", error.message);
-      }
-      return failure("MUTATION_FAILED", error.message);
-    }
-    return failure("MUTATION_FAILED", errorMessage(error));
-  }
 }
 
 /**

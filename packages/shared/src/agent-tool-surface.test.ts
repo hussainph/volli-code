@@ -250,15 +250,24 @@ describe("the registry's tool projection (VC-162)", () => {
   });
 });
 
-describe("Verb Tier while both doors are open (VC-162 → VC-163)", () => {
-  it("reads session.start as coordination, not control, while the socket answers", () => {
+describe("Verb Tier once the socket door is shut (VC-162 → VC-163)", () => {
+  it("reads session.start as control, now that no socket caller reaches it", () => {
     const entry = verbEntry("session.start");
-    expect(entry?.accessModes).toEqual(["cli", "tool"]);
-    // A tier is the WEAKEST door a verb is reachable through. Claiming control
-    // here would claim a closed door that is standing open: any authenticated
-    // socket caller still reaches this verb. VC-163 removes `cli`, flips the
-    // actor to `role`, and that is the moment the tier changes.
-    expect(verbTier(entry!)).toBe("coordination");
-    expect(verbTier({ accessModes: ["tool"], actor: "role" })).toBe("control");
+    // VC-162 left this `["cli", "tool"]` and the tier read as coordination — a
+    // tier is the WEAKEST door a verb is reachable through, and claiming
+    // control while any socket caller still reached it would have claimed a
+    // closed door that was standing open. VC-163 removed `cli` and flipped the
+    // actor to `role`, and that is what makes the control claim true.
+    expect(entry?.accessModes).toEqual(["tool"]);
+    expect(entry?.actor).toBe("role");
+    expect(verbTier(entry!)).toBe("control");
+  });
+
+  it("keeps the verb in the `project` bundle it was put in", () => {
+    // Closing the socket door did not move the tool. The Role that could start
+    // Sessions before this ticket is the Role that can start them after it;
+    // what changed is that nothing ELSE can.
+    expect(roleVerbBundle("project")).toContain("session.start");
+    expect(roleVerbBundle("ticket")).not.toContain("session.start");
   });
 });

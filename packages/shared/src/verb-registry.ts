@@ -614,12 +614,22 @@ export const VERB_REGISTRY = [
     ],
   },
   {
-    // VC-92 ruled this one off the agent surface entirely — an app-only
-    // curation act, no bundle and no CLI access mode. It is still on the socket
-    // here because this table records today's surface; VC-163 empties its
-    // access modes, at which point it holds no tier at all.
+    // OFF every agent surface (VC-92 §3, done in VC-163). Archiving is app-only
+    // curation: a person deciding a Ticket has stopped being live work. No
+    // bundle carries it, no CLI access mode projects it, and `verbTier` reads
+    // the empty list as no governance class at all rather than as a tier.
+    //
+    // The entry stays HERE, whole, rather than being deleted — that is what
+    // makes the door teach instead of lying. `declaredVerb` finds it and
+    // answers WRONG_DOOR ("exists in the app only; no agent surface executes
+    // it"); deleting the entry would produce UNSUPPORTED_COMMAND, which reads
+    // as "no such verb" and sends an agent looking for a way to do it by hand.
+    // `listed: true` is load-bearing for exactly that reason.
+    //
+    // Reversible the day a workflow needs it: put `"cli"` back. The handler,
+    // the options and the effects contract are all still here and still bound.
     key: "ticket.archive",
-    accessModes: ["cli"],
+    accessModes: [],
     actor: "session",
     handler: { site: "main", id: "ticket.archive" },
     listed: true,
@@ -857,19 +867,28 @@ export const VERB_REGISTRY = [
     // deliberately no headless path — app not running is APP_UNREACHABLE, and
     // `volli app launch` is the sanctioned recovery.
     //
-    // VC-92 ruled it control tier — a named tool in the `project` bundle, off
-    // the socket for every caller. VC-162 added the `tool` mode and `project`
-    // bundle membership; the socket door stays until VC-163 removes `cli` and
-    // flips the actor to `role`, which is the moment the tier becomes control.
+    // CONTROL TIER, and now actually so (VC-92 §3, completed in VC-163).
     //
-    // Dual-surface in the meantime, and `verbTier` reads that honestly as
-    // coordination: a tier is the WEAKEST door a verb is reachable through,
-    // and this one is still reachable by any authenticated socket caller. A
-    // control-tier claim while the socket answers would be a claim about a
-    // door that is standing open.
+    // VC-162 added the `tool` mode and `project` bundle membership beside the
+    // `cli` one, which left the verb dual-surface — and `verbTier` read that
+    // honestly as coordination, because a tier is the WEAKEST door a verb is
+    // reachable through. Removing `cli` and flipping the actor to `role` is
+    // what shuts the socket door, and only now is the control claim true.
+    //
+    // Why it had to leave the socket rather than be gated on it: a socket call
+    // can be attributed but never authenticated, so "only a Project Session may
+    // start Sessions" would have rested on an environment variable any process
+    // running as the user can set. VC-163's per-attachment token narrows that
+    // to injected strings and cross-session confusion; it does not close it
+    // against a hostile same-uid process, and starting agent work is the one
+    // verb whose misuse cannot tolerate that residue. A tool call carries its
+    // caller in the binding instead of in the request.
+    //
+    // Both doors still resolve ONE handler id. The agent path is the `project`
+    // bundle's `session_start` tool; the human path is the app.
     key: "session.start",
-    accessModes: ["cli", "tool"],
-    actor: "session",
+    accessModes: ["tool"],
+    actor: "role",
     handler: { site: "main", id: "session.start" },
     listed: true,
     referenceOrder: 17,

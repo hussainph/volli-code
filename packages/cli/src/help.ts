@@ -17,6 +17,7 @@ import type {
   AgentHelpRuntime,
   HelpTopicName,
   VerbEntry,
+  VerbToolField,
   VerbOption,
 } from "@volli/shared";
 
@@ -267,9 +268,50 @@ export function bareHelpText(
   );
 }
 
-/** Detail for one verb: usage, door, tier, options, effects, example, and notes. */
+/**
+ * How a tool-only verb's input reads on a help page: the model's own field
+ * names, from {@link VerbToolProjection}, never the argv table.
+ *
+ * The two tables are separate in the registry precisely so this page can pick
+ * the right one — "a model shown `-m` will write `-m`". Nested object fields
+ * are flattened with a dotted path rather than indented, because the point here
+ * is to name what the tool takes, not to reproduce a schema.
+ */
+function toolInputLines(fields: readonly VerbToolField[], prefix = ""): string[] {
+  return fields.flatMap((field) => {
+    const name = `${prefix}${field.name}`;
+    const required = field.required === true ? "" : " (optional)";
+    if (field.type === "object") {
+      return [
+        `  ${name}${required}  ${field.description}`,
+        ...toolInputLines(field.fields, `${name}.`),
+      ];
+    }
+    const values = field.type === "enum" ? ` (valid: ${field.values.join(", ")})` : "";
+    return [`  ${name}${required}  ${field.description}${values}`];
+  });
+}
+
+/**
+ * Detail for one verb: door, tier, then whichever surface actually runs it.
+ *
+ * The shell half — usage line, argv options, a copyable example — is printed
+ * ONLY for a verb carrying a `cli` access mode (VC-163). This is the
+ * discoverability doctrine's hard edge: help must name a verb it cannot run, so
+ * a wrong door can be told from no door, but it must not describe that verb in
+ * a syntax that will be refused. An agent handed `Usage: volli session start`
+ * and `Example: volli session start VC-12 -m "…"` types exactly that, gets a
+ * refusal, and learns that Volli's own help lies — which is worse than the
+ * refusal it was trying to teach around.
+ *
+ * What replaces it depends on the door that does hold the verb: a tool-only
+ * verb gets its callable wire name and its real input fields, and an app-only
+ * verb gets one sentence saying the app is the whole surface. The effects
+ * contract prints for all three, because it is the reason the page is read.
+ */
 function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
-  const visible = entry.options.filter((option) => option.hidden !== true);
+  const onCli = entry.accessModes.includes("cli");
+  const visible = onCli ? entry.options.filter((option) => option.hidden !== true) : [];
   const width = Math.max(0, ...visible.map((option) => optionToken(option).length));
   const tier = verbTier(entry);
   const lines = [
@@ -280,13 +322,28 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   ];
   const availability = toolAvailability(entry, runtime);
   if (availability !== null) lines.push(availability);
-  lines.push("", `Usage: ${usageLine(entry, "detail")}`);
-  if (visible.length > 0) {
-    lines.push("", "Options:");
-    for (const option of visible) {
-      const suffix = option.values !== undefined ? ` (${option.values})` : "";
-      lines.push(`  ${optionToken(option).padEnd(width)}  ${option.help}${suffix}`);
+  if (onCli) {
+    lines.push("", `Usage: ${usageLine(entry, "detail")}`);
+    if (visible.length > 0) {
+      lines.push("", "Options:");
+      for (const option of visible) {
+        const suffix = option.values !== undefined ? ` (${option.values})` : "";
+        lines.push(`  ${optionToken(option).padEnd(width)}  ${option.help}${suffix}`);
+      }
     }
+  } else if (entry.tool !== undefined) {
+    lines.push("", `Tool: ${entry.tool.name}`);
+    if (entry.tool.input.length > 0) {
+      lines.push("", "Input:");
+      lines.push(...toolInputLines(entry.tool.input));
+    }
+  } else {
+    // Generic, and deliberately so: it says what is true of ANY verb on no
+    // agent surface, so the next one added needs no new sentence here.
+    lines.push(
+      "",
+      "The app is the only door. Neither the Agent CLI nor the Agent Tool Surface runs this verb.",
+    );
   }
   if (entry.effects !== undefined) {
     lines.push("", entry.effects.when ? `Effects (${entry.effects.when}):` : "Effects:");
@@ -297,8 +354,8 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
     for (const effect of entry.effects.humanVisible) lines.push(`- Human sees: ${effect}`);
     for (const nonEffect of entry.effects.nonEffects) lines.push(`- Does not: ${nonEffect}`);
   }
-  if (entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
-  if (entry.notes !== undefined && entry.notes.length > 0) {
+  if (onCli && entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
+  if (onCli && entry.notes !== undefined && entry.notes.length > 0) {
     lines.push("", "Notes:");
     for (const note of entry.notes) lines.push(`- ${note}`);
   }

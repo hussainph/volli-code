@@ -293,16 +293,28 @@ export function teachingErrorForParseResult(
 }
 
 /**
- * Renders one parse refusal. A wrong door alone pays for the optional Role
- * read, because it is the one refusal whose teaching depends on live facts;
- * every other parse error stays local and instant.
+ * Renders one parse refusal. A wrong door onto a TOOL alone pays for the
+ * optional Role read, because it is the one refusal whose teaching depends on
+ * live facts — whether this Session's frozen bundle carries the verb. Every
+ * other parse error stays local and instant.
+ *
+ * The tool test is not a micro-optimization; it is what keeps the round-trip
+ * honest. VC-163 introduced the first verb on NO agent surface
+ * (`ticket.archive`), and for that one there is no bundle membership to report:
+ * `teachingErrorForParseResult` returns before it looks at the runtime, so
+ * reading one would be spending a socket call to answer a question the refusal
+ * does not ask.
  */
 export async function renderParseRefusal(
   parsed: Extract<ReturnType<typeof parseCliArgs>, { ok: false }>,
   argv: readonly string[],
   dependencies: RunCliDependencies,
 ): Promise<0 | 1 | 2 | 3> {
-  const runtime = parsed.code === "WRONG_DOOR" ? await readHelpRuntime(dependencies) : null;
+  const teachableByRole =
+    parsed.code === "WRONG_DOOR" &&
+    parsed.verb !== undefined &&
+    verbEntry(parsed.verb)?.accessModes.includes("tool") === true;
+  const runtime = teachableByRole ? await readHelpRuntime(dependencies) : null;
   const error = teachingErrorForParseResult(parsed, runtime);
   dependencies.stderr(renderCliError(error, { json: argv.includes("--json") }));
   return exitCodeForError(error.code);

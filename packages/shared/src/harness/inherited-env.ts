@@ -21,6 +21,7 @@ import {
   VOLLI_ARTIFACTS_DIR_ENV,
   VOLLI_PROJECT_DIR_ENV,
   VOLLI_SESSION_ENV,
+  VOLLI_SESSION_TOKEN_ENV,
   VOLLI_SOCKET_ENV,
   VOLLI_TICKET_ENV,
 } from "../volli-dir";
@@ -36,9 +37,17 @@ import type { HarnessAdapter } from "./types";
  * call in that terminal files its work against the outer window's ticket;
  * `VOLLI_SOCKET` inherited from another running Volli points the CLI at a
  * different app's planner entirely.
+ *
+ * `VOLLI_SESSION_TOKEN` is in this list for a stronger reason than the rest
+ * (VC-163). Every other inherited name costs a wrong attribution; an inherited
+ * token costs an authentication. It would let every terminal this app opens
+ * prove itself to be the outer Volli's Session — the exact cross-session
+ * confusion the token was minted to defeat, arriving through the one channel
+ * the token cannot inspect. A fresh attachment mints its own or has none.
  */
 const VOLLI_SESSION_CONTRACT: readonly string[] = [
   VOLLI_SESSION_ENV,
+  VOLLI_SESSION_TOKEN_ENV,
   VOLLI_SOCKET_ENV,
   VOLLI_TICKET_ENV,
   VOLLI_ARTIFACTS_DIR_ENV,
