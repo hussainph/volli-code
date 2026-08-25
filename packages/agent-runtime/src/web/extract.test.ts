@@ -561,6 +561,75 @@ describe("the bounds on a document's shape", () => {
 });
 
 /**
+ * What the scan costs, as distinct from what it permits.
+ *
+ * Every other test in this file asks whether a bound admitted the right
+ * document. These ask what was spent deciding, which is a separate question
+ * with a separate failure: extraction is synchronous and `webPortsFor` builds
+ * the fetcher in Electron's main process, so a scan that takes a minute is a
+ * minute in which SQLite, the IPC bridge, the `volli` CLI socket and every
+ * terminal are frozen. No deadline in `safe-fetch.ts` can interrupt it, because
+ * there is no await for a timer to fire into.
+ */
+describe("what the scan spends deciding", () => {
+  it("counts raw-text elements against the element bound", () => {
+    // `script`, `style`, `textarea` and `title` used to be recognised before
+    // the counter ran, so they cost nothing and a page could serve any number
+    // of them. The bound is the only thing standing between the scan and a
+    // document built entirely out of the tags it declined to count.
+    const scripts = `<!doctype html><html><head><title>Scripts</title></head><body>${"<script>x</script>".repeat(
+      50,
+    )}<p>the last paragraph</p></body></html>`;
+
+    const result = extractReadableMarkdown(scripts, "https://docs.example.com/scripts", {
+      ...WEB_EXTRACT_LIMITS,
+      maxElements: 20,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.text).not.toContain("the last paragraph");
+  });
+
+  it("reads a document built entirely of raw-text elements without going quadratic", () => {
+    // The shape that measured 59 seconds: the scan folded the whole document to
+    // lower case once per raw-text element to search for its closing tag, so
+    // the cost was the document size times the element count. 2 MiB is exactly
+    // what `htmlChars` admits, and `<script></script>` is close to the shortest
+    // raw-text element that can be repeated to fill it.
+    //
+    // The threshold is loose on purpose. This measured 0.37s once the fold was
+    // hoisted out of the loop, against 59s before and roughly 16s if only the
+    // counting above were fixed — so anything under a few seconds is the
+    // linear scan, and a regression is not a near miss.
+    const unit = "<script></script>";
+    const html = `<html><body>${unit.repeat(Math.floor((2 * 1024 * 1024) / unit.length))}</body></html>`;
+
+    const started = Date.now();
+    extractReadableMarkdown(html, "https://docs.example.com/scripts");
+
+    expect(Date.now() - started).toBeLessThan(8_000);
+  });
+
+  it("reads a page whose text changes length when it is lower-cased", () => {
+    // Not a regression — a forward guard on the fold the fix introduced. What
+    // the scan returns is an offset into the *original* markup, so the folded
+    // copy has to line up with it character for character. `toLowerCase()` does
+    // not promise that: U+0130 lowercases to two code units, so a page carrying
+    // one would shift every offset after it. Folding only `[A-Z]` is what makes
+    // the two strings the same length by construction, and this is the page
+    // shape that would notice if that ever stopped being true.
+    const html = `<!doctype html><html><head><title>\u0130stanbul</title></head><body><main><h1>\u0130stanbul</h1><p>${"The guide to the city, and the road out of it. ".repeat(
+      12,
+    )}</p></main></body></html>`;
+
+    const result = extractReadableMarkdown(html, "https://docs.example.com/istanbul");
+
+    expect(result.text).toContain("the road out of it");
+    expect(result.truncated).toBe(false);
+  });
+});
+
+/**
  * The second bound, on the parsed tree, and why one bound is not enough.
  *
  * The scan reads the string a page sent. The parser builds the tree a browser

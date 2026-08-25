@@ -575,3 +575,65 @@ plus JSON APIs, XHTML, and CJK and Cyrillic Wikipedia. The two pages that still
 refuse in the original set — stackoverflow.com and npmjs.com — answer 403 to any
 non-browser client, and the fixed product identity that causes that remains a
 deliberate choice recorded above.
+
+## Addendum — VC-175, what the security review of that work found
+
+The coverage work above was reviewed against this note's own threat model before
+it merged. The SSRF core held: resolve-once-then-pin is a real rebinding
+defence, every resolved address is classified rather than just the one a client
+would pick, the IANA registries are followed rather than the three RFC 1918
+ranges, and the redirect design re-admits every hop — the metadata-service test
+proves the socket is never opened. Four findings sat outside that core, and all
+four are fixed. They are recorded here because three of them were introduced or
+widened by the coverage work itself, which is the honest shape of the trade.
+
+**The bound that cost more than the work it bounded.** `structureBoundOffset`
+folded the entire document to lower case to search for a closing tag — inside
+the scan loop, once per raw-text element and once per skipped subtree. The scan
+was therefore quadratic in the size of the document while bounding nothing, and
+`RAW_TEXT_ELEMENTS` were recognised *before* the element counter ran, so
+`script`, `style`, `textarea` and `title` cost nothing against `maxElements` and
+a page could serve any number of them. Measured: 2 MiB of `<script></script>`
+pairs — comfortably inside `htmlChars`, and inside the 5 MiB body bound on the
+wire — held the thread for **59 seconds**. Extraction is synchronous and
+`webPortsFor` builds the fetcher in Electron's main process, so `totalMs` cannot
+interrupt it: SQLite, the IPC bridge, the `volli` CLI socket and every terminal
+were frozen for the duration, from one fetched URL. This is precisely the
+failure `extract.ts` warns about in its own header — "a bound that is not
+enforced before the work begins is not enforced at all" — reached by making the
+enforcement itself the expensive part.
+
+The fold is now built once per scan and shared, and raw-text elements are
+counted. 59,246 ms → **370 ms**. The fold is restricted to `[A-Z]` rather than
+`toLowerCase()` because the scan returns offsets into the *original* markup and
+the two strings must line up character for character; `toLowerCase()` does not
+promise that, since U+0130 lowercases to two code units.
+
+**The envelope was the half of the injection surface that stayed open.** The
+commit before this one identified both places this boundary writes outside the
+untrusted-content markers in Volli's own voice — "refusal text and the
+envelope's provenance line" — and bounded only the refusal, through `named()`.
+`envelope()` went on printing `finalUrl` in full, and a server chooses `finalUrl`
+by redirecting. Measured: a redirect to the server's own long URL put **1,900
+characters** of its choosing above the marker line, inside a sentence beginning
+"Volli read", for a two-character document — a 2,584-character preamble. The
+2,048-character `target.length` rule was the only thing bounding it, and 2,048
+characters is not "far below room to write an instruction". Every URL the
+envelope states now goes through `shownUrl`: origin and path, query dropped
+entirely, 96 characters, ellipsis when anything was lost. The same preamble is
+now 685 characters and carries none of the server's text.
+
+**A refusal quoted a URL nothing had bounded.** `refusalText` was handed the
+caller's own string rather than the admitted one — a refusal can happen because
+there was no admissible URL at all — so a 50,021-character URL produced a
+50,272-character refusal, in Volli's voice, having been refused by the very rule
+that exists to keep a URL short. Same fix, same helper: 272 characters.
+
+**What the tests had not been asked.** `safe-fetch.test.ts` pinned the invariant
+for refusals ("never lets %s in a redirect write into the refusal") and there
+was no equivalent on the success path, which is why the envelope stayed open
+while the refusal was closed. The regression tests added alongside these fixes
+were each run against the unfixed code first: the raw-text counting test, the
+quadratic-scan test (41.8 s before the threshold caught it), the envelope test
+and the refusal test all fail without their fix. A cost ceiling is now a thing
+this module's tests assert, not only a thing its comments claim.

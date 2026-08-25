@@ -282,15 +282,18 @@ const SKIPPED_SUBTREES: ReadonlySet<string> = new Set(["svg", "math"]);
  * would resume the scan in the middle of a subtree that is still open. A
  * subtree that never closes runs to the end of the document, which is the same
  * answer the parser will reach.
+ *
+ * Takes the folded copy of the document rather than the document, because it is
+ * called once per skipped subtree and folding here would be folding the whole
+ * document once per `<svg>` on the page. See {@link asciiFold}.
  */
-function endOfSubtree(html: string, name: string, from: number): number {
-  const lowered = html.toLowerCase();
+function endOfSubtree(folded: string, name: string, from: number): number {
   let depth = 1;
   let index = from;
   while (depth > 0) {
-    const next = lowered.indexOf(`<${name}`, index);
-    const close = lowered.indexOf(`</${name}`, index);
-    if (close === -1) return html.length;
+    const next = folded.indexOf(`<${name}`, index);
+    const close = folded.indexOf(`</${name}`, index);
+    if (close === -1) return folded.length;
     // A nested opening before the next close means one more level to unwind.
     if (next !== -1 && next < close) {
       const past = next + name.length + 1;
@@ -298,7 +301,7 @@ function endOfSubtree(html: string, name: string, from: number): number {
       // character stops, which is the same rule the main scan reads tags by.
       // An empty slice — the tag ending the document — matches nothing and so
       // counts as a real tag, which is what it is.
-      if (!/^[a-zA-Z0-9-]/.test(html.slice(past, past + 1))) depth += 1;
+      if (!/^[a-zA-Z0-9-]/.test(folded.slice(past, past + 1))) depth += 1;
       index = past;
       continue;
     }
@@ -306,6 +309,29 @@ function endOfSubtree(html: string, name: string, from: number): number {
     index = close + name.length + 2;
   }
   return index;
+}
+
+/**
+ * The document with its ASCII letters folded to lower case, for tag matching.
+ *
+ * Built once per scan, and that is the whole point of it. Both the raw-text
+ * branch and {@link endOfSubtree} need a case-insensitive search for a closing
+ * tag, and both used to fold the entire document to get one — inside the scan
+ * loop, once per element. That made the scan quadratic in the size of the
+ * document while bounding nothing: measured, 2 MiB of `<script></script>` pairs
+ * held this thread for 59 seconds. Extraction is synchronous and runs in
+ * Electron's main process, so neither the fetch deadline nor an abort signal
+ * could interrupt it — the whole app was frozen for the duration.
+ *
+ * Folded over `[A-Z]` rather than with `toLowerCase()`, because every offset
+ * this scan returns indexes the *original* string and the two must therefore
+ * line up character for character. `toLowerCase()` does not promise that: U+0130
+ * lowercases to two code units, so one such character in a document would shift
+ * every offset after it and cut the markup in the wrong place. A tag name is
+ * ASCII, so folding ASCII is all this needs.
+ */
+function asciiFold(html: string): string {
+  return html.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
 /**
@@ -430,6 +456,8 @@ function structureBoundOffset(
 ): number | undefined {
   // The elements currently open, outermost first. Its length is the depth.
   const open: string[] = [];
+  // One fold for the whole scan, shared by every case-insensitive search below.
+  const folded = asciiFold(html);
   let elements = 0;
   let index = 0;
 
@@ -493,17 +521,22 @@ function structureBoundOffset(
       index = close + 1;
       continue;
     }
+    // Counted before the raw-text branch rather than after it. `script`,
+    // `style`, `textarea` and `title` are elements, and leaving them outside
+    // the budget meant a page could serve an unbounded number of them — the
+    // element bound is the one thing standing between this scan and a document
+    // built entirely out of the tags it declined to count.
+    elements += 1;
+    if (elements > maxElements) return start;
     if (RAW_TEXT_ELEMENTS.has(name)) {
-      const end = html.toLowerCase().indexOf(`</${name}`, close);
+      const end = folded.indexOf(`</${name}`, close);
       index = end === -1 ? html.length : end;
       continue;
     }
-    elements += 1;
-    if (elements > maxElements) return start;
     // A subtree the sanitiser is going to delete anyway: counted once, stepped
     // over, and never allowed to spend the budget on its own contents.
     if (SKIPPED_SUBTREES.has(name) && html[close - 1] !== "/") {
-      index = endOfSubtree(html, name, close + 1);
+      index = endOfSubtree(folded, name, close + 1);
       continue;
     }
     closeImplied(name);
