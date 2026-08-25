@@ -1,5 +1,6 @@
 /**
- * The ticket write verbs: create, update, move, comment, signal, archive.
+ * The ticket write verbs exposed on the Agent CLI: create, update, move,
+ * comment, and signal. Archive is app-only curation (VC-163).
  *
  * Coordination tier — every one of them wants an authenticated session actor,
  * every one commits through `ticket-commands.ts` rather than touching a repo
