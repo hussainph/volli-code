@@ -50,6 +50,18 @@ describe("agent product guidance", () => {
     expect(stated).toContain("coordination");
   });
 
+  it("records all four VC-85 coordination capabilities", () => {
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-85");
+
+    expect(entry).toMatchObject({ baseline: "VC-91" });
+    const stated = [...entry!.added, ...entry!.changed, ...entry!.fixed];
+    expect(stated).toHaveLength(4);
+    expect(stated.join("\n")).toContain("ticket signal");
+    expect(stated.join("\n")).toContain("ticket_await");
+    expect(stated.join("\n")).toContain("lossless");
+    expect(stated.join("\n")).toContain("--events 0 and --comments 0");
+  });
+
   it("ships concepts and changes as canonical local help topics", () => {
     expect(HELP_TOPIC_NAMES).toEqual([
       "concepts",

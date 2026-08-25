@@ -142,7 +142,7 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     ],
   },
   {
-    baseline: "VC-91",
+    baseline: "VC-85",
     build: "VC-162",
     added: [
       "A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.",
@@ -155,6 +155,21 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "A Ticket Session's tool array contains no agent-control tool, and cannot acquire one while it runs. Availability is decided once, when the Session is created.",
     ],
     fixed: [],
+    removed: [],
+  },
+  {
+    baseline: "VC-91",
+    build: "VC-85",
+    added: [
+      "ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.",
+      "ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.",
+    ],
+    changed: [
+      "ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.",
+    ],
+    fixed: [
+      "ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.",
+    ],
     removed: [],
   },
   {
