@@ -30,6 +30,7 @@ import type {
   SessionRecord,
   SessionEnvRepair,
   SessionEnvReport,
+  TicketEventActor,
   TranscriptReference,
 } from "@volli/shared";
 import type {
@@ -199,6 +200,20 @@ export interface AgentCommandServiceOptions {
    */
   doctorRepair?: () => Promise<SessionEnvRepair>;
   /**
+   * Verifies a caller's `VOLLI_SESSION_TOKEN`, answering the Session id it
+   * authenticates or `null` (VC-163).
+   *
+   * The composition root's `SessionTokenRegistry.verify`. A seam rather than a
+   * direct import because the minting half belongs to the attachments — the
+   * PTY manager and the Pi adapter — and only main's startup sees both sides.
+   *
+   * Absent means nothing can authenticate, so every socket caller resolves to
+   * the unauthenticated actor: reads yes, coordination writes no. Fail-closed
+   * by construction, which is what makes an unwired test a safe default rather
+   * than an accidental grant.
+   */
+  verifySessionToken?: (token: string | undefined) => string | null;
+  /**
    * The skills index a fresh Session with no explicit skills would carry — the
    * SAME port `session start` composes through (`SessionSkillPorts.index` with
    * nothing injected), threaded in so `prompt baseline` prices the index a real
@@ -283,8 +298,35 @@ export interface AgentCommandContext {
    * Who `VOLLI_SESSION` is, when the caller exported one and this verb's table
    * entry asks for it. `null` means no session env, an id that resolves to no
    * Session, or a verb that resolves its own.
+   *
+   * A CLAIM, resolved against the Session Engine. Whether the caller is
+   * entitled to it is {@link actor}'s answer, not this one's — a forged
+   * `VOLLI_SESSION` still resolves here, and still attributes as nobody.
    */
   readonly envSession: EnvSessionIdentity | null;
+  /**
+   * Who to ATTRIBUTE this caller's writes to, decided once by the dispatch
+   * (VC-163).
+   *
+   * Either the authenticated session actor its token proves, or
+   * `unauthenticated`. Never `user`: a socket call cannot establish that a
+   * person made it, and attributing one anyway is the grant-by-absence VC-92
+   * §6.3 ruled dead.
+   *
+   * Handlers read this rather than deriving their own, so the actor a write is
+   * ATTRIBUTED to is by construction the same actor the admission gate
+   * ADMITTED. Two derivations could disagree, and the disagreement would be
+   * invisible in exactly the case that matters — which is what it did, in
+   * `ticket.comment`, until this field replaced a second read of raw env.
+   *
+   * `null` for a verb whose table entry skips identity resolution (`hook`,
+   * `session.link`, `session.harness`). Those three resolve their own terminal
+   * record and write no ticket history, so there is nothing here for them to
+   * attribute — and `null` says that, where a defaulted `unauthenticated`
+   * would have been a wrong answer rather than an absent one. Admission still
+   * judged them: that runs off the token alone.
+   */
+  readonly actor: TicketEventActor | null;
 }
 
 /**

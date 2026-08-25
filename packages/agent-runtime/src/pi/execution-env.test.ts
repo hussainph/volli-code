@@ -99,6 +99,41 @@ describe("piExecutionEnv", () => {
     }
   });
 
+  // VC-163: a structured Session's shell authenticates like a PTY's does. The
+  // token is what makes `volli ticket comment` from inside a turn a Session
+  // write rather than an unauthenticated one that may only read.
+  it("carries the attachment's session token beside the identity", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      identity: {
+        sessionId: "session-uuid-1",
+        ticketDisplayId: "VC-51",
+        sessionToken: "tok-abc",
+      },
+    });
+    try {
+      await expect(env.exec("printenv VOLLI_SESSION_TOKEN")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "tok-abc\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("exports no token variable when the host minted none", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      identity: { sessionId: "session-uuid-1", ticketDisplayId: null },
+    });
+    try {
+      await expect(env.exec("printenv VOLLI_SESSION_TOKEN; echo done")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "done\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it("omits VOLLI_TICKET for a ticketless session rather than inventing one", async () => {
     const env = await piExecutionEnv(workspace(), {
       identity: { sessionId: "session-uuid-1", ticketDisplayId: null },

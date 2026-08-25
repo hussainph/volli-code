@@ -50,6 +50,7 @@ async function probe(path: string): Promise<void> {
       env: {
         ...(env.VOLLI_SOCKET ? { socket: env.VOLLI_SOCKET } : {}),
         ...(env.VOLLI_SESSION ? { session: env.VOLLI_SESSION } : {}),
+        ...(env.VOLLI_SESSION_TOKEN ? { token: env.VOLLI_SESSION_TOKEN } : {}),
         ...(env.VOLLI_TICKET ? { ticket: env.VOLLI_TICKET } : {}),
       },
     },

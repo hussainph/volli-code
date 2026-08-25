@@ -21,7 +21,7 @@ import { blobsRoot } from "./blob-store";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import { listComments } from "./db/comments-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
-import { insertProject } from "./db/projects-repo";
+import { insertProject, listProjects } from "./db/projects-repo";
 import {
   endSession,
   getSession,
@@ -46,6 +46,7 @@ import {
 import { createDesktopSessionEngine } from "./session-control";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
+import { createSessionTokenRegistry } from "./session-tokens";
 import { scriptedGit } from "./worktree/scripted-git";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
@@ -56,13 +57,75 @@ const artifacts = createInMemoryTranscriptArtifactStore();
 /** When the Nth transcript message of a peeked chat session happened. */
 const messageAt = (index: number): number => 10_000 + index * 1_000;
 
+/**
+ * The door's token registry, shared by every service these tests build.
+ *
+ * The REAL registry, not a permissive double. A test that presents the wrong
+ * token, or none, is refused here exactly as a stranger's process would be —
+ * which is what keeps `ACTING_ENV` below an authentication rather than a
+ * bypass. `resolution.test.ts` and `socket-honesty.test.ts` own the refusal
+ * cases; this file is about what the verbs do once a caller is admitted.
+ */
+const DOOR_TOKENS = createSessionTokenRegistry();
+
+/** The Session almost every test here acts as. Seeded at service construction. */
+const ACTING_SESSION = "5eeded00-0000-4000-8000-0000000000aa";
+const ACTING_TOKEN = DOOR_TOKENS.mint({
+  sessionId: ACTING_SESSION,
+  attachmentId: "acting-attachment",
+});
+
+/**
+ * A caller the door authenticates as {@link ACTING_SESSION}.
+ *
+ * Since VC-163 a socket caller is a Session or it is nobody: `env: ACTING_ENV` now
+ * means the unauthenticated actor, which may read and may not write. Most tests
+ * in this file are about a verb's behaviour rather than about admission, so
+ * they act as an ordinary authenticated Session and this is how they say so.
+ */
+const ACTING_ENV: AgentRequest["ctx"]["env"] = {
+  session: ACTING_SESSION,
+  token: ACTING_TOKEN,
+};
+
+/**
+ * An env the door will authenticate as `sessionId`.
+ *
+ * Memoised per Session, because minting twice for one attachment retires the
+ * first token — that is the registry doing its job, and a test that called this
+ * twice would otherwise disarm its own earlier requests.
+ */
+const mintedFor = new Map<string, string>();
+function asSession(
+  sessionId: string,
+  extra: { ticket?: string; socket?: string } = {},
+): AgentRequest["ctx"]["env"] {
+  let token = mintedFor.get(sessionId);
+  if (token === undefined) {
+    token = DOOR_TOKENS.mint({ sessionId, attachmentId: `attachment-of-${sessionId}` });
+    mintedFor.set(sessionId, token);
+  }
+  return { session: sessionId, token, ...extra };
+}
+
 /** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
   options: Omit<AgentCommandServiceOptions, "sessionEngine"> & { sessionEngine?: SessionEngine },
 ) {
+  // The acting Session has to EXIST for the door to resolve it: a valid token
+  // naming a Session the Engine cannot find is an error, not an actor. Seeded
+  // against whichever project the test inserted before building the service.
+  const project = listProjects(options.db)[0];
+  if (project !== undefined && getSession(options.db, ACTING_SESSION) === undefined) {
+    insertSession(
+      options.db,
+      testSession(project.id, null, { id: ACTING_SESSION, cwd: project.path }),
+    );
+  }
   return createAgentCommandServiceBase({
     ...options,
     sessionEngine: options.sessionEngine ?? createDesktopSessionEngine(options.db),
+    verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,
   });
 }
 
@@ -98,7 +161,7 @@ describe("agent command service", () => {
         labels: [],
         harness: "codex",
       },
-      ctx: { cwd: "/outside", env: {} },
+      ctx: { cwd: "/outside", env: ACTING_ENV },
     };
 
     const response = await service.execute(request);
@@ -198,7 +261,7 @@ describe("agent command service", () => {
         args,
         ctx: {
           cwd: "/repo/volli",
-          env: inSession ? { session: sessionId, ticket: "VC-1" } : {},
+          env: inSession ? asSession(sessionId, { ticket: "VC-1" }) : ACTING_ENV,
         },
       });
 
@@ -254,7 +317,11 @@ describe("agent command service", () => {
     expect(listTicketsByProject(ctx.db, "project-one")).toHaveLength(2);
     expect(getTicket(ctx.db, "ticket-one")).toMatchObject({ title: "After", status: "doing" });
     expect(listComments(ctx.db, "ticket-one")).toHaveLength(1);
-    expect(notify).toHaveBeenCalledTimes(1);
+    // Twice: the `notify` verb itself, plus the Doing-entry guardrail. Since
+    // VC-163 every socket move is made by an authenticated Session rather than
+    // by an unattributable "user", and a Session moving work into Doing is
+    // exactly what that guardrail exists to make visible.
+    expect(notify).toHaveBeenCalledTimes(2);
     expect(doctorRepair).toHaveBeenCalledTimes(1);
     expect(doctorFacts).toHaveBeenCalledTimes(1);
     expect(interruptTicketSessions).not.toHaveBeenCalled();
@@ -285,7 +352,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "ticket.create",
         args,
-        ctx: { cwd: "/repo/volli", env: {} },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
       });
 
     // A malformed branch name is an INVALID_REQUEST, not a generic MUTATION_FAILED.
@@ -325,7 +392,7 @@ describe("agent command service", () => {
         v: 1,
         cmd,
         args,
-        ctx: { cwd: "/repo/volli", env: {} },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
       });
 
     expect((await execute("ticket.create", { title: "Ship CLI" })).ok).toBe(true);
@@ -339,7 +406,7 @@ describe("agent command service", () => {
     });
     expect(commented).toMatchObject({
       ok: true,
-      data: { comment: { ticket: "VC-1", body: "In progress", actor: "user" } },
+      data: { comment: { ticket: "VC-1", body: "In progress", actor: "session" } },
     });
     expect(board).toMatchObject({
       ok: true,
@@ -380,7 +447,7 @@ describe("agent command service", () => {
         args,
         ctx: {
           cwd: "/repo/volli",
-          env: session ? { session, ticket: "VC-1" } : {},
+          env: session ? asSession(session, { ticket: "VC-1" }) : ACTING_ENV,
         },
       });
 
@@ -399,7 +466,14 @@ describe("agent command service", () => {
       ok: true,
       data: {
         events: [
-          { actor: "user", actorContext: null, payload: { kind: "created" } },
+          // Two DIFFERENT Sessions, which is the subject: the feed cites the
+          // one that made each write. Since VC-163 neither can be "user" —
+          // a socket caller is an authenticated Session or it writes nothing.
+          {
+            actor: "session",
+            actorContext: { session: "5eeded00", ticket: null },
+            payload: { kind: "created" },
+          },
           {
             actor: "session",
             actorContext: { session: "abcdef12", ticket: "VC-1" },
@@ -436,7 +510,7 @@ describe("agent command service", () => {
       newId: () => `ticket-${++id}`,
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     await execute("ticket.create", { title: "First", status: "todo" });
     await execute("ticket.create", { title: "Second", status: "todo" });
 
@@ -478,7 +552,10 @@ describe("agent command service", () => {
         v: 1,
         cmd,
         args,
-        ctx: { cwd: "/repo/volli", env: session ? { session, ticket: "VC-2" } : {} },
+        ctx: {
+          cwd: "/repo/volli",
+          env: session ? asSession(session, { ticket: "VC-2" }) : ACTING_ENV,
+        },
       });
     // VC-1 is the ticket being moved; VC-2 is the driving session's own ticket.
     await exec("ticket.create", { title: "Worked ticket", status: "todo" });
@@ -489,7 +566,10 @@ describe("agent command service", () => {
       testSession("project-one", "ticket-2", { id: orchestrator, cwd: "/repo/volli" }),
     );
 
-    // A user-attributed CLI move (no session env) is silent.
+    // The guardrail is about entering DOING, not about who moved: a move
+    // anywhere else is silent whoever made it. (Since VC-163 there is no
+    // "user-attributed CLI move" to contrast with — an unauthenticated caller
+    // cannot move a Ticket at all, which `socket-honesty.test.ts` proves.)
     await exec("ticket.move", { id: "VC-1", to: "backlog" });
     expect(notifications).toEqual([]);
 
@@ -521,7 +601,7 @@ describe("agent command service", () => {
         },
       });
       const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
       return { exec, interruptedTickets };
     }
 
@@ -588,7 +668,7 @@ describe("agent command service", () => {
           v: 1,
           cmd: "ticket.move",
           args: { id: "VC-1", to: "todo" },
-          ctx: { cwd: "/repo/volli", env: {} },
+          ctx: { cwd: "/repo/volli", env: ACTING_ENV },
         });
 
         expect(moved).toMatchObject({ ok: true, data: { ticket: { status: "todo" } } });
@@ -619,7 +699,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(
@@ -636,7 +716,7 @@ describe("agent command service", () => {
       args: {},
       ctx: {
         cwd: "/tmp/worktrees/VC-1",
-        env: { session: sessionId, ticket: "VC-1", socket: "/tmp/volli.sock" },
+        env: asSession(sessionId, { ticket: "VC-1", socket: "/tmp/volli.sock" }),
       },
     });
 
@@ -711,7 +791,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "identify",
       args: { agentSurface: true },
-      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
     });
 
     expect(response).toMatchObject({
@@ -730,7 +810,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "identify",
         args: {},
-        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
       }),
     ).not.toHaveProperty("data.agentSurface");
   });
@@ -768,6 +848,8 @@ describe("agent command service", () => {
         v: 1,
         cmd: "identify",
         args: {},
+        // Anonymous on purpose: this is the refusal a preview used to inherit,
+        // and it must be the CONTEXT refusal rather than an admission one.
         ctx: { cwd: "/somewhere/unregistered", env: {} },
       }),
     ).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
@@ -795,7 +877,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
 
     expect(await execute("session.harness", { id: "claude-code", dryRun: true })).toMatchObject({
       ok: false,
@@ -826,7 +908,7 @@ describe("agent command service", () => {
       newId: () => `ticket-internal-${++id}`,
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
 
     await execute("ticket.create", {
       title: "Ship CLI",
@@ -854,7 +936,9 @@ describe("agent command service", () => {
       data: {
         ticket: { id: "VC-1", title: "Ship CLI" },
         events: [{ payload: { kind: "labels_changed" } }, { payload: { kind: "commented" } }],
-        comments: [{ ticket: "VC-1", body: "Public progress", actor: "user", session: null }],
+        comments: [
+          { ticket: "VC-1", body: "Public progress", actor: "session", session: "5eeded00" },
+        ],
       },
     });
     expect(JSON.stringify({ list, show })).not.toMatch(
@@ -876,7 +960,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     await execute("ticket.create", { title: "Ship CLI" });
     for (const priority of ["high", "low", "medium", "high", "low", "medium"] as const) {
       await execute("ticket.update", {
@@ -911,7 +995,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     await execute("ticket.create", {
       title: "Draft CLI",
       body: "Old section\n\nKeep this",
@@ -975,7 +1059,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     await execute("ticket.create", { title: "Original" });
 
     const rejected = await execute("ticket.update", {
@@ -1014,7 +1098,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     await execute("ticket.create", { title: "Ship CLI" });
 
     archiveTicketCommand(ctx.db, "ticket-one", { now: 100, actor: { kind: "user" } });
@@ -1044,14 +1128,14 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI", body: "Follow the implementation contract." },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     const brief = await service.execute({
       v: 1,
       cmd: "ticket.brief",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(brief).toEqual({
@@ -1080,7 +1164,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI", body: "Follow the implementation contract." },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     updateTicketFieldsCommand(
       ctx.db,
@@ -1097,7 +1181,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.brief",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(brief).toEqual({
@@ -1129,14 +1213,14 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI", body: "Follow the implementation contract.", usesWorktree: false },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     const brief = await service.execute({
       v: 1,
       cmd: "ticket.brief",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(brief).toMatchObject({
@@ -1169,7 +1253,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI", body: "Follow the implementation contract." },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     const blobsRootDir = blobsRoot(mkdtempSync(join(tmpdir(), "volli-blobs-")));
     importBlob(
@@ -1199,7 +1283,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.brief",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(brief).toEqual({
@@ -1233,14 +1317,14 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     const brief = await service.execute({
       v: 1,
       cmd: "ticket.brief",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(brief).toEqual({
@@ -1270,6 +1354,8 @@ describe("agent command service", () => {
       v: 1,
       cmd: "identify",
       args: { project: "BE" },
+      // No session env: the point is that `--project` alone resolves, so a
+      // session rung sitting underneath it would decide nothing here.
       ctx: { cwd: "/somewhere/else", env: {} },
     });
 
@@ -1284,6 +1370,8 @@ describe("agent command service", () => {
       v: 1,
       cmd: "identify",
       args: { project: "NOPE" },
+      // No session env: the point is that `--project` alone resolves, so a
+      // session rung sitting underneath it would decide nothing here.
       ctx: { cwd: "/somewhere/else", env: {} },
     });
     expect(missing).toMatchObject({ v: 1, ok: false, error: { code: "PROJECT_NOT_FOUND" } });
@@ -1300,7 +1388,7 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       newId: () => "t1",
     });
-    const base = { cwd: "/repo/alpha", env: {} } as const;
+    const base = { cwd: "/repo/alpha", env: ACTING_ENV } as const;
 
     const create = await service.execute({
       v: 1,
@@ -1374,7 +1462,7 @@ describe("agent command service", () => {
         appVersion: "1.0.0",
         newId: () => `t${(seq += 1)}`,
       });
-      const base = { cwd: "/repo/alpha", env: {} } as const;
+      const base = { cwd: "/repo/alpha", env: ACTING_ENV } as const;
       return {
         create: (harness) =>
           service.execute({
@@ -1495,7 +1583,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     await execute("ticket.create", { title: "Ship CLI", labels: ["feature"] });
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(
@@ -1581,10 +1669,19 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.list",
       args: {},
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
-    expect(sessions).toMatchObject({ ok: true, data: { sessions: [{ harness: "claude-code" }] } });
+    // `arrayContaining`, because the caller's own Session is on this list too:
+    // since VC-163 a socket writer must BE a Session, so the fixture that
+    // authenticates these tests is itself a row here. The subject is the
+    // harness this Session reports, not the length of the list.
+    expect(sessions).toMatchObject({
+      ok: true,
+      data: {
+        sessions: expect.arrayContaining([expect.objectContaining({ harness: "claude-code" })]),
+      },
+    });
   });
 
   // The snapshot every other session verb addresses stays terminal-only, but
@@ -1628,7 +1725,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.list",
       args: {},
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     // Identity resolution is engine-backed (VC-51): a structured Session
     // exports VOLLI_SESSION too, so `identify` answers for it even though the
@@ -1638,22 +1735,22 @@ describe("agent command service", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { session: structured.session.id } },
+      ctx: { cwd: "/repo/volli", env: asSession(structured.session.id) },
     });
 
     expect(sessions).toMatchObject({
       ok: true,
       data: {
-        sessions: [
-          { id: "abcdef12", title: "Terminal" },
-          {
+        sessions: expect.arrayContaining([
+          expect.objectContaining({ id: "abcdef12", title: "Terminal" }),
+          expect.objectContaining({
             id: structured.session.id.slice(0, 8),
             kind: "chat",
             ticket: null,
             title: "Structured OpenCode Session",
             ageMs: 100,
-          },
-        ],
+          }),
+        ]),
       },
     });
     expect(JSON.stringify(sessions)).not.toContain(structured.session.id);
@@ -1689,14 +1786,14 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "In Alpha", project: "/repo/alpha" },
-      ctx: { cwd: "/outside", env: {} },
+      ctx: { cwd: "/outside", env: ACTING_ENV },
     });
 
     const mismatch = await service.execute({
       v: 1,
       cmd: "session.list",
       args: { ticket: "AL-1", project: "/repo/beta" },
-      ctx: { cwd: "/outside", env: {} },
+      ctx: { cwd: "/outside", env: ACTING_ENV },
     });
 
     expect(mismatch).toMatchObject({
@@ -1736,20 +1833,20 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.peek",
       args: { id: "abcdef12", lines: 2 },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     const notified = await service.execute({
       v: 1,
       cmd: "notify",
       args: { title: "Agent", message: "Needs input" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     const byUuid = await service.execute({
       v: 1,
       cmd: "session.peek",
       args: { id: sessionId, lines: 2 },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(peek).toEqual({
@@ -1900,7 +1997,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "session.peek",
         args: { id: shortId, lines: 2 },
-        ctx: { cwd: "/repo/volli", env: {} },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
       });
 
       expect(peek).toMatchObject({
@@ -1964,7 +2061,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "session.peek",
         args: { id: shortId },
-        ctx: { cwd: "/repo/volli", env: {} },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
       });
 
       expect(peek).toMatchObject({
@@ -2001,7 +2098,7 @@ describe("agent command service", () => {
           v: 1,
           cmd: "session.peek",
           args: { id },
-          ctx: { cwd: "/repo/volli", env: {} },
+          ctx: { cwd: "/repo/volli", env: ACTING_ENV },
         });
 
       // A handle nothing answers to, a full UUID, and a malformed one: the
@@ -2043,7 +2140,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship CLI" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     mutations.length = 0;
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
@@ -2056,13 +2153,13 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.blocked",
       args: { reason: "Waiting for credentials" },
-      ctx: { cwd: "/repo/volli", env: { session: sessionId, ticket: "VC-1" } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId, { ticket: "VC-1" }) },
     });
     const events = await service.execute({
       v: 1,
       cmd: "ticket.events",
       args: { id: "VC-1", limit: 10 },
-      ctx: { cwd: "/repo/volli", env: { session: sessionId, ticket: "VC-1" } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId, { ticket: "VC-1" }) },
     });
 
     expect(blocked).toEqual({
@@ -2119,7 +2216,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "session.done",
         args: {},
-        ctx: { cwd: "/repo/volli", env: { session: sessionId, ticket: "VC-1" } },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId, { ticket: "VC-1" }) },
       }),
     ).rejects.toThrow("disk full");
     expect(mutations).toEqual([]);
@@ -2153,7 +2250,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.done",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
     });
 
     expect(response).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
@@ -2176,7 +2273,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "hook",
       args: { harness: "claude-code", event: "turn.started" },
-      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
     });
 
     expect(response).toMatchObject({ ok: true, data: { session: "abcdef12" } });
@@ -2197,8 +2294,10 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.done",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
     });
+    // Anonymous: refused at the door rather than for missing context, because
+    // since VC-163 those are the same condition (see `session.link`).
     const missing = await service.execute({
       v: 1,
       cmd: "session.done",
@@ -2211,7 +2310,7 @@ describe("agent command service", () => {
       ok: true,
       data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
-    expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+    expect(missing).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
   });
 
   it("accepts a lifecycle signal from a structured session with no terminal attachment (VC-51)", async () => {
@@ -2244,7 +2343,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "session.done",
       args: { reason: "Implementation finished" },
-      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
     });
 
     expect(done).toMatchObject({
@@ -2285,13 +2384,13 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.comment",
       args: { id: "VC-1", message: "Findings recorded." },
-      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+      ctx: { cwd: "/repo/volli", env: asSession(created.session.id) },
     });
     const identified = await service.execute({
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/outside", env: { session: created.session.id } },
+      ctx: { cwd: "/outside", env: asSession(created.session.id) },
     });
 
     // Before VC-51 this failed SESSION_NOT_FOUND against the terminal-only
@@ -2326,7 +2425,7 @@ describe("agent command service", () => {
           v: 1,
           cmd: "session.link",
           args: { id },
-          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+          ctx: { cwd: "/repo/volli", env: session ? asSession(session) : {} },
         });
       return { link };
     }
@@ -2368,13 +2467,13 @@ describe("agent command service", () => {
           v: 1,
           cmd: "session.link",
           args: { id },
-          ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+          ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
         });
       const announce = service.execute({
         v: 1,
         cmd: "session.harness",
         args: { id: "claude-code" },
-        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
       });
 
       const [linked, announced] = await Promise.all([link("native-seed"), announce]);
@@ -2387,14 +2486,20 @@ describe("agent command service", () => {
       });
     });
 
-    it("requires VOLLI_SESSION context (same wording style as session.done)", async () => {
+    // Since VC-163 "no VOLLI_SESSION" and "not an authenticated Session" are
+    // the same condition — a token cannot be held by anything that is not a
+    // Session — so the admission gate answers first, and answers with more than
+    // the old CONTEXT_REQUIRED did: it names what the caller must BE, not just
+    // which variable is missing.
+    it("refuses a caller that is not an authenticated Session", async () => {
       const { link } = linkService();
       const noContext = await link("some-uuid", null);
       expect(noContext).toMatchObject({
         ok: false,
         error: {
-          code: "CONTEXT_REQUIRED",
-          message: "session link requires VOLLI_SESSION context.",
+          code: "FORBIDDEN_ACTOR",
+          reason: expect.stringContaining("not an authenticated Volli Session"),
+          next: expect.stringContaining("from inside a Volli Session"),
         },
       });
     });
@@ -2429,14 +2534,14 @@ describe("agent command service", () => {
           v: 1,
           cmd: "session.harness",
           args: { id },
-          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+          ctx: { cwd: "/repo/volli", env: session ? asSession(session) : {} },
         });
       const mint = (id: unknown, session: string | null = sessionId) =>
         service.execute({
           v: 1,
           cmd: "session.harness",
           args: { id, mint: true },
-          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+          ctx: { cwd: "/repo/volli", env: session ? asSession(session) : {} },
         });
       return { announce, mint, notices };
     }
@@ -2536,14 +2641,11 @@ describe("agent command service", () => {
       ]);
     });
 
-    it("requires VOLLI_SESSION context", async () => {
+    it("refuses a caller that is not an authenticated Session", async () => {
       const { announce } = announceService();
       expect(await announce("claude-code", null)).toMatchObject({
         ok: false,
-        error: {
-          code: "CONTEXT_REQUIRED",
-          message: "session harness requires VOLLI_SESSION context.",
-        },
+        error: { code: "FORBIDDEN_ACTOR" },
       });
     });
 
@@ -2638,7 +2740,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "session.harness",
         args: { id: "cursor", mint: true },
-        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
       });
 
       expect(response).toMatchObject({ ok: false, error: { code: "SESSION_ENDED" } });
@@ -2679,7 +2781,7 @@ describe("agent command service", () => {
           v: 1,
           cmd: "session.harness",
           args: { id: "claude-code" },
-          ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+          ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
         });
 
       await announce();
@@ -2742,7 +2844,7 @@ describe("agent command service", () => {
           v: 1,
           cmd: "hook",
           args,
-          ctx: { cwd: "/repo/volli", env: session ? { session } : {} },
+          ctx: { cwd: "/repo/volli", env: session ? asSession(session) : {} },
         });
       return { hook };
     }
@@ -2860,12 +2962,16 @@ describe("agent command service", () => {
       expect(notices).toEqual([]);
     });
 
-    it("needs VOLLI_SESSION, and refuses a session that is not ours", async () => {
+    // The hot path is admitted like every other coordination verb (VC-92 §3
+    // lists `hook` there, "session-actor by construction"). An anonymous
+    // caller is refused at the door; an authenticated one naming a Session
+    // Volli has no record of still gets the addressing refusal it always did.
+    it("needs an authenticated Session, and refuses a session that is not ours", async () => {
       const { hook } = hookService();
 
       await expect(
         hook({ harness: "claude-code", event: "turn.started" }, null),
-      ).resolves.toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
+      ).resolves.toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
       await expect(
         hook({ harness: "claude-code", event: "turn.started" }, "not-a-session"),
       ).resolves.toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
@@ -3225,7 +3331,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Ship" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     updateTicketFieldsCommand(
       ctx.db,
@@ -3276,7 +3382,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: {},
-      ctx: { cwd: "/wt/VC-1", env: {} },
+      ctx: { cwd: "/wt/VC-1", env: ACTING_ENV },
     });
     expect(res).toEqual({
       v: 1,
@@ -3299,7 +3405,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: {},
-      ctx: { cwd: "/wt/VC-1/packages/shared", env: {} },
+      ctx: { cwd: "/wt/VC-1/packages/shared", env: ACTING_ENV },
     });
     expect(nested).toMatchObject({ ok: true, data: { ticket: "VC-1" } });
   });
@@ -3340,7 +3446,7 @@ describe("agent command service", () => {
         v: 1,
         cmd: "worktree.status",
         args: {},
-        ctx: { cwd: physicalCwd, env: {} },
+        ctx: { cwd: physicalCwd, env: ACTING_ENV },
       });
       expect(res).toMatchObject({ ok: true, data: { ticket: "VC-1" } });
     } finally {
@@ -3374,6 +3480,8 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: { id: "VC-1" },
+      // No session env: the point is that `--project` alone resolves, so a
+      // session rung sitting underneath it would decide nothing here.
       ctx: { cwd: "/somewhere/else", env: {} },
     });
     expect(res).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
@@ -3403,14 +3511,14 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.create",
       args: { title: "Backlog item" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     const unknown = await service.execute({
       v: 1,
       cmd: "worktree.status",
       args: { id: "VC-99" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     expect(unknown).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
 
@@ -3418,7 +3526,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     expect(noWorktree).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     expect(noWorktree).toMatchObject({ ok: false });
@@ -3429,7 +3537,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: {},
-      ctx: { cwd: "/elsewhere", env: {} },
+      ctx: { cwd: "/elsewhere", env: ACTING_ENV },
     });
     expect(noContext).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
   });
@@ -3467,7 +3575,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.diff",
       args: {},
-      ctx: { cwd: "/wt/VC-1", env: {} },
+      ctx: { cwd: "/wt/VC-1", env: ACTING_ENV },
     });
     expect(pr).toEqual({
       v: 1,
@@ -3489,7 +3597,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.diff",
       args: { workingTree: true },
-      ctx: { cwd: "/wt/VC-1", env: {} },
+      ctx: { cwd: "/wt/VC-1", env: ACTING_ENV },
     });
     expect(wip).toMatchObject({
       ok: true,
@@ -3535,7 +3643,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.diff",
       args: {},
-      ctx: { cwd: "/wt/VC-1", env: {} },
+      ctx: { cwd: "/wt/VC-1", env: ACTING_ENV },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -3575,6 +3683,8 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: { id: "VC-1" },
+      // No session env: the point is that `--project` alone resolves, so a
+      // session rung sitting underneath it would decide nothing here.
       ctx: { cwd: "/somewhere/else", env: {} },
     });
     expect(status).toMatchObject({ ok: true, data: { ticket: "VC-1", worktreePath: "/wt/VC-1" } });
@@ -3584,7 +3694,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.show",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     expect(show).toMatchObject({ ok: false, error: { code: "ARCHIVED_TICKET" } });
   });
@@ -3619,6 +3729,8 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: { id: "VC-1" },
+      // No session env: the point is that `--project` alone resolves, so a
+      // session rung sitting underneath it would decide nothing here.
       ctx: { cwd: "/somewhere/else", env: {} },
     });
     expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
@@ -3665,7 +3777,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "worktree.status",
       args: {},
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     expect(bare).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
   });
@@ -3693,7 +3805,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.show",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     expect(show).toMatchObject({
       ok: true,
@@ -3706,7 +3818,7 @@ describe("agent command service", () => {
       v: 1,
       cmd: "ticket.brief",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
     expect(brief.ok).toBe(true);
     if (!brief.ok) return;
@@ -3787,7 +3899,7 @@ describe("identify env block (VC-94)", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(response).toMatchObject({ ok: true });
@@ -3824,7 +3936,7 @@ describe("doctor", () => {
       ...options,
     });
     return (args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd: "doctor", args, ctx: { cwd: "/repo", env: {} } });
+      service.execute({ v: 1, cmd: "doctor", args, ctx: { cwd: "/repo", env: ACTING_ENV } });
   }
 
   it("returns a check per finding, with a summary", async () => {
@@ -3966,7 +4078,7 @@ describe("doctor", () => {
       v: 1,
       cmd: "doctor",
       args: observation,
-      ctx: { cwd: "/repo", env: {} },
+      ctx: { cwd: "/repo", env: ACTING_ENV },
     });
     expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
   });
@@ -4054,7 +4166,7 @@ describe("prompt.baseline", () => {
         v: 1,
         cmd: "prompt.baseline",
         args,
-        ctx: { cwd: "/outside", env: {} },
+        ctx: { cwd: "/outside", env: ACTING_ENV },
       });
   }
 
@@ -4066,7 +4178,7 @@ describe("prompt.baseline", () => {
       v: 1,
       cmd: "prompt.baseline",
       args: { project: "/repo/volli" },
-      ctx: { cwd: "/outside", env: {} },
+      ctx: { cwd: "/outside", env: ACTING_ENV },
     });
     expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
   });
@@ -4317,7 +4429,7 @@ describe("model.list", () => {
       ...(overrides.timeoutMs !== undefined ? { modelAccessTimeoutMs: overrides.timeoutMs } : {}),
     });
     const execute = (args: Record<string, unknown> = {}) =>
-      service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: {} } });
+      service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: ACTING_ENV } });
     return { execute };
   }
 
@@ -4527,7 +4639,7 @@ describe("reads over a session the socket did not start", () => {
       v: 1,
       cmd: "ticket.events",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(events).toMatchObject({
@@ -4566,7 +4678,7 @@ describe("reads over a session the socket did not start", () => {
       v: 1,
       cmd: "session.list",
       args: { ticket: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     expect(listed).toMatchObject({
@@ -4613,7 +4725,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       v: 1,
       cmd: "worktree.status",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     // The old sentence ("Move it to Doing to create one") sent agents to do
@@ -4641,7 +4753,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       v: 1,
       cmd: "worktree.diff",
       args: { id: "VC-1" },
-      ctx: { cwd: "/repo/volli", env: {} },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
 
     if (res.ok) throw new Error("expected a refusal");
@@ -4678,7 +4790,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+      ctx: { cwd: "/repo/volli", env: asSession(created.session.id) },
     });
 
     expect(res).toMatchObject({
@@ -4720,7 +4832,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/wt/VC-1/packages/shared", env: { session: created.session.id } },
+      ctx: { cwd: "/wt/VC-1/packages/shared", env: asSession(created.session.id) },
     });
 
     if (!res.ok) throw new Error("expected identify to succeed");
@@ -4748,7 +4860,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { session: created.session.id } },
+      ctx: { cwd: "/repo/volli", env: asSession(created.session.id) },
     });
 
     if (!res.ok) throw new Error("expected identify to succeed");
@@ -4801,7 +4913,7 @@ describe("volli cost", () => {
       sessionEngine,
     });
     const execute = (args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd: "cost", args, ctx: { cwd: "/repo/volli", env: {} } });
+      service.execute({ v: 1, cmd: "cost", args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
     return { sessionEngine, execute };
   }
 

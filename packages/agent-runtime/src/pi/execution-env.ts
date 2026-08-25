@@ -9,7 +9,7 @@ import {
   type ExecutionEnv,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
-import { VOLLI_SESSION_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
+import { VOLLI_SESSION_ENV, VOLLI_SESSION_TOKEN_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
 
 /**
  * The Volli identity a Session's commands run under: the durable Session id,
@@ -23,6 +23,17 @@ export interface PiSessionEnvIdentity {
   sessionId: string;
   /** e.g. `VC-51`; `null` for a ticketless project Session. */
   ticketDisplayId: string | null;
+  /**
+   * This attachment's `VOLLI_SESSION_TOKEN` — what turns the id beside it from
+   * a claim into an authentication at the socket door (VC-163).
+   *
+   * Host-minted like the id, and absent when the host minted none: that
+   * Session's shell can then read the board and change nothing, which is the
+   * fail-closed direction. Never read off `process.env`, for the reason the two
+   * fields beside it are not: main's own environment holds no token, and one
+   * that somehow reached it would authenticate the wrong Session.
+   */
+  sessionToken?: string;
 }
 
 export interface PiExecutionEnvOptions {
@@ -37,7 +48,7 @@ export interface PiExecutionEnvOptions {
    * set in the environment a child is handed.
    *
    * A deliberate exception to this module's rule that the environment carries
-   * "nothing that says who is running it": these two names are exactly who is
+   * "nothing that says who is running it": these names are exactly who is
    * running it, minted by the host for this one Session rather than carried
    * over from the host's own environment. They are what the bundled `volli`
    * CLI resolves `session done` / `session blocked` against, and what makes a
@@ -151,6 +162,9 @@ function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<s
   if (identity === undefined) return {};
   return {
     [VOLLI_SESSION_ENV]: identity.sessionId,
+    ...(identity.sessionToken === undefined
+      ? {}
+      : { [VOLLI_SESSION_TOKEN_ENV]: identity.sessionToken }),
     ...(identity.ticketDisplayId === null ? {} : { [VOLLI_TICKET_ENV]: identity.ticketDisplayId }),
   };
 }

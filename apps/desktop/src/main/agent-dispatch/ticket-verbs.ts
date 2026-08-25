@@ -46,9 +46,9 @@ import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import {
   actorSessionTicketDisplay,
+  attributedActor,
   invalidPriorityResponse,
   projectForCreate,
-  requestActor,
   ticketForDisplayId,
 } from "./resolution";
 import { agentTicket } from "./wire";
@@ -130,7 +130,10 @@ export async function ticketCreateVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now, newId } = context;
+  const { options, projects, envSession, now, newId, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = projectForCreate(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   const createPriorityError = invalidPriorityResponse(request.args["priority"]);
@@ -153,8 +156,6 @@ export async function ticketCreateVerb(
   ) {
     return failure("INVALID_REQUEST", "Invalid ticket create arguments.");
   }
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const createPreview = dryRunResponse(request, {
     kind: "project",
     id: resolved.project.ticketPrefix,
@@ -182,7 +183,7 @@ export async function ticketCreateVerb(
         // automation at use time, NOT stamped here from a snapshot.
         baseBranch: typeof base === "string" ? base : null,
       },
-      { now: createdAt, actor: actor.actor },
+      { now: createdAt, actor },
     );
     options.onMutation?.({
       ticketId: ticket.id,
@@ -204,11 +205,12 @@ export async function ticketUpdateVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
+  const { options, projects, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const title = request.args["title"];
   const priority = request.args["priority"];
   const base = request.args["base"];
@@ -258,13 +260,13 @@ export async function ticketUpdateVerb(
             ? { preferredHarnessId: requestedHarness.harnessId }
             : {}),
         },
-        { now: updatedAt, actor: actor.actor },
+        { now: updatedAt, actor },
       );
       if (isTicketPriority(priority) && priority !== resolved.ticket.priority) {
         ticket = setTicketPriorityCommand(
           options.db,
           { ticketId: resolved.ticket.id, priority },
-          { now: updatedAt, actor: actor.actor },
+          { now: updatedAt, actor },
         );
       }
       const currentLabels = resolved.ticket.labels;
@@ -274,7 +276,7 @@ export async function ticketUpdateVerb(
       ticket = setTicketLabelsCommand(
         options.db,
         { ticketId: resolved.ticket.id, labels: requestedLabels },
-        { now: updatedAt, actor: actor.actor },
+        { now: updatedAt, actor },
       );
       return ticket;
     });
@@ -299,11 +301,12 @@ export async function ticketMoveVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
+  const { options, projects, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const to = request.args["to"];
   if (!isTicketStatus(to)) {
     return failure("INVALID_REQUEST", "ticket move requires a valid destination column.");
@@ -352,7 +355,7 @@ export async function ticketMoveVerb(
         toStatus: to,
         toIndex,
       },
-      { now: movedAt, actor: actor.actor },
+      { now: movedAt, actor },
     );
     const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
     // Backward-move interrupt (issue #78): the move committed above, so the
@@ -385,18 +388,18 @@ export async function ticketMoveVerb(
     // pushing work into the active column, is the told-to-work-on-changes
     // vector VC-92 §3 named. It notifies, and the body says what is unknown
     // about it rather than inventing a party.
-    if (to === "doing" && actor.actor.kind !== "user") {
+    if (to === "doing" && actor.kind !== "user") {
       const movedDisplay = displayTicketId(
         resolved.project.ticketPrefix,
         resolved.ticket.ticketNumber,
       );
       let body: string;
-      if (actor.actor.kind === "automation") {
+      if (actor.kind === "automation") {
         body = "Moved by automation";
-      } else if (actor.actor.kind === "unauthenticated") {
+      } else if (actor.kind === "unauthenticated") {
         body = "Moved by an unauthenticated caller";
       } else {
-        const via = actorSessionTicketDisplay(options.db, projects, actor.actor.ticketId);
+        const via = actorSessionTicketDisplay(options.db, projects, actor.ticketId);
         body = via ? `Moved via ${via}'s session` : "Moved via a session";
       }
       options.notify?.(`${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`, body);
@@ -421,11 +424,12 @@ export async function ticketCommentVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, now } = context;
+  const { options, projects, now, actor: attribution } = context;
+  const resolvedActor = attributedActor(attribution);
+  if (!resolvedActor.ok) return resolvedActor.response;
+  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
-  const actor = requestActor(request, envSession);
-  if (!actor.ok) return actor.response;
   const message = request.args["message"];
   if (typeof message !== "string" || message.trim().length === 0) {
     return failure("INVALID_REQUEST", "ticket comment requires a message.");
@@ -442,10 +446,16 @@ export async function ticketCommentVerb(
       {
         ticketId: resolved.ticket.id,
         body: message,
-        commentActor: request.ctx.env.session ? "session" : "user",
-        sessionId: request.ctx.env.session ?? null,
+        // From the RESOLVED actor, never from `request.ctx.env.session` (VC-163).
+        // Reading the raw claim here was a second, independent derivation of
+        // the same fact, and the two could disagree in exactly the case that
+        // matters: a forged `VOLLI_SESSION` with no token attributes the EVENT
+        // as unauthenticated while stamping the COMMENT with the Session it
+        // named — a row citing a Session that did not write it.
+        commentActor: actor.kind === "session" ? "session" : actor.kind,
+        sessionId: actor.kind === "session" ? actor.sessionId : null,
       },
-      { now: now(), actor: actor.actor },
+      { now: now(), actor },
     );
     options.onMutation?.({
       ticketId: resolved.ticket.id,

@@ -170,9 +170,12 @@ _Avoid_: web search setting, browsing, internet permission
 The bash-composable `volli` verb surface a Session's shell (or a person's
 terminal) reaches through the local agent socket. It is the discovery surface
 and the low-risk coordination surface: reads, plus writes that are visible,
-attributable, and reversible. It attributes its caller and cannot authenticate
-one — any process running as the user can reach it — so a verb whose misuse
-cannot be tolerated from an arbitrary such process does not belong here.
+attributable, and reversible. Any process running as the user can reach it, so
+a Session proves itself with a per-attachment token rather than by naming
+itself; a caller without one is the unauthenticated Actor and reads only. The
+token defeats an injected string and cross-session confusion, not a hostile
+same-uid process — so a verb whose misuse cannot be tolerated from an arbitrary
+such process still does not belong here.
 _Avoid_: agent surface (alone), planning CLI
 
 **Agent Tool Surface**:
@@ -208,8 +211,9 @@ surface's projection)
 The governance class a verb's access modes imply, never a stored field. Read
 tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
 session actor, judged by per-actor policy. Control tier: named tool only,
-Role-bundled, absent from the agent socket. No verb needs a higher tier than
-the ambient authority its effect already lies within.
+Role-bundled, absent from the agent socket. A verb on no agent surface at all
+holds no tier. No verb needs a higher tier than the ambient authority its
+effect already lies within.
 _Avoid_: dangerous tier, middle tier
 
 **Cache Prefix**:
@@ -447,7 +451,7 @@ _Avoid_: artifact, diff (when referring to the whole body of work)
 The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
-Who a ticket event is attributed to: `user`, `session`, or `automation`. The app derives this from how the mutation arrived; callers never self-declare it.
+Who a ticket event is attributed to: `user`, `session`, `automation`, or `unauthenticated`. The app derives this from how the mutation arrived; callers never self-declare it. `unauthenticated` is the honest name for a socket caller Volli could not identify — it is neither the person nor the Session it may have named, and by default it writes nothing at all.
 _Avoid_: agent (as an actor value — the app cannot know an agent typed it, only which session it came from)
 
 **Deliberate move**:

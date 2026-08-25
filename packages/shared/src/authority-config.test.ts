@@ -4,6 +4,7 @@ import {
   AUTHORITY_ACTOR_KINDS,
   AUTHORITY_DEFAULTS_TOKEN,
   AUTHORITY_ENFORCEMENTS,
+  coordinationVerbAllowed,
   DEFAULT_AUTHORITY_POLICY,
   JUDGMENT_MODES,
   PEEK_DISCLOSURES,
@@ -12,6 +13,7 @@ import {
   resolveAuthorityPolicy,
   validateAuthorityPolicyOverride,
 } from "./authority-config";
+import { VERB_REGISTRY, verbTier } from "./verb-registry";
 
 describe("DEFAULT_AUTHORITY_POLICY", () => {
   it("observes rather than enforces, which is VC-44's recorded day-one posture", () => {
@@ -468,6 +470,87 @@ describe("validateAuthorityPolicyOverride", () => {
     }
     for (const judgmentMode of JUDGMENT_MODES) {
       expect(validateAuthorityPolicyOverride({ judgmentMode }).ok).toBe(true);
+    }
+  });
+});
+
+/**
+ * The policy read VC-44 wrote this store for, and VC-163 wired to the door.
+ *
+ * VC-44's own comment named the split: "Read by VC-163 at the socket door …
+ * nothing in this ticket enforces any of it." These are the enforcement tests.
+ */
+describe("coordinationVerbAllowed", () => {
+  const policy = DEFAULT_AUTHORITY_POLICY;
+
+  it("lets an authenticated Session run the verbs it works with", () => {
+    for (const verb of ["ticket.comment", "ticket.move", "session.done", "notify"]) {
+      expect(coordinationVerbAllowed(policy, "session", verb)).toBe(true);
+    }
+  });
+
+  // The ticket's default posture, as one assertion: reads only. Every
+  // coordination verb in the product is refused for a caller Volli could not
+  // authenticate, without a project having to say anything.
+  it("refuses every coordination verb to an unauthenticated caller by default", () => {
+    for (const verb of [
+      "ticket.create",
+      "ticket.update",
+      "ticket.move",
+      "ticket.comment",
+      "notify",
+      "session.done",
+      "session.blocked",
+      "session.link",
+      "session.harness",
+      "hook",
+    ]) {
+      expect(coordinationVerbAllowed(policy, "unauthenticated", verb)).toBe(false);
+    }
+  });
+
+  it("honours a project that granted one verb to unauthenticated callers", () => {
+    const granted = resolveAuthorityPolicy({
+      actors: { unauthenticated: { coordinationVerbs: ["ticket.comment"] } },
+    });
+
+    expect(coordinationVerbAllowed(granted, "unauthenticated", "ticket.comment")).toBe(true);
+    // Granting one grants exactly one: the list replaces, and nothing about
+    // commenting implies moving a Ticket.
+    expect(coordinationVerbAllowed(granted, "unauthenticated", "ticket.move")).toBe(false);
+  });
+
+  it("lets a project withdraw a verb from its own Sessions", () => {
+    const narrowed = resolveAuthorityPolicy({
+      actors: { session: { coordinationVerbs: ["ticket.comment"] } },
+    });
+
+    expect(coordinationVerbAllowed(narrowed, "session", "ticket.comment")).toBe(true);
+    expect(coordinationVerbAllowed(narrowed, "session", "ticket.move")).toBe(false);
+  });
+
+  // The invariant that would have caught VC-163's own bug. The default session
+  // list was hand-written by VC-44 while nothing read it, and it had drifted
+  // from VC-92 §3: `session.harness` and `hook` were missing, so wiring the
+  // policy to the door would have silently refused every Session the two
+  // involuntary channels its harness reports through.
+  //
+  // Derived from the registry rather than restated, so a coordination verb
+  // added later fails here until someone decides whether a Session holds it.
+  it("grants a Session every coordination-tier verb the registry declares", () => {
+    const coordination = VERB_REGISTRY.filter((entry) => verbTier(entry) === "coordination").map(
+      (entry) => entry.key,
+    );
+
+    expect(coordination.length).toBeGreaterThan(0);
+    for (const verb of coordination) {
+      expect(coordinationVerbAllowed(policy, "session", verb), verb).toBe(true);
+    }
+  });
+
+  it("refuses a verb no policy lists, whoever asks", () => {
+    for (const kind of AUTHORITY_ACTOR_KINDS) {
+      expect(coordinationVerbAllowed(policy, kind, "verb.that.does.not.exist")).toBe(false);
     }
   });
 });
