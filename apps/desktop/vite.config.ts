@@ -66,7 +66,9 @@ const packedElectronDeps = {
   // It must stay a runtime require() of the real package — the same treatment
   // electron gets — which is why apps/desktop declares it directly and
   // electron-builder.yml whitelists its tree.
-  neverBundle: ["electron", "jsdom"],
+  // sharp loads its platform binary and libvips files relative to its package;
+  // keep it external just like jsdom, then ship/unpack that tree explicitly.
+  neverBundle: ["electron", "jsdom", "sharp"],
 };
 
 export default defineConfig(({ mode }) => ({

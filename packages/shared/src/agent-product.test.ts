@@ -13,14 +13,41 @@ import {
 describe("agent product guidance", () => {
   it("starts the capability record at the ratified implementation baseline", () => {
     expect(AGENT_CAPABILITY_BASELINE).toBe("8e8a17c0");
-    expect(AGENT_CAPABILITY_CHANGES).toHaveLength(1);
-    expect(AGENT_CAPABILITY_CHANGES[0]).toMatchObject({
+    // The OLDEST entry is the one pinned to the baseline. The record is
+    // newest-first, so this reads from the end rather than from index 0 — an
+    // entry added later must not be able to move what the baseline claims.
+    expect(AGENT_CAPABILITY_CHANGES.at(-1)).toMatchObject({
       baseline: "8e8a17c0",
+      build: "VC-91",
       added: expect.arrayContaining([
         expect.stringContaining("help concepts"),
         expect.stringContaining("dry-run"),
       ]),
     });
+  });
+
+  it("is newest-first, and each entry follows the one below it", () => {
+    // The heading `volli help changes` renders is `<build> (after <baseline>)`,
+    // so a record whose chain is broken prints a lineage that never happened.
+    const builds = AGENT_CAPABILITY_CHANGES.map((change) => change.build);
+    expect(new Set(builds).size).toBe(builds.length);
+    for (const [index, change] of AGENT_CAPABILITY_CHANGES.entries()) {
+      const older = AGENT_CAPABILITY_CHANGES[index + 1];
+      if (older !== undefined) expect(change.baseline).toBe(older.build);
+    }
+  });
+
+  it("records the Role-scoped tool surface as an agent-facing capability (VC-162)", () => {
+    // VC-91's own entry promised this one by name ("ready for session.start
+    // when VC-162 supplies its tool seam"), so the record owes a reader the
+    // moment that promise was kept.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-162");
+    expect(entry).toBeDefined();
+    const stated = [...entry!.added, ...entry!.changed].join("\n");
+    // The wire name is what an agent will actually be offered, and the tier is
+    // the thing most likely to be misread while both doors are open.
+    expect(stated).toContain("session_start");
+    expect(stated).toContain("coordination");
   });
 
   it("ships concepts and changes as canonical local help topics", () => {

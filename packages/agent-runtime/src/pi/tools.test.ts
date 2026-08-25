@@ -1,4 +1,9 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import sharp from "sharp";
 import {
   NON_CODING_TOOL_IDS,
   type RuntimeAskUserRequest,
@@ -12,6 +17,7 @@ import { WebSearchRefusal } from "../web/search";
 import {
   ASK_USER_TOOL_NAME,
   createAskUserTool,
+  createSessionTools,
   createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
@@ -21,6 +27,7 @@ import {
   type WebFetchPort,
   type WebSearchPort,
 } from "./tools";
+import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
 
 /** What the host was asked, and with which signal, so both can be read back. */
 interface RecordedAsk {
@@ -69,6 +76,41 @@ function resultText(result: AgentToolResult<undefined>): string {
   if (first?.type !== "text") throw new Error("The tool answered with something other than text");
   return first.text;
 }
+
+describe("read tool", () => {
+  it("compresses a byte-heavy PNG before returning it to the model", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-read-image-"));
+    const env = new NodeExecutionEnv({ cwd: root });
+    try {
+      // Deliberately uncompressed pixels: an ordinary-size screenshot that the
+      // generic Pi read tool would otherwise inline as a request-breaking PNG.
+      const source = await sharp({
+        create: { width: 1_200, height: 1_200, channels: 3, background: "#e96942" },
+      })
+        .png({ compressionLevel: 0 })
+        .toBuffer();
+      await writeFile(join(root, "shot.png"), source);
+
+      const [read] = createSessionTools({ tools: { tools: ["read"] } }, env);
+      const result = await read!.execute(
+        "call-1",
+        { path: "shot.png" },
+        new AbortController().signal,
+      );
+      const image = result.content.find((part) => part.type === "image");
+      const text = resultText(result as AgentToolResult<undefined>);
+
+      expect(image).toMatchObject({ type: "image", mimeType: "image/jpeg" });
+      expect(image?.type === "image" && Buffer.byteLength(image.data, "utf8")).toBeLessThanOrEqual(
+        MAX_READ_IMAGE_BASE64_BYTES,
+      );
+      expect(text).toContain("recompressed as JPEG");
+    } finally {
+      await env.cleanup();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("ask_user tool", () => {
   it("offers the model one question and tells it when asking is warranted", () => {

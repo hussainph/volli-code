@@ -189,6 +189,9 @@ importers:
       restty:
         specifier: ^0.2.0
         version: 0.2.0(patch_hash=a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af)(typescript@7.0.2)
+      sharp:
+        specifier: 0.35.3
+        version: 0.35.3(@types/node@26.2.0)
       shiki:
         specifier: 4.3.1
         version: 4.3.1
@@ -259,6 +262,13 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 0.2.5(@opentelemetry/api@1.9.0)(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(typescript@7.0.2)(yaml@2.9.0)
+    optionalDependencies:
+      '@img/sharp-darwin-arm64':
+        specifier: 0.35.3
+        version: 0.35.3
+      '@img/sharp-libvips-darwin-arm64':
+        specifier: 1.3.2
+        version: 1.3.2
 
   apps/docs:
     dependencies:
@@ -363,6 +373,9 @@ importers:
       proper-lockfile:
         specifier: 4.1.2
         version: 4.1.2
+      sharp:
+        specifier: 0.35.3
+        version: 0.35.3(@types/node@26.2.0)
       turndown:
         specifier: ^7.2.4
         version: 7.2.4

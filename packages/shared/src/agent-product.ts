@@ -121,6 +121,22 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-91",
+    build: "VC-162",
+    added: [
+      "A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.",
+      "session_start as a named tool in the project Role's bundle. A Project Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.",
+      "A SESSION TOOLS block in every Session's first message, naming the Volli verbs that Session holds under their callable names, and stating that what is absent will not become available mid-Session.",
+    ],
+    changed: [
+      "session.start is reachable through two doors: volli session start on the Agent CLI, and the named session_start tool on the Agent Tool Surface. One registry key, one handler, two doors — its verb tier stays coordination while the CLI door remains open.",
+      "A Session's frozen tool surface can now name Verb Registry keys alongside coding and interaction tools. The durable record spells the dot-key; only the provider wire uses the underscored form.",
+      "A Ticket Session's tool array contains no agent-control tool, and cannot acquire one while it runs. Availability is decided once, when the Session is created.",
+    ],
+    fixed: [],
+    removed: [],
+  },
+  {
     baseline: AGENT_CAPABILITY_BASELINE,
     build: "VC-91",
     added: [
