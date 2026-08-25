@@ -263,6 +263,27 @@ describe("Verb Tier once the socket door is shut (VC-162 → VC-163)", () => {
     expect(verbTier(entry!)).toBe("control");
   });
 
+  // The ticket names this one in as many words: "`ticket.archive` is absent
+  // from the CLI projection and from every bundle". The type system already
+  // makes it unsayable — `VerbToolKey` is derived from the `tool` access mode,
+  // so no bundle CAN name a verb that has none — but the acceptance is worth an
+  // assertion that does not depend on reading the type to see it.
+  it("puts ticket.archive in no Role's bundle at all", () => {
+    for (const role of ["project", "ticket", "subagent"] as const) {
+      expect(roleVerbBundle(role) as readonly string[], role).not.toContain("ticket.archive");
+    }
+    expect(VERB_TOOL_KEYS as readonly string[]).not.toContain("ticket.archive");
+    // And a grant cannot smuggle it in either: the resolver fails closed on a
+    // key this build cannot project as a tool.
+    expect(() =>
+      resolveAgentToolSurface({
+        role: "project",
+        capabilities: { coding: [], interaction: [] },
+        grants: ["ticket.archive"],
+      }),
+    ).toThrow("is not a verb this build can offer as a tool");
+  });
+
   it("keeps the verb in the `project` bundle it was put in", () => {
     // Closing the socket door did not move the tool. The Role that could start
     // Sessions before this ticket is the Role that can start them after it;
