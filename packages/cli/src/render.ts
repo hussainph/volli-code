@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
+
 import {
   ERROR_RECOVERY,
   isAgentMutationPlan,
   SESSION_ENV_TOOLS,
   TICKET_STATUS_LABELS,
+  untrustedProseLines,
 } from "@volli/shared";
 import type {
   AgentError,
@@ -149,6 +152,105 @@ function renderTicketResult(data: unknown): string | null {
   return ticketLine(data["ticket"]);
 }
 
+/** The most prose one ticket-show row may hand an agent in text mode. */
+export const TICKET_SHOW_PROSE_MAX_CHARS = 1_000;
+
+/** The verdict columns shared by ticket.signal's receipt and ticket show's latest-signal rows. */
+function ticketSignalLine(signal: Record<string, unknown>): string {
+  return ["ticket", "kind", "verdict"]
+    .map((field) => (typeof signal[field] === "string" ? terminalSafeInline(signal[field]) : "-"))
+    .join("  ");
+}
+
+/** A text-mode ticket show must not let one prose row consume the caller's context. */
+function boundedUntrustedProse(kind: string, prose: string): string[] {
+  const truncated = prose.length > TICKET_SHOW_PROSE_MAX_CHARS;
+  const shown = truncated ? prose.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) : prose;
+  return [
+    ...(truncated
+      ? [`The ${kind} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`]
+      : []),
+    ...untrustedProseLines(kind, shown, randomUUID(), "ticket show response"),
+  ];
+}
+
+/** The event payload crosses the socket under `payload`; tolerate old test fixtures that put it at top level. */
+function ticketEventPayload(event: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(event["payload"]) ? event["payload"] : event;
+}
+
+/** One scalar or scalar list as a scan-friendly event field; nested records stay out of a text row. */
+function ticketEventValue(value: unknown): string | null {
+  if (value === null) return "-";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return terminalSafeInline(value);
+  }
+  if (Array.isArray(value)) {
+    const values = value.map(ticketEventValue);
+    return values.every((entry) => entry !== null) ? values.join(",") : null;
+  }
+  return null;
+}
+
+/** One durable event as columns rather than an opaque JSON object. */
+function ticketEventLine(event: Record<string, unknown>): string {
+  const payload = ticketEventPayload(event);
+  const kind = typeof payload["kind"] === "string" ? terminalSafeInline(payload["kind"]) : "-";
+  const facts = Object.entries(payload).flatMap(([field, value]) => {
+    // Signal detail is prose. It travels below in its own nonce-delimited
+    // envelope rather than escaping this formatted event line.
+    if (field === "kind" || field === "detail") return [];
+    const rendered = ticketEventValue(value);
+    return rendered === null ? [] : [`${field}=${rendered}`];
+  });
+  const metadata: string[] = [];
+  if (typeof event["actor"] === "string") {
+    metadata.push(`actor=${terminalSafeInline(event["actor"])}`);
+  }
+  if (isRecord(event["actorContext"]) && typeof event["actorContext"]["session"] === "string") {
+    metadata.push(`session=${terminalSafeInline(event["actorContext"]["session"])}`);
+  }
+  if (typeof event["createdAt"] === "number") metadata.push(`at=${event["createdAt"]}`);
+  return ["event", kind, ...facts, ...metadata].join("  ");
+}
+
+function renderTicketEvent(event: Record<string, unknown>): string[] {
+  const payload = ticketEventPayload(event);
+  const lines = [ticketEventLine(event)];
+  if (
+    payload["kind"] === "signaled" &&
+    typeof payload["detail"] === "string" &&
+    payload["detail"].trim().length > 0
+  ) {
+    lines.push(...boundedUntrustedProse("signal detail", payload["detail"]));
+  }
+  return lines;
+}
+
+function renderTicketSignal(signal: Record<string, unknown>): string[] {
+  const lines = [`signal  ${ticketSignalLine(signal)}`];
+  if (typeof signal["detail"] === "string" && signal["detail"].trim().length > 0) {
+    lines.push(...boundedUntrustedProse("signal detail", signal["detail"]));
+  }
+  return lines;
+}
+
+function renderTicketComment(comment: Record<string, unknown>): string[] {
+  const metadata = [
+    typeof comment["ticket"] === "string" ? terminalSafeInline(comment["ticket"]) : "-",
+    typeof comment["actor"] === "string" ? terminalSafeInline(comment["actor"]) : "-",
+    typeof comment["session"] === "string"
+      ? `session=${terminalSafeInline(comment["session"])}`
+      : null,
+    typeof comment["createdAt"] === "number" ? `at=${comment["createdAt"]}` : null,
+  ].filter((value): value is string => value !== null);
+  const lines = [`comment  ${metadata.join("  ")}`];
+  if (typeof comment["body"] === "string") {
+    lines.push(...boundedUntrustedProse("ticket comment", comment["body"]));
+  }
+  return lines;
+}
+
 function renderDetail(data: unknown): string | null {
   if (!isRecord(data) || !isRecord(data["ticket"])) return null;
   const ticket = data["ticket"];
@@ -166,12 +268,13 @@ function renderDetail(data: unknown): string | null {
   // the ticket STANDS (VC-85): at most one line per kind, and the line an
   // orchestrator polling this ticket came to read.
   for (const signal of recordsAt(data, "signals") ?? []) {
-    lines.push(`signal  ${JSON.stringify(signal)}`);
+    lines.push(...renderTicketSignal(signal));
   }
-  for (const event of recordsAt(data, "events") ?? [])
-    lines.push(`event  ${JSON.stringify(event)}`);
+  for (const event of recordsAt(data, "events") ?? []) {
+    lines.push(...renderTicketEvent(event));
+  }
   for (const comment of recordsAt(data, "comments") ?? []) {
-    lines.push(`comment  ${JSON.stringify(comment)}`);
+    lines.push(...renderTicketComment(comment));
   }
   return lines.join("\n");
 }
@@ -511,9 +614,7 @@ function renderStableLines(command: string, data: unknown): string | null {
   // reading it back is how a wrong `--kind` gets caught one line later.
   if (command === "ticket.signal" && isRecord(data["signal"])) {
     const signal = data["signal"];
-    return typeof signal["ticket"] === "string"
-      ? `${terminalSafeInline(signal["ticket"])}  ${terminalSafeInline(signal["kind"])}  ${terminalSafeInline(signal["verdict"])}`
-      : null;
+    return typeof signal["ticket"] === "string" ? ticketSignalLine(signal) : null;
   }
   if (command === "project.list") {
     const projects = recordsAt(data, "projects");
