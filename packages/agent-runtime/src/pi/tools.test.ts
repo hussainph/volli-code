@@ -530,6 +530,22 @@ describe("web_fetch tool", () => {
     expect(text).toContain("https://example.com/private");
   });
 
+  it("says so plainly when what it was asked to read was never a URL", async () => {
+    // The model can call this with anything, and admission refuses a string it
+    // cannot parse. The refusal still has to name what was refused, and there
+    // is no origin or path to name it by — so it says that, rather than
+    // quoting a string of the model's own devising back into the transcript.
+    const tool = createWebFetchTool(async () => {
+      throw new WebFetchRefusal("target.unparsable", "That is not a URL Volli can read.");
+    });
+
+    const text = resultText(await tool.execute("call-33", { url: "the docs for turndown" }));
+
+    expect(text).toContain("a URL Volli could not read");
+    expect(text).not.toContain("the docs for turndown");
+    expect(text).toContain("target.unparsable");
+  });
+
   it("names a URL Volli would never open without reading as one", async () => {
     const tool = createWebFetchTool(async () => {
       throw new WebFetchRefusal(
