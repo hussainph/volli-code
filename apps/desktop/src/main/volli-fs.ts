@@ -1457,6 +1457,11 @@ export function registerFileIpcHandlers(
       ]);
       if (!loaded.ok) return loaded;
       if (!skills.ok) return skills;
+      // A Settings write may land while the two directories are being read.
+      // Resolve only against the row current after that wait, so no response
+      // can expose the policy snapshot that merely supplied the stable path.
+      const currentProject = getProjectById(db, input.projectId);
+      if (!currentProject) return { ok: false, error: "Unknown project" };
       // The picker offers what this project actually has. A `manual` skill IS
       // still offered here — withholding it from the model's index is the
       // whole point of that mode, and it stays typable by name; only `off`
@@ -1469,7 +1474,7 @@ export function registerFileIpcHandlers(
         skills:
           input.ruled === false
             ? [...skills.skills]
-            : [...applySkillModes(skills.skills, project.skillModes ?? {})],
+            : [...applySkillModes(skills.skills, currentProject.skillModes ?? {})],
       };
     },
   };

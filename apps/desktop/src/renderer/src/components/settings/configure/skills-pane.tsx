@@ -14,14 +14,12 @@
  *   Manual   out of the index, still `/slug`-invokable. Costs nothing idle.
  *   Off      gone.
  *
- * THE COLUMN GOVERNS THE MODEL AXIS (VC-181). Auto and Manual move a skill in
- * and out of the index and leave the `/` menu to the skill's author, who is
- * the only party with an opinion about whether their skill is something a
- * person names or background knowledge a model reaches for
- * (`user-invocable: false`). Off is the exception and closes both, because it
- * is a removal rather than a budget answer. All three are offered on every
- * row: an author default is a default, not a ceiling, and a Project that wants
- * an author-manual skill in its index can say so and have it stick.
+ * EACH PROJECT MODE IS THE COMPLETE MATRIX (VC-181): Auto opens model and user
+ * routes, Manual keeps only the user routes, and Off closes both. An author's
+ * `user-invocable: false` is the fourth, model-only combination only while the
+ * Project has no rule. Settings displays that state as “Model only (author)”;
+ * choosing any real mode then overrides both axes rather than preserving a
+ * hidden author veto.
  *
  * A `Select` rather than three pills: `docs/DESIGN.md` reserves the pill for a
  * control that acts, and this is one-of-N repeated down a column, where a
@@ -43,11 +41,14 @@ import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
+  AUTHOR_MODEL_ONLY_MODE,
   authorSkillMode,
   resolveSkillMode,
+  skillModeMatchesAuthor,
   SKILL_MODES,
   type Project,
   type SkillMode,
+  type SkillModeReadout,
   type SkillModes,
   type SkillReference,
 } from "@volli/shared";
@@ -164,12 +165,13 @@ export function SkillsPane({ project }: { project: Project }) {
 export function ruled(
   current: SkillModes,
   targets: readonly SkillReference[],
-  mode: SkillMode,
+  mode: SkillModeReadout,
 ): SkillModes {
   const targeted = new Set(targets.map((skill) => skill.name));
   const kept = Object.entries(current).filter(([key]) => !targeted.has(key));
+  if (mode === AUTHOR_MODEL_ONLY_MODE) return Object.fromEntries(kept);
   const departures = targets
-    .filter((skill) => authorSkillMode(skill.invocation) !== mode)
+    .filter((skill) => !skillModeMatchesAuthor(mode, skill))
     .map((skill) => [skill.name, mode] as const);
   return { ...Object.fromEntries(kept), ...Object.fromEntries(departures) };
 }
@@ -205,7 +207,7 @@ function SkillsTable({
     if (saved !== null) adoptProject(saved.project);
   }
 
-  const setMode = (skill: SkillReference, mode: SkillMode): Promise<void> =>
+  const setMode = (skill: SkillReference, mode: SkillModeReadout): Promise<void> =>
     write(ruled(modes, [skill], mode));
 
   /**
@@ -309,31 +311,39 @@ function SkillsTable({
           key: "mode",
           header: "Mode",
           width: "8.5rem",
-          cell: (skill) => (
-            <Select
-              value={resolveSkillMode(modes, skill)}
-              onValueChange={(next) => void setMode(skill, next as SkillMode)}
-            >
-              <SelectTrigger
-                size="sm"
-                className={CONTROL_W.sm}
-                // The scope is named, because a PERSONAL skill ruled from a
-                // project page is otherwise ambiguous: off here, or off
-                // everywhere? This one writes to the project.
-                aria-label={`${skill.name} in this project`}
-                data-testid={`skill-mode-${skill.name}`}
+          cell: (skill) => {
+            const readout = resolveSkillMode(modes, skill);
+            const hasAuthorModelOnly =
+              authorSkillMode(skill.authorPolicy) === AUTHOR_MODEL_ONLY_MODE;
+            return (
+              <Select
+                value={readout}
+                onValueChange={(next) => void setMode(skill, next as SkillModeReadout)}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {offerableModes(skill).map((mode) => (
-                  <SelectItem key={mode} value={mode}>
-                    {MODE_LABEL[mode]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ),
+                <SelectTrigger
+                  size="sm"
+                  className={CONTROL_W.sm}
+                  // The scope is named, because a PERSONAL skill ruled from a
+                  // project page is otherwise ambiguous: off here, or off
+                  // everywhere? This one writes to the project.
+                  aria-label={`${skill.name} in this project`}
+                  data-testid={`skill-mode-${skill.name}`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {hasAuthorModelOnly ? (
+                    <SelectItem value={AUTHOR_MODEL_ONLY_MODE}>Model only (author)</SelectItem>
+                  ) : null}
+                  {offerableModes(skill).map((mode) => (
+                    <SelectItem key={mode} value={mode}>
+                      {MODE_LABEL[mode]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+          },
         },
       ]}
     />

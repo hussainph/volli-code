@@ -38,7 +38,8 @@ const SKILL: SkillReference = {
   name: "tdd",
   description: "Red, green, refactor",
   body: "Write the failing test first.",
-  invocation: SKILL_POLICY_DEFAULT,
+  authorPolicy: SKILL_POLICY_DEFAULT,
+  effectivePolicy: SKILL_POLICY_DEFAULT,
   policyDiagnostic: null,
   root: ".agents/skills/tdd",
 };

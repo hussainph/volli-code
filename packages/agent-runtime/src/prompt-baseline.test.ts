@@ -33,7 +33,8 @@ function skill(name: string): SkillReference {
     name,
     description: `${name} description`,
     body: `# ${name}\n\nDo ${name}.`,
-    invocation: SKILL_POLICY_DEFAULT,
+    authorPolicy: SKILL_POLICY_DEFAULT,
+    effectivePolicy: SKILL_POLICY_DEFAULT,
     policyDiagnostic: null,
     root: `.agents/skills/${name}`,
   };

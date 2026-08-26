@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applySkillModes,
+  AUTHOR_MODEL_ONLY_MODE,
   authorSkillMode,
   globalSkillsDir,
   isSkillName,
@@ -9,6 +10,7 @@ import {
   readAuthorInvocationPolicy,
   resolveSkillPolicy,
   sameSkillPolicy,
+  skillModeMatchesAuthor,
   skillModePolicy,
   SKILL_DISABLE_MODEL_INVOCATION_KEY,
   SKILL_POLICY_DEFAULT,
@@ -41,15 +43,19 @@ function rootHeader(name: string): string {
   return `Skill directory: .agents/skills/${name}/ — file references in this skill resolve relative to it.`;
 }
 
-function skill(overrides: Partial<SkillReference> = {}): SkillReference {
+function skill(
+  input: Partial<SkillReference> & { policy?: SkillInvocationPolicy } = {},
+): SkillReference {
   // Root follows the name by default, the way the project-tier reader spells
   // it, so a test that renames a skill does not have to restate its directory.
+  const { policy = SKILL_POLICY_DEFAULT, ...overrides } = input;
   const name = overrides.name ?? "svg-logo-designer";
   return {
     name,
     description: "Create professional SVG logos",
     body: "# SVG Logo Designer\n\nUse `awk '{print $1}'` when needed.",
-    invocation: SKILL_POLICY_DEFAULT,
+    authorPolicy: policy,
+    effectivePolicy: policy,
     policyDiagnostic: null,
     root: `.agents/skills/${name}`,
     ...overrides,
@@ -203,7 +209,7 @@ describe("skillsIndexResource", () => {
   });
 
   it("leaves out a skill that is not model-discoverable, and nothing else", () => {
-    const quiet = skill({ name: "quiet", invocation: MANUAL });
+    const quiet = skill({ name: "quiet", policy: MANUAL });
     const loud = skill({ name: "loud", description: "Advertised" });
 
     const resource = skillsIndexResource([quiet, loud]);
@@ -213,14 +219,14 @@ describe("skillsIndexResource", () => {
   });
 
   it("is null when every skill opted out, so the prompt composes as if none existed", () => {
-    expect(skillsIndexResource([skill({ invocation: MANUAL })])).toBeNull();
+    expect(skillsIndexResource([skill({ policy: MANUAL })])).toBeNull();
   });
 
   it("still advertises a skill that is only withheld from the PICKER", () => {
     // The fourth combination. `user-invocable: false` is background knowledge:
     // the model must still be able to find it, which is the whole difference
     // between the two axes.
-    const background = skill({ name: "house-style", invocation: BACKGROUND });
+    const background = skill({ name: "house-style", policy: BACKGROUND });
     expect(skillsIndexResource([background])?.text).toContain("- house-style (");
   });
 
@@ -384,46 +390,36 @@ describe("readAuthorInvocationPolicy", () => {
 });
 
 describe("skillModePolicy", () => {
-  it("is the ticket's matrix for a skill whose author declared nothing", () => {
-    expect(skillModePolicy("auto", SKILL_POLICY_DEFAULT)).toEqual({
-      modelDiscoverable: true,
-      userInvokable: true,
-    });
-    expect(skillModePolicy("manual", SKILL_POLICY_DEFAULT)).toEqual(MANUAL);
-    expect(skillModePolicy("off", SKILL_POLICY_DEFAULT)).toEqual(CLOSED);
+  it("implements the Project mode matrix outright", () => {
+    expect(skillModePolicy("auto")).toEqual(SKILL_POLICY_DEFAULT);
+    expect(skillModePolicy("manual")).toEqual(MANUAL);
+    expect(skillModePolicy("off")).toEqual(CLOSED);
   });
 
-  it("governs the model axis outright, in both directions", () => {
-    expect(skillModePolicy("auto", MANUAL).modelDiscoverable).toBe(true);
-    expect(skillModePolicy("manual", SKILL_POLICY_DEFAULT).modelDiscoverable).toBe(false);
-  });
-
-  it("leaves user-invocable: false to the author under auto and manual alike", () => {
-    // The decision this ticket asked for, pinned: the fourth combination is
-    // AUTHOR-ONLY. A mode is a prompt-budget lever, and promoting a skill into
-    // the index is not a reason to start offering a `/` row its author
-    // deliberately withheld.
-    expect(skillModePolicy("auto", BACKGROUND)).toEqual(BACKGROUND);
-    expect(skillModePolicy("manual", BACKGROUND)).toEqual(CLOSED);
-  });
-
-  it("closes both axes for off, which is a removal rather than a budget answer", () => {
-    expect(skillModePolicy("off", SKILL_POLICY_DEFAULT)).toEqual(CLOSED);
-    expect(skillModePolicy("off", BACKGROUND)).toEqual(CLOSED);
+  it("lets every Project mode override both author axes", () => {
+    expect(skillModePolicy("auto")).toEqual({ modelDiscoverable: true, userInvokable: true });
+    expect(skillModePolicy("manual")).toEqual({ modelDiscoverable: false, userInvokable: true });
+    expect(skillModePolicy("off")).toEqual({ modelDiscoverable: false, userInvokable: false });
   });
 });
 
 describe("resolveSkillPolicy", () => {
   it("falls back to the author's declaration when the project has no rule", () => {
-    expect(resolveSkillPolicy({}, skill({ invocation: MANUAL }))).toEqual(MANUAL);
-    expect(resolveSkillPolicy({}, skill({ invocation: BACKGROUND }))).toEqual(BACKGROUND);
+    expect(resolveSkillPolicy({}, skill({ policy: MANUAL }))).toEqual(MANUAL);
+    expect(resolveSkillPolicy({}, skill({ policy: BACKGROUND }))).toEqual(BACKGROUND);
   });
 
-  it("lets the project override the author in both directions", () => {
-    const quiet = skill({ name: "quiet", invocation: MANUAL });
-    const loud = skill({ name: "loud" });
-    expect(resolveSkillPolicy({ quiet: "auto" }, quiet).modelDiscoverable).toBe(true);
-    expect(resolveSkillPolicy({ loud: "manual" }, loud).modelDiscoverable).toBe(false);
+  it("lets the project override both author axes", () => {
+    const quiet = skill({ name: "quiet", policy: MANUAL });
+    const background = skill({ name: "background", policy: BACKGROUND });
+    expect(resolveSkillPolicy({ quiet: "auto" }, quiet)).toEqual(SKILL_POLICY_DEFAULT);
+    expect(resolveSkillPolicy({ background: "manual" }, background)).toEqual(MANUAL);
+    expect(resolveSkillPolicy({ background: "off" }, background)).toEqual(CLOSED);
+  });
+
+  it("does not read Object prototype names as Project rules", () => {
+    expect(resolveSkillPolicy({}, skill({ name: "constructor" }))).toEqual(SKILL_POLICY_DEFAULT);
+    expect(resolveSkillPolicy({}, skill({ name: "toString" }))).toEqual(SKILL_POLICY_DEFAULT);
   });
 
   it("ignores a rule that names some other skill", () => {
@@ -450,15 +446,19 @@ describe("sameSkillPolicy / isSkillUnavailable / authorSkillMode", () => {
     expect(authorSkillMode(SKILL_POLICY_DEFAULT)).toBe("auto");
     expect(authorSkillMode(MANUAL)).toBe("manual");
     expect(authorSkillMode(CLOSED)).toBe("off");
-    // Judged on the axis the column governs: background knowledge is Auto.
-    expect(authorSkillMode(BACKGROUND)).toBe("auto");
+    expect(authorSkillMode(BACKGROUND)).toBe(AUTHOR_MODEL_ONLY_MODE);
+  });
+
+  it("recognizes only a complete mode policy as the author default", () => {
+    expect(skillModeMatchesAuthor("manual", skill({ policy: MANUAL }))).toBe(true);
+    expect(skillModeMatchesAuthor("auto", skill({ policy: BACKGROUND }))).toBe(false);
   });
 });
 
 describe("applySkillModes", () => {
   const tdd = skill({ name: "tdd" });
   const diagnose = skill({ name: "diagnose" });
-  const quiet = skill({ name: "quiet", invocation: MANUAL });
+  const quiet = skill({ name: "quiet", policy: MANUAL });
 
   it("leaves an unruled project exactly as it loaded", () => {
     expect(applySkillModes([tdd, diagnose], {})).toEqual([tdd, diagnose]);
@@ -475,7 +475,7 @@ describe("applySkillModes", () => {
     // skill — `/tdd` still resolves it.
     const ruled = applySkillModes([tdd], { tdd: "manual" });
 
-    expect(ruled[0]?.invocation).toEqual(MANUAL);
+    expect(ruled[0]?.effectivePolicy).toEqual(MANUAL);
     expect(skillsIndexResource(ruled)).toBeNull();
     expect(ruled).toHaveLength(1);
   });
@@ -493,7 +493,7 @@ describe("applySkillModes", () => {
     // Select snapped back — which is why the pane had stopped offering it.
     const ruled = applySkillModes([quiet], parseSkillModes({ quiet: "auto" }));
 
-    expect(ruled[0]?.invocation).toEqual(SKILL_POLICY_DEFAULT);
+    expect(ruled[0]?.effectivePolicy).toEqual(SKILL_POLICY_DEFAULT);
     expect(skillsIndexResource(ruled)?.text).toContain("- quiet (");
   });
 
@@ -505,15 +505,17 @@ describe("applySkillModes", () => {
   it("drops a skill whose author closed both axes, with no project rule at all", () => {
     // There is no empty-rules fast path for exactly this: "no rules" is not
     // the same as "nothing to do".
-    expect(applySkillModes([skill({ name: "disabled", invocation: CLOSED })], {})).toEqual([]);
+    expect(applySkillModes([skill({ name: "disabled", policy: CLOSED })], {})).toEqual([]);
   });
 
-  it("drops a background-only skill that a project then set to manual", () => {
-    // Neither route can reach it: the author refused the picker, the project
-    // refused the index. Leaving the row in the supply would offer a `/` name
-    // that resolves to nothing.
-    const background = skill({ name: "house-style", invocation: BACKGROUND });
-    expect(applySkillModes([background], { "house-style": "manual" })).toEqual([]);
+  it("turns an author-model-only skill into the complete selected Project mode", () => {
+    const background = skill({ name: "house-style", policy: BACKGROUND });
+    const manual = applySkillModes([background], { "house-style": "manual" })[0];
+    expect(manual?.authorPolicy).toEqual(BACKGROUND);
+    expect(manual?.effectivePolicy).toEqual(MANUAL);
+    expect(applySkillModes([background], { "house-style": "auto" })[0]?.effectivePolicy).toEqual(
+      SKILL_POLICY_DEFAULT,
+    );
   });
 
   it("ignores a rule naming a skill that is no longer installed", () => {
@@ -527,11 +529,11 @@ describe("resolveSkillMode", () => {
   });
 
   it("reads manual for a skill whose own frontmatter opted out", () => {
-    expect(resolveSkillMode({}, skill({ name: "quiet", invocation: MANUAL }))).toBe("manual");
+    expect(resolveSkillMode({}, skill({ name: "quiet", policy: MANUAL }))).toBe("manual");
   });
 
   it("lets the project's rule outrank the frontmatter default, both ways", () => {
-    const quiet = skill({ name: "quiet", invocation: MANUAL });
+    const quiet = skill({ name: "quiet", policy: MANUAL });
     expect(resolveSkillMode({ quiet: "auto" }, quiet)).toBe("auto");
     expect(resolveSkillMode({ quiet: "off" }, quiet)).toBe("off");
 
@@ -539,8 +541,18 @@ describe("resolveSkillMode", () => {
     expect(resolveSkillMode({ loud: "manual" }, loud)).toBe("manual");
   });
 
+  it("reads an exact author-only state for background knowledge", () => {
+    const background = skill({ name: "background", policy: BACKGROUND });
+    expect(resolveSkillMode({}, background)).toBe(AUTHOR_MODEL_ONLY_MODE);
+    expect(resolveSkillMode({ background: "auto" }, background)).toBe("auto");
+  });
+
   it("reads off for a skill whose author closed both axes", () => {
-    expect(resolveSkillMode({}, skill({ name: "disabled", invocation: CLOSED }))).toBe("off");
+    expect(resolveSkillMode({}, skill({ name: "disabled", policy: CLOSED }))).toBe("off");
+  });
+
+  it("does not return inherited Object properties as a readout", () => {
+    expect(resolveSkillMode({}, skill({ name: "constructor" }))).toBe("auto");
   });
 });
 
@@ -549,6 +561,15 @@ describe("parseSkillModes", () => {
     expect(parseSkillModes({ tdd: "off", bad: "sideways", "not a slug": "off" })).toEqual({
       tdd: "off",
     });
+  });
+
+  it("keeps own prototype-looking slugs without mutating the result prototype", () => {
+    const parsed = parseSkillModes(JSON.parse('{"constructor":"off","__proto__":"manual"}'));
+    expect(Object.hasOwn(parsed, "constructor")).toBe(true);
+    expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+    expect(parsed["constructor"]).toBe("off");
+    expect(parsed["__proto__"]).toBe("manual");
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
   });
 
   it("keeps an auto rule, because for some skills it IS a departure", () => {

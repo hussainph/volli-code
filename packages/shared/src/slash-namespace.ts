@@ -16,7 +16,7 @@
 import { COMPOSER_VERBS } from "./composer-verb";
 import type { PromptTemplate } from "./prompt-template";
 import { isSlashInvocationName } from "./slash-name";
-import type { SkillReference } from "./skill";
+import { userInvokableSkills, type SkillReference } from "./skill";
 
 /** The qualifier a template wears when it cannot keep its bare name. */
 export const COMMAND_QUALIFIER = "command";
@@ -103,8 +103,7 @@ const SLASH_SOURCE_ENTRIES = [
     // because it was never an offered row. Filtering in the composer instead
     // would have left submit resolving a name the menu refused to show.
     candidates: ({ skills }) =>
-      skills
-        .filter((skill) => skill.invocation.userInvokable)
+      userInvokableSkills(skills)
         .toSorted((a, b) => a.name.localeCompare(b.name))
         .map((skill) => ({
           kind: "skill",

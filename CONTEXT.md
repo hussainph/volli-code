@@ -592,20 +592,43 @@ Settings can never disagree.
 _Avoid_: enabled, visibility, permission, scope
 
 **Skill mode**:
-A Project's per-Skill override of the model axis: `Auto` (in the index),
-`Manual` (out of the index, still typed by name), `Off` (removed). It is a
-budget lever, so it governs discoverability and leaves the user axis to the
-Skill's author — `Off` is the exception, being a removal rather than a budget
-answer, and closes both. A mode is stored only where it departs from what the
-file itself declared.
+A Project's complete per-Skill override: `Auto` opens model discovery and user
+invocation, `Manual` closes model discovery and keeps user invocation, and
+`Off` closes both. The author-only fourth combination — model discoverable but
+not user invokable — applies only where the Project has no override; Settings
+names it `Model only (author)` rather than mislabelling it Auto. A stored mode
+outranks both author axes and is removed when it exactly restores the file's
+declaration.
 _Avoid_: skill setting, toggle, enablement
 
 **Author invocation default**:
-What a `SKILL.md` asks for before any Project has its say, spelled with the
-portable top-level `disable-model-invocation` and `user-invocable` flags that
-Claude Code, Cursor, Copilot and Pi all honour. Neither is in the Agent Skills
-core format — both are client extensions — so they are read leniently and a
-declaration that cannot be taken at face value earns a surfaced diagnostic
-rather than a silent reinterpretation. A Project override outranks it in both
-directions.
+What a `SKILL.md` asks for before any Project has its say. The top-level
+`disable-model-invocation` spelling is the portable manual default honoured by
+Claude Code, Cursor, Copilot and Pi. `user-invocable` is the independent
+Claude/Copilot spelling Volli also accepts; neither extension belongs to the
+Agent Skills core format. Volli's legacy
+`metadata.volli-user-invoke-only` remains an alias, the portable top-level key
+wins a conflict, and any declaration that cannot be read earns a surfaced
+diagnostic. Unparseable YAML fails closed until the file or a Project override
+fixes it.
 _Avoid_: frontmatter flag (alone), skill config
+
+**Skill activation lifecycle**:
+An explicit `/slug` is attached to one user message: the transcript keeps the
+person's reference and one typed delivery receipt containing the exact resource
+bytes and Skill root. Repeating the same resolved name in that message delivers
+it once; invoking it again in a later message creates a new receipt and delivers
+it again. Context compaction restores one exact active resource per Skill name,
+using the latest delivered bytes, so summarization cannot silently replace its
+instructions. This preservation is user-message context, not a persistent mode;
+starting a Session with a Skill is the separate attach-time route and places its
+resource in the attachment's stable system prompt. Attach-time names are also
+deduplicated.
+
+Project policy writes automatically invalidate every mounted supply. Consumers
+expose no previous-policy rows while the replacement disk read is in flight,
+and main resolves policy again after that read before index or delivery. Skill
+file adds, edits and removals are intentionally not watched: `/reload` is the
+explicit disk rescan and recovery action. A past transcript receipt never
+changes when either policy or disk content changes.
+_Avoid_: active plugin, sticky slash command

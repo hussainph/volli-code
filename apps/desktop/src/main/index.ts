@@ -37,6 +37,7 @@ import {
   skillResourcePart,
   skillsIndexResource,
   ticketBranchName,
+  userInvokableSkills,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
@@ -1154,13 +1155,21 @@ app.whenReady().then(async () => {
                 `The project's skills could not be read: ${read.error}`,
               );
             }
-            // A skill this project switched off is not "hidden from the model"
-            // — it is not available, so resolving it by name fails like any
-            // other name the project does not have. Same for one whose author
-            // closed both axes: `applySkillModes` drops anything no route can
-            // reach, so attach-time selection asks the same ruled supply the
-            // picker and the index do (VC-181).
-            const available = applySkillModes(read.skills, project.skillModes ?? {});
+            // Re-read AFTER disk I/O: a policy write can land while SKILL.md
+            // files are being read, and attach-time delivery must resolve the
+            // policy current at delivery rather than the snapshot that chose
+            // the directory. Human attach-time selection is a user invocation
+            // route, so a model-only author policy is not eligible either.
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) {
+              throw new StructuredSessionsError(
+                "SKILL_NOT_FOUND",
+                "The project for this Session was not found.",
+              );
+            }
+            const available = userInvokableSkills(
+              applySkillModes(read.skills, currentProject.skillModes ?? {}),
+            );
             // Order and dedup follow the request, not the directory: the
             // record should say what was asked for, once each.
             return [...new Set(names)].map((name) => {
@@ -1199,8 +1208,12 @@ app.whenReady().then(async () => {
               globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
             });
             if (!read.ok) return null;
+            // Policy is read after the filesystem for the same race the
+            // explicit attach route closes above.
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) return null;
             return skillsIndexResource(
-              applySkillModes(read.skills, project.skillModes ?? {}),
+              applySkillModes(read.skills, currentProject.skillModes ?? {}),
               injectedNames,
             );
           },
@@ -1786,11 +1799,13 @@ app.whenReady().then(async () => {
             ]);
             if (!loaded.ok) throw new Error(loaded.error);
             if (!skills.ok) throw new Error(skills.error);
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) throw new Error("Unknown project");
             return {
               templates: loaded.templates,
-              // The ruled list, exactly as `volli:prompt-templates` hands the
-              // composer: an `off` skill is not offered, a `manual` one is.
-              skills: applySkillModes(skills.skills, project.skillModes ?? {}),
+              // Resolve against the policy current after the filesystem read,
+              // not the snapshot that supplied the stable project path.
+              skills: applySkillModes(skills.skills, currentProject.skillModes ?? {}),
             };
           },
           // The composer's message shape, with the Run's durable command/message

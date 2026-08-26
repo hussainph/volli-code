@@ -59,9 +59,10 @@ import { isPromptResource } from "./prompt-resource";
 /**
  * The two independent things a skill may be allowed to do.
  *
- * NOT one flag with two names. Claude Code, Copilot/VS Code, Cursor and Pi all
- * ship these as separate frontmatter fields, and the four combinations are
- * each a real configuration a skill author picks on purpose:
+ * NOT one flag with two names. Claude Code and Copilot/VS Code expose both
+ * fields; Cursor and Pi share the model-invocation opt-out. Volli accepts the
+ * two-axis vocabulary so a portable author declaration degrades predictably,
+ * and each of the four combinations has one explicit meaning:
  *
  * | modelDiscoverable | userInvokable | what it is                          |
  * | ----------------- | ------------- | ----------------------------------- |
@@ -95,6 +96,12 @@ export const SKILL_POLICY_DEFAULT: SkillInvocationPolicy = {
   userInvokable: true,
 };
 
+/** Neither route is open. Named for parser failures and the Off mode. */
+export const SKILL_POLICY_UNAVAILABLE: SkillInvocationPolicy = {
+  modelDiscoverable: false,
+  userInvokable: false,
+};
+
 /** Whether two policies say the same thing — the identity-preserving check. */
 export function sameSkillPolicy(a: SkillInvocationPolicy, b: SkillInvocationPolicy): boolean {
   return a.modelDiscoverable === b.modelDiscoverable && a.userInvokable === b.userInvokable;
@@ -114,16 +121,22 @@ export interface SkillReference {
   /** The instructions themselves: the SKILL.md body, frontmatter stripped. */
   readonly body: string;
   /**
-   * What the skill's own file asked for, before this project has its say —
-   * the AUTHOR default that {@link resolveSkillPolicy} resolves a Project
-   * override against, and the value {@link applySkillModes} rewrites when a
-   * rule departs from it. Never Volli's opinion; see
-   * {@link readAuthorInvocationPolicy} for how a SKILL.md spells it.
+   * What the skill's own file asked for, before this project has its say.
+   * Stable across ruling so Settings can compare a Project choice with the
+   * declaration it overrides.
    */
-  readonly invocation: SkillInvocationPolicy;
+  readonly authorPolicy: SkillInvocationPolicy;
+  /**
+   * What this particular supply currently allows. Equal to
+   * {@link authorPolicy} on the loader's unruled Settings supply and replaced
+   * by {@link applySkillModes} everywhere that consumes Project policy.
+   * Downstream consumers read only this field; they never infer policy from
+   * the author declaration themselves.
+   */
+  readonly effectivePolicy: SkillInvocationPolicy;
   /**
    * One line about a policy declaration that could not be taken at face
-   * value — conflicting spellings, or a flag whose value is not a boolean.
+   * value — malformed YAML, conflicting spellings, or a non-boolean flag.
    * `null` is the normal case. Carried on the reference rather than logged so
    * the Settings pane can show it against the row it is about: a skill whose
    * declared policy was silently discarded is exactly the fault a person
@@ -233,17 +246,25 @@ export function isSkillName(value: string): boolean {
  * ({@link readAuthorInvocationPolicy}) with a per-project override in front of
  * it, so the author's default still holds wherever a project has said nothing.
  *
- * ## The mode column governs the MODEL axis (VC-181)
+ * ## A Project mode is a complete policy (VC-181)
  *
- * A mode is a budget lever: it answers "is this skill worth its index row on
- * every turn in this project". It therefore sets `modelDiscoverable` outright
- * and leaves `userInvokable` to the author — see {@link skillModePolicy}. The
- * one exception is `off`, which is not a budget answer but a removal, and
- * closes both axes.
+ * The middle state remains the budget lever, but a stored mode outranks the
+ * author on both axes: Auto is model + user, Manual is user only, and Off is
+ * neither. `user-invocable: false` supplies the fourth, model-only combination
+ * only while the Project has no override; Settings names that author-only
+ * readout separately so selecting Auto can genuinely reopen the user route.
  */
 export type SkillMode = "auto" | "manual" | "off";
 
-/** Every mode, for a picker that must offer all of them. */
+/**
+ * The author-only fourth combination as a Settings readout, never persisted as
+ * a Project mode. Choosing any real mode replaces it through Project
+ * precedence and therefore restores the mode's complete two-axis matrix.
+ */
+export const AUTHOR_MODEL_ONLY_MODE = "author-model-only" as const;
+export type SkillModeReadout = SkillMode | typeof AUTHOR_MODEL_ONLY_MODE;
+
+/** Every Project mode, for a picker that must offer all of them. */
 export const SKILL_MODES: readonly SkillMode[] = ["auto", "manual", "off"];
 
 /**
@@ -277,40 +298,38 @@ export type SkillModes = Readonly<Record<string, SkillMode>>;
  */
 export function parseSkillModes(value: unknown): SkillModes {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  const rules: Record<string, SkillMode> = {};
-  for (const [slug, mode] of Object.entries(value as Record<string, unknown>)) {
-    if (!isSkillName(slug)) continue;
-    if (mode !== "auto" && mode !== "manual" && mode !== "off") continue;
-    rules[slug] = mode;
-  }
-  return rules;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, SkillMode] => {
+        const [slug, mode] = entry;
+        return isSkillName(slug) && (mode === "auto" || mode === "manual" || mode === "off");
+      },
+    ),
+  );
 }
 
 /**
- * One Project mode applied over one author default — the whole of what a mode
- * MEANS, in one pure function.
+ * One Project mode's complete two-axis meaning.
  *
- * ## Why `userInvokable` passes through
- *
- * `auto` does not force a skill into the `/` menu and `manual` does not force
- * it out. A mode answers the index-cost question; the picker question belongs
- * to the author, who is the only party with an opinion about whether their
- * skill is something a person names or background knowledge a model reaches
- * for. This is the ticket's fourth combination decided AUTHOR-ONLY rather than
- * left as an accidental parser outcome: `user-invocable: false` survives Auto
- * and Manual alike, and the Project's escape hatch from it is `off`, which
- * removes the skill rather than pretending to promote it.
- *
- * `off` closes both axes because it is the one mode that is not a budget
- * answer: a person who set it wants the skill gone from this project, and a
- * row that stayed typable would make Off a lie.
+ * A Project rule outranks the author declaration, so these are absolute rather
+ * than patches: Auto opens both routes, Manual keeps only the person's route,
+ * and Off closes both. The fourth combination remains author-only — it can be
+ * the effective policy only while this Project has no rule for the skill.
  */
-export function skillModePolicy(
-  mode: SkillMode,
-  author: SkillInvocationPolicy,
-): SkillInvocationPolicy {
-  if (mode === "off") return { modelDiscoverable: false, userInvokable: false };
-  return { modelDiscoverable: mode === "auto", userInvokable: author.userInvokable };
+export function skillModePolicy(mode: SkillMode): SkillInvocationPolicy {
+  switch (mode) {
+    case "auto":
+      return SKILL_POLICY_DEFAULT;
+    case "manual":
+      return { modelDiscoverable: false, userInvokable: true };
+    case "off":
+      return SKILL_POLICY_UNAVAILABLE;
+  }
+}
+
+/** Read an own Project rule without confusing Object prototype names for slugs. */
+function projectSkillMode(modes: SkillModes, name: string): SkillMode | undefined {
+  return Object.hasOwn(modes, name) ? modes[name] : undefined;
 }
 
 /**
@@ -322,72 +341,44 @@ export function skillModePolicy(
  *   1. the Project's override for this slug, if it has one
  *   2. the author's own declaration ({@link readAuthorInvocationPolicy})
  *   3. the format's default — already folded into (2)
- *
- * Every consumer resolves through here or through {@link applySkillModes},
- * which is this function in a loop. Before VC-181 the same question was
- * answered in four places against a single boolean, and "is it in the picker"
- * and "is it in the index" could not be asked separately at all.
  */
 export function resolveSkillPolicy(
   modes: SkillModes,
   skill: SkillReference,
 ): SkillInvocationPolicy {
-  const mode = modes[skill.name];
-  return mode === undefined ? skill.invocation : skillModePolicy(mode, skill.invocation);
+  const mode = projectSkillMode(modes, skill.name);
+  return mode === undefined ? skill.authorPolicy : skillModePolicy(mode);
 }
 
 /**
- * The mode a policy reads as — the Settings Select's value, and the rule the
- * writer uses to tell a real override from a restatement.
- *
- * Lossy on purpose, and only in the direction that cannot mislead: a skill
- * whose author closed both axes reads as `off`, and one that is merely not
- * user-invokable still reads by its model axis, because that is the axis the
- * column governs.
+ * How an author policy reads in Settings when there is no Project rule.
+ * `author-model-only` is a display state, not a storable mode: choosing any
+ * real mode gives the Project precedence over both axes.
  */
-export function authorSkillMode(policy: SkillInvocationPolicy): SkillMode {
+export function authorSkillMode(policy: SkillInvocationPolicy): SkillModeReadout {
   if (isSkillUnavailable(policy)) return "off";
+  if (policy.modelDiscoverable && !policy.userInvokable) return AUTHOR_MODEL_ONLY_MODE;
   return policy.modelDiscoverable ? "auto" : "manual";
 }
 
-/**
- * What a skill's mode resolves to: the project's rule if it has one, otherwise
- * the mode the author's own declaration reads as.
- *
- * Now that {@link parseSkillModes} keeps `auto`, this answers in both
- * directions — a project can demote a discoverable skill to Manual AND
- * promote an author-manual one to Auto, and neither answer snaps back.
- */
-export function resolveSkillMode(modes: SkillModes, skill: SkillReference): SkillMode {
-  return modes[skill.name] ?? authorSkillMode(skill.invocation);
+/** The Project rule if present, otherwise an exact readout of the author policy. */
+export function resolveSkillMode(modes: SkillModes, skill: SkillReference): SkillModeReadout {
+  return projectSkillMode(modes, skill.name) ?? authorSkillMode(skill.authorPolicy);
+}
+
+/** Whether choosing `mode` merely restores this skill's author declaration. */
+export function skillModeMatchesAuthor(mode: SkillMode, skill: SkillReference): boolean {
+  return sameSkillPolicy(skillModePolicy(mode), skill.authorPolicy);
 }
 
 /**
  * One project's skill list, with its rules applied — the single seam every
  * consumption point goes through.
  *
- * It works by REWRITING each reference's {@link SkillReference.invocation} to
- * its effective policy rather than by teaching every consumer about modes, so
- * a downstream surface asks one question of the row in front of it:
- * {@link skillsIndexResource} reads `modelDiscoverable`, `resolveSlashNamespace`
- * reads `userInvokable`, and neither has to know a Project exists.
- *
- * A skill left {@link isSkillUnavailable} is DROPPED, which is `off`'s job and
- * also an author's when they close both axes themselves. Filesystem read
- * limits and unreadable entries remain the loader's separate safety policy; a
- * shadowed loaded name is renamed rather than dropped.
- *
- * Applied AFTER {@link mergeSkills}, so project-over-personal is already
- * resolved and a slug names exactly one surviving skill — a rule cannot mean
- * "the project's copy but not the personal one".
- *
- * A rule naming nothing installed is ignored: a skill can be uninstalled while
- * its slug is still in the row, and a stale entry is not a reason to fail a
- * read that every composer open depends on.
- *
- * NOTE there is no empty-rules fast path. An author can close both axes with
- * no Project rule at all, so "no rules" is not the same as "nothing to do".
- * References whose policy is unchanged are still returned by identity.
+ * The author declaration remains intact on {@link SkillReference.authorPolicy}
+ * while {@link SkillReference.effectivePolicy} is replaced. A downstream
+ * surface therefore asks one question of the row in front of it without
+ * destroying the provenance Settings needs to edit the rule later.
  */
 export function applySkillModes(
   skills: readonly SkillReference[],
@@ -395,11 +386,20 @@ export function applySkillModes(
 ): readonly SkillReference[] {
   const ruled: SkillReference[] = [];
   for (const skill of skills) {
-    const invocation = resolveSkillPolicy(modes, skill);
-    if (isSkillUnavailable(invocation)) continue;
-    ruled.push(sameSkillPolicy(skill.invocation, invocation) ? skill : { ...skill, invocation });
+    const effectivePolicy = resolveSkillPolicy(modes, skill);
+    if (isSkillUnavailable(effectivePolicy)) continue;
+    ruled.push(
+      sameSkillPolicy(skill.effectivePolicy, effectivePolicy)
+        ? skill
+        : { ...skill, effectivePolicy },
+    );
   }
   return ruled;
+}
+
+/** Every human invocation surface, including attach-time selection, uses this projection. */
+export function userInvokableSkills(skills: readonly SkillReference[]): readonly SkillReference[] {
+  return skills.filter((skill) => skill.effectivePolicy.userInvokable);
 }
 
 /**
@@ -441,7 +441,7 @@ export const SKILLS_INDEX_RESOURCE_NAME = "skills index";
 export const SKILL_DISABLE_MODEL_INVOCATION_KEY = "disable-model-invocation";
 
 /**
- * The portable top-level field that withholds a skill from the `/` menu.
+ * The recognized top-level field that withholds a skill from the `/` menu.
  *
  * The other axis, and the one Volli could not previously express at all.
  * Copilot's table is the clearest statement of it: `user-invocable: false`
@@ -619,7 +619,7 @@ export function skillsIndexResource(
 ): PromptResource | null {
   const injected = new Set(injectedNames);
   const rows = skills
-    .filter((skill) => skill.invocation.modelDiscoverable && !injected.has(skill.name))
+    .filter((skill) => skill.effectivePolicy.modelDiscoverable && !injected.has(skill.name))
     .toSorted((a, b) => a.name.localeCompare(b.name));
   if (rows.length === 0) return null;
   const entries = rows.map((skill) => {

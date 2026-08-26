@@ -2096,7 +2096,8 @@ describe("registerFileIpcHandlers", () => {
         name: string;
         description: string;
         body: string;
-        invocation: { modelDiscoverable: boolean; userInvokable: boolean };
+        authorPolicy: { modelDiscoverable: boolean; userInvokable: boolean };
+        effectivePolicy: { modelDiscoverable: boolean; userInvokable: boolean };
         policyDiagnostic: string | null;
         root: string;
       }[];
@@ -2108,7 +2109,8 @@ describe("registerFileIpcHandlers", () => {
         name: "logos",
         description: "Draw logos",
         body: "# Logos",
-        invocation: { modelDiscoverable: true, userInvokable: true },
+        authorPolicy: { modelDiscoverable: true, userInvokable: true },
+        effectivePolicy: { modelDiscoverable: true, userInvokable: true },
         policyDiagnostic: null,
         root: ".agents/skills/logos",
       },
@@ -2116,7 +2118,8 @@ describe("registerFileIpcHandlers", () => {
         name: "pdf",
         description: "Fill PDFs",
         body: "# PDF",
-        invocation: { modelDiscoverable: true, userInvokable: true },
+        authorPolicy: { modelDiscoverable: true, userInvokable: true },
+        effectivePolicy: { modelDiscoverable: true, userInvokable: true },
         policyDiagnostic: null,
         root: `${setup.globalSkillsDir}/pdf`,
       },

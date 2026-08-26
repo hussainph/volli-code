@@ -1,4 +1,10 @@
-import { SKILL_POLICY_DEFAULT, type Project, type SkillReference } from "@volli/shared";
+import {
+  AUTHOR_MODEL_ONLY_MODE,
+  resolveSkillMode,
+  SKILL_POLICY_DEFAULT,
+  type Project,
+  type SkillReference,
+} from "@volli/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -7,7 +13,8 @@ const skills: SkillReference[] = [
     name: "tdd",
     description: "Red, green, refactor",
     body: "Write the failing test first.",
-    invocation: SKILL_POLICY_DEFAULT,
+    authorPolicy: SKILL_POLICY_DEFAULT,
+    effectivePolicy: SKILL_POLICY_DEFAULT,
     policyDiagnostic: null,
     root: ".agents/skills/tdd",
   },
@@ -15,9 +22,19 @@ const skills: SkillReference[] = [
     name: "quiet-helper",
     description: "Asked-for only",
     body: "Only when summoned.",
-    invocation: { modelDiscoverable: false, userInvokable: true },
+    authorPolicy: { modelDiscoverable: false, userInvokable: true },
+    effectivePolicy: { modelDiscoverable: false, userInvokable: true },
     policyDiagnostic: null,
     root: ".agents/skills/quiet-helper",
+  },
+  {
+    name: "house-style",
+    description: "Background knowledge",
+    body: "Apply this automatically.",
+    authorPolicy: { modelDiscoverable: true, userInvokable: false },
+    effectivePolicy: { modelDiscoverable: true, userInvokable: false },
+    policyDiagnostic: null,
+    root: ".agents/skills/house-style",
   },
 ];
 
@@ -71,11 +88,19 @@ describe("Configure → Skills", () => {
     // can actually deliver — and therefore one it may offer.
     expect(offerableModes(skills[0]!)).toEqual(["auto", "manual", "off"]);
     expect(offerableModes(skills[1]!)).toEqual(["auto", "manual", "off"]);
+    expect(offerableModes(skills[2]!)).toEqual(["auto", "manual", "off"]);
+  });
+
+  it("reads author model-only exactly until a Project mode overrides it", () => {
+    const background = skills[2]!;
+    expect(resolveSkillMode({}, background)).toBe(AUTHOR_MODEL_ONLY_MODE);
+    expect(resolveSkillMode({ "house-style": "auto" }, background)).toBe("auto");
   });
 
   describe("ruled", () => {
     const tdd = skills[0]!;
     const quiet = skills[1]!;
+    const background = skills[2]!;
 
     it("deletes a rule that merely restates the skill's own default", () => {
       expect(ruled({ tdd: "off" }, [tdd], "auto")).toEqual({});
@@ -85,6 +110,15 @@ describe("Configure → Skills", () => {
     it("stores an auto rule when auto IS a departure for that skill", () => {
       // The write half of the round trip the old code could not complete.
       expect(ruled({}, [quiet], "auto")).toEqual({ "quiet-helper": "auto" });
+      // The author-only fourth combination matches no Project mode: selecting
+      // Auto deliberately reopens the user route too.
+      expect(ruled({}, [background], "auto")).toEqual({ "house-style": "auto" });
+    });
+
+    it("can clear a Project override back to the author-only fourth combination", () => {
+      expect(
+        ruled({ "house-style": "auto", other: "off" }, [background], AUTHOR_MODEL_ONLY_MODE),
+      ).toEqual({ other: "off" });
     });
 
     it("stores a departure and leaves other skills' rules alone", () => {

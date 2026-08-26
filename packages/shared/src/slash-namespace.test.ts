@@ -16,7 +16,8 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     name,
     description: "Create professional SVG logos",
     body: "# Logos",
-    invocation: SKILL_POLICY_DEFAULT,
+    authorPolicy: SKILL_POLICY_DEFAULT,
+    effectivePolicy: SKILL_POLICY_DEFAULT,
     policyDiagnostic: null,
     root: `.agents/skills/${name}`,
     ...overrides,
@@ -239,13 +240,17 @@ describe("submit resolution", () => {
 });
 
 describe("the user-invokable axis (VC-181)", () => {
+  const manualPolicy = { modelDiscoverable: false, userInvokable: true } as const;
+  const backgroundPolicy = { modelDiscoverable: true, userInvokable: false } as const;
   const manual = skill({
     name: "wait-what",
-    invocation: { modelDiscoverable: false, userInvokable: true },
+    authorPolicy: manualPolicy,
+    effectivePolicy: manualPolicy,
   });
   const background = skill({
     name: "house-style",
-    invocation: { modelDiscoverable: true, userInvokable: false },
+    authorPolicy: backgroundPolicy,
+    effectivePolicy: backgroundPolicy,
   });
 
   it("offers a manual skill — withheld from the model is not withheld from the person", () => {

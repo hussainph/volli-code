@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
-import { SKILL_POLICY_DEFAULT, skillRootDir, type SkillInvocationPolicy } from "@volli/shared";
+import {
+  SKILL_POLICY_DEFAULT,
+  SKILL_POLICY_UNAVAILABLE,
+  skillRootDir,
+  type SkillInvocationPolicy,
+} from "@volli/shared";
 
 import { loadSkills, readSkillDir } from "./skills";
 
@@ -14,7 +19,7 @@ const readProjectSkills = (dir: string) => readSkillDir(dir, skillRootDir);
 async function policiesIn(dir: string): Promise<Record<string, SkillInvocationPolicy>> {
   const result = await readProjectSkills(dir);
   if (!result.ok) throw new Error(result.error);
-  return Object.fromEntries(result.skills.map((skill) => [skill.name, skill.invocation]));
+  return Object.fromEntries(result.skills.map((skill) => [skill.name, skill.authorPolicy]));
 }
 
 const tempDirs: string[] = [];
@@ -59,7 +64,8 @@ describe("readProjectSkills", () => {
           name: "svg-logo-designer",
           description: "Draw logos",
           body: "# Logos\n\nDo the thing.",
-          invocation: SKILL_POLICY_DEFAULT,
+          authorPolicy: SKILL_POLICY_DEFAULT,
+          effectivePolicy: SKILL_POLICY_DEFAULT,
           policyDiagnostic: null,
           root: ".agents/skills/svg-logo-designer",
         },
@@ -133,7 +139,8 @@ describe("readProjectSkills", () => {
           name: "plain",
           description: "d",
           body: "Body",
-          invocation: SKILL_POLICY_DEFAULT,
+          authorPolicy: SKILL_POLICY_DEFAULT,
+          effectivePolicy: SKILL_POLICY_DEFAULT,
           policyDiagnostic: null,
           root: ".agents/skills/plain",
         },
@@ -197,7 +204,7 @@ describe("readProjectSkills", () => {
     if (!result.ok) return;
     // The portable field wins, because it is the one the author wrote for
     // every other harness they use.
-    expect(result.skills[0]?.invocation).toEqual(SKILL_POLICY_DEFAULT);
+    expect(result.skills[0]?.authorPolicy).toEqual(SKILL_POLICY_DEFAULT);
     expect(result.skills[0]?.policyDiagnostic).toContain("disable-model-invocation wins");
   });
 
@@ -210,8 +217,25 @@ describe("readProjectSkills", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.skills[0]?.invocation).toEqual(SKILL_POLICY_DEFAULT);
+    expect(result.skills[0]?.authorPolicy).toEqual(SKILL_POLICY_DEFAULT);
     expect(result.skills[0]?.policyDiagnostic).toContain("is not true or false");
+  });
+
+  it("fails malformed YAML closed and surfaces a useful diagnostic", async () => {
+    const dir = makeSkillsDir({
+      broken: "---\ndescription: [not closed\ndisable-model-invocation: true\n---\nBody",
+      unfenced: "---\ndisable-model-invocation: true\nBody",
+    });
+
+    const result = await readProjectSkills(dir);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const loaded of result.skills) {
+      expect(loaded.authorPolicy).toEqual(SKILL_POLICY_UNAVAILABLE);
+      expect(loaded.effectivePolicy).toEqual(SKILL_POLICY_UNAVAILABLE);
+      expect(loaded.policyDiagnostic).toContain("unavailable until SKILL.md is fixed");
+    }
   });
 
   it("does not read a sibling Codex agents/openai.yaml as frontmatter", async () => {
@@ -281,7 +305,8 @@ describe("loadSkills", () => {
         name: "shared",
         description: "from project",
         body: "Project body",
-        invocation: SKILL_POLICY_DEFAULT,
+        authorPolicy: SKILL_POLICY_DEFAULT,
+        effectivePolicy: SKILL_POLICY_DEFAULT,
         policyDiagnostic: null,
         root: ".agents/skills/shared",
       },

@@ -13,8 +13,8 @@
  * same description key, same first-line fallback — which is why this module
  * borrows `prompt-templates.ts`'s parser instead of writing a second one.
  * Two kinds of field are read and no others: `description`, and the invocation
- * policy — the portable top-level `disable-model-invocation` and
- * `user-invocable` flags, plus Volli's original `metadata` alias for the first
+ * policy — portable `disable-model-invocation`, recognized
+ * `user-invocable`, plus Volli's original `metadata` alias for the first
  * of them. What those declarations MEAN is not decided here: the frontmatter
  * goes to `@volli/shared`'s `readAuthorInvocationPolicy`, which owns
  * precedence and the diagnostics a conflicting file earns, so main and the
@@ -28,9 +28,11 @@
  *
  * The failure policy is `prompt-templates.ts`'s, verbatim: a missing
  * directory is the normal case and reads as empty, only a directory that
- * exists and cannot be read is an error, and one broken skill loses that
- * skill alone. A directory without a readable SKILL.md is not a skill and is
- * not a fault either — `.agents/skills/` may hold anything an installer left.
+ * exists and cannot be read is an error, and one unreadable SKILL.md loses
+ * that skill alone. Malformed YAML remains an unruled Settings row carrying a
+ * diagnostic but fails closed everywhere else. A directory without a readable
+ * SKILL.md is not a skill and is not a fault either — `.agents/skills/` may
+ * hold anything an installer left.
  */
 import { promises as fsp, type Dirent } from "node:fs";
 import { join } from "node:path";
@@ -40,6 +42,7 @@ import {
   mergeSkills,
   promptTemplateDescription,
   readAuthorInvocationPolicy,
+  SKILL_POLICY_UNAVAILABLE,
   skillRootDir,
   type SkillReference,
 } from "@volli/shared";
@@ -104,19 +107,28 @@ export async function readSkillDir(
       // No readable SKILL.md — not a skill, and one loss never costs the rest.
       continue;
     }
-    const { description, metadata, disableModelInvocation, userInvocable, body } =
-      parsePromptTemplateFile(raw);
-    const { policy, diagnostic } = readAuthorInvocationPolicy({
+    const {
+      description,
+      metadata,
       disableModelInvocation,
       userInvocable,
-      metadata,
-    });
+      frontmatterDiagnostic,
+      body,
+    } = parsePromptTemplateFile(raw);
+    const author =
+      frontmatterDiagnostic === null
+        ? readAuthorInvocationPolicy({ disableModelInvocation, userInvocable, metadata })
+        : {
+            policy: SKILL_POLICY_UNAVAILABLE,
+            diagnostic: `${frontmatterDiagnostic} This skill is unavailable until SKILL.md is fixed.`,
+          };
     skills.push({
       name: slug,
       description: promptTemplateDescription({ body, frontmatterDescription: description }),
       body,
-      invocation: policy,
-      policyDiagnostic: diagnostic,
+      authorPolicy: author.policy,
+      effectivePolicy: author.policy,
+      policyDiagnostic: author.diagnostic,
       root: rootFor(slug),
     });
   }
