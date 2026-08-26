@@ -122,7 +122,41 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
-    baseline: "VC-162",
+    baseline: "VC-178",
+    build: "VC-185",
+    added: [
+      "volli worktree sync [<id>] — merge a ticket's base branch into its worktree branch and report what happened. Coordination tier: an authenticated Session, on the Agent CLI. It never waits on a gate, a check, or CI; it merges, reports, and returns.",
+      "A conflicted sync is an outcome rather than a refusal: status reads conflicted, every conflicted path is listed, and the worktree is left conflicted for the Session to resolve. Branch on status, not on the exit code.",
+      "volli worktree sync <id> --abort — the documented way out of a conflicted sync, on the same verb so the exit is discoverable from the entrance. Nothing else cleans up after a conflict.",
+      "volli worktree sync --dry-run — previews the resolved base ref, target branch, and branch-identity check through the shared side-effect plan without merging or aborting.",
+      "volli conflicts — the file-collision radar: which active ticket worktrees touch the same paths, as a per-path list and a worst-first list of colliding ticket pairs. Read tier, any caller, --json like every other read.",
+    ],
+    changed: [
+      "Sync contacts no remote. It merges the base ref this checkout already has — origin/<base> when a fetch has landed one, the local base branch otherwise — so no credential is used and nothing can block on one.",
+      "Sync runs local Git asynchronously behind a hard deadline, so a hung hook, signing helper, or filter cannot freeze Electron main or wait forever. A hook failure that leaves a merge in flight names --abort recovery.",
+      "conflicts now compares each worktree's complete Change Set (committed, staged, unstaged, and untracked paths versus its base) and keeps each project's matrix separate.",
+      "An authenticated Session may run worktree.sync by default, on the same grounds as its other coordination verbs: the merge is already inside the ambient authority its own execute tool reaches.",
+    ],
+    fixed: [],
+    removed: [],
+  },
+  {
+    baseline: "VC-163",
+    build: "VC-178",
+    added: [
+      "ticket signal --dry-run. Every voluntary coordination write now previews through the shared contract, and the append-only one is where a rehearsal matters most.",
+    ],
+    changed: [
+      "ticket show and ticket events print formatted signal, event and comment rows in text mode instead of raw JSON, so the cheap poll returns lines rather than blobs.",
+      "Comment bodies, signal details and free-text event payloads are bounded per field and hoisted into one untrusted-prose envelope per response, cited from their row by a [n] token. Quoting keeps identical polls byte-identical; ticket_await keeps its per-wake nonce because one wake is delivered once.",
+    ],
+    fixed: [
+      "volli doctor decides Session liveness from the attachment token the socket door verified rather than from the live-PTY map, so an environment that can write is no longer reported as ended.",
+    ],
+    removed: [],
+  },
+  {
+    baseline: "VC-85",
     build: "VC-163",
     added: [
       "Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.",
@@ -140,6 +174,21 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.",
       "ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.",
     ],
+  },
+  {
+    baseline: "VC-162",
+    build: "VC-85",
+    added: [
+      "ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.",
+      "ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.",
+    ],
+    changed: [
+      "ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.",
+    ],
+    fixed: [
+      "ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.",
+    ],
+    removed: [],
   },
   {
     baseline: "VC-91",

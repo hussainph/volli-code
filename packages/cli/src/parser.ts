@@ -353,6 +353,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--kind": { kind: "value", key: "kind", parse: signalKindValue },
       "--verdict": { kind: "value", key: "verdict", parse: signalVerdictValue },
       "--detail": { kind: "value", key: "detail" },
+      "--dry-run": DRY_RUN,
     },
     // Both are required because a signal with either half missing is not a
     // weaker signal, it is not one: "review" says nothing without a verdict,
@@ -367,9 +368,21 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   "worktree.diff": {
     options: { "--working-tree": { kind: "flag", key: "workingTree", value: true } },
   },
+  // The one worktree verb that writes (VC-185). `--abort` is a MODE rather
+  // than a modifier: it is the documented way back out of a conflicted sync,
+  // and putting it on the same verb is what makes the exit discoverable from
+  // the entrance. `--dry-run` still resolves the same target, but never runs
+  // either merge mode.
+  "worktree.sync": {
+    options: {
+      "--abort": { kind: "flag", key: "abort", value: true },
+      "--dry-run": DRY_RUN,
+    },
+  },
+  conflicts: PROJECT_ONLY,
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
-  "model.list": { options: { "--all": { kind: "flag", key: "all", value: true } } },
+  "model.list": { options: {} },
   cost: {
     options: {
       "--ticket": { kind: "value", key: "ticket" },

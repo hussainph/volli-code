@@ -42,10 +42,11 @@ const helpWith = async (
 /** One `--dry-run` attempt against an app whose identify answers as scripted. */
 const previewAgainst = async (
   identifyData: unknown,
+  argv: readonly string[] = ["ticket", "comment", "VC-1", "-m", "hi", "--dry-run"],
 ): Promise<{ code: number; stderr: string; commands: string[] }> => {
   const stderr: string[] = [];
   const requests: AgentRequest[] = [];
-  const code = await runCli(["ticket", "comment", "VC-1", "-m", "hi", "--dry-run"], {
+  const code = await runCli(argv, {
     env: { VOLLI_SOCKET: "/socket" },
     cwd: "/work",
     stdout: () => undefined,
@@ -958,6 +959,72 @@ describe("runCli — doctor", () => {
     });
   });
 
+  it("previews a ticket signal through the shared contract without sending a write", async () => {
+    const stdout: string[] = [];
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("ticket.signal")!, {
+      kind: "ticket",
+      id: "VC-1",
+      label: "VC-1",
+    });
+    const code = await runCli(
+      ["ticket", "signal", "VC-1", "--kind", "implement", "--verdict", "pass", "--dry-run"],
+      {
+        env: { VOLLI_SOCKET: "/socket" },
+        cwd: "/work",
+        stdout: (text) => stdout.push(text),
+        stderr: () => undefined,
+        readText: async () => "",
+        observe: async () => ({}),
+        request: async (_socket, request) => {
+          requests.push(request);
+          return request.cmd === "identify"
+            ? { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } }
+            : { v: 1, ok: true, data: plan };
+        },
+        launch: async () => ({ alreadyRunning: true }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(requests.map((request) => request.cmd)).toEqual(["identify", "ticket.signal"]);
+    expect(requests[1]?.args).toEqual({
+      id: "VC-1",
+      kind: "implement",
+      verdict: "pass",
+      dryRun: true,
+    });
+    expect(stdout.join("")).toContain("Side-effect preview");
+  });
+
+  it("sends a worktree sync preview through the shared contract", async () => {
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("worktree.sync")!, {
+      kind: "ticket",
+      id: "VC-1",
+      label: "VC-1",
+    });
+    const code = await runCli(["worktree", "sync", "VC-1", "--dry-run"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return request.cmd === "identify"
+          ? { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } }
+          : { v: 1, ok: true, data: plan };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(requests.map((request) => request.cmd)).toEqual(["identify", "worktree.sync"]);
+    expect(requests[1]?.args).toEqual({ id: "VC-1", dryRun: true });
+  });
+
   it("keeps doctor --fix preview free of local observation and a second request", async () => {
     const requests: AgentRequest[] = [];
     let observed = false;
@@ -1018,6 +1085,22 @@ describe("runCli — doctor", () => {
     expect(malformed.stderr).toContain(
       "The running app does not declare the side-effect preview contract",
     );
+
+    // Signals are append-only, so this new coordination write has to receive
+    // the same preflight protection as every older previewable write.
+    const signal = await previewAgainst({ appVersion: "0.1.1" }, [
+      "ticket",
+      "signal",
+      "VC-1",
+      "--kind",
+      "implement",
+      "--verdict",
+      "pass",
+      "--dry-run",
+    ]);
+    expect(signal.code).toBe(1);
+    expect(signal.commands).toEqual(["identify"]);
+    expect(signal.stderr).toContain("side-effect preview contract");
   });
 
   it("surfaces the preflight identify refusal instead of sending the preview", async () => {

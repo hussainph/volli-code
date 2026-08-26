@@ -43,7 +43,7 @@ import type {
 
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
-import type { RunGit } from "../worktree";
+import type { RunGit, RunGitAsync } from "../worktree";
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;
@@ -58,6 +58,13 @@ export interface AgentCommandServiceOptions {
    * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
    */
   git?: RunGit;
+  /**
+   * The non-blocking git runner for verbs that can execute user-configured
+   * hooks or scan complete Change Sets. Defaults to {@link runGitCapturingAsync}
+   * and is separate from {@link git} so a caller cannot accidentally put a
+   * long-running child back onto Electron main.
+   */
+  gitAsync?: RunGitAsync;
   /**
    * Whether a ticket's stamped worktree directory still exists on disk (C3):
    * threaded into the worktree read verbs' disk-existence seam so a stamped-
@@ -271,6 +278,8 @@ export interface AgentCommandContext {
   readonly newId: () => string;
   /** {@link AgentCommandServiceOptions.git}, defaulted to `runGitCapturing`. */
   readonly git: RunGit;
+  /** {@link AgentCommandServiceOptions.gitAsync}, defaulted to `runGitCapturingAsync`. */
+  readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
   readonly worktreeExists: (path: string) => boolean;
   /**
@@ -315,6 +324,14 @@ export interface AgentCommandContext {
    * `VOLLI_SESSION` still resolves here, and still attributes as nobody.
    */
   readonly envSession: EnvSessionIdentity | null;
+  /**
+   * The Session this request's attachment token authenticated at the socket
+   * door, or null when the caller presented no valid matching token. Kept
+   * beside the raw env-session claim so diagnostics can report the same
+   * liveness a coordination write would receive rather than treating a claim
+   * as proof.
+   */
+  readonly authenticatedSessionId: string | null;
   /**
    * Who to ATTRIBUTE this caller's writes to, decided once by the dispatch
    * (VC-163).

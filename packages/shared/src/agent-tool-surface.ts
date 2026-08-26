@@ -80,12 +80,26 @@ import type { VerbToolKey } from "./verb-registry";
  * (`AuthorityActorPolicy.awaitable`), judged at call time — bundle membership
  * is deliberately not the control.
  *
+ * `automation.run` sits in the `project` bundle ALONE (VC-134, filed by
+ * VC-112). Starting an Automation Run is agent control — it spends model budget
+ * and opens work on a Ticket — so it travels with `session.start` under VC-92's
+ * pairing rule. And its absence from the `ticket` bundle is the whole of what
+ * keeps orchestrator authority out of a Ticket Session: VC-112 declines
+ * OpenClaw's "cap a created job to the creating turn's tools" rule on the
+ * grounds that it patches a hole `bundle(Role) ∪ grants(session)` never opens.
+ * A Session that never held the verb has nothing to inherit or to be capped
+ * from, so there is deliberately no capping rule anywhere beside this map.
+ *
  * Declared as a total map over {@link SessionRole} so adding a Role is a bundle
  * decision made at the compiler rather than a silent empty default — the same
  * discipline the registry's tier table holds for adding a verb.
  */
 const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> = Object.freeze({
-  project: Object.freeze(["session.start", "ticket.await"]) as readonly VerbToolKey[],
+  project: Object.freeze([
+    "session.start",
+    "ticket.await",
+    "automation.run",
+  ]) as readonly VerbToolKey[],
   ticket: Object.freeze(["ticket.await"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
 });

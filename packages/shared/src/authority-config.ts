@@ -206,6 +206,12 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
   "session.blocked",
   "session.done",
   "session.link",
+  // Worktree sync (VC-185). A default rather than a grant, by VC-92's audit
+  // principle: it merges the base into a worktree the Session's own `execute`
+  // tool already reaches with two git commands, so withholding it here would
+  // withhold nothing — it would only push the same merge back into hand-rolled
+  // shell, which is the uneven staleness handling this verb replaces.
+  "worktree.sync",
   "notify",
   "session.harness",
   "hook",

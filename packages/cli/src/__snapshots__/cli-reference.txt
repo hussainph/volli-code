@@ -12,9 +12,10 @@ Read
   ticket brief <id>
   worktree status [<id>]
   worktree diff [<id>] [--working-tree]
+  conflicts [--project <p>]
   project list
   label list [--project <p>]
-  model list [--all]
+  model list
   cost [--ticket <id>] [--session <handle>] [--project <p>] [--all-projects] [--since <when>] [--group-by <dimension>]
 
 Write
@@ -22,7 +23,8 @@ Write
   ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>] [--dry-run]
   ticket move <id> --to <column> [--dry-run]
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
-  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>]
+  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
+  worktree sync [<id>] [--abort] [--dry-run]
 
 Session
   session list [--project <p>] [--ticket <id>]
@@ -188,6 +190,27 @@ Notes:
 - --working-tree switches to the uncommitted working-tree view.
 
 ============================================================================
+volli help conflicts
+============================================================================
+conflicts — Report which active ticket worktrees touch the same files.
+
+Door: Agent CLI
+Verb tier: read
+
+Usage: volli conflicts [options]
+
+Options:
+  --project <p>  Target project.
+
+Example: volli conflicts --json
+
+Notes:
+- Compares each active worktree's diff against its own base; no worktree is touched and no remote is contacted.
+- Shared paths, not predicted merge failures: two tickets editing opposite ends of one file still merge cleanly.
+- No overlap is the healthy answer and prints as one.
+- A worktree whose diff could not be read is named as skipped rather than dropped.
+
+============================================================================
 volli help project list
 ============================================================================
 project list — List all registered projects.
@@ -217,21 +240,18 @@ Example: volli label list --project VC
 ============================================================================
 volli help model list
 ============================================================================
-model list — List signed-in providers, model ids, and reasoning levels.
+model list — List available providers, model ids, and reasoning levels.
 
 Door: Agent CLI
 Verb tier: read
 
-Usage: volli model list [options]
-
-Options:
-  --all  Include signed-out providers and unavailable models.
+Usage: volli model list
 
 Example: volli model list
 
 Notes:
 - Copy a printed <provider/model> verbatim into session start --model.
-- Shows available models only; --all includes signed-out providers.
+- Shows only models this profile can run.
 
 ============================================================================
 volli help cost
@@ -393,6 +413,7 @@ Options:
   --kind <kind>        Which stage this verdict is about. (valid: validate, implement, review, merge, human-gate, budget)
   --verdict <verdict>  How that stage went. (valid: pass, fail, blocked)
   --detail <text>      One line of prose for a reader; the verdict is what machines read.
+  --dry-run            Validate and preview without side effects.
 
 Effects:
 - Durable write: Create one attributed Ticket signal and its signaled Ticket event, in one transaction.
@@ -422,6 +443,37 @@ Effects:
 - Durable write: Mark the Ticket archived and append its attributed archive event.
 - Human sees: The Ticket leaves the active board and remains available as archived history.
 - Does not: The Ticket worktree is preserved and active Sessions are not ended.
+
+============================================================================
+volli help worktree sync
+============================================================================
+worktree sync — Merge a ticket's base branch into its worktree branch and report what happened.
+
+Door: Agent CLI
+Verb tier: coordination
+
+Usage: volli worktree sync [<id>] [options]
+
+Options:
+  --abort    Abort a merge left in flight by an earlier conflicted sync.
+  --dry-run  Validate and preview without side effects.
+
+Effects:
+- Durable write: Merge the base ref into the ticket worktree's checked-out branch, leaving a merge commit or an unresolved merge in that worktree.
+- Human sees: The ticket's worktree status and Change Set show the merged base, or the conflicted merge awaiting resolution.
+- Does not: No Ticket moves, no Session starts, and no signal is recorded.
+- Does not: Nothing is fetched, pushed, or pulled: no remote is contacted and no credential is used.
+- Does not: No gate, check, or CI run is started or waited on.
+
+Example: volli worktree sync VC-12
+
+Notes:
+- Defaults to the ticket owning the current directory.
+- Merges the base ref this checkout already has (origin/<base> when present, else the local branch) and contacts no remote.
+- It never waits: no gate, no CI, no watch. Local Git runs asynchronously behind a hard deadline, then it reports and returns.
+- A conflict is an outcome, not an error: status is conflicted, every conflicted path is listed, and the worktree is left conflicted for this session to resolve.
+- --dry-run resolves the base ref and branch-identity check without merging or aborting.
+- --abort undoes a merge left in flight. Nothing else here cleans up after a conflict.
 
 ============================================================================
 volli help session start
@@ -699,6 +751,7 @@ volli help worktree
 worktree subcommands:
   worktree status  Show a ticket's worktree branch, base, and sync state. [Agent CLI]
   worktree diff    Summarize a ticket's diff (the PR range by default). [Agent CLI]
+  worktree sync    Merge a ticket's base branch into its worktree branch and report what happened. [Agent CLI]
 Run volli help worktree <subcommand> for detail.
 
 ============================================================================
@@ -719,7 +772,7 @@ Run volli help label <subcommand> for detail.
 volli help model
 ============================================================================
 model subcommands:
-  model list  List signed-in providers, model ids, and reasoning levels. [Agent CLI]
+  model list  List available providers, model ids, and reasoning levels. [Agent CLI]
 Run volli help model <subcommand> for detail.
 
 ============================================================================
@@ -803,7 +856,35 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
-VC-163 (after VC-162)
+VC-185 (after VC-178)
+Added
+- volli worktree sync [<id>] — merge a ticket's base branch into its worktree branch and report what happened. Coordination tier: an authenticated Session, on the Agent CLI. It never waits on a gate, a check, or CI; it merges, reports, and returns.
+- A conflicted sync is an outcome rather than a refusal: status reads conflicted, every conflicted path is listed, and the worktree is left conflicted for the Session to resolve. Branch on status, not on the exit code.
+- volli worktree sync <id> --abort — the documented way out of a conflicted sync, on the same verb so the exit is discoverable from the entrance. Nothing else cleans up after a conflict.
+- volli worktree sync --dry-run — previews the resolved base ref, target branch, and branch-identity check through the shared side-effect plan without merging or aborting.
+- volli conflicts — the file-collision radar: which active ticket worktrees touch the same paths, as a per-path list and a worst-first list of colliding ticket pairs. Read tier, any caller, --json like every other read.
+Changed
+- Sync contacts no remote. It merges the base ref this checkout already has — origin/<base> when a fetch has landed one, the local base branch otherwise — so no credential is used and nothing can block on one.
+- Sync runs local Git asynchronously behind a hard deadline, so a hung hook, signing helper, or filter cannot freeze Electron main or wait forever. A hook failure that leaves a merge in flight names --abort recovery.
+- conflicts now compares each worktree's complete Change Set (committed, staged, unstaged, and untracked paths versus its base) and keeps each project's matrix separate.
+- An authenticated Session may run worktree.sync by default, on the same grounds as its other coordination verbs: the merge is already inside the ambient authority its own execute tool reaches.
+Fixed
+- None in this record.
+Removed
+- None in this record.
+
+VC-178 (after VC-163)
+Added
+- ticket signal --dry-run. Every voluntary coordination write now previews through the shared contract, and the append-only one is where a rehearsal matters most.
+Changed
+- ticket show and ticket events print formatted signal, event and comment rows in text mode instead of raw JSON, so the cheap poll returns lines rather than blobs.
+- Comment bodies, signal details and free-text event payloads are bounded per field and hoisted into one untrusted-prose envelope per response, cited from their row by a [n] token. Quoting keeps identical polls byte-identical; ticket_await keeps its per-wake nonce because one wake is delivered once.
+Fixed
+- volli doctor decides Session liveness from the attachment token the socket door verified rather than from the live-PTY map, so an environment that can write is no longer reported as ended.
+Removed
+- None in this record.
+
+VC-163 (after VC-85)
 Added
 - Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.
 - The unauthenticated Actor, for a socket caller Volli cannot identify. It may read the board and, by default, write nothing — a posture a person can widen per project, per verb.
@@ -818,6 +899,17 @@ Fixed
 Removed
 - session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
 - ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.
+
+VC-85 (after VC-162)
+Added
+- ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.
+- ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.
+Changed
+- ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.
+Fixed
+- ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.
+Removed
+- None in this record.
 
 VC-162 (after VC-91)
 Added
@@ -958,6 +1050,8 @@ Read before writing; work your own board unless instructed; do not drive another
 Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.
 A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.
 ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.
+volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.
+volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.
 No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.
 
 ============================================================================
@@ -975,17 +1069,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -1060,7 +1154,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1103,6 +1197,11 @@ volli worktree diff ORACLE-1 --not-an-option
 USAGE Unknown option --not-an-option (options: --working-tree) — see volli help worktree diff
 
 ============================================================================
+volli conflicts --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option (options: --project) — see volli help conflicts
+
+============================================================================
 volli project list --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option — see volli help project list
@@ -1115,7 +1214,7 @@ USAGE Unknown option --not-an-option (options: --project) — see volli help lab
 ============================================================================
 volli model list --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --all) — see volli help model list
+USAGE Unknown option --not-an-option — see volli help model list
 
 ============================================================================
 volli cost --not-an-option
@@ -1145,12 +1244,17 @@ USAGE Unknown option --not-an-option (options: -m, --message, --file, --dry-run)
 ============================================================================
 volli ticket signal ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail) — see volli help ticket signal
+USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail, --dry-run) — see volli help ticket signal
 
 ============================================================================
 volli ticket archive ORACLE-1 --not-an-option
 ============================================================================
 WRONG_DOOR volli ticket archive exists in the app only; no agent surface executes it.
+
+============================================================================
+volli worktree sync ORACLE-1 --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option (options: --abort, --dry-run) — see volli help worktree sync
 
 ============================================================================
 volli session start ORACLE-1 --not-an-option
