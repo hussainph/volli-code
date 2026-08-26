@@ -21,6 +21,7 @@ import type { RuntimeSessionIdentity } from "@volli/shared";
 import type { SessionStartedNotice } from "../ipc/contract";
 
 import { createAgentToolDoor } from "./agent-tool-door";
+import type { AgentToolDoorOptions } from "./agent-tool-door";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertProject, listProjects } from "./db/projects-repo";
@@ -99,10 +100,14 @@ function harness(overrides: { startError?: unknown } = {}) {
     // (`agent-await.test.ts`) drives them with real fakes.
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     subscribeTicketWake: () => () => undefined,
+    // Supervision's ports likewise: `supervise-session.test.ts` drives the
+    // operations; this suite proves only the door — identity binding, wording,
+    // and the no-runtime refusal (which is what `null` exercises).
+    supervise: () => null,
   });
   const call = (input: Record<string, unknown>, toolCallId = "tc-0") =>
     door(CALLER, { verb: "session.start", input, toolCallId }, new AbortController().signal);
-  return { call, startInputs, kickoffs, notices };
+  return { call, door, startInputs, kickoffs, notices };
 }
 
 describe("session_start through the Agent Tool Surface", () => {
@@ -225,5 +230,172 @@ describe("session_start through the Agent Tool Surface", () => {
     const h = harness({ startError: new Error("the database is gone") });
 
     await expect(h.call({ ticket: "VC-1" })).rejects.toThrow("the database is gone");
+  });
+});
+
+// The supervision pair (VC-86). The operations' own semantics — resolution,
+// precedence, runtime acts — are `supervise-session.test.ts`'s; what is proved
+// here is the DOOR: the caller and its project are bound not believed, the
+// operation id is derived, refusals are words, and a host without a runtime
+// refuses rather than breaks.
+describe("session_stop and session_send through the Agent Tool Surface", () => {
+  const TARGET_SESSION = "bbbbbbbb-0000-0000-0000-000000000000";
+
+  function superviseHarness() {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", name: "Volli", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const stops: unknown[] = [];
+    const sends: unknown[] = [];
+    const db = ctx.db;
+    const door = createAgentToolDoor({
+      db,
+      projects: () => listProjects(db),
+      sessions: () => null,
+      actorTicketDisplay: () => null,
+      now: () => 1_000,
+      authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+      subscribeTicketWake: () => () => undefined,
+      supervise: () =>
+        ({
+          sessionEngine: {
+            listSessions: async () => [
+              {
+                session: {
+                  id: TARGET_SESSION,
+                  projectId: "project-one",
+                  ticketId: null,
+                  title: "Implementer",
+                  createdAt: 1,
+                },
+                status: "open",
+                commands: [],
+                receipts: [],
+                pendingExecutorStart: null,
+                attachments: [
+                  {
+                    id: "attachment-1",
+                    sessionId: TARGET_SESSION,
+                    adapterId: "pi",
+                    venue: { id: "local", kind: "local" },
+                    continuity: "fresh",
+                    native: null,
+                    authority: null,
+                    status: "open",
+                    openedAt: 1,
+                    closedAt: null,
+                    outcome: null,
+                    failure: null,
+                  },
+                ],
+                liveExecutor: null,
+                attention: { active: [], primary: null },
+                interactions: { active: [], resolved: [] },
+                signal: null,
+                stopped: null,
+                modelSelection: null,
+                turnActive: true,
+                authorityDenials: 0,
+                usage: {
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cacheReadTokens: 0,
+                  cacheWriteTokens: 0,
+                  meteredOperations: 0,
+                  unreportedOperations: 0,
+                  knownCostUsd: null,
+                  costBasis: "unavailable",
+                  costCoverage: "unavailable",
+                },
+                lastActivityAt: 1,
+                bornTicketless: true,
+              },
+            ],
+            submit: async (request: unknown) => {
+              stops.push(request);
+              return {};
+            },
+          },
+          runtime: {
+            command: async (request: unknown) => {
+              sends.push(request);
+              return {};
+            },
+          },
+        }) as unknown as ReturnType<AgentToolDoorOptions["supervise"]>,
+    });
+    const call = (verb: "session.stop" | "session.send", input: Record<string, unknown>) =>
+      door(CALLER, { verb, input, toolCallId: "tc-9" }, new AbortController().signal);
+    return { call, stops, sends };
+  }
+
+  it("binds the caller as the stop's actor and derives the operation id", async () => {
+    const h = superviseHarness();
+
+    const result = await h.call("session.stop", {
+      session: TARGET_SESSION.slice(0, 8),
+      reason: "Wedged",
+      // Ignored: the schema has no field for identity, and the door reads none.
+      callerSessionId: "somebody-else",
+      projectId: "project-two",
+    });
+
+    expect(result.text).toContain("Stopped Session bbbbbbbb");
+    expect(result.text).toContain('"Implementer"');
+    expect(h.stops[0]).toMatchObject({
+      commandId: "caller-session:tc-9",
+      sessionId: TARGET_SESSION,
+      intent: {
+        kind: "session.stop",
+        reason: "Wedged",
+        by: { kind: "session", sessionId: "caller-session" },
+      },
+    });
+  });
+
+  it("marks a sent message as steering from the calling Session", async () => {
+    const h = superviseHarness();
+
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Use the thinking-orbs library",
+    });
+
+    expect(result.text).toContain("Steering delivered into Session bbbbbbbb");
+    expect(result.text).toContain("mid-stream");
+    const submitted = h.sends.find(
+      (request) => (request as { command?: { kind?: string } }).command?.kind === "message.submit",
+    ) as { commandId: string; command: { delivery: string; message: { parts: unknown[] } } };
+    expect(submitted.commandId).toBe("caller-session:tc-9");
+    expect(submitted.command.delivery).toBe("steer");
+    expect(submitted.command.message.parts[0]).toMatchObject({
+      text: expect.stringContaining("Steering from supervising Session caller-s"),
+    });
+  });
+
+  it("refuses field mistakes and a host without a runtime in words, never throws", async () => {
+    const h = superviseHarness();
+    for (const [verb, input] of [
+      ["session.stop", {}],
+      ["session.stop", { session: "   " }],
+      ["session.send", { session: "bbbbbbbb" }],
+      ["session.send", { session: "bbbbbbbb", message: " " }],
+    ] as const) {
+      const result = await h.call(verb, { ...input });
+      expect(result.text.length).toBeGreaterThan(0);
+    }
+    expect(h.stops).toEqual([]);
+
+    // No runtime this launch: the start-suite harness wires `supervise: () =>
+    // null`, and both tools answer in words.
+    const degraded = harness();
+    const stop = await degraded.door(
+      CALLER,
+      { verb: "session.stop", input: { session: "bbbbbbbb" }, toolCallId: "tc-1" },
+      new AbortController().signal,
+    );
+    expect(stop.text).toContain("not available this launch");
   });
 });

@@ -1420,6 +1420,12 @@ app.whenReady().then(async () => {
           // post-commit wake bus until a planner fact matches.
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
           subscribeTicketWake,
+          // The supervision operations (VC-86): stop and send act through the
+          // same engine and runtime the app itself does — no parallel door.
+          supervise: () =>
+            sessionEngine !== null && sessionRuntime !== null
+              ? { sessionEngine, runtime: sessionRuntime }
+              : null,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),

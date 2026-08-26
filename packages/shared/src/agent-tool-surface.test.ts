@@ -24,7 +24,15 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
   it("gives a Project Session the agent-control family and a Ticket Session none", () => {
-    expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await"]);
+    // The whole family travels together (VC-92's pairing rule; stop and send
+    // joined start in VC-86) — shipping part of it would make the bundle no
+    // boundary.
+    expect(roleVerbBundle("project")).toEqual([
+      "session.start",
+      "session.stop",
+      "session.send",
+      "ticket.await",
+    ]);
     // The property this ticket exists to make true, asserted as absence
     // rather than described. An injected instruction telling a Ticket Session
     // to start ten Sessions has nothing to call. `ticket.await` is not of the
@@ -45,6 +53,10 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
 
 describe("resolveAgentToolSurface — the three sets, kept apart", () => {
   it("resolves capability tools, then the Role's verbs, in canonical order", () => {
+    // Verb order is REGISTRY DECLARATION order, not bundle order: stop and
+    // send were appended after ticket.await (VC-86), so they follow it —
+    // that is what keeps `ticket.await`'s position stable inside every
+    // tool-surface record frozen before they existed.
     expect(resolveAgentToolSurface(capabilities())).toEqual([
       "read",
       "edit",
@@ -55,6 +67,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_search",
       "session.start",
       "ticket.await",
+      "session.stop",
+      "session.send",
     ]);
   });
 
@@ -86,7 +100,17 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       resolveAgentToolSurface(
         capabilities({ capabilities: { coding: EVERY_CODING, interaction: ["ask_user"] } }),
       ),
-    ).toEqual(["read", "edit", "write", "execute", "ask_user", "session.start", "ticket.await"]);
+    ).toEqual([
+      "read",
+      "edit",
+      "write",
+      "execute",
+      "ask_user",
+      "session.start",
+      "ticket.await",
+      "session.stop",
+      "session.send",
+    ]);
   });
 
   it("orders interaction tools by the vocabulary, not by the caller's array", () => {
@@ -108,6 +132,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_search",
       "session.start",
       "ticket.await",
+      "session.stop",
+      "session.send",
     ]);
   });
 });

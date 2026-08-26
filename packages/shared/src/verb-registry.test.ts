@@ -145,6 +145,11 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // The first verb born on VC-92's target assignment directly: tool-only,
   // Role-gated, never on the socket (VC-85). No delta to grow out of.
   "ticket.await": "control",
+  // The supervision pair (VC-86), born control tier the same way: control
+  // over OTHER agents is only safe where the caller is unspoofable, so
+  // neither has ever had a socket door to shut.
+  "session.stop": "control",
+  "session.send": "control",
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
@@ -545,12 +550,17 @@ describe("REFERENCE_VERBS", () => {
     expect(REFERENCE_VERBS.map((entry) => entry.key).toSorted()).toEqual(listedOnCli.toSorted());
   });
 
-  it("still lets help name the two verbs the shell cannot run", () => {
+  it("still lets help name the verbs the shell cannot run", () => {
     const discoverable = DISCOVERABLE_VERBS.map((entry) => entry.key);
     const reference = new Set(REFERENCE_VERBS.map((entry) => entry.key));
+    // In reference order: the app-only archive, then the agent-control family
+    // — start (VC-163), stop and send (VC-86) — each listed so a wrong door
+    // teaches instead of reading as no door.
     expect(discoverable.filter((key) => !reference.has(key))).toEqual([
       "ticket.archive",
       "session.start",
+      "session.stop",
+      "session.send",
     ]);
   });
 

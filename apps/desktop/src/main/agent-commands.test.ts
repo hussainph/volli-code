@@ -2107,6 +2107,25 @@ describe("agent command service", () => {
       title: "Idle",
       provenance,
     });
+    // The fourth honest state (VC-86): stopped by a supervisor — the one
+    // "idle" used to hide.
+    const stopped = await sessionEngine.createSession({
+      commandId: "create-stopped",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Stopped",
+      provenance,
+    });
+    await sessionEngine.submit({
+      commandId: "command-stop",
+      sessionId: stopped.session.id,
+      intent: {
+        kind: "session.stop",
+        reason: "Wedged",
+        by: { kind: "session", sessionId: "supervisor-1" },
+      },
+      provenance,
+    });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
@@ -2149,9 +2168,23 @@ describe("agent command service", () => {
             waitingOn: null,
             lastActivityAgeMs: 9_000,
           }),
+          expect.objectContaining({
+            id: stopped.session.id.slice(0, 8),
+            status: "stopped",
+            waitingOn: null,
+          }),
         ]),
       },
     });
+
+    // The same word through the other read door: peek's activity line.
+    const peek = await service.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: stopped.session.id.slice(0, 8) },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(peek).toMatchObject({ ok: true, data: { status: "stopped", waitingOn: null } });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {

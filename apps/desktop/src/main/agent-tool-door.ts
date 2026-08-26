@@ -55,6 +55,12 @@ import type { SubscribeTicketWake } from "./agent-await";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
 import type { StartSessionPorts } from "./session-runtime/start-session";
+import {
+  sendSessionMessageOperation,
+  stopSessionOperation,
+  SuperviseSessionError,
+} from "./session-runtime/supervise-session";
+import type { SuperviseSessionPorts } from "./session-runtime/supervise-session";
 
 /**
  * What the door reaches, resolved per call rather than captured.
@@ -76,6 +82,12 @@ export interface AgentToolDoorOptions extends Omit<
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /** The post-commit wake bus (`ticket-wake.ts`, VC-85 slice C) `ticket.await` parks on. */
   subscribeTicketWake: SubscribeTicketWake;
+  /**
+   * The supervision operations' ports (VC-86), resolved per call like the
+   * Sessions facade: the runtime is composed after this door is. `null` reads
+   * as "no structured runtime this launch" and each tool refuses in words.
+   */
+  supervise: () => SuperviseSessionPorts | null;
 }
 
 /** A refusal the model reads and can act on. Never a thrown error. */
@@ -239,6 +251,112 @@ async function startSessionTool(
   }
 }
 
+/** One required string field, trimmed, or a refusal naming the field. */
+function requiredText(
+  input: Readonly<Record<string, unknown>>,
+  field: string,
+  example: string,
+): { ok: true; value: string } | { ok: false; text: string } {
+  const raw = input[field];
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return { ok: false, text: `\`${field}\` must be ${example}.` };
+  }
+  return { ok: true, value: raw.trim() };
+}
+
+async function stopSessionTool(
+  options: AgentToolDoorOptions,
+  session: RuntimeSessionIdentity,
+  request: RuntimeVerbCall,
+  // Not withdrawable mid-flight for the same reason a start is not: by the
+  // time an abort could be read, the stop fact either durably exists or never
+  // did, and a half-honoured cancel would strand the record.
+  _signal: AbortSignal,
+): Promise<RuntimeVerbResult> {
+  const ports = options.supervise();
+  if (ports === null) {
+    return refusal("Volli's Session runtime is not available this launch, so nothing was stopped.");
+  }
+  const handle = requiredText(
+    request.input,
+    "session",
+    "a short session id, as `volli session list` prints it",
+  );
+  if (!handle.ok) return refusal(handle.text);
+  const reason = optionalText(request.input, "reason");
+  if (!reason.ok) return refusal(reason.text);
+  try {
+    const outcome = await stopSessionOperation(ports, {
+      // The caller's identity plus the runtime's own call id (VC-162's
+      // discipline): a replayed tool call finds its own stop already recorded
+      // instead of writing a second one.
+      operationId: `${session.sessionId}:${request.toolCallId}`,
+      callerSessionId: session.sessionId,
+      projectId: session.projectId,
+      handle: handle.value,
+      ...(reason.value === undefined ? {} : { reason: reason.value }),
+    });
+    const acts =
+      outcome.interrupted && outcome.released
+        ? "Its open turn was interrupted and its executor released."
+        : outcome.released
+          ? "Its executor was released; no turn was open."
+          : "Nothing was live to interrupt or release.";
+    return {
+      text: [
+        `Stopped Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`}, recorded as stopped by this Session.`,
+        acts,
+        ...outcome.failures,
+        "Its history stays openable, and a person can reattach it.",
+      ].join(" "),
+    };
+  } catch (error) {
+    if (error instanceof SuperviseSessionError) return refusal(error.message);
+    throw error;
+  }
+}
+
+async function sendSessionTool(
+  options: AgentToolDoorOptions,
+  session: RuntimeSessionIdentity,
+  request: RuntimeVerbCall,
+  _signal: AbortSignal,
+): Promise<RuntimeVerbResult> {
+  const ports = options.supervise();
+  if (ports === null) {
+    return refusal("Volli's Session runtime is not available this launch, so nothing was sent.");
+  }
+  const handle = requiredText(
+    request.input,
+    "session",
+    "a short session id, as `volli session list` prints it",
+  );
+  if (!handle.ok) return refusal(handle.text);
+  const message = requiredText(request.input, "message", "the steering text to deliver");
+  if (!message.ok) return refusal(message.text);
+  try {
+    const outcome = await sendSessionMessageOperation(ports, {
+      operationId: `${session.sessionId}:${request.toolCallId}`,
+      callerSessionId: session.sessionId,
+      projectId: session.projectId,
+      handle: handle.value,
+      message: message.value,
+    });
+    return {
+      text: [
+        `Steering delivered into Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`}, marked as coming from this Session.`,
+        outcome.midTurn
+          ? "A turn was open, so the model reads it mid-stream."
+          : "No turn was open, so it opens one.",
+        "Nothing reports back into this Session; use `volli session peek` to observe the effect.",
+      ].join(" "),
+    };
+  } catch (error) {
+    if (error instanceof SuperviseSessionError) return refusal(error.message);
+    throw error;
+  }
+}
+
 /**
  * The verb-to-handler binding for this door, total over what a bundle can hold.
  *
@@ -260,6 +378,8 @@ type VerbToolHandlers = Record<
 
 const VERB_TOOL_HANDLERS: VerbToolHandlers = {
   "session.start": startSessionTool,
+  "session.stop": stopSessionTool,
+  "session.send": sendSessionTool,
   "ticket.await": (options, session, request, signal) =>
     awaitTicketTool(
       {
