@@ -38,6 +38,7 @@ export {
   readWorktreeStatus,
   readWorktreeDiff,
   readWorktreeChangeSet,
+  readWorktreeChangeSetPaths,
   readWorktreeBaseFile,
 } from "./read";
 export type {
@@ -45,9 +46,34 @@ export type {
   WorktreeStatusRead,
   WorktreeDiffRead,
   WorktreeChangeSetRead,
+  WorktreeChangeSetPathsRead,
   WorktreeBaseFileRead,
 } from "./read";
-export { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+export { changeSetPaths, changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+
+// Worktree sync (VC-185): the one worktree verb that writes. It merges the base
+// ref this checkout already has, reports conflicts per path, and returns —
+// never fetching, never waiting.
+export {
+  previewSyncWithBase,
+  previewTicketWorktree,
+  syncTicketWorktree,
+  syncWithBase,
+} from "./sync";
+export type {
+  SyncInput,
+  SyncMode,
+  SyncPreview,
+  SyncReport,
+  SyncStatus,
+  WorktreeSyncPreviewRead,
+  WorktreeSyncRead,
+} from "./sync";
+
+// The file-collision radar's scan (VC-185): every live ticket worktree's diff,
+// joined into the overlap matrix `@volli/shared` computes.
+export { scanCollisions } from "./collisions";
+export type { CollisionScan, ScannedWorktree, SkippedWorktree } from "./collisions";
 
 // The venue read (VC-55): the checkout a Session runs in, measured — the file
 // partition the empty chat draws and the loose count the Home rail shows.

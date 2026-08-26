@@ -122,6 +122,8 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     "Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.",
     "A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.",
     "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
+    "volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.",
+    "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
     "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
     "",
   ].join("\n");

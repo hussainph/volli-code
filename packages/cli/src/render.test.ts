@@ -1309,6 +1309,263 @@ describe("renderCliSuccess", () => {
   });
 });
 
+describe("renderCliSuccess — worktree.sync", () => {
+  it("renders a clean sync as an outcome line plus what moved", () => {
+    expect(
+      renderCliSuccess(
+        "worktree.sync",
+        {
+          ticket: "VC-12",
+          project: "Volli Code",
+          worktreePath: "/wt/VC-12",
+          branch: "volli/VC-12-ship",
+          baseBranch: "main",
+          mergedRef: "origin/main",
+          status: "merged",
+          commits: 2,
+          files: [{ path: "src/a.ts", insertions: 3, deletions: 1, untracked: false }],
+          insertions: 3,
+          deletions: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          conflicts: [],
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "VC-12  merged  volli/VC-12-ship ← origin/main\n" +
+        "  2 commits  1 files  +3 -1\n" +
+        "  src/a.ts  +3 -1\n",
+    );
+  });
+
+  it("renders an unmoved branch as one line and nothing else", () => {
+    expect(
+      renderCliSuccess(
+        "worktree.sync",
+        {
+          ticket: "VC-12",
+          branch: "volli/VC-12-ship",
+          mergedRef: "origin/main",
+          status: "already-up-to-date",
+          commits: 0,
+          files: [],
+          insertions: 0,
+          deletions: 0,
+          totalFiles: 0,
+          omittedFiles: 0,
+          conflicts: [],
+        },
+        { json: false },
+      ),
+    ).toBe("VC-12  already-up-to-date  volli/VC-12-ship ← origin/main\n");
+  });
+
+  it("names every conflicted path and the one way back out", () => {
+    const rendered = renderCliSuccess(
+      "worktree.sync",
+      {
+        ticket: "VC-12",
+        branch: "volli/VC-12-ship",
+        mergedRef: "origin/main",
+        status: "conflicted",
+        commits: 0,
+        files: [],
+        insertions: 0,
+        deletions: 0,
+        totalFiles: 0,
+        omittedFiles: 0,
+        conflicts: ["packages/shared/src/x.ts", "apps/desktop/src/y.tsx"],
+      },
+      { json: false },
+    );
+    expect(rendered).toBe(
+      "VC-12  conflicted  volli/VC-12-ship ← origin/main\n" +
+        "  conflicts  2\n" +
+        "    packages/shared/src/x.ts\n" +
+        "    apps/desktop/src/y.tsx\n" +
+        "  Resolve them here and commit, or volli worktree sync VC-12 --abort.\n",
+    );
+  });
+
+  it("renders malformed conflicts and files as empty lists", () => {
+    // A partial or malformed server reply must still leave the outcome legible:
+    // the renderer treats both lists as empty rather than throwing.
+    expect(
+      renderCliSuccess(
+        "worktree.sync",
+        {
+          ticket: "VC-12",
+          branch: null,
+          mergedRef: "main",
+          status: "merged",
+          commits: 1,
+          files: "not-an-array",
+          insertions: 3,
+          deletions: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          conflicts: { path: "not-an-array" },
+        },
+        { json: false },
+      ),
+    ).toBe("VC-12  merged  (detached) ← main\n  1 commits  1 files  +3 -1\n");
+  });
+
+  it("rolls up the files a big sync omitted, and says when it could not measure", () => {
+    const capped = renderCliSuccess(
+      "worktree.sync",
+      {
+        ticket: "VC-12",
+        branch: "volli/VC-12-ship",
+        mergedRef: "main",
+        status: "merged",
+        commits: 40,
+        files: [{ path: "src/a.ts", insertions: 1, deletions: 0, untracked: false }],
+        insertions: 900,
+        deletions: 400,
+        totalFiles: 120,
+        omittedFiles: 119,
+        conflicts: [],
+      },
+      { json: false },
+    );
+    expect(capped).toContain("  40 commits  120 files  +900 -400\n");
+    expect(capped).toContain("  … and 119 more files\n");
+
+    // The merge landed and the measurement did not: nulls read as unknown
+    // rather than as "nothing moved".
+    const unmeasured = renderCliSuccess(
+      "worktree.sync",
+      {
+        ticket: "VC-12",
+        branch: "volli/VC-12-ship",
+        mergedRef: "main",
+        status: "merged",
+        commits: null,
+        files: [],
+        insertions: null,
+        deletions: null,
+        totalFiles: null,
+        omittedFiles: null,
+        conflicts: [],
+      },
+      { json: false },
+    );
+    expect(unmeasured).toBe(
+      "VC-12  merged  volli/VC-12-ship ← main\n  merged, but what moved could not be measured\n",
+    );
+  });
+});
+
+describe("renderCliSuccess — conflicts", () => {
+  it("renders the matrix as a scan header and one block per colliding pair", () => {
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        {
+          scanned: 3,
+          worktrees: [
+            { ticket: "VC-65", branch: "volli/VC-65-a", baseBranch: "main", files: 2 },
+            { ticket: "VC-68", branch: "volli/VC-68-b", baseBranch: "main", files: 1 },
+            { ticket: "VC-70", branch: "volli/VC-70-c", baseBranch: "main", files: 1 },
+          ],
+          overlaps: [{ path: "src/chat-plane.tsx", tickets: ["VC-65", "VC-68"] }],
+          pairs: [{ tickets: ["VC-65", "VC-68"], paths: ["src/chat-plane.tsx"] }],
+          skipped: [],
+        },
+        { json: false },
+      ),
+    ).toBe(
+      ["3 worktrees  1 overlapping path", "VC-65 VC-68  1 path", "  src/chat-plane.tsx", ""].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("renders the empty case plainly, and says how much was looked at", () => {
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        { scanned: 12, worktrees: [], overlaps: [], pairs: [], skipped: [] },
+        { json: false },
+      ),
+    ).toBe("12 worktrees  no overlapping paths\n");
+
+    // Nothing to compare is a different answer from nothing colliding.
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        { scanned: 0, worktrees: [], overlaps: [], pairs: [], skipped: [] },
+        { json: false },
+      ),
+    ).toBe("no active worktrees to compare\n");
+  });
+
+  it("names what it could not read, so a silent skip cannot read as a clean bill", () => {
+    const rendered = renderCliSuccess(
+      "conflicts",
+      {
+        scanned: 1,
+        worktrees: [{ ticket: "VC-1", branch: "volli/VC-1-a", baseBranch: "main", files: 1 }],
+        overlaps: [],
+        pairs: [],
+        skipped: [{ ticket: "VC-2", reason: "fatal: bad revision" }],
+      },
+      { json: false },
+    );
+    expect(rendered).toBe(
+      ["1 worktrees  no overlapping paths", "  skipped VC-2  fatal: bad revision", ""].join("\n"),
+    );
+  });
+
+  it("renders missing radar arrays and malformed pair lists without crashing", () => {
+    // The header and pair row remain useful even when an older or malformed
+    // reply has no scan count or collection-shaped fields.
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        {
+          scanned: "unknown",
+          overlaps: { path: "not-an-array" },
+          pairs: [{ tickets: "not-an-array", paths: null }],
+          skipped: undefined,
+        },
+        { json: false },
+      ),
+    ).toBe("no active worktrees to compare\n  0 paths\n");
+
+    // A malformed pairs collection is ignored alongside the other malformed
+    // radar collections, leaving the plain empty answer.
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        { scanned: "unknown", overlaps: null, pairs: null, skipped: "not-an-array" },
+        { json: false },
+      ),
+    ).toBe("no active worktrees to compare\n");
+  });
+
+  it("caps a pair's paths and rolls the rest up", () => {
+    const paths = Array.from({ length: 25 }, (_, index) => `src/file-${index}.ts`);
+    const rendered = renderCliSuccess(
+      "conflicts",
+      {
+        scanned: 2,
+        worktrees: [],
+        overlaps: paths.map((path) => ({ path, tickets: ["VC-1", "VC-2"] })),
+        pairs: [{ tickets: ["VC-1", "VC-2"], paths }],
+        skipped: [],
+      },
+      { json: false },
+    );
+    expect(rendered).toContain("2 worktrees  25 overlapping paths\n");
+    expect(rendered).toContain("VC-1 VC-2  25 paths\n");
+    expect(rendered).toContain("  … and 5 more paths\n");
+    expect(rendered.split("\n").filter((line) => line.startsWith("  src/")).length).toBe(20);
+  });
+});
+
 describe("renderCliSuccess — prompt.baseline", () => {
   const data = {
     project: { name: "Volli Code", prefix: "VC" },

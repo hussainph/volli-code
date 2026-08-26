@@ -123,18 +123,28 @@ describe("resolveAuthorityPolicy", () => {
 describe("additive inheritance", () => {
   const defaults = DEFAULT_AUTHORITY_POLICY.actors.session.coordinationVerbs;
 
+  /**
+   * A verb the defaults do NOT carry, which is the only kind that can show the
+   * splice. These two cases used `worktree.sync` until VC-185 shipped it as a
+   * default — at which point the splice de-duplicated it and the tests were
+   * asserting the de-duplication instead of the position. The merge queue's
+   * submission verb (VC-89, still deferred) is the honest stand-in: a verb a
+   * project might one day widen its Sessions to, that no default grants.
+   */
+  const NOT_A_DEFAULT = "queue.submit";
+
   it("splices the defaults in where the token sits, so extending is the ordinary act", () => {
     const resolved = resolveAuthorityPolicy({
-      actors: { session: { coordinationVerbs: [AUTHORITY_DEFAULTS_TOKEN, "worktree.sync"] } },
+      actors: { session: { coordinationVerbs: [AUTHORITY_DEFAULTS_TOKEN, NOT_A_DEFAULT] } },
     });
-    expect(resolved.actors.session.coordinationVerbs).toEqual([...defaults, "worktree.sync"]);
+    expect(resolved.actors.session.coordinationVerbs).toEqual([...defaults, NOT_A_DEFAULT]);
   });
 
   it("preserves position, so a project may put its own entries first", () => {
     const resolved = resolveAuthorityPolicy({
-      actors: { session: { coordinationVerbs: ["worktree.sync", AUTHORITY_DEFAULTS_TOKEN] } },
+      actors: { session: { coordinationVerbs: [NOT_A_DEFAULT, AUTHORITY_DEFAULTS_TOKEN] } },
     });
-    expect(resolved.actors.session.coordinationVerbs).toEqual(["worktree.sync", ...defaults]);
+    expect(resolved.actors.session.coordinationVerbs).toEqual([NOT_A_DEFAULT, ...defaults]);
   });
 
   it("replaces wholesale when the token is absent, which is the visible act", () => {

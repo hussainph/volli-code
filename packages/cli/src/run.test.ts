@@ -993,6 +993,34 @@ describe("runCli — doctor", () => {
     expect(stdout.join("")).toContain("Side-effect preview");
   });
 
+  it("sends a worktree sync preview through the shared contract", async () => {
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("worktree.sync")!, {
+      kind: "ticket",
+      id: "VC-1",
+      label: "VC-1",
+    });
+    const code = await runCli(["worktree", "sync", "VC-1", "--dry-run"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return request.cmd === "identify"
+          ? { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } }
+          : { v: 1, ok: true, data: plan };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(requests.map((request) => request.cmd)).toEqual(["identify", "worktree.sync"]);
+    expect(requests[1]?.args).toEqual({ id: "VC-1", dryRun: true });
+  });
+
   it("keeps doctor --fix preview free of local observation and a second request", async () => {
     const requests: AgentRequest[] = [];
     let observed = false;

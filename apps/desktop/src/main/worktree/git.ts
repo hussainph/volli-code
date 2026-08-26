@@ -25,22 +25,54 @@ const execFileAsync = promisify(execFile);
  */
 export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
+/**
+ * The hard deadline for one local git child. Git still runs hooks, signing
+ * helpers, and filters for local commands; each can wait forever unless the
+ * process that launched it owns a deadline. Accepted socket requests disable
+ * their transport timeout, so this runner is the local bound that lets sync
+ * answer instead of leaving the client to infer a wedged child.
+ */
+export const GIT_COMMAND_TIMEOUT_MS = 8_000;
+
 /** A git invocation that exited non-zero, carrying its captured `stderr`. */
 export class GitError extends Error {
   constructor(
     message: string,
     readonly stderr: string,
     readonly args: readonly string[],
+    /** Whether this runner's deadline, rather than git, ended the child. */
+    readonly timedOut = false,
   ) {
     super(message);
     this.name = "GitError";
   }
 }
 
+/** The error shape Node gives both sync and async execFile calls. */
+interface CapturedGitFailure {
+  stderr?: Buffer | string;
+  message?: string;
+  killed?: unknown;
+  code?: unknown;
+}
+
+/** Turns a child-process failure into the one git error every caller understands. */
+function gitFailure(caught: unknown, args: readonly string[], timeoutMs: number): GitError {
+  const failure = caught as CapturedGitFailure;
+  const stderr = failure.stderr ? failure.stderr.toString() : "";
+  // Async execFile marks its own timeout with `killed`; execFileSync uses
+  // ETIMEDOUT. Treat both as the same bounded-runner outcome.
+  const timedOut = failure.killed === true || failure.code === "ETIMEDOUT";
+  const message = timedOut
+    ? `Git command timed out after ${timeoutMs}ms.`
+    : (failure.message ?? "git command failed");
+  return new GitError(message, stderr, args, timedOut);
+}
+
 /**
- * Default worktree git runner: pipes BOTH stdout and stderr, and on non-zero
- * exit throws a {@link GitError} carrying the captured stderr so callers can
- * record it. `execFileSync` populates `err.stderr` when stderr is piped.
+ * Default synchronous worktree git runner. It remains for small legacy reads,
+ * but every child has the same deadline as the async runner: a malformed local
+ * hook must never freeze Electron indefinitely.
  */
 export const runGitCapturing: RunGit = (args, cwd) => {
   try {
@@ -48,37 +80,65 @@ export const runGitCapturing: RunGit = (args, cwd) => {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: GIT_COMMAND_TIMEOUT_MS,
+      // A hook may ignore SIGTERM. SIGKILL makes the deadline mechanical for
+      // the direct git child rather than a polite request it can decline.
+      killSignal: "SIGKILL",
     });
   } catch (caught) {
-    const e = caught as { stderr?: Buffer | string; message?: string };
-    const stderr = e.stderr ? e.stderr.toString() : "";
-    throw new GitError(e.message ?? "git command failed", stderr, args);
+    throw gitFailure(caught, args, GIT_COMMAND_TIMEOUT_MS);
   }
 };
 
+/** Configuration for a bounded async git runner; the override is test-only useful. */
+export interface GitCapturingAsyncRunnerOptions {
+  /** Executable to run; production uses git and tests can supply a hung child. */
+  readonly file?: string;
+  /** Positive deadline for one child process. */
+  readonly timeoutMs?: number;
+}
+
 /**
- * The async twin of {@link runGitCapturing}, for reads that must not block the
- * main process. `changeSetSnapshot` runs five git commands over a whole
- * worktree and is re-triggered by every debounced filesystem event, so running
- * it synchronously froze the UI for the duration on a busy agent worktree —
- * the same reasoning that put the network verbs behind `RunNet` (net.ts).
- * Failures carry the captured stderr in a {@link GitError}, exactly as the
- * sync runner does, so callers classify them identically.
+ * Builds the async git runner that operations with arbitrary local hooks use.
+ *
+ * `worktree.sync` deliberately goes through this runner rather than
+ * `execFileSync`: while a hook waits, Electron main remains free to process
+ * other work, and the deadline kills the child so the command eventually
+ * answers. The factory lets the suite prove that behavior against a real hung
+ * spawn at a short deadline without weakening production's bound.
  */
-export const runGitCapturingAsync: RunGitAsync = async (args, cwd) => {
-  try {
-    const { stdout } = await execFileAsync("git", [...args], {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: GIT_MAX_BUFFER,
-    });
-    return stdout;
-  } catch (caught) {
-    const e = caught as { stderr?: Buffer | string; message?: string };
-    const stderr = e.stderr ? e.stderr.toString() : "";
-    throw new GitError(e.message ?? "git command failed", stderr, args);
+export function createGitCapturingAsyncRunner(
+  options: GitCapturingAsyncRunnerOptions = {},
+): RunGitAsync {
+  const file = options.file ?? "git";
+  const timeoutMs = options.timeoutMs ?? GIT_COMMAND_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("Git command timeout must be a positive finite number.");
   }
-};
+  return async (args, cwd) => {
+    try {
+      const { stdout } = await execFileAsync(file, [...args], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: GIT_MAX_BUFFER,
+        timeout: timeoutMs,
+        // See the synchronous runner: a deadline that only sends a signal a
+        // hook can ignore is not a deadline.
+        killSignal: "SIGKILL",
+      });
+      return stdout;
+    } catch (caught) {
+      throw gitFailure(caught, args, timeoutMs);
+    }
+  };
+}
+
+/**
+ * The async twin of {@link runGitCapturing}, for reads and local mutations
+ * that must not block the main process. Failures carry captured stderr in a
+ * {@link GitError}, exactly as the sync runner does.
+ */
+export const runGitCapturingAsync: RunGitAsync = createGitCapturingAsyncRunner();
 
 /** Pulls a captured stderr excerpt off any thrown error, for `worktree_failed` events. */
 export function stderrOf(error: unknown): string {

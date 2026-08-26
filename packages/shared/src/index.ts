@@ -31,6 +31,7 @@ export * from "./ticket-events";
 export * from "./ticket-await";
 export * from "./untrusted-content";
 export * from "./change-set";
+export * from "./worktree-collisions";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";

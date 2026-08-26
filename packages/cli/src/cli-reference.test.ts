@@ -33,13 +33,17 @@ import { parseCliArgs } from "./parser";
  */
 
 /**
- * The 29 listed commands, in the order the compact reference prints them.
+ * The 31 listed commands, in the order the compact reference prints them.
  *
  * `ticket archive` and `session start` are still HERE after VC-163, and that is
  * the point rather than an oversight: help must go on naming a verb the shell
  * cannot run, or a wrong door becomes indistinguishable from no door. What
  * changed is where each one prints and what its detail says — not whether help
  * knows it exists.
+ *
+ * VC-185 added two: `conflicts` beside the other worktree reads, and `worktree
+ * sync` at the end of the writes. Both are new bytes in the oracle, which is
+ * the surface growing in the open rather than a projection quietly drifting.
  */
 const REFERENCE_COMMANDS = [
   "identify",
@@ -50,6 +54,7 @@ const REFERENCE_COMMANDS = [
   "ticket brief",
   "worktree status",
   "worktree diff",
+  "conflicts",
   "project list",
   "label list",
   "model list",
@@ -60,6 +65,7 @@ const REFERENCE_COMMANDS = [
   "ticket comment",
   "ticket signal",
   "ticket archive",
+  "worktree sync",
   "session start",
   "session list",
   "session peek",
@@ -89,6 +95,7 @@ const TAKES_ID: ReadonlySet<string> = new Set([
   "session harness",
   "worktree status",
   "worktree diff",
+  "worktree sync",
 ]);
 
 /** The command-group words that answer with a subcommand list. */

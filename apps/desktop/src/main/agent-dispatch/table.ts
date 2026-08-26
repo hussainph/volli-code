@@ -29,6 +29,7 @@ import type { AgentCommandBindingId } from "@volli/shared";
 
 import type { AgentVerbHandler } from "./context";
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
+import { conflictsVerb } from "./conflicts-verb";
 import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import {
@@ -54,7 +55,7 @@ import {
   ticketSignalVerb,
   ticketUpdateVerb,
 } from "./ticket-verbs";
-import { worktreeDiffVerb, worktreeStatusVerb } from "./worktree-verbs";
+import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
 
 /**
  * Whether the dispatch folds every project's Sessions before calling the
@@ -122,6 +123,14 @@ export const AGENT_VERB_TABLE: {
   "ticket.brief": { handle: ticketBriefVerb, projections: "load", envSession: "resolve" },
   "worktree.status": { handle: worktreeStatusVerb, projections: "load", envSession: "resolve" },
   "worktree.diff": { handle: worktreeDiffVerb, projections: "load", envSession: "resolve" },
+  // The one worktree verb that writes (VC-185). It takes the fold for the same
+  // reason its two read siblings do — the context ladder that answers WHICH
+  // worktree runs off the same snapshot — and never for anything it waits on.
+  "worktree.sync": { handle: worktreeSyncVerb, projections: "load", envSession: "resolve" },
+  // The radar reads Tickets and worktree diffs, and no Session anywhere: the
+  // multi-project fold would be pure cost on a verb whose whole design claim is
+  // that it is cheap enough to run in a pipeline.
+  conflicts: { handle: conflictsVerb, projections: "skip", envSession: "resolve" },
   "project.list": { handle: projectListVerb, projections: "load", envSession: "resolve" },
   "label.list": { handle: labelListVerb, projections: "load", envSession: "resolve" },
   // Reads the Model Access snapshot and nothing else — no Session anywhere in

@@ -184,6 +184,48 @@ export async function changeSetSnapshot(
 }
 
 /**
+ * The complete, uncapped path set in a worktree's current Change Set.
+ *
+ * The collision radar needs every path, not the UI snapshot's capped file
+ * rows: an overlap hidden after the Details rail's cap would be exactly the
+ * merge-time surprise the radar exists to prevent. Like {@link changeSetSnapshot},
+ * this compares the complete working tree (committed + staged + unstaged) to
+ * the resolved base and appends untracked and unmerged paths from porcelain.
+ */
+export async function changeSetPaths(
+  git: RunGitAsync,
+  input: ChangeSetInput,
+): Promise<WorktreeResult<string[]>> {
+  if (!input.baseBranch) {
+    return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
+  }
+  try {
+    const baseRevision = await resolveChangeSetBaseRevision(
+      git,
+      input.worktreePath,
+      input.baseBranch,
+    );
+    if (!baseRevision) {
+      return err(
+        "No base branch is known for this worktree, so its Change Set cannot be computed.",
+      );
+    }
+    const [nameStatusOut, statusOut] = await Promise.all([
+      git(["diff", "--name-status", "-z", "-M", baseRevision], input.worktreePath),
+      git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath),
+    ]);
+    const paths = new Set([
+      ...parseNameStatus(nameStatusOut).map((entry) => entry.path),
+      ...parseUntracked(statusOut).map((entry) => entry.path),
+      ...parseUnmergedPaths(statusOut),
+    ]);
+    return ok([...paths].toSorted((left, right) => left.localeCompare(right)));
+  } catch (caught) {
+    return err(stderrOf(caught));
+  }
+}
+
+/**
  * Reads a file's contents at `baseRevision` without mutating the checkout
  * (`git show <rev>:<path>` — never `git checkout`). Path containment rejects
  * absolute paths and `..` traversal. Absence at the base is decided structurally
