@@ -14,7 +14,7 @@ Read
   worktree diff [<id>] [--working-tree]
   project list
   label list [--project <p>]
-  model list [--all]
+  model list
   cost [--ticket <id>] [--session <handle>] [--project <p>] [--all-projects] [--since <when>] [--group-by <dimension>]
 
 Write
@@ -217,21 +217,18 @@ Example: volli label list --project VC
 ============================================================================
 volli help model list
 ============================================================================
-model list — List signed-in providers, model ids, and reasoning levels.
+model list — List available providers, model ids, and reasoning levels.
 
 Door: Agent CLI
 Verb tier: read
 
-Usage: volli model list [options]
-
-Options:
-  --all  Include signed-out providers and unavailable models.
+Usage: volli model list
 
 Example: volli model list
 
 Notes:
 - Copy a printed <provider/model> verbatim into session start --model.
-- Shows available models only; --all includes signed-out providers.
+- Shows only models this profile can run.
 
 ============================================================================
 volli help cost
@@ -719,7 +716,7 @@ Run volli help label <subcommand> for detail.
 volli help model
 ============================================================================
 model subcommands:
-  model list  List signed-in providers, model ids, and reasoning levels. [Agent CLI]
+  model list  List available providers, model ids, and reasoning levels. [Agent CLI]
 Run volli help model <subcommand> for detail.
 
 ============================================================================
@@ -1115,7 +1112,7 @@ USAGE Unknown option --not-an-option (options: --project) — see volli help lab
 ============================================================================
 volli model list --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --all) — see volli help model list
+USAGE Unknown option --not-an-option — see volli help model list
 
 ============================================================================
 volli cost --not-an-option

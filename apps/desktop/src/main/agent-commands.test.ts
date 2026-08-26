@@ -4595,7 +4595,7 @@ describe("composeProjectBrief", () => {
 describe("model.list", () => {
   /**
    * The door under test with the seam faked out: `model.list` owns the bounded
-   * read, the signed-in filter, and the default report; the snapshot itself is
+   * read, the auth-available filter, and the default report; the snapshot itself is
    * `inspectPiModelAccess`'s contract, tested beside it in agent-runtime.
    */
   function modelListHarness(
@@ -4672,7 +4672,7 @@ describe("model.list", () => {
     return { execute };
   }
 
-  it("lists the signed-in slice by default, with copyable ids and an honest omission count", async () => {
+  it("lists only auth-available models, with copyable ids and an honest omission count", async () => {
     const harness = modelListHarness();
 
     const response = await harness.execute();
@@ -4696,8 +4696,8 @@ describe("model.list", () => {
                 reasoning: ["low", "medium", "high"],
               },
             ],
-            // claude-legacy is unavailable, so the default view withholds it
-            // — and says so, the same honesty the provider rollup has.
+            // claude-legacy is unavailable, so the command withholds it —
+            // and says so, the same honesty the provider rollup has.
             omittedModels: 1,
           },
         ],
@@ -4706,54 +4706,30 @@ describe("model.list", () => {
     });
   });
 
-  it("never leaks credential-adjacent snapshot fields, filtered or not", async () => {
+  it("never leaks credential-adjacent snapshot fields", async () => {
     const harness = modelListHarness();
 
-    for (const args of [{}, { all: true }]) {
-      const rendered = JSON.stringify(await harness.execute(args));
-      // The provider rows drop everything but identity/state/catalog — the
-      // credential-adjacent fields (stored-credential flags, billing, sign-in
-      // methods) stay behind the app's own surfaces.
-      expect(rendered).not.toContain("hasStoredCredential");
-      expect(rendered).not.toContain("billingSource");
-      expect(rendered).not.toContain("signIn");
-      expect(rendered).not.toContain("accountLabel");
-    }
+    const rendered = JSON.stringify(await harness.execute());
+    // The provider rows drop everything but identity/state/catalog — the
+    // credential-adjacent fields (stored-credential flags, billing, sign-in
+    // methods) stay behind the app's own surfaces.
+    expect(rendered).not.toContain("hasStoredCredential");
+    expect(rendered).not.toContain("billingSource");
+    expect(rendered).not.toContain("signIn");
+    expect(rendered).not.toContain("accountLabel");
   });
 
-  it("shows the whole registered catalog behind --all", async () => {
+  it("ignores a legacy all argument so unauthenticated models never reach an agent", async () => {
     const harness = modelListHarness();
 
-    const response = await harness.execute({ all: true });
+    const [ordinary, legacy] = await Promise.all([
+      harness.execute(),
+      harness.execute({ all: true }),
+    ]);
 
-    expect(response).toMatchObject({
-      ok: true,
-      data: {
-        omittedProviders: 0,
-        providers: [
-          {
-            id: "anthropic",
-            omittedModels: 0,
-            models: [
-              { model: "anthropic/claude-opus-5" },
-              { model: "anthropic/claude-legacy", state: "unavailable" },
-            ],
-          },
-          {
-            id: "openai-codex",
-            state: "authentication-required",
-            omittedModels: 0,
-            models: [
-              {
-                model: "openai-codex/gpt-5.6-terra",
-                state: "authentication-required",
-                reasoning: ["medium", "high", "xhigh"],
-              },
-            ],
-          },
-        ],
-      },
-    });
+    // An older CLI can still send an arbitrary socket argument. The handler
+    // must preserve the auth filter rather than treating it as an escape hatch.
+    expect(legacy).toEqual(ordinary);
   });
 
   it("reports the configured app default alongside the catalog", async () => {
@@ -4776,7 +4752,7 @@ describe("model.list", () => {
     });
   });
 
-  it("reports the Ticket default once one is chosen, not the project default", async () => {
+  it("reports the available Ticket default once one is chosen, not the project default", async () => {
     // `volli session start` is a Ticket Session, so the model it will run is
     // the execution default — reporting the orchestration one would name a
     // model this command is never going to use.
@@ -4784,13 +4760,13 @@ describe("model.list", () => {
     writeModelAccessDefault(
       ctx.db,
       "global",
-      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
+      { providerId: "openai-codex", modelId: "gpt-5.6-terra", reasoningLevel: "high" },
       500,
     );
     writeModelAccessDefault(
       ctx.db,
       "ticket",
-      { providerId: "openai-codex", modelId: "gpt-5.6-terra", reasoningLevel: "high" },
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "medium" },
       501,
     );
 
@@ -4798,8 +4774,22 @@ describe("model.list", () => {
 
     expect(response).toMatchObject({
       ok: true,
-      data: { default: { model: "openai-codex/gpt-5.6-terra", reasoning: "high" } },
+      data: { default: { model: "anthropic/claude-opus-5", reasoning: "medium" } },
     });
+  });
+
+  it("withholds a configured default whose model is no longer authenticated", async () => {
+    const harness = modelListHarness();
+    writeModelAccessDefault(
+      ctx.db,
+      "ticket",
+      { providerId: "openai-codex", modelId: "gpt-5.6-terra", reasoningLevel: "high" },
+      500,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({ ok: true, data: { default: null } });
   });
 
   it("answers APP_UNREACHABLE when the Pi runtime never came up this launch", async () => {

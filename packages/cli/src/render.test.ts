@@ -456,10 +456,10 @@ describe("renderCliSuccess", () => {
       "default  anthropic/claude-opus-5  medium\n" +
         "anthropic  Anthropic  available\n" +
         "  anthropic/claude-opus-5  low|medium|high\n" +
-        "  … and 2 more models not available (use --all)\n" +
+        "  … and 2 more models not available\n" +
         "openai-codex  OpenAI Codex  authentication-required\n" +
         "  openai-codex/gpt-5.6-terra  -  authentication-required\n" +
-        "… and 37 more providers not available (use --all)\n",
+        "… and 37 more providers not available\n",
     );
     // No configured default and nothing signed in: the answer is still legible.
     expect(
