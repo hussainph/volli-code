@@ -469,7 +469,7 @@ describe("ghPrStatus", () => {
       state: "open",
       mergedAt: null,
       hasConflicts: false,
-      failingChecks: [],
+      checks: [{ name: "build", workflow: null, state: "passing", url: null }],
     });
   });
 
@@ -504,25 +504,152 @@ describe("ghPrStatus", () => {
     expect(result.value.hasConflicts).toBe(true);
   });
 
-  it("collects failing check names from CheckRun conclusions and StatusContext states", async () => {
+  it("normalizes both rollup shapes into one list, preserving gh's order", async () => {
     const { run } = scriptedNet(() => ({
       stdout: JSON.stringify({
         state: "OPEN",
         mergedAt: null,
         mergeStateStatus: "BLOCKED",
         statusCheckRollup: [
-          { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE" },
+          {
+            __typename: "CheckRun",
+            name: "lint",
+            workflowName: "CI",
+            status: "COMPLETED",
+            conclusion: "FAILURE",
+            detailsUrl: "https://github.com/o/r/actions/runs/1/job/9",
+          },
           { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
           { __typename: "CheckRun", name: "e2e", status: "IN_PROGRESS", conclusion: null },
-          { __typename: "StatusContext", context: "ci/legacy", state: "ERROR" },
-          { __typename: "StatusContext", context: "ci/ok", state: "SUCCESS" },
+          {
+            __typename: "StatusContext",
+            context: "ci/legacy",
+            state: "ERROR",
+            targetUrl: "https://legacy.example/build/3",
+          },
+          { __typename: "StatusContext", context: "ci/ok", state: "SUCCESS", targetUrl: "" },
         ],
       }),
     }));
     const result = await ghPrStatus(run, input);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.failingChecks).toEqual(["lint", "ci/legacy"]);
+    expect(result.value.checks).toEqual([
+      {
+        name: "lint",
+        workflow: "CI",
+        state: "failing",
+        url: "https://github.com/o/r/actions/runs/1/job/9",
+      },
+      { name: "test", workflow: null, state: "passing", url: null },
+      { name: "e2e", workflow: null, state: "pending", url: null },
+      {
+        name: "ci/legacy",
+        workflow: null,
+        state: "failing",
+        url: "https://legacy.example/build/3",
+      },
+      // An empty `targetUrl` is gh's "no link", not a link to nowhere.
+      { name: "ci/ok", workflow: null, state: "passing", url: null },
+    ]);
+  });
+
+  it("maps every CheckRun conclusion to one of the four states", async () => {
+    const conclusions = [
+      ["SUCCESS", "passing"],
+      ["NEUTRAL", "passing"],
+      ["SKIPPED", "skipped"],
+      ["STALE", "skipped"],
+      ["FAILURE", "failing"],
+      ["TIMED_OUT", "failing"],
+      ["CANCELLED", "failing"],
+      ["STARTUP_FAILURE", "failing"],
+      ["ACTION_REQUIRED", "failing"],
+      // Not a member of today's enum: an unrecognized verdict must claim
+      // neither a pass nor a failure.
+      ["SOMETHING_NEW", "pending"],
+    ] as const;
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: conclusions.map(([conclusion]) => ({
+          __typename: "CheckRun",
+          name: conclusion,
+          status: "COMPLETED",
+          conclusion,
+        })),
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.checks.map((check) => [check.name, check.state])).toEqual(
+      conclusions.map(([conclusion, state]) => [conclusion, state]),
+    );
+  });
+
+  it("reads a queued CheckRun as pending whatever its status is called", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "a", status: "QUEUED", conclusion: null },
+          { __typename: "CheckRun", name: "b", status: "WAITING", conclusion: null },
+          // A stale conclusion left on a re-queued run must not outrank its status.
+          { __typename: "CheckRun", name: "c", status: "REQUESTED", conclusion: "SUCCESS" },
+        ],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.checks.map((check) => check.state)).toEqual([
+      "pending",
+      "pending",
+      "pending",
+    ]);
+  });
+
+  it("drops a rollup entry that names nothing rather than inventing a row", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" },
+          { __typename: "CheckRun", name: "", status: "COMPLETED", conclusion: "SUCCESS" },
+          null,
+          "not-an-object",
+          { __typename: "CheckRun", name: "real", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.checks).toEqual([
+      { name: "real", workflow: null, state: "passing", url: null },
+    ]);
+  });
+
+  it("reads a non-array rollup as no checks at all", async () => {
+    const { run } = scriptedNet(() => ({
+      stdout: JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: null,
+      }),
+    }));
+    const result = await ghPrStatus(run, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.checks).toEqual([]);
   });
 
   it("treats an unparseable body as an unknown failure rather than throwing", async () => {
