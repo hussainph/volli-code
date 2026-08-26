@@ -1128,6 +1128,30 @@ describe("renderCliSuccess — worktree.sync", () => {
     );
   });
 
+  it("renders malformed conflicts and files as empty lists", () => {
+    // A partial or malformed server reply must still leave the outcome legible:
+    // the renderer treats both lists as empty rather than throwing.
+    expect(
+      renderCliSuccess(
+        "worktree.sync",
+        {
+          ticket: "VC-12",
+          branch: null,
+          mergedRef: "main",
+          status: "merged",
+          commits: 1,
+          files: "not-an-array",
+          insertions: 3,
+          deletions: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          conflicts: { path: "not-an-array" },
+        },
+        { json: false },
+      ),
+    ).toBe("VC-12  merged  (detached) ← main\n  1 commits  1 files  +3 -1\n");
+  });
+
   it("rolls up the files a big sync omitted, and says when it could not measure", () => {
     const capped = renderCliSuccess(
       "worktree.sync",
@@ -1233,6 +1257,33 @@ describe("renderCliSuccess — conflicts", () => {
     expect(rendered).toBe(
       ["1 worktrees  no overlapping paths", "  skipped VC-2  fatal: bad revision", ""].join("\n"),
     );
+  });
+
+  it("renders missing radar arrays and malformed pair lists without crashing", () => {
+    // The header and pair row remain useful even when an older or malformed
+    // reply has no scan count or collection-shaped fields.
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        {
+          scanned: "unknown",
+          overlaps: { path: "not-an-array" },
+          pairs: [{ tickets: "not-an-array", paths: null }],
+          skipped: undefined,
+        },
+        { json: false },
+      ),
+    ).toBe("no active worktrees to compare\n  0 paths\n");
+
+    // A malformed pairs collection is ignored alongside the other malformed
+    // radar collections, leaving the plain empty answer.
+    expect(
+      renderCliSuccess(
+        "conflicts",
+        { scanned: "unknown", overlaps: null, pairs: null, skipped: "not-an-array" },
+        { json: false },
+      ),
+    ).toBe("no active worktrees to compare\n");
   });
 
   it("caps a pair's paths and rolls the rest up", () => {
