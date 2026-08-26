@@ -425,6 +425,22 @@ export type SessionInput =
   | { kind: "prompt-resources"; resources: readonly PromptResource[] }
   | { kind: "tool-surface"; tools: readonly SessionToolId[] };
 
+/**
+ * Who ended a Session's work (VC-86): a supervising Session (the control-tier
+ * `session.stop` tool), the person, or the runtime host's own watchdog. The
+ * complete answer to "who can stop a Session", written once — a fourth kind is
+ * a design decision, not a default.
+ *
+ * Deliberately NOT {@link SessionEventProvenance}: provenance says which door a
+ * write arrived through, and its `source.kind` vocabulary is frozen by the
+ * codec. This is the semantic actor of the stop itself, carried in the payload
+ * the way a Ticket event carries its actor.
+ */
+export type SessionStopActor =
+  | { kind: "session"; sessionId: string }
+  | { kind: "user" }
+  | { kind: "watchdog" };
+
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }
   | { kind: "session.created"; session: Session }
@@ -434,6 +450,14 @@ export type SessionEventPayload =
   | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
+  /**
+   * A supervisor, the person, or the watchdog ended this Session's work
+   * (VC-86). A NEW kind rather than a third `session.signaled` value, so a
+   * build that predates it drops the event it does not know instead of
+   * failing the whole Session over a value inside a kind it thought it knew.
+   * The Session stays openable — stop ends work, never identity.
+   */
+  | { kind: "session.stopped"; reason: string | null; by: SessionStopActor }
   | { kind: "attachment.opened"; attachment: SessionAttachment }
   | {
       kind: "attachment.native_referenced";
@@ -823,6 +847,8 @@ export type SessionCommandIntent =
   | { kind: "session.archive" }
   | { kind: "session.retitle"; title: string | null }
   | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }
+  /** End this Session's work, recording who did it (VC-86). Completes in-engine like a signal. */
+  | { kind: "session.stop"; reason: string | null; by: SessionStopActor }
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
@@ -885,6 +911,7 @@ export type CommandReceiptResult =
   | { kind: "session.archived"; sessionId: string }
   | { kind: "session.retitled"; sessionId: string }
   | { kind: "session.signaled"; sessionId: string }
+  | { kind: "session.stopped"; sessionId: string }
   | { kind: "model.selected"; sessionId: string }
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
@@ -1059,6 +1086,13 @@ export interface SessionProjection {
   interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
   signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
+  /**
+   * The stop currently in force, or null — set by `session.stopped`, cleared
+   * by work resuming (a fresh attachment or a turn). State rather than
+   * history: a listing says "stopped" while this is set, and the event row
+   * keeps the who-and-why forever regardless (VC-86).
+   */
+  stopped: { at: number; reason: string | null; by: SessionStopActor } | null;
   /** Latest accepted product model policy, durable across attachment and relaunch. */
   modelSelection: ModelSelection | null;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
@@ -1117,6 +1151,7 @@ export function projectSession(
   let status: SessionProjection["status"] = "open";
   let title = session.title;
   let signal: SessionProjection["signal"] = null;
+  let stopped: SessionProjection["stopped"] = null;
   let modelSelection: ModelSelection | null = null;
   let turnActive = false;
   let authorityDenials = 0;
@@ -1180,6 +1215,13 @@ export function projectSession(
           occurredAt: event.occurredAt,
         };
         break;
+      case "session.stopped":
+        stopped = {
+          at: event.occurredAt,
+          reason: event.payload.reason,
+          by: event.payload.by,
+        };
+        break;
       case "attachment.native_referenced": {
         const existing = attachments.get(event.payload.attachmentId);
         if (existing) {
@@ -1197,6 +1239,9 @@ export function projectSession(
           outcome: null,
           failure: null,
         });
+        // Work resuming ends a stop: the record stays in history, the state
+        // does not (VC-86).
+        stopped = null;
         if (event.commandId) pendingExecutorStarts.delete(event.commandId);
         break;
       }
@@ -1273,6 +1318,9 @@ export function projectSession(
       // running any more.
       case "turn.started":
         turnActive = true;
+        // A turn is work resuming, however the executor got there: a stop no
+        // longer describes what is happening (VC-86).
+        stopped = null;
         break;
       case "turn.completed":
       case "turn.interrupted":
@@ -1338,6 +1386,7 @@ export function projectSession(
     },
     interactions: { active: [...interactions.values()], resolved: resolvedInteractions },
     signal,
+    stopped,
     modelSelection,
     turnActive,
     authorityDenials,

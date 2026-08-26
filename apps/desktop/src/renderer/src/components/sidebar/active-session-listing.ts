@@ -459,6 +459,9 @@ const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
   idle: 2,
   parked: 3,
   exited: 4,
+  // A pane never produces it (the stop fact is chat-side, VC-86); ranked last
+  // so the map stays total without ever outranking a live state.
+  stopped: 5,
 };
 
 /**

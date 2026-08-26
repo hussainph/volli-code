@@ -41,6 +41,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
+    stopped: null,
     turnActive: false,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,

@@ -65,7 +65,9 @@ export interface AutomationRunnerDeps {
     resources: readonly PromptResource[];
   }): Promise<InstructionDeliveryResult>;
   /** Honest Session activity, or null when its projection cannot be read. */
-  readSessionActivity(sessionId: string): Promise<"working" | "waiting" | "idle" | null>;
+  readSessionActivity(
+    sessionId: string,
+  ): Promise<"working" | "waiting" | "idle" | "stopped" | null>;
   /** Fired after the complete Run projection exists. */
   onRunStarted?(event: { run: AutomationRun; projectId: string }): void;
   /** Detached-half diagnostics; defaults to `console.error`. */
@@ -134,7 +136,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     // than accidentally admitting a second live worker.
     const runs = deps.listRunsForTicket(ticketId);
     for (const run of runs) {
-      let activity: "working" | "waiting" | "idle" | null;
+      // "stopped" admits a new Run exactly as "idle" does: a supervisor ending
+      // an earlier Run's work is the opposite of that work still being live.
+      let activity: "working" | "waiting" | "idle" | "stopped" | null;
       try {
         activity = await deps.readSessionActivity(run.sessionId);
       } catch (error) {

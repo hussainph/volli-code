@@ -50,6 +50,7 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
+  stopped: "Stopped",
 };
 
 /**
