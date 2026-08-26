@@ -670,6 +670,14 @@ export class ChatSessionClient {
       // subject is already known when this message starts, so the detached
       // title write cannot wait on that answer: a steering message can resolve
       // first and would otherwise name the Session instead of this prompt.
+      //
+      // So the moment a Session gains a subject is the first message it STARTS
+      // delivering, no longer the first one accepted (VC-180). Firing ahead of
+      // the receipt is the whole point and costs the acceptance guarantee: a
+      // delivery that then fails leaves the Session named after a prompt the
+      // person did type, which is a truer subject than `Chat 3` and is the same
+      // name their retry would produce. Synchronous, before the `await`, so no
+      // steer can interleave — and so the promise above is never left floating.
       this.#autoTitle(body, attachments);
       const delivered = await deliveryResult;
       // A harness that cannot take a message says so in its receipt rather than
