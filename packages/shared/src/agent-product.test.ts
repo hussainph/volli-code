@@ -106,6 +106,7 @@ describe("agent product guidance", () => {
     }
     const added = entry!.added.join("\n");
     expect(added).toContain("worktree sync");
+    expect(added).toContain("worktree sync --dry-run");
     expect(added).toContain("conflicts");
     // The two claims most likely to be misread if unstated: what sync will not
     // do (wait), and what the radar costs (nothing, any caller). Matched case

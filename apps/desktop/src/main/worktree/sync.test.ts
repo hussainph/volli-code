@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { GitError } from "./git";
 import { scriptedGit } from "./scripted-git";
-import { syncWithBase } from "./sync";
+import { previewSyncWithBase, syncWithBase } from "./sync";
 import type { RunGitAsync } from "./types";
 
 /** Every git subcommand that talks to a remote — none of which sync may run. */
@@ -47,6 +47,78 @@ function mergingRepo(options: { conflicts?: readonly string[] } = {}) {
     return "";
   });
 }
+
+describe("previewSyncWithBase", () => {
+  it("reports the resolved ref and matching target without merging or aborting", async () => {
+    const { gitAsync, calls } = mergingRepo();
+
+    const result = await previewSyncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        mode: "merge",
+        mergedRef: "origin/main",
+        targetBranch: TICKET_BRANCH,
+        checkedOutBranch: TICKET_BRANCH,
+        branchIdentityMatches: true,
+      },
+    });
+    expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
+  });
+
+  it("reports a failed branch identity check without mutating", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "branch" && args[1] === "--show-current") return "other-branch\n";
+      return "";
+    });
+
+    const result = await previewSyncWithBase(gitAsync, SYNC_INPUT, "abort");
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        mode: "abort",
+        mergedRef: "origin/main",
+        targetBranch: TICKET_BRANCH,
+        checkedOutBranch: "other-branch",
+        branchIdentityMatches: false,
+      },
+    });
+    expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
+  });
+
+  it("refuses previews whose configured base or target branch cannot be checked", async () => {
+    const { gitAsync, calls } = scriptedGit(() => "");
+
+    const noBase = await previewSyncWithBase(
+      gitAsync,
+      { ...SYNC_INPUT, baseBranch: null },
+      "merge",
+    );
+    const noTarget = await previewSyncWithBase(gitAsync, { ...SYNC_INPUT, branch: null }, "merge");
+
+    expect(noBase).toMatchObject({ ok: false, error: expect.stringContaining("No base branch") });
+    expect(noTarget).toMatchObject({ ok: false, error: expect.stringContaining("no recorded") });
+    expect(calls).toEqual([]);
+  });
+
+  it("reports a branch-probe failure without attempting a merge", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      throw new GitError("branch unavailable", "fatal: not a git repository", args);
+    });
+
+    const result = await previewSyncWithBase(gitAsync, SYNC_INPUT, "merge");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("not a git repository"),
+    });
+    expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
+  });
+});
 
 describe("syncWithBase — a clean merge", () => {
   it("merges the base into the worktree and reports what moved", async () => {

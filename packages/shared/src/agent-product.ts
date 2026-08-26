@@ -128,6 +128,7 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "volli worktree sync [<id>] — merge a ticket's base branch into its worktree branch and report what happened. Coordination tier: an authenticated Session, on the Agent CLI. It never waits on a gate, a check, or CI; it merges, reports, and returns.",
       "A conflicted sync is an outcome rather than a refusal: status reads conflicted, every conflicted path is listed, and the worktree is left conflicted for the Session to resolve. Branch on status, not on the exit code.",
       "volli worktree sync <id> --abort — the documented way out of a conflicted sync, on the same verb so the exit is discoverable from the entrance. Nothing else cleans up after a conflict.",
+      "volli worktree sync --dry-run — previews the resolved base ref, target branch, and branch-identity check through the shared side-effect plan without merging or aborting.",
       "volli conflicts — the file-collision radar: which active ticket worktrees touch the same paths, as a per-path list and a worst-first list of colliding ticket pairs. Read tier, any caller, --json like every other read.",
     ],
     changed: [

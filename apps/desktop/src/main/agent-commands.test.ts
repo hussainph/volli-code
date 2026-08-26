@@ -4112,6 +4112,83 @@ describe("agent command service", () => {
     });
   });
 
+  it("previews the resolved base and branch safety check without merging", async () => {
+    const { service, calls } = await syncScenario((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "rev-parse") return "aaaaaaa\n";
+      if (args[0] === "merge") return "";
+      return "";
+    });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.sync",
+      args: { id: "VC-1", dryRun: true },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        kind: "mutation-plan",
+        dryRun: true,
+        verb: "worktree.sync",
+        target: { kind: "ticket", id: "VC-1" },
+        humanVisibleEffects: [
+          "Resolved base ref: origin/main.",
+          "Target branch: volli/VC-1-ship.",
+          "Branch identity check: passed (checked out: volli/VC-1-ship).",
+          "Would merge origin/main into volli/VC-1-ship.",
+        ],
+      },
+    });
+    // The preview runs only rev-parse and branch probes. In particular, it
+    // cannot turn into a real merge when an older caller sends dryRun directly.
+    expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
+  });
+
+  it("previews failed identity and abort mode without mutating either merge mode", async () => {
+    const { service, calls } = await syncScenario((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "merge") return "";
+      return "";
+    }, "some-other-branch");
+
+    const mismatched = await service.execute({
+      v: 1,
+      cmd: "worktree.sync",
+      args: { id: "VC-1", dryRun: true },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(mismatched).toMatchObject({
+      ok: true,
+      data: {
+        humanVisibleEffects: [
+          "Resolved base ref: origin/main.",
+          "Target branch: volli/VC-1-ship.",
+          "Branch identity check: failed (checked out: some-other-branch).",
+          "Would not merge because some-other-branch is not volli/VC-1-ship.",
+        ],
+      },
+    });
+
+    const abort = await service.execute({
+      v: 1,
+      cmd: "worktree.sync",
+      args: { id: "VC-1", abort: true, dryRun: true },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(abort).toMatchObject({
+      ok: true,
+      data: {
+        humanVisibleEffects: expect.arrayContaining([
+          "Would abort the merge in progress if the repeated execution checks allow it.",
+        ]),
+      },
+    });
+    expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
+  });
+
   it("refuses to mutate a checkout that is no longer on the ticket branch", async () => {
     const { service, calls } = await syncScenario((args) => {
       if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");

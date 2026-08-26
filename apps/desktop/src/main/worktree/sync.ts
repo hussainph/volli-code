@@ -121,6 +121,28 @@ export type WorktreeSyncRead =
       report: SyncReport;
     };
 
+/** Read-only evidence a sync preview reports before any merge or abort can run. */
+export interface SyncPreview {
+  readonly mode: SyncMode;
+  readonly mergedRef: string;
+  readonly targetBranch: string;
+  readonly checkedOutBranch: string | null;
+  readonly branchIdentityMatches: boolean;
+}
+
+/** The ticketId-in result for a read-only sync preview. */
+export type WorktreeSyncPreviewRead =
+  | WorktreeReadFailure
+  | { kind: "sync-error"; displayId: string; error: string }
+  | {
+      kind: "ok";
+      displayId: string;
+      worktreePath: string;
+      branch: string | null;
+      baseBranch: string | null;
+      preview: SyncPreview;
+    };
+
 /** Whether a merge is mid-flight, asked of git rather than of the filesystem. */
 async function mergeInFlight(git: RunGitAsync, cwd: string): Promise<boolean> {
   try {
@@ -181,6 +203,40 @@ async function checkedOutBranch(git: RunGitAsync, cwd: string): Promise<CheckedO
   } catch (caught) {
     return { ok: false, error: stderrOf(caught) };
   }
+}
+
+/**
+ * Resolves the evidence a dry-run needs without invoking a mutating Git
+ * command. It intentionally does not probe MERGE_HEAD: the shared preview
+ * caveat already says validation repeats on the real call, while this answer's
+ * job is to name the base, target, and checkout identity that gate that call.
+ */
+export async function previewSyncWithBase(
+  git: RunGitAsync,
+  input: SyncInput,
+  mode: SyncMode,
+): Promise<WorktreeResult<SyncPreview>> {
+  if (!input.baseBranch) {
+    return err("No base branch is known for this worktree, so there is nothing to sync from.");
+  }
+  if (!input.branch) {
+    return err(
+      "This ticket has no recorded worktree branch, so Volli cannot verify a safe checkout to sync.",
+    );
+  }
+
+  const mergedRef = (await resolveComparisonRefAsync(git, input.worktreePath, input.baseBranch))!;
+  const checkout = await checkedOutBranch(git, input.worktreePath);
+  if (!checkout.ok) {
+    return err(`Couldn't verify this worktree's checked-out branch: ${checkout.error}`);
+  }
+  return ok({
+    mode,
+    mergedRef,
+    targetBranch: input.branch,
+    checkedOutBranch: checkout.branch,
+    branchIdentityMatches: checkout.branch === input.branch,
+  });
 }
 
 /**
@@ -323,6 +379,36 @@ export async function syncWithBase(
  * three ways that question fails ("no such ticket", "no worktree yet", "stamped
  * but deleted") are the same three however the answer is going to be used.
  */
+export async function previewTicketWorktree(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+  mode: SyncMode,
+): Promise<WorktreeSyncPreviewRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = await previewSyncWithBase(
+    deps.gitAsync ?? runGitCapturingAsync,
+    {
+      worktreePath: target.worktreePath,
+      branch: target.branch,
+      baseBranch: target.baseBranch,
+    },
+    mode,
+  );
+  if (!result.ok) {
+    return { kind: "sync-error", displayId: target.displayId, error: result.error };
+  }
+  return {
+    kind: "ok",
+    displayId: target.displayId,
+    worktreePath: target.worktreePath,
+    branch: target.branch,
+    baseBranch: target.baseBranch,
+    preview: result.value,
+  };
+}
+
 export async function syncTicketWorktree(
   deps: WorktreeReadDeps,
   ticketId: string,

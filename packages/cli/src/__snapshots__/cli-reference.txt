@@ -24,7 +24,7 @@ Write
   ticket move <id> --to <column> [--dry-run]
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
   ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
-  worktree sync [<id>] [--abort]
+  worktree sync [<id>] [--abort] [--dry-run]
 
 Session
   session list [--project <p>] [--ticket <id>]
@@ -455,7 +455,8 @@ Verb tier: coordination
 Usage: volli worktree sync [<id>] [options]
 
 Options:
-  --abort  Abort a merge left in flight by an earlier conflicted sync.
+  --abort    Abort a merge left in flight by an earlier conflicted sync.
+  --dry-run  Validate and preview without side effects.
 
 Effects:
 - Durable write: Merge the base ref into the ticket worktree's checked-out branch, leaving a merge commit or an unresolved merge in that worktree.
@@ -471,6 +472,7 @@ Notes:
 - Merges the base ref this checkout already has (origin/<base> when present, else the local branch) and contacts no remote.
 - It never waits: no gate, no CI, no watch. Local Git runs asynchronously behind a hard deadline, then it reports and returns.
 - A conflict is an outcome, not an error: status is conflicted, every conflicted path is listed, and the worktree is left conflicted for this session to resolve.
+- --dry-run resolves the base ref and branch-identity check without merging or aborting.
 - --abort undoes a merge left in flight. Nothing else here cleans up after a conflict.
 
 ============================================================================
@@ -859,6 +861,7 @@ Added
 - volli worktree sync [<id>] — merge a ticket's base branch into its worktree branch and report what happened. Coordination tier: an authenticated Session, on the Agent CLI. It never waits on a gate, a check, or CI; it merges, reports, and returns.
 - A conflicted sync is an outcome rather than a refusal: status reads conflicted, every conflicted path is listed, and the worktree is left conflicted for the Session to resolve. Branch on status, not on the exit code.
 - volli worktree sync <id> --abort — the documented way out of a conflicted sync, on the same verb so the exit is discoverable from the entrance. Nothing else cleans up after a conflict.
+- volli worktree sync --dry-run — previews the resolved base ref, target branch, and branch-identity check through the shared side-effect plan without merging or aborting.
 - volli conflicts — the file-collision radar: which active ticket worktrees touch the same paths, as a per-path list and a worst-first list of colliding ticket pairs. Read tier, any caller, --json like every other read.
 Changed
 - Sync contacts no remote. It merges the base ref this checkout already has — origin/<base> when a fetch has landed one, the local base branch otherwise — so no credential is used and nothing can block on one.
@@ -1251,7 +1254,7 @@ WRONG_DOOR volli ticket archive exists in the app only; no agent surface execute
 ============================================================================
 volli worktree sync ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --abort) — see volli help worktree sync
+USAGE Unknown option --not-an-option (options: --abort, --dry-run) — see volli help worktree sync
 
 ============================================================================
 volli session start ORACLE-1 --not-an-option

@@ -20,10 +20,16 @@ import type { AgentRequest, AgentResponse, Project, Ticket } from "@volli/shared
 import type { WorktreeDiffMode } from "../../ipc/contract";
 
 import { listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
-import { readWorktreeDiff, readWorktreeStatus, syncTicketWorktree } from "../worktree";
+import {
+  previewTicketWorktree,
+  readWorktreeDiff,
+  readWorktreeStatus,
+  syncTicketWorktree,
+} from "../worktree";
 import { isInside } from "../worktree/paths";
 import { failure } from "./context";
 import type { AgentCommandContext, EnvSessionIdentity } from "./context";
+import { dryRunResponse } from "./preview";
 import { ticketForDisplayId } from "./resolution";
 
 /**
@@ -271,11 +277,59 @@ export async function worktreeSyncVerb(
   const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   const mode = request.args["abort"] === true ? "abort" : "merge";
-  const read = await syncTicketWorktree(
-    { db: options.db, git, gitAsync, worktreeExists },
-    resolved.ticket.id,
-    mode,
-  );
+  const deps = { db: options.db, git, gitAsync, worktreeExists };
+
+  // A preview has to resolve the same base and safety check as the real write,
+  // but it must stop before either `git merge --no-edit` or `git merge --abort`.
+  // The shared plan carries the dynamic evidence in its visible effects so text
+  // and JSON callers receive one preview contract rather than a sync-only shape.
+  if (request.args["dryRun"] === true) {
+    const previewRead = await previewTicketWorktree(deps, resolved.ticket.id, mode);
+    switch (previewRead.kind) {
+      case "missing-ticket":
+        return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
+      case "no-worktree":
+        return failure(
+          "INVALID_REQUEST",
+          noWorktreeRefusal(previewRead.displayId, previewRead.usesWorktree),
+        );
+      case "missing-on-disk":
+        return failure(
+          "INVALID_REQUEST",
+          `Ticket ${previewRead.displayId}'s worktree folder is missing (expected at ${previewRead.worktreePath}).`,
+        );
+      case "sync-error":
+        return failure("INVALID_REQUEST", previewRead.error);
+      case "ok": {
+        const preview = previewRead.preview;
+        const checkedOut = preview.checkedOutBranch ?? "detached HEAD";
+        const action =
+          preview.mode === "abort"
+            ? "Would abort the merge in progress if the repeated execution checks allow it."
+            : preview.branchIdentityMatches
+              ? `Would merge ${preview.mergedRef} into ${preview.targetBranch}.`
+              : `Would not merge because ${checkedOut} is not ${preview.targetBranch}.`;
+        const plan = dryRunResponse(
+          request,
+          { kind: "ticket", id: previewRead.displayId, label: previewRead.displayId },
+          {
+            humanVisibleEffects: [
+              `Resolved base ref: ${preview.mergedRef}.`,
+              `Target branch: ${preview.targetBranch}.`,
+              `Branch identity check: ${preview.branchIdentityMatches ? "passed" : "failed"} (checked out: ${checkedOut}).`,
+              action,
+            ],
+          },
+        );
+        // This branch is defensive: the request was checked above, but keeping
+        // a handler safe if its invocation shape changes prevents a preview
+        // from ever falling through to the real merge.
+        return plan ?? failure("INVALID_REQUEST", "Sync preview was not requested.");
+      }
+    }
+  }
+
+  const read = await syncTicketWorktree(deps, resolved.ticket.id, mode);
   switch (read.kind) {
     case "missing-ticket":
       return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");

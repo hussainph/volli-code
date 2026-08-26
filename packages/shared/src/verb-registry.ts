@@ -837,10 +837,9 @@ export const VERB_REGISTRY = [
     // mechanically; the socket cannot cancel a child once it has accepted a
     // request. It merges, reports conflicts, and returns.
     //
-    // Deliberately no `--dry-run`, for `ticket.signal`'s reason: the verb's
-    // whole output IS the report of what it did, the merge is undone by this
-    // same verb's `--abort`, and a preview would cost a round trip to be told
-    // what the real run is about to print.
+    // VC-178's voluntary-write rule applies here too. Its preview resolves the
+    // base ref and checkout identity, then stops before either merge mode can
+    // mutate the worktree.
     key: "worktree.sync",
     accessModes: ["cli"],
     actor: "session",
@@ -855,6 +854,7 @@ export const VERB_REGISTRY = [
       "Merges the base ref this checkout already has (origin/<base> when present, else the local branch) and contacts no remote.",
       "It never waits: no gate, no CI, no watch. Local Git runs asynchronously behind a hard deadline, then it reports and returns.",
       "A conflict is an outcome, not an error: status is conflicted, every conflicted path is listed, and the worktree is left conflicted for this session to resolve.",
+      "--dry-run resolves the base ref and branch-identity check without merging or aborting.",
       "--abort undoes a merge left in flight. Nothing else here cleans up after a conflict.",
     ],
     effects: {
@@ -883,6 +883,7 @@ export const VERB_REGISTRY = [
         kind: "flag",
         help: "Abort a merge left in flight by an earlier conflicted sync.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {

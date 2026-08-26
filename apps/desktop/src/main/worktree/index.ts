@@ -54,8 +54,21 @@ export { changeSetPaths, changeSetSnapshot, readChangeSetBaseFile } from "./chan
 // Worktree sync (VC-185): the one worktree verb that writes. It merges the base
 // ref this checkout already has, reports conflicts per path, and returns —
 // never fetching, never waiting.
-export { syncTicketWorktree, syncWithBase } from "./sync";
-export type { SyncInput, SyncMode, SyncReport, SyncStatus, WorktreeSyncRead } from "./sync";
+export {
+  previewSyncWithBase,
+  previewTicketWorktree,
+  syncTicketWorktree,
+  syncWithBase,
+} from "./sync";
+export type {
+  SyncInput,
+  SyncMode,
+  SyncPreview,
+  SyncReport,
+  SyncStatus,
+  WorktreeSyncPreviewRead,
+  WorktreeSyncRead,
+} from "./sync";
 
 // The file-collision radar's scan (VC-185): every live ticket worktree's diff,
 // joined into the overlap matrix `@volli/shared` computes.
