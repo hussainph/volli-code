@@ -208,8 +208,8 @@ export interface RuntimeToolBundle {
   tools: readonly CodingToolId[];
   /**
    * Product verbs from `bundle(Role) ∪ grants(session)`, in canonical registry
-   * order. Absent means none — a Ticket Session holds no verb tool today, and
-   * that absence is the Role-scoped availability VC-92 asked for.
+   * order. Absent means none — the Ticket Role's default bundle has no
+   * agent-control tool, while a durable birth grant may add one scoped verb.
    *
    * Membership comes from here; execution comes from
    * {@link SessionRuntimeSpec.callVerb}. A bundle naming a verb with no port
@@ -669,10 +669,10 @@ export interface SessionRuntimeSpec {
    */
   webSearch?: (input: { query: string; signal: AbortSignal }) => Promise<RuntimeWebSearchResults>;
   /**
-   * Run one product verb the Session's Role bundle names, in the host's own
-   * process (VC-162).
+   * Run one product verb the Session's frozen Agent Tool Surface names, in the
+   * host's own process (VC-162).
    *
-   * The door that makes Role-scoped availability real. A verb reached this way
+   * The door that makes Role- and grant-scoped availability real. A verb reached this way
    * never crosses the agent socket, so the caller is not *attributed* from an
    * environment variable it could have been handed — it is the Session this
    * spec belongs to, bound by the host at attach and not stated in the call.

@@ -1186,6 +1186,85 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 030: durable, birth-frozen grants for Ticket Session delegation.
+ *
+ * A Role bundle names what every Session of that Role carries. This is not one:
+ * `session_verb_grants` is a per-Session record whose only v1 entry is the
+ * canonical Registry key `session.start`, paired with the separate
+ * `own-ticket` scope and recursion limits the tool door enforces. Keeping the
+ * scope out of `verb` avoids inventing a second vocabulary key such as
+ * `session.start@own-ticket` that the Agent Tool Surface could not resolve.
+ *
+ * `session_delegations` records the ancestry and frozen limits at birth. A
+ * child at its inherited depth cap has an ancestry row but no grant row, which
+ * is the availability-as-enforcement result: it is never handed a start tool
+ * merely to be refused later. Claims are durable before a start opens its
+ * child, keyed by the runtime tool-call id, so a replay spends one fan-out slot
+ * and concurrent calls cannot exceed the parent grant's fixed limit.
+ *
+ * These tables live in the app-owned database beside VC-44's policy store, not
+ * in the worktree. They deliberately do not offer a general product write path:
+ * the only writer is the Session-birth composition path. The update triggers
+ * make a later hot edit fail rather than silently changing a frozen grant.
+ */
+const MIGRATION_030_SESSION_DELEGATION_GRANTS = `
+CREATE TABLE session_delegations (
+  session_id        TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  ticket_id         TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  parent_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  depth             INTEGER NOT NULL CHECK (depth >= 0),
+  CHECK (
+    (parent_session_id IS NULL AND depth = 0) OR
+    (parent_session_id IS NOT NULL AND depth > 0)
+  )
+);
+CREATE INDEX session_delegations_parent ON session_delegations(parent_session_id, depth);
+
+CREATE TABLE session_verb_grants (
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  verb         TEXT NOT NULL CHECK (verb = 'session.start'),
+  scope        TEXT NOT NULL CHECK (scope = 'own-ticket'),
+  max_depth    INTEGER NOT NULL CHECK (max_depth BETWEEN 1 AND 2),
+  max_children INTEGER NOT NULL CHECK (max_children BETWEEN 1 AND 3),
+  PRIMARY KEY (session_id, verb),
+  FOREIGN KEY (session_id) REFERENCES session_delegations(session_id) ON DELETE CASCADE
+);
+
+CREATE TABLE session_delegation_claims (
+  parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id      TEXT NOT NULL CHECK (tool_call_id <> ''),
+  ticket_id         TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  child_session_id  TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (parent_session_id, tool_call_id),
+  UNIQUE (child_session_id)
+);
+CREATE INDEX session_delegation_claims_parent
+  ON session_delegation_claims(parent_session_id, created_at);
+
+CREATE TRIGGER session_delegations_immutable_update
+BEFORE UPDATE ON session_delegations
+BEGIN
+  SELECT RAISE(ABORT, 'session delegation is immutable');
+END;
+CREATE TRIGGER session_verb_grants_immutable_update
+BEFORE UPDATE ON session_verb_grants
+BEGIN
+  SELECT RAISE(ABORT, 'session verb grant is immutable');
+END;
+CREATE TRIGGER session_delegation_claims_only_complete_child
+BEFORE UPDATE ON session_delegation_claims
+WHEN NEW.parent_session_id IS NOT OLD.parent_session_id
+  OR NEW.tool_call_id IS NOT OLD.tool_call_id
+  OR NEW.ticket_id IS NOT OLD.ticket_id
+  OR NEW.created_at IS NOT OLD.created_at
+  OR (OLD.child_session_id IS NOT NULL AND NEW.child_session_id IS NOT OLD.child_session_id)
+BEGIN
+  SELECT RAISE(ABORT, 'session delegation claim is immutable once completed');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1330,6 +1409,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 29,
     name: "ticket_event_sequence — durable opaque cursors for lossless waits",
     sql: MIGRATION_029_TICKET_EVENT_SEQUENCE,
+  },
+  {
+    version: 30,
+    name: "session delegation grants — birth-frozen scoped control grants and fan-out claims",
+    sql: MIGRATION_030_SESSION_DELEGATION_GRANTS,
   },
 ];
 

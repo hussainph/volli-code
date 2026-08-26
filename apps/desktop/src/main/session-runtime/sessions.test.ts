@@ -18,6 +18,7 @@ import {
   type SessionToolSurfacePorts,
   type SessionsOptions,
 } from "./sessions";
+import type { SessionGrantPorts } from "./delegation-store";
 
 const MODEL: ModelSelection = {
   providerId: "openai-codex",
@@ -37,6 +38,11 @@ const CODING_AND_ASK: SessionToolSurfacePorts = {
   record: async () => undefined,
 };
 
+const NO_GRANTS: SessionGrantPorts = {
+  resolveBirth: () => ({ grants: [], delegation: null }),
+  recordBirth: () => undefined,
+};
+
 /**
  * One harness for both Roles: the module under test is the single start door,
  * so the fixtures stop being two parallel copies too.
@@ -53,6 +59,7 @@ function sessions(
       ticketBelongsToProject: () => true,
       skills: NO_SKILLS,
       toolSurface: CODING_AND_ASK,
+      grants: NO_GRANTS,
       runtime: {
         command: async (request) => {
           commands.push(request);
@@ -215,6 +222,54 @@ describe("Sessions", () => {
     ]);
     // The runtime a chat attaches stays behind the product facade.
     expect(JSON.stringify(started)).not.toMatch(/adapter|profile|pi|opencode/i);
+  });
+
+  it("records birth grants before the frozen tool surface they authorize", async () => {
+    const order: string[] = [];
+    const delegation = {
+      parentSessionId: "parent-session",
+      depth: 1,
+      maxDepth: 2,
+      maxChildren: 3,
+      claimToolCallId: "tool-call-1",
+    } as const;
+    const { sessions: door } = sessions({
+      grants: {
+        resolveBirth: (input) => {
+          order.push(`resolve-grant:${input.role}`);
+          expect(input.delegation).toEqual(delegation);
+          return { grants: ["session.start"], delegation: input.delegation ?? null };
+        },
+        recordBirth: (_sessionId, birth) => {
+          order.push(`record-grant:${birth.grants.join(",")}`);
+        },
+      },
+      toolSurface: {
+        resolve: (_role, grants) => {
+          order.push(`resolve-surface:${grants?.join(",")}`);
+          return ["read", "session.start"];
+        },
+        record: () => {
+          order.push("record-surface");
+          return Promise.resolve();
+        },
+      },
+    });
+
+    await door.create({
+      operationId: "operation-delegated",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Delegated work",
+      delegation,
+    });
+
+    expect(order).toEqual([
+      "resolve-grant:ticket",
+      "resolve-surface:session.start",
+      "record-grant:session.start",
+      "record-surface",
+    ]);
   });
 
   it("records the sanitized Agent Tool Surface before any attachment exists", async () => {

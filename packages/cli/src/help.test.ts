@@ -375,7 +375,7 @@ describe("renderHelp over a supplied entry list", () => {
     );
   });
 
-  it("reports whether the resolved Role's frozen bundle carries a tool-only verb", () => {
+  it("reports whether the resolved Session's frozen tool surface carries a tool-only verb", () => {
     const carried: AgentHelpRuntime = {
       appVersion: "0.1.1",
       surface: { sessionId: "session-1", role: "project", tools: ["vault.rotate"] },
@@ -386,10 +386,10 @@ describe("renderHelp over a supplied entry list", () => {
       surface: { sessionId: "session-2", role: "ticket", tools: [] },
     };
     expect(renderHelp(["vault", "rotate"], [toolOnly], { runtime: carried })).toContain(
-      "carried by this project Session's frozen bundle",
+      "carried by this project Session's frozen Agent Tool Surface",
     );
     expect(renderHelp(["vault", "rotate"], [toolOnly], { runtime: absent })).toContain(
-      "not carried by this ticket Session's frozen bundle",
+      "not carried by this ticket Session's frozen Agent Tool Surface",
     );
     expect(bareHelpText([toolOnly], { runtime: carried })).toContain(
       "Frozen Agent Tool Surface: vault.rotate",

@@ -206,14 +206,14 @@ async function readHelpRuntime(dependencies: RunCliDependencies): Promise<AgentH
       surfaceUnknownReason:
         sessionId === undefined
           ? null
-          : "VOLLI_SOCKET is absent, so the frozen bundle cannot be read",
+          : "VOLLI_SOCKET is absent, so the frozen Agent Tool Surface cannot be read",
     };
   }
   const request: AgentRequest = {
     v: 1,
     cmd: "identify",
-    // The one caller that wants the frozen bundle asks for it, so plain
-    // `volli identify` never pays to fold a Session ledger it will not read.
+    // The one caller that wants the frozen Agent Tool Surface asks for it, so
+    // plain `volli identify` never pays to fold a Session ledger it will not read.
     args: { agentSurface: true },
     ctx: {
       cwd: dependencies.cwd,
@@ -277,11 +277,11 @@ export function teachingErrorForParseResult(
   if (runtime?.surface !== null && runtime?.surface !== undefined) {
     const carried = runtime.surface.tools.includes(entry.key);
     const roleReason = carried
-      ? ` This ${runtime.surface.role} Role's frozen bundle carries ${entry.key}.`
-      : ` This ${runtime.surface.role} Role's frozen bundle does not carry ${entry.key}.`;
+      ? ` This ${runtime.surface.role} Session's frozen tool surface carries ${entry.key}.`
+      : ` This ${runtime.surface.role} Session's frozen tool surface does not carry ${entry.key}.`;
     const next = carried
       ? `Call the named ${entry.key} tool through this Session's Agent Tool Surface.`
-      : `Use a Session whose frozen Role bundle carries ${entry.key}; do not bypass the refusal through process or database workarounds.`;
+      : `Use a Session whose frozen Agent Tool Surface carries ${entry.key}; do not bypass the refusal through process or database workarounds.`;
     return makeAgentError("WRONG_DOOR", `${parsed.message}${roleReason}`, next);
   }
   const unknown = runtime?.surfaceUnknownReason;
@@ -294,8 +294,8 @@ export function teachingErrorForParseResult(
 /**
  * Renders one parse refusal. A wrong door onto a TOOL alone pays for the
  * optional Role read, because it is the one refusal whose teaching depends on
- * live facts — whether this Session's frozen bundle carries the verb. Every
- * other parse error stays local and instant.
+ * live facts — whether this Session's frozen Agent Tool Surface carries the
+ * verb. Every other parse error stays local and instant.
  *
  * The tool test is not a micro-optimization; it is what keeps the round-trip
  * honest. VC-163 introduced the first verb on NO agent surface

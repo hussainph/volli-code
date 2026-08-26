@@ -99,6 +99,7 @@ import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { createAutoTitler } from "./session-runtime/auto-title";
+import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
   createSessions,
   StructuredSessionsError,
@@ -777,6 +778,10 @@ app.whenReady().then(async () => {
       );
     }
   }
+  // Per-Session control grants live beside VC-44's app-owned policy data. The
+  // store is intentionally constructed before any Session surface: it resolves
+  // birth grants and the door later consumes the exact durable record.
+  const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -793,9 +798,9 @@ app.whenReady().then(async () => {
       })
     : null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
-    webAccess !== null && sessionEngine !== null
+    webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role) => {
+          resolve: (role, grants) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -814,9 +819,11 @@ app.whenReady().then(async () => {
                   ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
                 ],
               },
-              // No grants: VC-162 ships the resolver seam and no store. A
-              // durable per-Session grant is a later slice, and it inherits a
-              // resolver that already refuses an unknown or non-tool key.
+              // The store supplies canonical Registry keys from an immutable
+              // birth record. The resolver remains the fail-closed vocabulary
+              // boundary: a malformed durable grant refuses the Session before
+              // it reaches a model as a mysteriously smaller tool surface.
+              grants,
             });
           },
           record: async (sessionId, tools) => {
@@ -985,10 +992,10 @@ app.whenReady().then(async () => {
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
               //
-              // The Role comes from the Session's own durable `ticketId`, which
-              // is what the Role IS — so a legacy Project Session backfills the
-              // project bundle and a legacy Ticket Session backfills none, the
-              // same answer its mint would have given had this existed then.
+              // A legacy Session has no durable birth-grant record, so it gets
+              // no new grant here. Applying today's role default would be a hot
+              // privilege edit to an existing Session; the fail-closed empty
+              // list leaves only the Role bundle it could honestly have held.
               toolSurface = toolSurfaceTools(
                 await sessionEngine.getOrRecordSessionInput({
                   sessionId,
@@ -996,6 +1003,7 @@ app.whenReady().then(async () => {
                     kind: "tool-surface",
                     tools: sessionToolSurface.resolve(
                       attaching.ticketId === null ? "project" : "ticket",
+                      [],
                     ),
                   },
                   provenance,
@@ -1208,7 +1216,8 @@ app.whenReady().then(async () => {
     piRuntimeHost !== null &&
     sessionDb !== null &&
     sessionSkills !== null &&
-    sessionToolSurface !== null
+    sessionToolSurface !== null &&
+    sessionDelegation !== null
       ? createSessions({
           runtime: sessionRuntime,
           // The inheritance chain, in rung order (VC-112, VC-126): the
@@ -1235,6 +1244,7 @@ app.whenReady().then(async () => {
             (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
+          grants: sessionDelegation,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
@@ -1409,12 +1419,13 @@ app.whenReady().then(async () => {
   // rest: the project list grows, and the facade is built further down this
   // same function. See the declaration above for why the binding is split.
   agentToolDoor =
-    sessionDb === null
+    sessionDb === null || sessionDelegation === null
       ? null
       : createAgentToolDoor({
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
+          delegation: sessionDelegation,
           // `ticket.await`'s two ports (VC-85): the wait is judged against the
           // caller's project policy when it starts, and parks on the
           // post-commit wake bus until a planner fact matches.

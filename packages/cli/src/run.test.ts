@@ -93,7 +93,9 @@ describe("runCli", () => {
     );
     expect(carried).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining("project Role's frozen bundle carries session.start"),
+      reason: expect.stringContaining(
+        "project Session's frozen tool surface carries session.start",
+      ),
       next: expect.stringContaining("named session.start tool"),
     });
 
@@ -108,7 +110,9 @@ describe("runCli", () => {
     );
     expect(absent).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining("ticket Role's frozen bundle does not carry session.start"),
+      reason: expect.stringContaining(
+        "ticket Session's frozen tool surface does not carry session.start",
+      ),
       next: expect.stringContaining("do not bypass the refusal"),
     });
 
@@ -224,7 +228,7 @@ describe("runCli", () => {
       }),
     ).toBe(0);
     expect(socketless.join("")).toContain(
-      "unknown (VOLLI_SOCKET is absent, so the frozen bundle cannot be read)",
+      "unknown (VOLLI_SOCKET is absent, so the frozen Agent Tool Surface cannot be read)",
     );
 
     // The read itself failed in transit.

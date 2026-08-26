@@ -53,6 +53,7 @@ import type {
 
 import type { SessionStartedNotice } from "../../ipc/contract";
 import type { AutoTitleRequest } from "./auto-title";
+import type { TicketSessionDelegation } from "./delegation-store";
 import type { Sessions, SessionModelOverride } from "./sessions";
 
 /** The kickoff turn's ids, derived so a replayed start submits one message. */
@@ -104,6 +105,11 @@ export interface StartSessionInput {
   /** An explicit, permanent title. Its presence is what suppresses auto-titling. */
   title?: string | undefined;
   modelOverride?: SessionModelOverride | undefined;
+  /**
+   * A claimed Ticket caller's frozen ancestry. Internal only: the tool door
+   * derives it from its bound identity and the renderer cannot name it.
+   */
+  delegation?: TicketSessionDelegation | undefined;
   /** Derived by the door from what it can honestly know. Never self-declared. */
   actor: TicketEventActor;
 }
@@ -148,6 +154,7 @@ export async function startSessionOperation(
     title,
     actor: input.actor,
     ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
+    ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
   });
   // The kickoff rides only a ready attach — a Session that needs recovery holds
   // its first turn for the app's Retry — and it is deliberately detached: the

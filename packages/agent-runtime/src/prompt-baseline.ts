@@ -128,7 +128,7 @@ export type PromptCachePlacement = "prefix" | "message";
 export const WORKSPACE_ENVIRONMENT_REMINDER_ID = "reminder:workspace-environment";
 
 /**
- * The Role bundle block riding the same first message (VC-162).
+ * The frozen Agent Tool Surface block riding the same first message (VC-162).
  *
  * `session-static` and not `role-static`, which is the whole reason it is a
  * message-side block instead of a system-prompt layer: membership is
@@ -183,15 +183,15 @@ export interface PromptBaseline {
    */
   reminder: PromptBaselineTotal;
   /**
-   * The Role bundle block riding that same message (VC-162).
+   * The frozen Agent Tool Surface block riding that same message (VC-162).
    *
    * Its own rollup rather than folded into {@link reminder}, because that field
    * means one specific thing — the workspace-environment fact, whose measured
    * zero for a healthy workspace is an assertion several callers make. Adding
    * bytes to it would have quietly changed what a zero there proves.
    *
-   * Never zero in practice: every Session is told what its Role bundle holds,
-   * including the Sessions that hold nothing.
+   * Never zero in practice: every Session is told what its frozen tool surface
+   * holds, including the Sessions that hold nothing.
    */
   toolSurface: PromptBaselineTotal;
   /**

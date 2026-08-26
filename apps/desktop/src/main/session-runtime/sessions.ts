@@ -31,6 +31,8 @@ import type {
   TicketEventActor,
 } from "@volli/shared";
 
+import type { SessionGrantPorts, TicketSessionDelegation } from "./delegation-store";
+
 /**
  * The one adapter id the structured product attaches under.
  *
@@ -119,9 +121,10 @@ export interface SessionToolSurfacePorts {
    * The whole surface for one Role: `capability tools ∪ bundle(Role) ∪
    * grants(session)` (VC-162).
    *
-   * Takes the Role because the Role is what decides the verb half — a Project
-   * Session carries the agent-control family and a Ticket Session carries none,
-   * which is the availability-as-enforcement property VC-92 asked for. Before
+   * Takes the Role because the Role decides the base verb half — a Project
+   * Session carries the agent-control family and a Ticket Role carries none.
+   * The separate `grants` argument is the durable birth exception, which keeps
+   * availability-as-enforcement without turning it into a bundle edit. Before
    * this argument existed every Session resolved the same list, and "Role
    * determines the tool bundle" was true only in `CONTEXT.md`.
    *
@@ -133,7 +136,7 @@ export interface SessionToolSurfacePorts {
    * the runtime's Role vocabulary — the same one `RuntimeToolBundle` and the
    * first-message block are written in. VC-9 widens it here, in the open.
    */
-  resolve(role: RuntimeSessionRole): readonly SessionToolId[];
+  resolve(role: RuntimeSessionRole, grants: readonly string[]): readonly SessionToolId[];
   record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
 }
 
@@ -168,6 +171,12 @@ export interface SessionStartInput {
    */
   actor?: TicketEventActor;
   modelOverride?: SessionModelOverride;
+  /**
+   * Trusted in-process ancestry from a Ticket caller's claimed `session.start`.
+   * The renderer's create schema cannot name it; only the bound tool door may
+   * pass this birth context through the shared facade.
+   */
+  delegation?: TicketSessionDelegation;
 }
 
 /**
@@ -253,6 +262,8 @@ export interface SessionsOptions {
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
+  /** Durable per-Session grants, resolved and recorded at birth (VC-183). */
+  grants: SessionGrantPorts;
   /**
    * What Model Access can actually run, consulted only when an override
    * arrives: the configured default was validated when it was saved
@@ -371,10 +382,18 @@ export function createSessions(options: SessionsOptions): Sessions {
       explicit.map((resource) => resource.name),
     );
     const resources = index === null ? explicit : [...explicit, index];
+    // Resolve grants before creation and freeze them before the surface they
+    // authorize. The resolver still owns vocabulary validation; this port owns
+    // the durable per-Session source and its scope/recursion data.
+    const grants = options.grants.resolveBirth({
+      role,
+      ticketId: input.ticketId,
+      ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
+    });
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
-    const toolSurface = options.toolSurface.resolve(role);
+    const toolSurface = options.toolSurface.resolve(role, grants.grants);
     const created = await options.runtime.command({
       commandId: `${input.operationId}:create`,
       command: {
@@ -401,8 +420,11 @@ export function createSessions(options: SessionsOptions): Sessions {
     // Durable inside MINT, not beside the attach: VC-16 split the start so a
     // chat can open optimistically — `create` lands the tab and `attach`
     // follows separately — and the record has to exist before whichever
-    // attach eventually composes the system prompt from it.
+    // attach eventually composes the system prompt from it. The grant reaches
+    // the store first: a tool surface without its scope would be a capability
+    // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
+    options.grants.recordBirth(created.sessionId, grants);
     await options.toolSurface.record(created.sessionId, toolSurface);
     return { sessionId: created.sessionId, model };
   }

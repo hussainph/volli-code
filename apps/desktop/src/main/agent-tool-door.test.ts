@@ -25,6 +25,7 @@ import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertProject, listProjects } from "./db/projects-repo";
 import { insertTicket } from "./db/tickets-repo";
+import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-store";
 import type { SessionStartInput } from "./session-runtime/sessions";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 
@@ -47,7 +48,18 @@ const CALLER: RuntimeSessionIdentity = {
   ticketId: null,
 };
 
-function harness(overrides: { startError?: unknown } = {}) {
+const TICKET_CALLER: RuntimeSessionIdentity = {
+  role: "ticket",
+  sessionId: "ticket-caller-session",
+  rootThreadId: "thread-2",
+  attachmentId: "attachment-2",
+  projectId: "project-one",
+  ticketId: "ticket-one",
+};
+
+function harness(
+  overrides: { startError?: unknown; delegation?: TicketSessionDelegationClaims } = {},
+) {
   ctx = openTestDb();
   insertProject(
     ctx.db,
@@ -60,6 +72,10 @@ function harness(overrides: { startError?: unknown } = {}) {
   insertTicket(
     ctx.db,
     testTicket("project-one", { id: "ticket-one", ticketNumber: 1, title: "Ship CLI" }),
+  );
+  insertTicket(
+    ctx.db,
+    testTicket("project-one", { id: "ticket-three", ticketNumber: 2, title: "Another task" }),
   );
   insertTicket(
     ctx.db,
@@ -95,13 +111,31 @@ function harness(overrides: { startError?: unknown } = {}) {
     onSessionStarted: (notice) => notices.push(notice),
     actorTicketDisplay: () => null,
     now: () => 1_000,
+    delegation:
+      overrides.delegation ??
+      ({
+        claimStart: ({ parentSessionId, toolCallId }) => ({
+          ok: true,
+          delegation: {
+            parentSessionId,
+            depth: 1,
+            maxDepth: 1,
+            maxChildren: 3,
+            claimToolCallId: toolCallId,
+          },
+        }),
+        releaseIfUnstarted: () => undefined,
+      } satisfies TicketSessionDelegationClaims),
     // `ticket.await`'s ports, inert for the start-tool suite: its own suite
     // (`agent-await.test.ts`) drives them with real fakes.
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     subscribeTicketWake: () => () => undefined,
   });
-  const call = (input: Record<string, unknown>, toolCallId = "tc-0") =>
-    door(CALLER, { verb: "session.start", input, toolCallId }, new AbortController().signal);
+  const call = (
+    input: Record<string, unknown>,
+    toolCallId = "tc-0",
+    caller: RuntimeSessionIdentity = CALLER,
+  ) => door(caller, { verb: "session.start", input, toolCallId }, new AbortController().signal);
   return { call, startInputs, kickoffs, notices };
 }
 
@@ -153,6 +187,77 @@ describe("session_start through the Agent Tool Surface", () => {
 
     expect(result.text).toContain("No Ticket OT-7 in this project");
     expect(h.startInputs).toEqual([]);
+  });
+
+  it("lets a Ticket Session start only on its own Ticket", async () => {
+    const h = harness();
+
+    const own = await h.call({ ticket: "VC-1" }, "ticket-own", TICKET_CALLER);
+    const other = await h.call({ ticket: "VC-2" }, "ticket-other", TICKET_CALLER);
+
+    expect(own.text).toContain("Started Session");
+    expect(other.text).toContain("only start Sessions on its own Ticket");
+    expect(h.startInputs).toHaveLength(1);
+    expect(h.startInputs[0]).toMatchObject({
+      ticketId: "ticket-one",
+      delegation: {
+        parentSessionId: TICKET_CALLER.sessionId,
+        depth: 1,
+        maxDepth: 1,
+        maxChildren: 3,
+        claimToolCallId: "ticket-own",
+      },
+    });
+  });
+
+  it("refuses a Ticket caller whose frozen birth grant is absent or exhausted", async () => {
+    const h = harness({
+      delegation: {
+        claimStart: ({ toolCallId }) =>
+          toolCallId === "no-grant"
+            ? { ok: false, reason: "not-granted" as const }
+            : { ok: false, reason: "limit" as const },
+        releaseIfUnstarted: () => undefined,
+      },
+    });
+
+    const missing = await h.call({ ticket: "VC-1" }, "no-grant", TICKET_CALLER);
+    const capped = await h.call({ ticket: "VC-1" }, "at-cap", TICKET_CALLER);
+
+    expect(missing.text).toContain("was not granted in-ticket delegation when it started");
+    expect(capped.text).toContain("already used its in-ticket delegation limit");
+    expect(h.startInputs).toEqual([]);
+  });
+
+  it("releases a claim only when the Session create command never became durable", async () => {
+    const released: unknown[] = [];
+    const h = harness({
+      startError: new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", "Choose a model."),
+      delegation: {
+        claimStart: ({ parentSessionId, toolCallId }) => ({
+          ok: true,
+          delegation: {
+            parentSessionId,
+            depth: 1,
+            maxDepth: 1,
+            maxChildren: 3,
+            claimToolCallId: toolCallId,
+          },
+        }),
+        releaseIfUnstarted: (input) => released.push(input),
+      },
+    });
+
+    const result = await h.call({ ticket: "VC-1" }, "failed-start", TICKET_CALLER);
+
+    expect(result.text).toContain("Choose a model.");
+    expect(released).toEqual([
+      {
+        parentSessionId: TICKET_CALLER.sessionId,
+        toolCallId: "failed-start",
+        createCommandId: `${TICKET_CALLER.sessionId}:failed-start:create`,
+      },
+    ]);
   });
 
   it("derives the operation id from the caller and the runtime's own call id", async () => {

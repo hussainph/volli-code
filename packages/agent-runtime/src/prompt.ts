@@ -308,18 +308,18 @@ const BRIEF_DELIMITER: Record<RuntimeSessionRole, string> = {
  */
 const ENVIRONMENT_DELIMITER = "WORKSPACE ENVIRONMENT";
 
-/** The delimiter the Role bundle arrives in, beside the Brief. */
+/** The delimiter the frozen Agent Tool Surface arrives in, beside the Brief. */
 const TOOL_SURFACE_DELIMITER = "SESSION TOOLS";
 
-/** What the Session calls itself where the bundle is named. */
-const BUNDLE_SUBJECT: Record<RuntimeSessionRole, string> = {
-  ticket: "This Ticket Session's Role bundle",
-  project: "This Project Session's Role bundle",
+/** What the Session calls its frozen surface where its named verbs are listed. */
+const TOOL_SURFACE_SUBJECT: Record<RuntimeSessionRole, string> = {
+  ticket: "This Ticket Session's frozen tool surface",
+  project: "This Project Session's frozen tool surface",
 };
 
 /**
- * The product verbs this Session's Role handed it, said once so it never has to
- * find out by trying (VC-162).
+ * The product verbs this Session was handed, said once so it never has to find
+ * out by trying (VC-162).
  *
  * A Turn Reminder rather than prompt bytes, and the reason is the Cache Prefix
  * rather than taste. Bundle membership is `bundle(Role) ∪ grants(session)`, so a
@@ -359,8 +359,8 @@ export function composeToolSurfaceBlock(
   return [
     `--- BEGIN ${TOOL_SURFACE_DELIMITER} ---`,
     ...(named.length === 0
-      ? [`${BUNDLE_SUBJECT[role]} holds no Volli verbs as named tools.`]
-      : [`${BUNDLE_SUBJECT[role]} holds these Volli verbs as named tools:`, ...named]),
+      ? [`${TOOL_SURFACE_SUBJECT[role]} holds no Volli verbs as named tools.`]
+      : [`${TOOL_SURFACE_SUBJECT[role]} holds these Volli verbs as named tools:`, ...named]),
     "Membership was fixed when this Session was created and does not change while",
     "it runs. A Volli verb not named here is not in this Session's tool array: do",
     "not probe for it, and do not reach for an equivalent another way. Where the",

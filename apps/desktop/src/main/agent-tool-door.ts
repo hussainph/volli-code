@@ -53,6 +53,10 @@ import { ticketForDisplayId } from "./agent-dispatch/resolution";
 import { awaitTicketTool } from "./agent-await";
 import type { SubscribeTicketWake } from "./agent-await";
 import { StructuredSessionsError } from "./session-runtime/sessions";
+import type {
+  TicketSessionDelegation,
+  TicketSessionDelegationClaims,
+} from "./session-runtime/delegation-store";
 import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
 import type { StartSessionPorts } from "./session-runtime/start-session";
 
@@ -72,6 +76,8 @@ export interface AgentToolDoorOptions extends Omit<
   projects: () => readonly Project[];
   sessions: () => StartSessionPorts["sessions"] | null;
   actorTicketDisplay: StartSessionPorts["actorTicketDisplay"];
+  /** Durable own-ticket claims for Ticket Role's birth grants (VC-183). */
+  delegation: TicketSessionDelegationClaims;
   /** The caller's project policy, read per call — `ticket.await` judges its wait when it starts. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /** The post-commit wake bus (`ticket-wake.ts`, VC-85 slice C) `ticket.await` parks on. */
@@ -184,6 +190,31 @@ async function startSessionTool(
     );
   }
 
+  // Project Sessions retain the existing project-wide control bound. A Ticket
+  // Session only reaches this handler because its frozen birth surface carried
+  // a stored `session.start` grant, and that grant's scope is narrower than the
+  // generic project lookup above: exactly its attached Ticket.
+  let delegation: TicketSessionDelegation | undefined;
+  if (session.role === "ticket") {
+    if (resolved.ticket.id !== session.ticketId) {
+      return refusal("This Ticket Session can only start Sessions on its own Ticket.");
+    }
+    const claimed = options.delegation.claimStart({
+      parentSessionId: session.sessionId,
+      ticketId: session.ticketId,
+      toolCallId: request.toolCallId,
+    });
+    if (!claimed.ok) {
+      return refusal(
+        claimed.reason === "limit"
+          ? "This Ticket Session has already used its in-ticket delegation limit."
+          : "This Ticket Session was not granted in-ticket delegation when it started.",
+      );
+    }
+    delegation = claimed.delegation;
+  }
+  const operationId = `${session.sessionId}:${request.toolCallId}`;
+
   try {
     const started = await startSessionOperation(
       {
@@ -202,7 +233,7 @@ async function startSessionTool(
         // fresh random one. Every durable write in the start is keyed on this,
         // so replaying one tool call lands one Session, one kickoff and one
         // `session_started` rather than a second set of all three.
-        operationId: `${session.sessionId}:${request.toolCallId}`,
+        operationId,
         project: resolved.project,
         ticket: resolved.ticket,
         ...(message.value === undefined ? {} : { message: message.value }),
@@ -211,6 +242,7 @@ async function startSessionTool(
           const built = startSessionModelOverride(override.model, override.reasoning);
           return built === undefined ? {} : { modelOverride: built };
         })(),
+        ...(delegation === undefined ? {} : { delegation }),
         actor: callerActor(session),
       },
       { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
@@ -229,6 +261,17 @@ async function startSessionTool(
       ].join("\n"),
     };
   } catch (error) {
+    // A failure before the Session's create command is durable must not burn a
+    // fan-out slot. Once create exists, replay owns recovery and the claim stays
+    // put — a later retry records the same child's birth grant rather than
+    // starting another Session.
+    if (delegation !== undefined) {
+      options.delegation.releaseIfUnstarted({
+        parentSessionId: session.sessionId,
+        toolCallId: request.toolCallId,
+        createCommandId: `${operationId}:create`,
+      });
+    }
     // A refusal the facade named is still an answer about the request, so the
     // model gets its words. Anything else is a host that could not carry out
     // the start at all, and that fails the call.

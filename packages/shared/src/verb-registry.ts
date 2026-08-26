@@ -1045,10 +1045,11 @@ export const VERB_REGISTRY = [
       // identity itself, so there is no project or actor field to supply and
       // nothing to be gained by describing oneself.
       description: [
-        "Start an agent chat Session on one Ticket in this project, and return as soon as it opens.",
+        "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
+        "A Project Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, within its fixed delegation limit.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
-        "Volli binds the calling Session and project itself: name the Ticket and nothing about yourself.",
+        "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
       input: [
         {
