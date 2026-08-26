@@ -217,10 +217,10 @@ export async function doctorVerb(
   };
 }
 
-/** `volli model list` — signed-in providers, model ids, reasoning levels. */
+/** `volli model list` — available providers, model ids, reasoning levels. */
 export async function modelListVerb(
   context: AgentCommandContext,
-  request: AgentRequest,
+  _request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options } = context;
   // Same structural stance as `session.start`: the only transport is the
@@ -245,18 +245,20 @@ export async function modelListVerb(
       "Model Access did not answer in time (a provider probe may be hung). Retry, or check provider sign-in in the app.",
     );
   }
-  // The signed-in slice is the default view: the full registered catalog
-  // is ~1,200 rows, and dumping it into an agent's context window is the
-  // failure mode this verb exists to prevent. `--all` is the explicit
-  // opt-in, and the rollup count keeps the omission honest.
-  const all = request.args["all"] === true;
-  const shownProviders = all
-    ? snapshot.providers
-    : snapshot.providers.filter((provider) => provider.state === "available");
+  // The Model Access snapshot holds the complete registered catalog — around
+  // 1,200 rows — while this agent-facing command must name only models the
+  // runtime can actually use. There is deliberately no opt-out: asking an
+  // agent to choose from a signed-out catalog is both context waste and a
+  // misleading instruction.
+  const shownProviders = snapshot.providers.filter((provider) => provider.state === "available");
+  const shownProviderIds = new Set(shownProviders.map((provider) => provider.id));
+  const shownModels = snapshot.models.filter(
+    (model) => shownProviderIds.has(model.providerId) && model.state === "available",
+  );
   const providers = shownProviders.map((provider) => {
     const catalog = snapshot.models.filter((model) => model.providerId === provider.id);
-    const models = catalog
-      .filter((model) => all || model.state === "available")
+    const models = shownModels
+      .filter((model) => model.providerId === provider.id)
       .map((model) => ({
         // The copyable string: `session start --model` takes it verbatim
         // (the parser splits on the FIRST slash, so gateway model ids
@@ -276,25 +278,29 @@ export async function modelListVerb(
       omittedModels: catalog.length - models.length,
     };
   });
-  // The app default is reported even when it names a model the filtered
-  // view no longer shows — what `session start` will do without an
-  // override is a fact about the app, not about this view.
-  //
   // Which default: the Ticket one (VC-53), because `volli session start`
   // starts a Ticket Session. A profile that configured only the project
   // default sees that one, since an unset ticket default resolves to it.
+  // A stored default is not itself proof of access, though: the credential
+  // might have expired or been signed out since it was saved, so suppress a
+  // default whose model is absent from the available slice as well.
   const selection = resolveDefaultModel(readModelAccessDefaults(options.db), "ticket");
+  const defaultModel =
+    selection !== null &&
+    shownModels.some(
+      (model) => model.providerId === selection.providerId && model.modelId === selection.modelId,
+    )
+      ? {
+          model: `${selection.providerId}/${selection.modelId}`,
+          reasoning: selection.reasoningLevel,
+        }
+      : null;
   return {
     v: 1,
     ok: true,
     data: {
       observedAt: snapshot.observedAt,
-      default: selection
-        ? {
-            model: `${selection.providerId}/${selection.modelId}`,
-            reasoning: selection.reasoningLevel,
-          }
-        : null,
+      default: defaultModel,
       providers,
       omittedProviders: snapshot.providers.length - shownProviders.length,
     },

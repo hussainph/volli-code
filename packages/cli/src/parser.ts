@@ -369,7 +369,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
-  "model.list": { options: { "--all": { kind: "flag", key: "all", value: true } } },
+  "model.list": { options: {} },
   cost: {
     options: {
       "--ticket": { kind: "value", key: "ticket" },

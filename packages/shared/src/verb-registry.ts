@@ -844,7 +844,8 @@ export const VERB_REGISTRY = [
   },
   {
     // Model discovery (VC-78): the same Model Access snapshot the app reads,
-    // filtered for a context window — never a parallel provider probe.
+    // narrowed to models the runtime can use — never a parallel provider probe
+    // or a signed-out catalog in an agent's context.
     key: "model.list",
     accessModes: ["cli"],
     actor: "any",
@@ -852,19 +853,13 @@ export const VERB_REGISTRY = [
     listed: true,
     referenceOrder: 10,
     group: "Read",
-    summary: "List signed-in providers, model ids, and reasoning levels.",
+    summary: "List available providers, model ids, and reasoning levels.",
     example: "volli model list",
     notes: [
       "Copy a printed <provider/model> verbatim into session start --model.",
-      "Shows available models only; --all includes signed-out providers.",
+      "Shows only models this profile can run.",
     ],
-    options: [
-      {
-        name: "--all",
-        kind: "flag",
-        help: "Include signed-out providers and unavailable models.",
-      },
-    ],
+    options: [],
   },
   {
     // What a pass cost, and where it went (VC-87).
