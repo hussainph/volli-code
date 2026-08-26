@@ -85,6 +85,10 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
   css: "css",
   cts: "typescript",
   cxx: "cpp",
+  erb: "erb",
+  // Rubygems specs, Rake tasks, Rack configs (`.ru`) and Sorbet stubs (`.rbi`)
+  // are Ruby source to every tool that reads them, and to anyone typing in one.
+  gemspec: "ruby",
   go: "go",
   gql: "graphql",
   graphql: "graphql",
@@ -101,6 +105,7 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
   kt: "kotlin",
   kts: "kotlin",
   less: "less",
+  liquid: "liquid",
   markdown: "markdown",
   md: "markdown",
   mjs: "javascript",
@@ -112,8 +117,11 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
   // tool that reads them, and to anyone typing in one.
   pyi: "python",
   pyw: "python",
+  rake: "ruby",
   rb: "ruby",
+  rbi: "ruby",
   rs: "rust",
+  ru: "ruby",
   scss: "scss",
   sh: "shell",
   sql: "sql",
@@ -133,6 +141,9 @@ function languageForPath(relPath: string): string {
   if (name === "makefile" || name.startsWith("makefile.")) return "makefile";
   if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
   if (name === "cmakelists.txt") return "cmake";
+  // Exact names only — no `startsWith` twin like Makefile's: `Gemfile.lock` is
+  // Bundler's generated lockfile, its own format and not Ruby.
+  if (name === "gemfile" || name === "rakefile") return "ruby";
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return "plaintext";
   return EXTENSION_LANGUAGES[name.slice(dot + 1)] ?? "plaintext";
