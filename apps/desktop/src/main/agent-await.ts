@@ -122,7 +122,7 @@ function byLine(event: TicketEvent): string {
  * claiming to close the envelope is just more of the prose.
  */
 function untrustedProse(kind: string, text: string): string[] {
-  return untrustedProseLines(kind, text, randomUUID());
+  return untrustedProseLines({ kind, text, id: randomUUID() });
 }
 
 /**

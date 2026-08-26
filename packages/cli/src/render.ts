@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import {
   ERROR_RECOVERY,
   isAgentMutationPlan,
   SESSION_ENV_TOOLS,
   TICKET_STATUS_LABELS,
-  untrustedProseLines,
+  untrustedProseResponseLines,
 } from "@volli/shared";
 import type {
   AgentError,
@@ -152,8 +150,19 @@ function renderTicketResult(data: unknown): string | null {
   return ticketLine(data["ticket"]);
 }
 
-/** The most prose one ticket-show row may hand an agent in text mode. */
+/** The most prose one ticket-show log field may hand an agent in text mode. */
 export const TICKET_SHOW_PROSE_MAX_CHARS = 1_000;
+
+interface TicketShowProse {
+  label: string;
+  text: string;
+  truncated: boolean;
+}
+
+interface RenderedTicketShowEntry {
+  lines: string[];
+  prose: TicketShowProse[];
+}
 
 /** The verdict columns shared by ticket.signal's receipt and ticket show's latest-signal rows. */
 function ticketSignalLine(signal: Record<string, unknown>): string {
@@ -162,47 +171,104 @@ function ticketSignalLine(signal: Record<string, unknown>): string {
     .join("  ");
 }
 
-/** A text-mode ticket show must not let one prose row consume the caller's context. */
-function boundedUntrustedProse(kind: string, prose: string): string[] {
-  const truncated = prose.length > TICKET_SHOW_PROSE_MAX_CHARS;
-  const shown = truncated ? prose.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) : prose;
-  return [
-    ...(truncated
-      ? [`The ${kind} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`]
-      : []),
-    ...untrustedProseLines(kind, shown, randomUUID(), "ticket show response"),
-  ];
+/** A text-mode ticket show must not let one prose field consume the caller's context. */
+function boundedTicketShowProse(label: string, text: string): TicketShowProse {
+  const truncated = text.length > TICKET_SHOW_PROSE_MAX_CHARS;
+  return {
+    label,
+    text: truncated ? text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) : text,
+    truncated,
+  };
 }
 
-/** The event payload crosses the socket under `payload`; tolerate old test fixtures that put it at top level. */
-function ticketEventPayload(event: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(event["payload"]) ? event["payload"] : event;
+/**
+ * Event fields a text row may render bare. Everything else is another author's
+ * data below the response-wide envelope, so a newly added free-text payload
+ * cannot silently bypass the bound and framing contract.
+ */
+const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  created: ["status"],
+  status_changed: ["from", "to"],
+  priority_changed: ["from", "to"],
+  harness_changed: ["from", "to"],
+  body_edited: [],
+  archived: [],
+  unarchived: [],
+  commented: ["commentId"],
+  signaled: ["signalKind", "verdict"],
+  worktree_changed: ["from", "to"],
+  worktree_scope_changed: ["from", "to"],
+  worktree_failed: ["stage"],
+  worktree_committed: [],
+  pr_opened: ["url"],
+  pr_merged: ["url"],
+  worktree_reclaimed: ["branch", "daysInDone"],
+  attachment_added: ["attachmentId"],
+  attachment_removed: ["attachmentId"],
+  session_started: ["sessionId"],
+};
+
+/** Ticket events cross the socket under `payload`; a top-level kind is not an event payload. */
+function ticketEventPayload(event: Record<string, unknown>): Record<string, unknown> | null {
+  return isRecord(event["payload"]) ? event["payload"] : null;
 }
 
-/** One scalar or scalar list as a scan-friendly event field; nested records stay out of a text row. */
-function ticketEventValue(value: unknown): string | null {
+/** One scalar or scalar list as a scan-friendly event field, with no silent record drop. */
+function ticketEventValue(value: unknown): string {
+  let text: string;
+  if (value === null) {
+    text = "-";
+  } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    text = String(value);
+  } else if (Array.isArray(value)) {
+    text = value.length === 0 ? "[]" : value.map(ticketEventValue).join(",");
+  } else {
+    text = "<record>";
+  }
+  // Inline fields are structured facts, not prose, but malformed or future
+  // data must still not turn one event line into an unbounded response.
+  const bounded =
+    text.length > TICKET_SHOW_PROSE_MAX_CHARS
+      ? `${text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS)}…`
+      : text;
+  return terminalSafeInline(bounded);
+}
+
+/** Flatten a nested structured fact instead of dropping its identities from the event row. */
+function ticketEventFacts(field: string, value: unknown): string[] {
+  if (!isRecord(value)) return [`${terminalSafeInline(field)}=${ticketEventValue(value)}`];
+  const entries = Object.entries(value);
+  if (entries.length === 0) return [`${terminalSafeInline(field)}=<empty>`];
+  return entries.flatMap(([nestedField, nestedValue]) =>
+    ticketEventFacts(`${field}.${nestedField}`, nestedValue),
+  );
+}
+
+/** A readable data representation for a field the response envelope quotes line by line. */
+function ticketEventProseText(value: unknown): string {
   if (value === null) return "-";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return terminalSafeInline(value);
+    return String(value);
   }
   if (Array.isArray(value)) {
-    const values = value.map(ticketEventValue);
-    return values.every((entry) => entry !== null) ? values.join(",") : null;
+    return value.length === 0
+      ? "(empty)"
+      : value.map((entry, index) => `${index + 1}. ${ticketEventProseText(entry)}`).join("\n");
   }
-  return null;
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    return entries.length === 0
+      ? "(empty)"
+      : entries
+          .map(([field, nestedValue]) => `${field}: ${ticketEventProseText(nestedValue)}`)
+          .join("\n");
+  }
+  return "<unrenderable>";
 }
 
-/** One durable event as columns rather than an opaque JSON object. */
-function ticketEventLine(event: Record<string, unknown>): string {
+/** One durable event as columns plus any prose it directs to the response envelope. */
+function renderTicketEvent(event: Record<string, unknown>): RenderedTicketShowEntry {
   const payload = ticketEventPayload(event);
-  const kind = typeof payload["kind"] === "string" ? terminalSafeInline(payload["kind"]) : "-";
-  const facts = Object.entries(payload).flatMap(([field, value]) => {
-    // Signal detail is prose. It travels below in its own nonce-delimited
-    // envelope rather than escaping this formatted event line.
-    if (field === "kind" || field === "detail") return [];
-    const rendered = ticketEventValue(value);
-    return rendered === null ? [] : [`${field}=${rendered}`];
-  });
   const metadata: string[] = [];
   if (typeof event["actor"] === "string") {
     metadata.push(`actor=${terminalSafeInline(event["actor"])}`);
@@ -211,31 +277,49 @@ function ticketEventLine(event: Record<string, unknown>): string {
     metadata.push(`session=${terminalSafeInline(event["actorContext"]["session"])}`);
   }
   if (typeof event["createdAt"] === "number") metadata.push(`at=${event["createdAt"]}`);
-  return ["event", kind, ...facts, ...metadata].join("  ");
-}
-
-function renderTicketEvent(event: Record<string, unknown>): string[] {
-  const payload = ticketEventPayload(event);
-  const lines = [ticketEventLine(event)];
-  if (
-    payload["kind"] === "signaled" &&
-    typeof payload["detail"] === "string" &&
-    payload["detail"].trim().length > 0
-  ) {
-    lines.push(...boundedUntrustedProse("signal detail", payload["detail"]));
+  if (payload === null) {
+    return { lines: [["event", "-", "payload=<missing>", ...metadata].join("  ")], prose: [] };
   }
-  return lines;
+
+  const kindValue = payload["kind"];
+  const kind = typeof kindValue === "string" ? kindValue : "-";
+  const inlineFields = new Set(TICKET_EVENT_INLINE_FIELDS[kind] ?? []);
+  const prose: TicketShowProse[] = [];
+  const facts = Object.entries(payload).flatMap(([field, value]) => {
+    if (field === "kind") return [];
+    if (inlineFields.has(field)) return ticketEventFacts(field, value);
+    // An omitted signal detail carries no prose; every other present field is
+    // named on the row and handed over as bounded, quoted data below it.
+    if (
+      field === "detail" &&
+      (value === null || (typeof value === "string" && value.trim().length === 0))
+    ) {
+      return [];
+    }
+    if (value === null || value === undefined) return [`${terminalSafeInline(field)}=-`];
+    prose.push(
+      boundedTicketShowProse(
+        `event ${terminalSafeInline(kind)} ${terminalSafeInline(field)}`,
+        ticketEventProseText(value),
+      ),
+    );
+    return [`${terminalSafeInline(field)}=<untrusted prose below>`];
+  });
+  return {
+    lines: [["event", terminalSafeInline(kind), ...facts, ...metadata].join("  ")],
+    prose,
+  };
 }
 
-function renderTicketSignal(signal: Record<string, unknown>): string[] {
-  const lines = [`signal  ${ticketSignalLine(signal)}`];
+function renderTicketSignal(signal: Record<string, unknown>): RenderedTicketShowEntry {
+  const prose: TicketShowProse[] = [];
   if (typeof signal["detail"] === "string" && signal["detail"].trim().length > 0) {
-    lines.push(...boundedUntrustedProse("signal detail", signal["detail"]));
+    prose.push(boundedTicketShowProse("signal detail", signal["detail"]));
   }
-  return lines;
+  return { lines: [`signal  ${ticketSignalLine(signal)}`], prose };
 }
 
-function renderTicketComment(comment: Record<string, unknown>): string[] {
+function renderTicketComment(comment: Record<string, unknown>): RenderedTicketShowEntry {
   const metadata = [
     typeof comment["ticket"] === "string" ? terminalSafeInline(comment["ticket"]) : "-",
     typeof comment["actor"] === "string" ? terminalSafeInline(comment["actor"]) : "-",
@@ -244,11 +328,27 @@ function renderTicketComment(comment: Record<string, unknown>): string[] {
       : null,
     typeof comment["createdAt"] === "number" ? `at=${comment["createdAt"]}` : null,
   ].filter((value): value is string => value !== null);
-  const lines = [`comment  ${metadata.join("  ")}`];
-  if (typeof comment["body"] === "string") {
-    lines.push(...boundedUntrustedProse("ticket comment", comment["body"]));
-  }
-  return lines;
+  const prose =
+    typeof comment["body"] === "string"
+      ? [boundedTicketShowProse("ticket comment", comment["body"])]
+      : [];
+  return { lines: [`comment  ${metadata.join("  ")}`], prose };
+}
+
+function renderTicketShowProse(prose: readonly TicketShowProse[]): string[] {
+  const truncations = prose
+    .filter((block) => block.truncated)
+    .map(
+      (block) =>
+        `The ${block.label} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`,
+    );
+  return [
+    ...truncations,
+    ...untrustedProseResponseLines({
+      response: "ticket show response",
+      blocks: prose.map(({ label, text }) => ({ label, text })),
+    }),
+  ];
 }
 
 function renderDetail(data: unknown): string | null {
@@ -257,6 +357,7 @@ function renderDetail(data: unknown): string | null {
   const first = ticketLine(ticket);
   if (first === null) return null;
   const lines = [first];
+  const prose: TicketShowProse[] = [];
   for (const key of ["priority", "harness", "baseBranch", "branch"] as const) {
     const value = ticket[key];
     if (typeof value === "string") lines.push(`${key}  ${terminalSafeInline(value)}`);
@@ -268,14 +369,21 @@ function renderDetail(data: unknown): string | null {
   // the ticket STANDS (VC-85): at most one line per kind, and the line an
   // orchestrator polling this ticket came to read.
   for (const signal of recordsAt(data, "signals") ?? []) {
-    lines.push(...renderTicketSignal(signal));
+    const rendered = renderTicketSignal(signal);
+    lines.push(...rendered.lines);
+    prose.push(...rendered.prose);
   }
   for (const event of recordsAt(data, "events") ?? []) {
-    lines.push(...renderTicketEvent(event));
+    const rendered = renderTicketEvent(event);
+    lines.push(...rendered.lines);
+    prose.push(...rendered.prose);
   }
   for (const comment of recordsAt(data, "comments") ?? []) {
-    lines.push(...renderTicketComment(comment));
+    const rendered = renderTicketComment(comment);
+    lines.push(...rendered.lines);
+    prose.push(...rendered.prose);
   }
+  if (prose.length > 0) lines.push(...renderTicketShowProse(prose));
   return lines.join("\n");
 }
 
