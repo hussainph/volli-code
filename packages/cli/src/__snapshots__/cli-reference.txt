@@ -430,7 +430,7 @@ session start — Start an agent chat session on a ticket.
 
 Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
-Role availability: not claimed outside a resolved Session.
+Tool availability: not claimed outside a resolved Session.
 
 Tool: session_start
 
@@ -867,7 +867,7 @@ Error codes:
     Next: Run `volli help` and choose one of the commands or topics it lists.
   WRONG_DOOR           2 usage
     Why: The verb exists, but the shell is not the surface that executes it.
-    Next: Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.
+    Next: Use the surface named in the refusal; if tool availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.
   FORBIDDEN_ACTOR      1 failure
     Why: The verb is on this surface, and this caller is not one the project's policy lets run it. Coordination-tier verbs want an authenticated Volli Session; a process that merely runs as your user is not one.
     Next: Run the command from inside a Volli Session. If you already are, the project's per-actor policy withholds this verb and only a person can widen it in Settings — do not work around the refusal.

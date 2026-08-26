@@ -53,7 +53,7 @@ import type {
 
 import type { SessionStartedNotice } from "../../ipc/contract";
 import type { AutoTitleRequest } from "./auto-title";
-import type { TicketSessionDelegation } from "./delegation-store";
+import type { TicketSessionDelegation } from "./delegation-policy";
 import type { Sessions, SessionModelOverride } from "./sessions";
 
 /** The kickoff turn's ids, derived so a replayed start submits one message. */

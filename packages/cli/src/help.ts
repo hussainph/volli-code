@@ -234,8 +234,8 @@ function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string |
       : `Tool availability: not carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`;
   }
   return runtime.surfaceUnknownReason === null
-    ? "Role availability: not claimed outside a resolved Session."
-    : `Role availability: unknown (${runtime.surfaceUnknownReason}).`;
+    ? "Tool availability: not claimed outside a resolved Session."
+    : `Tool availability: unknown (${runtime.surfaceUnknownReason}).`;
 }
 
 /** The complete compact shell reference plus honest discovery of non-shell doors. */

@@ -31,7 +31,19 @@ import type {
   TicketEventActor,
 } from "@volli/shared";
 
-import type { SessionGrantPorts, TicketSessionDelegation } from "./delegation-store";
+import type { SessionGrantPorts, TicketSessionDelegation } from "./delegation-policy";
+
+/**
+ * The Session Engine command id one start operation writes its `create` under.
+ *
+ * Exported because two callers need the same answer and neither owns it: `mint`
+ * writes the command, and the tool door hands the id to the delegation ledger
+ * as the durable evidence that a claimed fan-out slot really opened a Session.
+ * Spelling it twice is how those two quietly stop agreeing.
+ */
+export function sessionCreateCommandId(operationId: string): string {
+  return `${operationId}:create`;
+}
 
 /**
  * The one adapter id the structured product attaches under.
@@ -395,7 +407,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     // happens to read Settings. The answer is sanitized names/order only.
     const toolSurface = options.toolSurface.resolve(role, grants.grants);
     const created = await options.runtime.command({
-      commandId: `${input.operationId}:create`,
+      commandId: sessionCreateCommandId(input.operationId),
       command: {
         kind: "session.create",
         projectId: input.projectId,

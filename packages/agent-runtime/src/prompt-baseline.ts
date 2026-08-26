@@ -60,9 +60,12 @@ export const PROMPT_BASELINE_CHARS_PER_TOKEN = 4;
  * How wide a set of requests can reuse a section's bytes — which is to say how
  * often those bytes are bought at cache-write price instead of read at ~0.1x.
  *
- * - `role-static`: composed from Role, its frozen bundle, and product version.
- *   Every Session with those terms composes the same bytes, so the first one to
- *   run pays for them and every overlapping Session reads them.
+ * - `role-static`: composed from Role, its default verb bundle, and product
+ *   version. Every Session with those terms composes the same bytes, so the
+ *   first one to run pays for them and every overlapping Session reads them.
+ *   A per-Session birth grant is deliberately NOT one of those terms — it
+ *   varies within a Role, which is why the surface block below is
+ *   `session-static` instead.
  * - `project-static`: composed from a project fact. Shared by every Session in
  *   the project — which is where the skills index, far the largest section,
  *   lands.

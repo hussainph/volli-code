@@ -25,7 +25,7 @@ import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertProject, listProjects } from "./db/projects-repo";
 import { insertTicket } from "./db/tickets-repo";
-import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-store";
+import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-policy";
 import type { SessionStartInput } from "./session-runtime/sessions";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 
@@ -56,6 +56,33 @@ const TICKET_CALLER: RuntimeSessionIdentity = {
   projectId: "project-one",
   ticketId: "ticket-one",
 };
+
+/**
+ * The ledger a Ticket caller born with the Role default would meet.
+ *
+ * `startGrantScope` answers null by default because that is what a genuine
+ * Project Session's row says: it was never born with a scoped grant. The one
+ * test that needs the other answer is the orphaned-Ticket case, and it says so.
+ */
+function grantingDelegation(
+  overrides: Partial<TicketSessionDelegationClaims> = {},
+): TicketSessionDelegationClaims {
+  return {
+    startGrantScope: () => null,
+    claimStart: ({ parentSessionId, toolCallId }) => ({
+      ok: true,
+      delegation: {
+        parentSessionId,
+        depth: 1,
+        maxDepth: 1,
+        maxChildren: 3,
+        claimToolCallId: toolCallId,
+      },
+    }),
+    releaseIfUnstarted: () => undefined,
+    ...overrides,
+  };
+}
 
 function harness(
   overrides: { startError?: unknown; delegation?: TicketSessionDelegationClaims } = {},
@@ -111,21 +138,7 @@ function harness(
     onSessionStarted: (notice) => notices.push(notice),
     actorTicketDisplay: () => null,
     now: () => 1_000,
-    delegation:
-      overrides.delegation ??
-      ({
-        claimStart: ({ parentSessionId, toolCallId }) => ({
-          ok: true,
-          delegation: {
-            parentSessionId,
-            depth: 1,
-            maxDepth: 1,
-            maxChildren: 3,
-            claimToolCallId: toolCallId,
-          },
-        }),
-        releaseIfUnstarted: () => undefined,
-      } satisfies TicketSessionDelegationClaims),
+    delegation: overrides.delegation ?? grantingDelegation(),
     // `ticket.await`'s ports, inert for the start-tool suite: its own suite
     // (`agent-await.test.ts`) drives them with real fakes.
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
@@ -212,51 +225,78 @@ describe("session_start through the Agent Tool Surface", () => {
 
   it("refuses a Ticket caller whose frozen birth grant is absent or exhausted", async () => {
     const h = harness({
-      delegation: {
+      delegation: grantingDelegation({
         claimStart: ({ toolCallId }) =>
           toolCallId === "no-grant"
             ? { ok: false, reason: "not-granted" as const }
-            : { ok: false, reason: "limit" as const },
-        releaseIfUnstarted: () => undefined,
-      },
+            : { ok: false, reason: "limit" as const, maxChildren: 3 },
+      }),
     });
 
     const missing = await h.call({ ticket: "VC-1" }, "no-grant", TICKET_CALLER);
     const capped = await h.call({ ticket: "VC-1" }, "at-cap", TICKET_CALLER);
 
     expect(missing.text).toContain("was not granted in-ticket delegation when it started");
-    expect(capped.text).toContain("already used its in-ticket delegation limit");
+    // The number, not the word "limit": a model told only that it hit a bound
+    // has no way to size what it has left.
+    expect(capped.text).toContain("already started the 3 Sessions its in-ticket delegation allows");
     expect(h.startInputs).toEqual([]);
   });
 
-  it("releases a claim only when the Session create command never became durable", async () => {
+  /**
+   * Deleting a Ticket sets `sessions.ticket_id` to NULL, so a Session born on a
+   * Ticket can attach later as a ticketless — `project` Role — one, while the
+   * frozen tool surface it replays still names `session.start`. Judging that
+   * caller by its live Role would silently widen an own-ticket grant into the
+   * project-wide bound, so the door reads how it was BORN.
+   */
+  it("refuses a ticketless caller that was born with an own-ticket grant", async () => {
+    const h = harness({ delegation: grantingDelegation({ startGrantScope: () => "own-ticket" }) });
+
+    const orphaned = await h.call({ ticket: "VC-1" }, "orphaned", CALLER);
+
+    expect(orphaned.text).toContain("scoped to its own Ticket, which is no longer attached");
+    expect(h.startInputs).toEqual([]);
+  });
+
+  it("hands the ledger the create command id its start will write, and asks for the slot back on failure", async () => {
+    const claimed: unknown[] = [];
     const released: unknown[] = [];
     const h = harness({
       startError: new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", "Choose a model."),
-      delegation: {
-        claimStart: ({ parentSessionId, toolCallId }) => ({
-          ok: true,
-          delegation: {
-            parentSessionId,
-            depth: 1,
-            maxDepth: 1,
-            maxChildren: 3,
-            claimToolCallId: toolCallId,
-          },
-        }),
+      delegation: grantingDelegation({
+        claimStart: (input) => {
+          claimed.push(input);
+          return {
+            ok: true,
+            delegation: {
+              parentSessionId: input.parentSessionId,
+              depth: 1,
+              maxDepth: 1,
+              maxChildren: 3,
+              claimToolCallId: input.toolCallId,
+            },
+          };
+        },
         releaseIfUnstarted: (input) => released.push(input),
-      },
+      }),
     });
 
     const result = await h.call({ ticket: "VC-1" }, "failed-start", TICKET_CALLER);
 
     expect(result.text).toContain("Choose a model.");
-    expect(released).toEqual([
+    // The door states the create id once, at claim time; the release names only
+    // the claim, and the ledger reads the evidence it already stored.
+    expect(claimed).toEqual([
       {
         parentSessionId: TICKET_CALLER.sessionId,
         toolCallId: "failed-start",
+        ticketId: "ticket-one",
         createCommandId: `${TICKET_CALLER.sessionId}:failed-start:create`,
       },
+    ]);
+    expect(released).toEqual([
+      { parentSessionId: TICKET_CALLER.sessionId, toolCallId: "failed-start" },
     ]);
   });
 

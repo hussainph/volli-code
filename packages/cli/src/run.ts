@@ -287,7 +287,7 @@ export function teachingErrorForParseResult(
   const unknown = runtime?.surfaceUnknownReason;
   return makeAgentError(
     "WRONG_DOOR",
-    `${parsed.message} Role availability is unknown${unknown ? ` because ${unknown}` : " outside a resolved Session"}.`,
+    `${parsed.message} Tool availability is unknown${unknown ? ` because ${unknown}` : " outside a resolved Session"}.`,
   );
 }
 

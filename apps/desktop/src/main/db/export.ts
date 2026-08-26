@@ -232,7 +232,8 @@ export interface ExportSessionCommandReceipt {
 /** One Ticket Session's durable delegation ancestry (migration 030). */
 export interface ExportSessionDelegation {
   sessionId: string;
-  ticketId: string;
+  /** Null once the Ticket is deleted; the ancestry outlives it. */
+  ticketId: string | null;
   parentSessionId: string | null;
   depth: number;
 }
@@ -251,6 +252,7 @@ export interface ExportSessionDelegationClaim {
   parentSessionId: string;
   toolCallId: string;
   ticketId: string;
+  createCommandId: string;
   childSessionId: string | null;
   createdAt: number;
 }
@@ -721,7 +723,7 @@ function exportSessionCommandReceipts(db: Database.Database): ExportSessionComma
 
 interface SessionDelegationRow {
   session_id: string;
-  ticket_id: string;
+  ticket_id: string | null;
   parent_session_id: string | null;
   depth: number;
 }
@@ -769,6 +771,7 @@ interface SessionDelegationClaimRow {
   parent_session_id: string;
   tool_call_id: string;
   ticket_id: string;
+  create_command_id: string;
   child_session_id: string | null;
   created_at: number;
 }
@@ -776,7 +779,7 @@ interface SessionDelegationClaimRow {
 function exportSessionDelegationClaims(db: Database.Database): ExportSessionDelegationClaim[] {
   const rows = prepared<[], SessionDelegationClaimRow>(
     db,
-    `SELECT parent_session_id, tool_call_id, ticket_id, child_session_id, created_at
+    `SELECT parent_session_id, tool_call_id, ticket_id, create_command_id, child_session_id, created_at
        FROM session_delegation_claims
       ORDER BY parent_session_id COLLATE BINARY, tool_call_id COLLATE BINARY`,
   ).all();
@@ -784,6 +787,7 @@ function exportSessionDelegationClaims(db: Database.Database): ExportSessionDele
     parentSessionId: row.parent_session_id,
     toolCallId: row.tool_call_id,
     ticketId: row.ticket_id,
+    createCommandId: row.create_command_id,
     childSessionId: row.child_session_id,
     createdAt: row.created_at,
   }));

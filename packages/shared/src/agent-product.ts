@@ -214,7 +214,7 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
   },
   WRONG_DOOR: {
     why: "The verb exists, but the shell is not the surface that executes it.",
-    next: "Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.",
+    next: "Use the surface named in the refusal; if tool availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.",
   },
   FORBIDDEN_ACTOR: {
     why: "The verb is on this surface, and this caller is not one the project's policy lets run it. Coordination-tier verbs want an authenticated Volli Session; a process that merely runs as your user is not one.",

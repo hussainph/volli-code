@@ -18,7 +18,7 @@ import {
   type SessionToolSurfacePorts,
   type SessionsOptions,
 } from "./sessions";
-import type { SessionGrantPorts } from "./delegation-store";
+import type { SessionGrantPorts } from "./delegation-policy";
 
 const MODEL: ModelSelection = {
   providerId: "openai-codex",

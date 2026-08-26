@@ -305,7 +305,7 @@ describe("renderHelp over a supplied entry list", () => {
     const detail = renderHelp(["vault", "rotate"], [toolOnly]);
     expect(detail).toContain("Door: Agent Tool Surface (named tool; not shell-executable)");
     expect(detail).toContain("Verb tier: control");
-    expect(detail).toContain("Role availability: not claimed outside a resolved Session");
+    expect(detail).toContain("Tool availability: not claimed outside a resolved Session");
   });
 
   it("names an app-only verb's door honestly instead of hiding it", () => {
@@ -355,7 +355,7 @@ describe("renderHelp over a supplied entry list", () => {
         surfaceUnknownReason: "the app is stopped",
       },
     });
-    expect(detail).toContain("Role availability: unknown (the app is stopped).");
+    expect(detail).toContain("Tool availability: unknown (the app is stopped).");
   });
 
   it("throws from renderHelp on an unknown path so projections cannot silently degrade", () => {

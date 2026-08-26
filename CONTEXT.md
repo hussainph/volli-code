@@ -212,9 +212,9 @@ surface's projection)
 **Verb Tier**:
 The governance class a verb's access modes imply, never a stored field. Read
 tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
-session actor, judged by per-actor policy. Control tier: named tool only,
-Role-bundled, absent from the agent socket. A verb on no agent surface at all
-holds no tier. No verb needs a higher tier than the ambient authority its
+session actor, judged by per-actor policy. Control tier: named tool only, held
+through a Role bundle or a scoped birth grant, absent from the agent socket. A
+verb on no agent surface at all holds no tier. No verb needs a higher tier than the ambient authority its
 effect already lies within.
 _Avoid_: dangerous tier, middle tier
 

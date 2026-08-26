@@ -606,6 +606,7 @@ describe("buildExportDocument — populated db", () => {
       parentSessionId: root.id,
       ticketId: ticket.id,
       toolCallId: "tool-call-1",
+      createCommandId: `${root.id}:tool-call-1:create`,
     });
     if (!claim.ok) throw new Error("Expected the root Session to claim one child");
     insertSession(ctx.db, child);
@@ -635,6 +636,7 @@ describe("buildExportDocument — populated db", () => {
           parentSessionId: root.id,
           toolCallId: "tool-call-1",
           ticketId: ticket.id,
+          createCommandId: `${root.id}:tool-call-1:create`,
           childSessionId: child.id,
         },
       ],

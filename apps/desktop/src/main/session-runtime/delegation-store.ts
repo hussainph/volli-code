@@ -1,82 +1,37 @@
 /**
- * Durable birth grants for Ticket Session delegation.
+ * The durable half of in-ticket delegation (VC-183).
  *
- * The Verb Registry key remains `session.start`. Its narrower authority is not
- * encoded into a second key: the per-Session row carries `scope: own-ticket`,
- * and the tool door reads that scope against its bound caller identity. That
- * keeps provider tool projection, Registry validation, and durable grant data
- * in their separate jobs.
+ * `delegation-policy.ts` beside this file decides what a grant means; this
+ * writes and reads it. The split is the one the two implemented ports already
+ * drew: `SessionGrantPorts` is birth, `TicketSessionDelegationClaims` is the
+ * fan-out ledger the tool door spends.
+ *
+ * No renderer or agent-socket write reaches this store: only Session birth
+ * persists a grant, and only a bound named tool may consume an
+ * already-persisted one.
  */
 import type Database from "better-sqlite3";
 import { isVerbToolKey } from "@volli/shared";
-import type { RuntimeSessionRole, VerbToolKey } from "@volli/shared";
+import type { RuntimeSessionRole } from "@volli/shared";
 
-/**
- * The role-default grant, recorded per Session rather than added to the Ticket
- * Role bundle. One child generation lets an executor enlist a reviewer, fixer,
- * or parallel implementer; three direct children bound the worktree fan-out.
- */
-/** The largest supported ancestor chain: at most 1 + 3 + 9 Sessions. */
-export const MAX_TICKET_SESSION_DELEGATION_DEPTH = 2;
-/** Per-parent cap, kept small enough that the shared worktree stays legible. */
-export const MAX_TICKET_SESSION_DELEGATION_CHILDREN = 3;
-
-export const DEFAULT_TICKET_SESSION_DELEGATION = Object.freeze({
-  maxDepth: 1,
-  maxChildren: 3,
-});
-
-/** The ancestry and limits frozen into one Ticket Session at its birth. */
-export interface TicketSessionDelegation {
-  parentSessionId: string | null;
-  /** Root Sessions are depth zero; a child is its parent's depth plus one. */
-  depth: number;
-  maxDepth: number;
-  maxChildren: number;
-  /** The parent tool call whose durable claim opened this child, if any. */
-  claimToolCallId: string | null;
-}
-
-/** What the Session-start seam needs before it resolves the frozen tool surface. */
-export interface SessionGrantBirth {
-  /** Canonical Verb Registry keys that feed resolveAgentToolSurface. */
-  grants: readonly VerbToolKey[];
-  /** Null for a Project Session; retained even when a child reaches the depth cap. */
-  delegation: TicketSessionDelegation | null;
-}
-
-/**
- * The narrow birth seam the Sessions facade owns. It derives policy before a
- * Session exists, then records exactly that answer before any attachment can
- * receive the resolved tool surface.
- */
-export interface SessionGrantPorts {
-  resolveBirth(input: {
-    role: RuntimeSessionRole;
-    ticketId: string | null;
-    delegation?: TicketSessionDelegation;
-  }): SessionGrantBirth;
-  recordBirth(sessionId: string, birth: SessionGrantBirth): void;
-}
-
-export type TicketDelegationClaim =
-  | { ok: true; delegation: TicketSessionDelegation }
-  | { ok: false; reason: "not-granted" | "limit" };
-
-/** The tool-door half: a durable, idempotent unit of the parent grant's fan-out. */
-export interface TicketSessionDelegationClaims {
-  claimStart(input: {
-    parentSessionId: string;
-    ticketId: string;
-    toolCallId: string;
-  }): TicketDelegationClaim;
-  /** Release only a claim proved not to have created a durable Session. */
-  releaseIfUnstarted(input: {
-    parentSessionId: string;
-    toolCallId: string;
-    createCommandId: string;
-  }): void;
-}
+import {
+  assertDelegation,
+  claimedDelegation,
+  claimKey,
+  cloneDelegation,
+  cloneDelegationDefaults,
+  isDelegationChildren,
+  isDelegationDepth,
+  isNonNegativeInteger,
+} from "./delegation-policy";
+import type {
+  DelegationClaimRef,
+  SessionGrantBirth,
+  SessionGrantPorts,
+  TicketDelegationClaim,
+  TicketSessionDelegation,
+  TicketSessionDelegationClaims,
+} from "./delegation-policy";
 
 interface StartGrantRow {
   scope: string;
@@ -85,21 +40,18 @@ interface StartGrantRow {
 }
 
 interface DelegationRow extends StartGrantRow {
-  ticket_id: string;
+  /** Null once the Ticket is deleted; the grant outlives it, refusing. */
+  ticket_id: string | null;
   parent_session_id: string | null;
   depth: number;
 }
 
 interface ClaimRow {
   ticket_id: string;
+  create_command_id: string;
   child_session_id: string | null;
 }
 
-/**
- * The app-owned grants store. No renderer or agent-socket write reaches it:
- * only Session birth persists a grant, and only a bound named tool may consume
- * an already-persisted one.
- */
 export class TicketSessionDelegationStore
   implements SessionGrantPorts, TicketSessionDelegationClaims
 {
@@ -119,16 +71,13 @@ export class TicketSessionDelegationStore
       }
       return { grants: [], delegation: null };
     }
+    // The Role and the Ticket are one fact on start (`ticketId !== null` IS the
+    // Role), so a `ticket` Role with no Ticket is a caller that has already
+    // lost track of which Session it is minting.
     if (input.ticketId === null) {
       throw new Error("A Ticket Session needs a Ticket before grants can resolve");
     }
-    const delegation = input.delegation ?? {
-      parentSessionId: null,
-      depth: 0,
-      maxDepth: DEFAULT_TICKET_SESSION_DELEGATION.maxDepth,
-      maxChildren: DEFAULT_TICKET_SESSION_DELEGATION.maxChildren,
-      claimToolCallId: null,
-    };
+    const delegation = input.delegation ?? cloneDelegationDefaults();
     assertDelegation(delegation);
     // At the depth cap we still retain ancestry for future own-children grants,
     // but do not offer a tool whose next call must fail. Availability remains
@@ -156,15 +105,18 @@ export class TicketSessionDelegationStore
       }
       this.recordDelegation(sessionId, session.ticket_id, birth.delegation);
       this.recordGrants(sessionId, birth);
-      if (birth.delegation.parentSessionId !== null && birth.delegation.claimToolCallId !== null) {
-        this.completeClaim({
-          parentSessionId: birth.delegation.parentSessionId,
-          ticketId: session.ticket_id,
-          toolCallId: birth.delegation.claimToolCallId,
-          childSessionId: sessionId,
-        });
+      const { parentSessionId, claimToolCallId } = birth.delegation;
+      if (parentSessionId !== null && claimToolCallId !== null) {
+        this.completeClaim(
+          { parentSessionId, toolCallId: claimToolCallId },
+          { ticketId: session.ticket_id, childSessionId: sessionId },
+        );
       }
     })();
+  }
+
+  startGrantScope(sessionId: string): "own-ticket" | null {
+    return this.readStartGrant(sessionId)?.scope ?? null;
   }
 
   /** The grant a tool door may consume, fail-closed for missing or malformed stored data. */
@@ -189,13 +141,14 @@ export class TicketSessionDelegationStore
     return { scope: "own-ticket", maxDepth: row.max_depth, maxChildren: row.max_children };
   }
 
-  claimStart(input: {
-    parentSessionId: string;
-    ticketId: string;
-    toolCallId: string;
-  }): TicketDelegationClaim {
+  claimStart(
+    input: DelegationClaimRef & { ticketId: string; createCommandId: string },
+  ): TicketDelegationClaim {
     if (input.toolCallId.length === 0) throw new Error("A delegation claim needs a tool call id");
-    const key = claimKey(input.parentSessionId, input.toolCallId);
+    if (input.createCommandId.length === 0) {
+      throw new Error("A delegation claim needs the create command id its start will write");
+    }
+    const key = claimKey(input);
     return this.db.transaction(() => {
       // A process crash can land after the claim but before Session Engine
       // creates its command. On the next process, there is no in-flight call
@@ -212,67 +165,61 @@ export class TicketSessionDelegationStore
       ) {
         return { ok: false, reason: "not-granted" } as const;
       }
-      const existing = this.db
-        .prepare(
-          `SELECT ticket_id, child_session_id
-             FROM session_delegation_claims
-            WHERE parent_session_id = ? AND tool_call_id = ?`,
-        )
-        .get(input.parentSessionId, input.toolCallId) as ClaimRow | undefined;
-      if (existing !== undefined) {
-        if (existing.ticket_id !== input.ticketId) {
-          throw new Error("A replayed delegation call cannot change its Ticket");
-        }
+      const granted = {
+        depth: parent.depth,
+        maxDepth: parent.max_depth,
+        maxChildren: parent.max_children,
+      };
+      // A replay cannot smuggle in a different Ticket: the grant check above
+      // already refused every `ticketId` but the one on the ancestry row, and
+      // this claim was inserted under that same check. There is no third value
+      // left for the stored row to disagree with.
+      if (this.readClaim(input) !== undefined) {
         this.#inFlightClaims.add(key);
-        return {
-          ok: true,
-          delegation: claimedDelegation(parent, input.parentSessionId, input.toolCallId),
-        } as const;
+        return { ok: true, delegation: claimedDelegation(granted, input) } as const;
       }
       const count = this.db
         .prepare(
           "SELECT COUNT(*) AS count FROM session_delegation_claims WHERE parent_session_id = ?",
         )
         .get(input.parentSessionId) as { count: number };
-      if (count.count >= parent.max_children) return { ok: false, reason: "limit" } as const;
-      this.db
-        .prepare(
-          `INSERT INTO session_delegation_claims
-             (parent_session_id, tool_call_id, ticket_id, child_session_id, created_at)
-           VALUES (?, ?, ?, NULL, ?)`,
-        )
-        .run(input.parentSessionId, input.toolCallId, input.ticketId, Date.now());
-      this.#inFlightClaims.add(key);
-      return {
-        ok: true,
-        delegation: claimedDelegation(parent, input.parentSessionId, input.toolCallId),
-      } as const;
-    })();
-  }
-
-  releaseIfUnstarted(input: {
-    parentSessionId: string;
-    toolCallId: string;
-    createCommandId: string;
-  }): void {
-    const key = claimKey(input.parentSessionId, input.toolCallId);
-    this.db.transaction(() => {
-      // A Session Engine create command is durable evidence that a retry must
-      // preserve the slot: it can replay the same child and finish recording
-      // its birth grant after a crash or a later start failure.
-      const created = this.db
-        .prepare("SELECT session_id FROM session_commands WHERE id = ?")
-        .get(input.createCommandId);
-      if (created !== undefined) {
-        this.#inFlightClaims.delete(key);
-        return;
+      if (count.count >= parent.max_children) {
+        return { ok: false, reason: "limit", maxChildren: parent.max_children } as const;
       }
       this.db
         .prepare(
-          `DELETE FROM session_delegation_claims
-            WHERE parent_session_id = ? AND tool_call_id = ? AND child_session_id IS NULL`,
+          `INSERT INTO session_delegation_claims
+             (parent_session_id, tool_call_id, ticket_id, create_command_id, child_session_id, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?)`,
         )
-        .run(input.parentSessionId, input.toolCallId);
+        .run(
+          input.parentSessionId,
+          input.toolCallId,
+          input.ticketId,
+          input.createCommandId,
+          Date.now(),
+        );
+      this.#inFlightClaims.add(key);
+      return { ok: true, delegation: claimedDelegation(granted, input) } as const;
+    })();
+  }
+
+  releaseIfUnstarted(input: DelegationClaimRef): void {
+    const key = claimKey(input);
+    this.db.transaction(() => {
+      const claim = this.readClaim(input);
+      if (claim === undefined) {
+        this.#inFlightClaims.delete(key);
+        return;
+      }
+      // A Session Engine create command is durable evidence that a retry must
+      // preserve the slot: it can replay the same child and finish recording
+      // its birth grant after a crash or a later start failure.
+      if (this.createCommandExists(claim.create_command_id)) {
+        this.#inFlightClaims.delete(key);
+        return;
+      }
+      this.deletePendingClaim(input);
       this.#inFlightClaims.delete(key);
     })();
   }
@@ -280,24 +227,44 @@ export class TicketSessionDelegationStore
   private clearAbandonedClaims(parentSessionId: string): void {
     const pending = this.db
       .prepare(
-        `SELECT tool_call_id
+        `SELECT tool_call_id, create_command_id
            FROM session_delegation_claims
           WHERE parent_session_id = ? AND child_session_id IS NULL`,
       )
-      .all(parentSessionId) as Array<{ tool_call_id: string }>;
-    for (const { tool_call_id: toolCallId } of pending) {
-      if (this.#inFlightClaims.has(claimKey(parentSessionId, toolCallId))) continue;
-      const created = this.db
-        .prepare("SELECT session_id FROM session_commands WHERE id = ?")
-        .get(createCommandId(parentSessionId, toolCallId));
-      if (created !== undefined) continue;
-      this.db
-        .prepare(
-          `DELETE FROM session_delegation_claims
-            WHERE parent_session_id = ? AND tool_call_id = ? AND child_session_id IS NULL`,
-        )
-        .run(parentSessionId, toolCallId);
+      .all(parentSessionId) as Array<{ tool_call_id: string; create_command_id: string }>;
+    for (const row of pending) {
+      const ref = { parentSessionId, toolCallId: row.tool_call_id };
+      if (this.#inFlightClaims.has(claimKey(ref))) continue;
+      if (this.createCommandExists(row.create_command_id)) continue;
+      this.deletePendingClaim(ref);
     }
+  }
+
+  private createCommandExists(createCommandId: string): boolean {
+    return (
+      this.db
+        .prepare("SELECT session_id FROM session_commands WHERE id = ?")
+        .get(createCommandId) !== undefined
+    );
+  }
+
+  private readClaim(ref: DelegationClaimRef): ClaimRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT ticket_id, create_command_id, child_session_id
+           FROM session_delegation_claims
+          WHERE parent_session_id = ? AND tool_call_id = ?`,
+      )
+      .get(ref.parentSessionId, ref.toolCallId) as ClaimRow | undefined;
+  }
+
+  private deletePendingClaim(ref: DelegationClaimRef): void {
+    this.db
+      .prepare(
+        `DELETE FROM session_delegation_claims
+          WHERE parent_session_id = ? AND tool_call_id = ? AND child_session_id IS NULL`,
+      )
+      .run(ref.parentSessionId, ref.toolCallId);
   }
 
   private recordDelegation(
@@ -312,7 +279,7 @@ export class TicketSessionDelegationStore
           WHERE session_id = ?`,
       )
       .get(sessionId) as
-      | { ticket_id: string; parent_session_id: string | null; depth: number }
+      | { ticket_id: string | null; parent_session_id: string | null; depth: number }
       | undefined;
     if (existing !== undefined) {
       if (
@@ -333,23 +300,27 @@ export class TicketSessionDelegationStore
   }
 
   private recordGrants(sessionId: string, birth: SessionGrantBirth): void {
-    const wantsStart = birth.grants.includes("session.start");
     for (const grant of birth.grants) {
-      if (!isVerbToolKey(grant) || grant !== "session.start") {
-        throw new Error(`${grant} is not a Session delegation grant this build can record`);
+      // `session.start` is the only grant this build's schema can store, and
+      // `isVerbToolKey` is not a second opinion on that — it is the vocabulary
+      // check every other name has to pass before it could ever be added here.
+      if (grant !== "session.start") {
+        const known = isVerbToolKey(grant) ? "is not a Session delegation grant" : "is not a verb";
+        throw new Error(`${grant} ${known} this build can record`);
       }
     }
+    const wantsStart = birth.grants.includes("session.start");
     const existing = this.readStartGrant(sessionId);
     if (!wantsStart) {
-      if (existing !== null)
+      if (existing !== null) {
         throw new Error(`Session ${sessionId} already has an unexpected start grant`);
+      }
       return;
     }
     const delegation = birth.delegation;
     if (delegation === null) throw new Error("A start grant needs delegation ancestry");
     if (existing !== null) {
       if (
-        existing.scope !== "own-ticket" ||
         existing.maxDepth !== delegation.maxDepth ||
         existing.maxChildren !== delegation.maxChildren
       ) {
@@ -365,23 +336,15 @@ export class TicketSessionDelegationStore
       .run(sessionId, delegation.maxDepth, delegation.maxChildren);
   }
 
-  private completeClaim(input: {
-    parentSessionId: string;
-    ticketId: string;
-    toolCallId: string;
-    childSessionId: string;
-  }): void {
-    const existing = this.db
-      .prepare(
-        `SELECT ticket_id, child_session_id
-           FROM session_delegation_claims
-          WHERE parent_session_id = ? AND tool_call_id = ?`,
-      )
-      .get(input.parentSessionId, input.toolCallId) as ClaimRow | undefined;
-    if (existing === undefined || existing.ticket_id !== input.ticketId) {
+  private completeClaim(
+    ref: DelegationClaimRef,
+    opened: { ticketId: string; childSessionId: string },
+  ): void {
+    const existing = this.readClaim(ref);
+    if (existing === undefined || existing.ticket_id !== opened.ticketId) {
       throw new Error("The delegation claim that opened this Session was not found");
     }
-    if (existing.child_session_id !== null && existing.child_session_id !== input.childSessionId) {
+    if (existing.child_session_id !== null && existing.child_session_id !== opened.childSessionId) {
       throw new Error("A delegation claim cannot open two Sessions");
     }
     if (existing.child_session_id === null) {
@@ -391,9 +354,9 @@ export class TicketSessionDelegationStore
               SET child_session_id = ?
             WHERE parent_session_id = ? AND tool_call_id = ?`,
         )
-        .run(input.childSessionId, input.parentSessionId, input.toolCallId);
+        .run(opened.childSessionId, ref.parentSessionId, ref.toolCallId);
     }
-    this.#inFlightClaims.delete(claimKey(input.parentSessionId, input.toolCallId));
+    this.#inFlightClaims.delete(claimKey(ref));
   }
 
   private readDelegationGrant(sessionId: string): DelegationRow | null {
@@ -422,75 +385,4 @@ export function createTicketSessionDelegationStore(
   db: Database.Database,
 ): TicketSessionDelegationStore {
   return new TicketSessionDelegationStore(db);
-}
-
-function claimedDelegation(
-  parent: DelegationRow,
-  parentSessionId: string,
-  toolCallId: string,
-): TicketSessionDelegation {
-  return {
-    parentSessionId,
-    depth: parent.depth + 1,
-    maxDepth: parent.max_depth,
-    maxChildren: parent.max_children,
-    claimToolCallId: toolCallId,
-  };
-}
-
-function cloneDelegation(delegation: TicketSessionDelegation): TicketSessionDelegation {
-  return { ...delegation };
-}
-
-function assertDelegation(value: TicketSessionDelegation): void {
-  if (!isNonNegativeInteger(value.depth))
-    throw new Error("Delegation depth must be a whole number");
-  if (!isDelegationDepth(value.maxDepth)) {
-    throw new Error("Delegation max depth exceeds the hard ceiling");
-  }
-  if (!isDelegationChildren(value.maxChildren)) {
-    throw new Error("Delegation max children exceeds the hard ceiling");
-  }
-  if (value.depth === 0 && value.parentSessionId !== null) {
-    throw new Error("A root delegation cannot name a parent Session");
-  }
-  if (value.depth > 0 && value.parentSessionId === null) {
-    throw new Error("A child delegation must name its parent Session");
-  }
-  if (value.depth > value.maxDepth) {
-    throw new Error("Delegation depth cannot exceed its frozen max depth");
-  }
-  if (value.parentSessionId === null && value.claimToolCallId !== null) {
-    throw new Error("A root delegation cannot name a parent tool claim");
-  }
-  if (value.parentSessionId !== null && value.claimToolCallId === null) {
-    throw new Error("A child delegation must name the parent tool claim that opened it");
-  }
-  if (value.claimToolCallId !== null && value.claimToolCallId.length === 0) {
-    throw new Error("A delegation claim id cannot be empty");
-  }
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1;
-}
-
-function isDelegationDepth(value: unknown): value is number {
-  return isPositiveInteger(value) && value <= MAX_TICKET_SESSION_DELEGATION_DEPTH;
-}
-
-function isDelegationChildren(value: unknown): value is number {
-  return isPositiveInteger(value) && value <= MAX_TICKET_SESSION_DELEGATION_CHILDREN;
-}
-
-function claimKey(parentSessionId: string, toolCallId: string): string {
-  return `${parentSessionId}:${toolCallId}`;
-}
-
-function createCommandId(parentSessionId: string, toolCallId: string): string {
-  return `${claimKey(parentSessionId, toolCallId)}:create`;
 }
