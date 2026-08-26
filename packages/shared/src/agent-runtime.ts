@@ -1178,6 +1178,12 @@ export interface RuntimeAttachmentHandle {
      * `volli-blob:` reference in the message parts.
      */
     images?: readonly RuntimeImageInput[],
+    /**
+     * Typed resources delivered beside this message. The runtime frames them
+     * after the user's text and retains their identity so compaction can
+     * restore exact instructions instead of trusting a generated summary.
+     */
+    resources?: readonly PromptResource[],
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;

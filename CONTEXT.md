@@ -567,3 +567,68 @@ not open. It is recorded with its reason and never replayed — the next
 occurrence stands — and a person may start it by hand from the Run history
 afterwards. A skip and a silence must not look the same.
 _Avoid_: missed run, failed run
+
+**Skill**:
+A directory holding a `SKILL.md` — frontmatter naming and describing it, body
+of instructions — under the `.agents/skills/` convention, in either the
+project's own tier or the personal `~/.agents/skills/`. Its identity is the
+directory slug, not the frontmatter `name`: the slug is what a person types
+after `/`, what the picker offers, and what the delivered RESOURCE block
+carries, so the reference and the injection can never disagree about what the
+thing is called. A Skill's body reaches a model three ways, each visible in the
+prompt or the transcript — an explicit `/slug` in the composer, an attach-time
+selection, or the model's own read of a SKILL.md it found in the Skills index.
+_Avoid_: plugin, tool, extension, macro
+
+**Invocation policy**:
+What one Skill is currently allowed to do, on two independent axes: **Model
+discoverable** (its metadata rides the Skills index and the model may activate
+it unprompted) and **User invokable** (it appears in `/` completion and an
+explicit reference resolves). A Skill that is neither is **Unavailable**. The
+two are separate questions — the index is a prompt-budget question, the picker
+a discoverability question for a person — and every consumer resolves the same
+policy, so the index, the picker, explicit submit, attach-time selection and
+Settings can never disagree.
+_Avoid_: enabled, visibility, permission, scope
+
+**Skill mode**:
+A Project's complete per-Skill override: `Auto` opens model discovery and user
+invocation, `Manual` closes model discovery and keeps user invocation, and
+`Off` closes both. The author-only fourth combination — model discoverable but
+not user invokable — applies only where the Project has no override; Settings
+names it `Model only (author)` rather than mislabelling it Auto. A stored mode
+outranks both author axes and is removed when it exactly restores the file's
+declaration.
+_Avoid_: skill setting, toggle, enablement
+
+**Author invocation default**:
+What a `SKILL.md` asks for before any Project has its say. The top-level
+`disable-model-invocation` spelling is the portable manual default honoured by
+Claude Code, Cursor, Copilot and Pi. `user-invocable` is the independent
+Claude/Copilot spelling Volli also accepts; neither extension belongs to the
+Agent Skills core format. Volli's legacy
+`metadata.volli-user-invoke-only` remains an alias, the portable top-level key
+wins a conflict, and any declaration that cannot be read earns a surfaced
+diagnostic. Unparseable YAML fails closed until the file or a Project override
+fixes it.
+_Avoid_: frontmatter flag (alone), skill config
+
+**Skill activation lifecycle**:
+An explicit `/slug` is attached to one user message: the transcript keeps the
+person's reference and one typed delivery receipt containing the exact resource
+bytes and Skill root. Repeating the same resolved name in that message delivers
+it once; invoking it again in a later message creates a new receipt and delivers
+it again. Context compaction restores one exact active resource per Skill name,
+using the latest delivered bytes, so summarization cannot silently replace its
+instructions. This preservation is user-message context, not a persistent mode;
+starting a Session with a Skill is the separate attach-time route and places its
+resource in the attachment's stable system prompt. Attach-time names are also
+deduplicated.
+
+Project policy writes automatically invalidate every mounted supply. Consumers
+expose no previous-policy rows while the replacement disk read is in flight,
+and main resolves policy again after that read before index or delivery. Skill
+file adds, edits and removals are intentionally not watched: `/reload` is the
+explicit disk rescan and recovery action. A past transcript receipt never
+changes when either policy or disk content changes.
+_Avoid_: active plugin, sticky slash command

@@ -3,12 +3,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
-import { skillRootDir } from "@volli/shared";
+import {
+  SKILL_POLICY_DEFAULT,
+  SKILL_POLICY_UNAVAILABLE,
+  skillRootDir,
+  type SkillInvocationPolicy,
+} from "@volli/shared";
 
 import { loadSkills, readSkillDir } from "./skills";
 
 /** The project tier's root spelling — what every `readSkillDir` case below reads under. */
 const readProjectSkills = (dir: string) => readSkillDir(dir, skillRootDir);
+
+/** Slug → effective author policy, the shape the invocation cases assert on. */
+async function policiesIn(dir: string): Promise<Record<string, SkillInvocationPolicy>> {
+  const result = await readProjectSkills(dir);
+  if (!result.ok) throw new Error(result.error);
+  return Object.fromEntries(result.skills.map((skill) => [skill.name, skill.authorPolicy]));
+}
 
 const tempDirs: string[] = [];
 
@@ -52,7 +64,9 @@ describe("readProjectSkills", () => {
           name: "svg-logo-designer",
           description: "Draw logos",
           body: "# Logos\n\nDo the thing.",
-          userInvokeOnly: false,
+          authorPolicy: SKILL_POLICY_DEFAULT,
+          effectivePolicy: SKILL_POLICY_DEFAULT,
+          policyDiagnostic: null,
           root: ".agents/skills/svg-logo-designer",
         },
       ],
@@ -125,14 +139,44 @@ describe("readProjectSkills", () => {
           name: "plain",
           description: "d",
           body: "Body",
-          userInvokeOnly: false,
+          authorPolicy: SKILL_POLICY_DEFAULT,
+          effectivePolicy: SKILL_POLICY_DEFAULT,
+          policyDiagnostic: null,
           root: ".agents/skills/plain",
         },
       ],
     });
   });
 
-  it("honours the spec-sanctioned metadata opt-out, as a string or a bare boolean", async () => {
+  it("honours the portable disable-model-invocation flag, string or bare boolean", async () => {
+    const dir = makeSkillsDir({
+      quiet: '---\ndescription: d\ndisable-model-invocation: "true"\n---\nBody',
+      yamlish: "---\ndescription: d\ndisable-model-invocation: true\n---\nBody",
+      loud: "---\ndescription: d\ndisable-model-invocation: false\n---\nBody",
+    });
+
+    // The acceptance case: a skill whose ONLY declaration is this flag is
+    // withheld from the model and still typable, with no Project override.
+    await expect(policiesIn(dir)).resolves.toEqual({
+      quiet: { modelDiscoverable: false, userInvokable: true },
+      yamlish: { modelDiscoverable: false, userInvokable: true },
+      loud: SKILL_POLICY_DEFAULT,
+    });
+  });
+
+  it("honours user-invocable: false as the other axis", async () => {
+    const dir = makeSkillsDir({
+      background: "---\ndescription: d\nuser-invocable: false\n---\nBody",
+      both: "---\ndescription: d\nuser-invocable: false\ndisable-model-invocation: true\n---\nBody",
+    });
+
+    await expect(policiesIn(dir)).resolves.toEqual({
+      background: { modelDiscoverable: true, userInvokable: false },
+      both: { modelDiscoverable: false, userInvokable: false },
+    });
+  });
+
+  it("still honours the legacy metadata alias when the portable field is absent", async () => {
     const dir = makeSkillsDir({
       quiet: '---\ndescription: d\nmetadata:\n  volli-user-invoke-only: "true"\n---\nBody',
       yamlish: "---\ndescription: d\nmetadata:\n  volli-user-invoke-only: true\n---\nBody",
@@ -140,13 +184,71 @@ describe("readProjectSkills", () => {
       unrelated: "---\ndescription: d\nmetadata:\n  author: someone\n---\nBody",
     });
 
+    await expect(policiesIn(dir)).resolves.toEqual({
+      quiet: { modelDiscoverable: false, userInvokable: true },
+      yamlish: { modelDiscoverable: false, userInvokable: true },
+      loud: SKILL_POLICY_DEFAULT,
+      unrelated: SKILL_POLICY_DEFAULT,
+    });
+  });
+
+  it("resolves a conflicting pair deterministically and says so on the row", async () => {
+    const dir = makeSkillsDir({
+      conflicted:
+        "---\ndescription: d\ndisable-model-invocation: false\nmetadata:\n  volli-user-invoke-only: true\n---\nBody",
+    });
+
     const result = await readProjectSkills(dir);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(
-      Object.fromEntries(result.skills.map((skill) => [skill.name, skill.userInvokeOnly])),
-    ).toEqual({ quiet: true, yamlish: true, loud: false, unrelated: false });
+    // The portable field wins, because it is the one the author wrote for
+    // every other harness they use.
+    expect(result.skills[0]?.authorPolicy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(result.skills[0]?.policyDiagnostic).toContain("disable-model-invocation wins");
+  });
+
+  it("reports a flag it cannot read rather than silently reading it as false", async () => {
+    const dir = makeSkillsDir({
+      fuzzy: "---\ndescription: d\ndisable-model-invocation: yes\n---\nBody",
+    });
+
+    const result = await readProjectSkills(dir);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skills[0]?.authorPolicy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(result.skills[0]?.policyDiagnostic).toContain("is not true or false");
+  });
+
+  it("fails malformed YAML closed and surfaces a useful diagnostic", async () => {
+    const dir = makeSkillsDir({
+      broken: "---\ndescription: [not closed\ndisable-model-invocation: true\n---\nBody",
+      unfenced: "---\ndisable-model-invocation: true\nBody",
+    });
+
+    const result = await readProjectSkills(dir);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const loaded of result.skills) {
+      expect(loaded.authorPolicy).toEqual(SKILL_POLICY_UNAVAILABLE);
+      expect(loaded.effectivePolicy).toEqual(SKILL_POLICY_UNAVAILABLE);
+      expect(loaded.policyDiagnostic).toContain("unavailable until SKILL.md is fixed");
+    }
+  });
+
+  it("does not read a sibling Codex agents/openai.yaml as frontmatter", async () => {
+    const dir = makeSkillsDir({ codexy: "---\ndescription: d\n---\nBody" });
+    mkdirSync(join(dir, "codexy", "agents"), { recursive: true });
+    writeFileSync(
+      join(dir, "codexy", "agents", "openai.yaml"),
+      "policy:\n  allow_implicit_invocation: false\n",
+      "utf8",
+    );
+
+    // Another client's configuration file, beside the skill rather than in it.
+    await expect(policiesIn(dir)).resolves.toEqual({ codexy: SKILL_POLICY_DEFAULT });
   });
 
   it("derives a description from the body when the frontmatter has none", async () => {
@@ -203,7 +305,9 @@ describe("loadSkills", () => {
         name: "shared",
         description: "from project",
         body: "Project body",
-        userInvokeOnly: false,
+        authorPolicy: SKILL_POLICY_DEFAULT,
+        effectivePolicy: SKILL_POLICY_DEFAULT,
+        policyDiagnostic: null,
         root: ".agents/skills/shared",
       },
     ]);

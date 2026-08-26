@@ -89,10 +89,11 @@ describe("per-project agent configuration (migration 023)", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "p1" }));
 
-    const updated = updateProjectSkillModes(ctx.db, "p1", { tdd: "manual", mintlify: "off" }, 10);
+    const modes = { tdd: "manual", mintlify: "off", "wait-what": "auto" } as const;
+    const updated = updateProjectSkillModes(ctx.db, "p1", modes, 10);
 
-    expect(updated?.skillModes).toEqual({ tdd: "manual", mintlify: "off" });
-    expect(getProjectById(ctx.db, "p1")?.skillModes).toEqual({ tdd: "manual", mintlify: "off" });
+    expect(updated?.skillModes).toEqual(modes);
+    expect(getProjectById(ctx.db, "p1")?.skillModes).toEqual(modes);
   });
 
   it("stores an all-default rule map as inherit rather than an empty object", () => {

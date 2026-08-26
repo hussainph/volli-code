@@ -28,13 +28,17 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import {
+  appendPromptResources,
   COMPACTION_REASONS,
   COST_BASES,
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
+  isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
+  promptResourceBlock,
+  readPromptResourceBlocks,
   SESSION_USAGE_CAUSES,
   UtilityCompletionError,
   type AgentRuntime,
@@ -45,6 +49,7 @@ import {
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ObservabilitySink,
+  type PromptResource,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -367,6 +372,42 @@ function queuedUserMessage(text: string, images: readonly RuntimeImageInput[] = 
   };
 }
 
+/** Text blocks from a user message, for legacy resource recovery and deduplication. */
+function userMessageText(message: AgentMessage): string {
+  if (message.role !== "user") return "";
+  const content = (message as UserMessage).content;
+  if (typeof content === "string") return content;
+  return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n");
+}
+
+/**
+ * Re-establish exact activated resources immediately after a compaction
+ * summary, before its retained tail. Keeping the tail last is required by
+ * overflow retry, which continues from the user/tool message the failed reply
+ * was answering.
+ */
+function restoreCompactedResources(
+  messages: readonly AgentMessage[],
+  resources: readonly PromptResource[],
+): AgentMessage[] {
+  const missing = resources.filter((resource) => {
+    const block = promptResourceBlock(resource);
+    return !messages.some((message) => userMessageText(message).includes(block));
+  });
+  if (missing.length === 0) return [...messages];
+
+  const restored = queuedUserMessage(
+    appendPromptResources(
+      "The following named skill resources were activated earlier and are restored verbatim after context compaction.",
+      missing,
+    ),
+  );
+  // Every caller holds a compacted context, whose summary is first. `+ 1`
+  // naturally falls back to zero for a legacy context missing that role.
+  const insertion = messages.findIndex((message) => message.role === "compactionSummary") + 1;
+  return [...messages.slice(0, insertion), restored, ...messages.slice(insertion)];
+}
+
 const FAILED_ASSISTANT_STOP_REASONS = [
   "aborted",
   "error",
@@ -411,6 +452,8 @@ interface AcceptedMessageCommandMarker {
   delivery: "prompt" | "queue" | "steer";
   turnId: string;
   message: UserMessage;
+  /** Typed identity for message resources; absent on markers written before VC-181. */
+  resources?: readonly PromptResource[];
 }
 
 interface AcceptedRetryCommandMarker {
@@ -533,7 +576,9 @@ function isRecoverableObservation(value: unknown): boolean {
       return (
         value["operation"] === "message.submit" &&
         isOneOf(value["delivery"], ["prompt", "queue", "steer"]) &&
-        isPersistedUserMessage(value["message"])
+        isPersistedUserMessage(value["message"]) &&
+        (value["resources"] === undefined ||
+          (Array.isArray(value["resources"]) && value["resources"].every(isPromptResource)))
       );
     default:
       return false;
@@ -848,6 +893,32 @@ async function attachSession(
     const unreadableMarkerCount =
       customEntries.filter((entry) => entry.customType === VOLLI_OBSERVATION_MARKER).length -
       recoveredMarkers.length;
+
+    // Latest activation wins by durable branch order. New command markers carry
+    // typed resources; parsing the already-delivered text is the compatibility
+    // path for older markers and direct runtime messages.
+    const activeMessageResources = new Map<string, PromptResource>();
+    const markersByCursor = new Map(
+      recoveredMarkers.map((marker) => [marker.recoveryCursor, marker] as const),
+    );
+    const rememberResources = (resources: readonly PromptResource[]): void => {
+      for (const resource of resources) activeMessageResources.set(resource.name, resource);
+    };
+    for (const entry of recoveredEntries) {
+      if (entry.type === "message" && entry.message.role === "user") {
+        rememberResources(readPromptResourceBlocks(userMessageText(entry.message)));
+        continue;
+      }
+      if (entry.type !== "custom") continue;
+      const marker = markersByCursor.get(entry.id);
+      if (marker?.kind !== "command-accepted" || marker.operation !== "message.submit") {
+        continue;
+      }
+      rememberResources(
+        marker.resources ?? readPromptResourceBlocks(userMessageText(marker.message)),
+      );
+    }
+
     const recoveredObservations = recoveredMarkers.filter(
       (
         marker,
@@ -909,9 +980,12 @@ async function attachSession(
      * restart, with nothing anywhere saying so. {@link contextMessages} is Pi's
      * own elision rule and is the only way messages are derived here.
      */
-    const recoveredMessages = contextMessages(
+    const recoveredContext = contextMessages(
       conversationPath(recoveredEntries, conversationReader),
     );
+    const recoveredMessages = recoveredEntries.some((entry) => entry.type === "compaction")
+      ? restoreCompactedResources(recoveredContext, [...activeMessageResources.values()])
+      : recoveredContext;
     const activeAttentionReasons = new Set<AttentionObservation["reason"]>();
     const openTurnIds = new Set<string>();
     for (const observation of recoveredObservations) {
@@ -1090,6 +1164,7 @@ async function attachSession(
       operation: "message.submit";
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
+      resources: readonly PromptResource[];
     };
     type PendingRetryDelivery = {
       commandId: string | null;
@@ -1104,6 +1179,7 @@ async function attachSession(
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
     ): Promise<boolean> => {
+      if (delivery?.operation === "message.submit") rememberResources(delivery.resources);
       if (!delivery?.commandId) return false;
       if (delivery.operation === "message.submit") {
         await persistObservation({
@@ -1113,6 +1189,9 @@ async function attachSession(
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
           message: durableMessage(delivery.message) as UserMessage,
+          // Always present on new markers, including `[]`, so recovery can
+          // distinguish typed absence from a user-authored delimiter lookalike.
+          resources: delivery.resources,
         });
       } else {
         await persistObservation({
@@ -1468,7 +1547,9 @@ async function attachSession(
           // away. Take that away and a turn started mid-summary is one this line
           // overwrites — its message and its reply gone from the model's context
           // while both remain in the ledger and on screen.
-          agent.state.messages = outcome.messages;
+          agent.state.messages = restoreCompactedResources(outcome.messages, [
+            ...activeMessageResources.values(),
+          ]);
         }
         // Recorded before the compaction fact, so a crash between the two
         // loses the summary rather than the bill: the summary is recoverable
@@ -1500,7 +1581,7 @@ async function attachSession(
                   // whole tokens, and a fractional one would recover and then
                   // fail to decode.
                   tokensBefore: Math.floor(outcome.entry.tokensBefore),
-                  tokensAfter: estimatedContextTokens(outcome.messages),
+                  tokensAfter: estimatedContextTokens(agent.state.messages),
                 }
               : { kind: "compaction", state: "failed", reason, message: outcome.message },
           ),
@@ -1822,6 +1903,7 @@ async function attachSession(
         delivery = "queue",
         commandId,
         images = [],
+        resources = [],
       ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -1842,13 +1924,15 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
+        const framedText = appendPromptResources(text, resources);
         if (agent.state.isStreaming) {
-          const message = queuedUserMessage(text, images);
+          const message = queuedUserMessage(framedText, images);
           const pending = {
             commandId: commandId ?? null,
             operation: "message.submit" as const,
             delivery,
             message,
+            resources,
           };
           pendingQueuedDeliveries.set(message, pending);
           if (delivery === "steer") agent.steer(message);
@@ -1864,13 +1948,16 @@ async function attachSession(
         // no gap between releasing it and Pi owning the array itself.
         await rewritingTheContext(compactBeforeTurn);
         const delivered =
-          agent.state.messages.length === 0 ? composeFirstUserMessage(spec, text) : text;
+          agent.state.messages.length === 0
+            ? composeFirstUserMessage(spec, framedText)
+            : framedText;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,
           operation: "message.submit" as const,
           delivery: "prompt" as const,
           message,
+          resources,
         };
         await agent.prompt(message);
         await settleRun();

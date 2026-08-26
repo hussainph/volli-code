@@ -787,8 +787,8 @@ ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
  * project upgraded across this migration behaves precisely as it did before.
  *
  * The shapes:
- *  - `skill_modes` — a JSON object mapping a skill slug to `"manual"` or
- *    `"off"`. Only DEPARTURES are stored: an absent slug means the skill's own
+ *  - `skill_modes` — a JSON object mapping a skill slug to `"auto"`,
+ *    `"manual"` or `"off"`. Only DEPARTURES are stored: an absent slug means the skill's own
  *    frontmatter decides, so a skill installed after this was last written is
  *    governed by its author rather than silently hidden — which is what an
  *    allow list would have done.

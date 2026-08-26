@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { COMPOSER_VERBS } from "./composer-verb";
 import { expandCommandInvocation, type PromptTemplate } from "./prompt-template";
-import type { SkillReference } from "./skill";
+import { SKILL_POLICY_DEFAULT, type SkillReference } from "./skill";
 import { resolveSlashNamespace, SLASH_SOURCE_REGISTRY, slashTargets } from "./slash-namespace";
 import { isSlashInvocationName } from "./slash-name";
 
@@ -16,7 +16,9 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     name,
     description: "Create professional SVG logos",
     body: "# Logos",
-    userInvokeOnly: false,
+    authorPolicy: SKILL_POLICY_DEFAULT,
+    effectivePolicy: SKILL_POLICY_DEFAULT,
+    policyDiagnostic: null,
     root: `.agents/skills/${name}`,
     ...overrides,
   };
@@ -234,5 +236,60 @@ describe("submit resolution", () => {
     expect(expandCommandInvocation("/review /command:compact", [review, own]).text).toBe(
       "Review /command:compact.",
     );
+  });
+});
+
+describe("the user-invokable axis (VC-181)", () => {
+  const manualPolicy = { modelDiscoverable: false, userInvokable: true } as const;
+  const backgroundPolicy = { modelDiscoverable: true, userInvokable: false } as const;
+  const manual = skill({
+    name: "wait-what",
+    authorPolicy: manualPolicy,
+    effectivePolicy: manualPolicy,
+  });
+  const background = skill({
+    name: "house-style",
+    authorPolicy: backgroundPolicy,
+    effectivePolicy: backgroundPolicy,
+  });
+
+  it("offers a manual skill — withheld from the model is not withheld from the person", () => {
+    const namespace = resolveSlashNamespace({ templates: [], skills: [manual] });
+
+    expect(namespace.entries.map((entry) => entry.name)).toEqual(["wait-what"]);
+    expect(slashTargets(namespace).get("wait-what")?.kind).toBe("skill");
+  });
+
+  it("withholds a user-invocable: false skill from the namespace entirely", () => {
+    const namespace = resolveSlashNamespace({ templates: [], skills: [background] });
+
+    expect(namespace.entries).toEqual([]);
+    expect(slashTargets(namespace).has("house-style")).toBe(false);
+  });
+
+  it("keeps the picker and submit in exact agreement about both", () => {
+    // Parity is structural: `expandCommandInvocation` resolves through the
+    // same namespace the picker lists, so there is no arrangement in which one
+    // offers a row the other cannot resolve.
+    const skills = [manual, background];
+    const offered = new Set(
+      resolveSlashNamespace({ templates: [], skills }).entries.map((e) => e.name),
+    );
+
+    const expanded = expandCommandInvocation("/wait-what and /house-style please", [], skills);
+
+    expect(offered).toEqual(new Set(["wait-what"]));
+    // The offered one delivered a resource; the unoffered one stayed prose.
+    expect(expanded.resources.map((resource) => resource.name)).toEqual(["wait-what"]);
+    expect(expanded.text).toBe("/wait-what and /house-style please");
+  });
+
+  it("does not let a withheld skill free up a name a later skill then takes", () => {
+    // The filter runs before naming, so `house-style` never reserves anything.
+    const other = skill({ name: "house-style", root: "/home/.agents/skills/house-style" });
+    const namespace = resolveSlashNamespace({ templates: [], skills: [background, other] });
+
+    expect(namespace.entries.map((entry) => entry.name)).toEqual(["house-style"]);
+    expect(namespace.entries[0]?.shadowedBy).toBeNull();
   });
 });

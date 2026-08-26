@@ -2,10 +2,20 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applySkillModes,
+  AUTHOR_MODEL_ONLY_MODE,
+  authorSkillMode,
   globalSkillsDir,
   isSkillName,
-  isUserInvokeOnly,
+  isSkillUnavailable,
+  readAuthorInvocationPolicy,
+  resolveSkillPolicy,
+  sameSkillPolicy,
+  skillModeMatchesAuthor,
+  skillModePolicy,
+  SKILL_DISABLE_MODEL_INVOCATION_KEY,
+  SKILL_POLICY_DEFAULT,
   SKILL_RESOURCE_PART_TYPE,
+  SKILL_USER_INVOCABLE_KEY,
   SKILL_USER_INVOKE_ONLY_KEY,
   mergeSkills,
   projectSkillsDir,
@@ -17,23 +27,36 @@ import {
   resolveSkillMode,
   skillsIndexResource,
   SKILLS_INDEX_RESOURCE_NAME,
+  type SkillInvocationPolicy,
   type SkillReference,
 } from "./skill";
+
+/** "Manual": out of the index, still typable — the common author declaration. */
+const MANUAL: SkillInvocationPolicy = { modelDiscoverable: false, userInvokable: true };
+/** The fourth combination: background knowledge with no `/` row. */
+const BACKGROUND: SkillInvocationPolicy = { modelDiscoverable: true, userInvokable: false };
+/** Both axes closed — what `off` means, and what an author can declare too. */
+const CLOSED: SkillInvocationPolicy = { modelDiscoverable: false, userInvokable: false };
 
 /** The one-line header `skillPromptResource` puts above a delivered body. */
 function rootHeader(name: string): string {
   return `Skill directory: .agents/skills/${name}/ — file references in this skill resolve relative to it.`;
 }
 
-function skill(overrides: Partial<SkillReference> = {}): SkillReference {
+function skill(
+  input: Partial<SkillReference> & { policy?: SkillInvocationPolicy } = {},
+): SkillReference {
   // Root follows the name by default, the way the project-tier reader spells
   // it, so a test that renames a skill does not have to restate its directory.
+  const { policy = SKILL_POLICY_DEFAULT, ...overrides } = input;
   const name = overrides.name ?? "svg-logo-designer";
   return {
     name,
     description: "Create professional SVG logos",
     body: "# SVG Logo Designer\n\nUse `awk '{print $1}'` when needed.",
-    userInvokeOnly: false,
+    authorPolicy: policy,
+    effectivePolicy: policy,
+    policyDiagnostic: null,
     root: `.agents/skills/${name}`,
     ...overrides,
   };
@@ -185,8 +208,8 @@ describe("skillsIndexResource", () => {
     expect(skillsIndexResource([])).toBeNull();
   });
 
-  it("leaves out a skill that asked to be user-invoked only, and nothing else", () => {
-    const quiet = skill({ name: "quiet", userInvokeOnly: true });
+  it("leaves out a skill that is not model-discoverable, and nothing else", () => {
+    const quiet = skill({ name: "quiet", policy: MANUAL });
     const loud = skill({ name: "loud", description: "Advertised" });
 
     const resource = skillsIndexResource([quiet, loud]);
@@ -196,7 +219,15 @@ describe("skillsIndexResource", () => {
   });
 
   it("is null when every skill opted out, so the prompt composes as if none existed", () => {
-    expect(skillsIndexResource([skill({ userInvokeOnly: true })])).toBeNull();
+    expect(skillsIndexResource([skill({ policy: MANUAL })])).toBeNull();
+  });
+
+  it("still advertises a skill that is only withheld from the PICKER", () => {
+    // The fourth combination. `user-invocable: false` is background knowledge:
+    // the model must still be able to find it, which is the whole difference
+    // between the two axes.
+    const background = skill({ name: "house-style", policy: BACKGROUND });
+    expect(skillsIndexResource([background])?.text).toContain("- house-style (");
   });
 
   it("points a personal-tier entry at its absolute SKILL.md", () => {
@@ -248,29 +279,186 @@ describe("skillsIndexResource", () => {
   });
 });
 
-describe("isUserInvokeOnly", () => {
-  it("reads the namespaced key out of the spec's metadata map", () => {
-    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "true" })).toBe(true);
-    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "TRUE " })).toBe(true);
-    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: true })).toBe(true);
+describe("readAuthorInvocationPolicy", () => {
+  it("defaults to the format's own default when a file declares nothing", () => {
+    expect(readAuthorInvocationPolicy({})).toEqual({
+      policy: SKILL_POLICY_DEFAULT,
+      diagnostic: null,
+    });
   });
 
-  it("leaves a skill advertised for anything else — the format's default wins", () => {
-    expect(isUserInvokeOnly(undefined)).toBe(false);
-    expect(isUserInvokeOnly(null)).toBe(false);
-    expect(isUserInvokeOnly("not a map")).toBe(false);
-    expect(isUserInvokeOnly({})).toBe(false);
-    expect(isUserInvokeOnly({ author: "someone" })).toBe(false);
-    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "false" })).toBe(false);
-    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: false })).toBe(false);
-    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: { nested: "map" } })).toBe(false);
+  it("reads the portable disable-model-invocation flag, boolean or string", () => {
+    for (const raw of [true, "true", "TRUE ", " True"]) {
+      expect(readAuthorInvocationPolicy({ disableModelInvocation: raw }).policy).toEqual(MANUAL);
+    }
+    for (const raw of [false, "false", "FALSE"]) {
+      expect(readAuthorInvocationPolicy({ disableModelInvocation: raw }).policy).toEqual(
+        SKILL_POLICY_DEFAULT,
+      );
+    }
+  });
+
+  it("reads user-invocable as the independent second axis", () => {
+    expect(readAuthorInvocationPolicy({ userInvocable: false }).policy).toEqual(BACKGROUND);
+    expect(
+      readAuthorInvocationPolicy({ userInvocable: false, disableModelInvocation: true }).policy,
+    ).toEqual(CLOSED);
+    expect(readAuthorInvocationPolicy({ userInvocable: true }).policy).toEqual(
+      SKILL_POLICY_DEFAULT,
+    );
+  });
+
+  it("reads the legacy metadata alias when the portable field is absent", () => {
+    expect(
+      readAuthorInvocationPolicy({ metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: "true" } }).policy,
+    ).toEqual(MANUAL);
+    expect(
+      readAuthorInvocationPolicy({ metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: true } }).policy,
+    ).toEqual(MANUAL);
+    expect(readAuthorInvocationPolicy({ metadata: { author: "someone" } }).policy).toEqual(
+      SKILL_POLICY_DEFAULT,
+    );
+    expect(readAuthorInvocationPolicy({ metadata: "not a map" }).policy).toEqual(
+      SKILL_POLICY_DEFAULT,
+    );
+  });
+
+  it("lets the portable field outrank the legacy alias, and says which won", () => {
+    // Deterministic in BOTH directions, because a conflict is a conflict
+    // whichever way round it is written.
+    const withheld = readAuthorInvocationPolicy({
+      disableModelInvocation: true,
+      metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: false },
+    });
+    expect(withheld.policy).toEqual(MANUAL);
+    expect(withheld.diagnostic).toContain(`${SKILL_DISABLE_MODEL_INVOCATION_KEY} wins`);
+
+    const advertised = readAuthorInvocationPolicy({
+      disableModelInvocation: false,
+      metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: true },
+    });
+    expect(advertised.policy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(advertised.diagnostic).toContain(`${SKILL_DISABLE_MODEL_INVOCATION_KEY} wins`);
+  });
+
+  it("says nothing when the two spellings agree", () => {
+    expect(
+      readAuthorInvocationPolicy({
+        disableModelInvocation: true,
+        metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: true },
+      }),
+    ).toEqual({ policy: MANUAL, diagnostic: null });
+  });
+
+  it("falls through to the next rung on a value it cannot read, and names it", () => {
+    // `disable-model-invocation: yes` is an author who believes their skill is
+    // withheld and is wrong about that. Reading it as `false` in silence is
+    // the failure mode this diagnostic exists for.
+    const fuzzy = readAuthorInvocationPolicy({ disableModelInvocation: "yes" });
+    expect(fuzzy.policy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(fuzzy.diagnostic).toContain(SKILL_DISABLE_MODEL_INVOCATION_KEY);
+    expect(fuzzy.diagnostic).toContain("is not true or false");
+
+    // ...and the alias still decides the axis, since the portable read failed.
+    expect(
+      readAuthorInvocationPolicy({
+        disableModelInvocation: { nested: "map" },
+        metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: true },
+      }).policy,
+    ).toEqual(MANUAL);
+  });
+
+  it("names a malformed user-invocable and keeps the person's axis open", () => {
+    const fuzzy = readAuthorInvocationPolicy({ userInvocable: "maybe" });
+    expect(fuzzy.policy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(fuzzy.diagnostic).toContain(SKILL_USER_INVOCABLE_KEY);
+  });
+
+  it("names a malformed legacy alias too", () => {
+    const fuzzy = readAuthorInvocationPolicy({
+      metadata: { [SKILL_USER_INVOKE_ONLY_KEY]: { nested: "map" } },
+    });
+    expect(fuzzy.policy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(fuzzy.diagnostic).toContain(SKILL_USER_INVOKE_ONLY_KEY);
+  });
+
+  it("treats an empty or absent value as absent rather than malformed", () => {
+    expect(readAuthorInvocationPolicy({ disableModelInvocation: "  " }).diagnostic).toBeNull();
+    expect(readAuthorInvocationPolicy({ disableModelInvocation: null }).diagnostic).toBeNull();
+    expect(readAuthorInvocationPolicy({ userInvocable: undefined }).diagnostic).toBeNull();
+  });
+});
+
+describe("skillModePolicy", () => {
+  it("implements the Project mode matrix outright", () => {
+    expect(skillModePolicy("auto")).toEqual(SKILL_POLICY_DEFAULT);
+    expect(skillModePolicy("manual")).toEqual(MANUAL);
+    expect(skillModePolicy("off")).toEqual(CLOSED);
+  });
+
+  it("lets every Project mode override both author axes", () => {
+    expect(skillModePolicy("auto")).toEqual({ modelDiscoverable: true, userInvokable: true });
+    expect(skillModePolicy("manual")).toEqual({ modelDiscoverable: false, userInvokable: true });
+    expect(skillModePolicy("off")).toEqual({ modelDiscoverable: false, userInvokable: false });
+  });
+});
+
+describe("resolveSkillPolicy", () => {
+  it("falls back to the author's declaration when the project has no rule", () => {
+    expect(resolveSkillPolicy({}, skill({ policy: MANUAL }))).toEqual(MANUAL);
+    expect(resolveSkillPolicy({}, skill({ policy: BACKGROUND }))).toEqual(BACKGROUND);
+  });
+
+  it("lets the project override both author axes", () => {
+    const quiet = skill({ name: "quiet", policy: MANUAL });
+    const background = skill({ name: "background", policy: BACKGROUND });
+    expect(resolveSkillPolicy({ quiet: "auto" }, quiet)).toEqual(SKILL_POLICY_DEFAULT);
+    expect(resolveSkillPolicy({ background: "manual" }, background)).toEqual(MANUAL);
+    expect(resolveSkillPolicy({ background: "off" }, background)).toEqual(CLOSED);
+  });
+
+  it("does not read Object prototype names as Project rules", () => {
+    expect(resolveSkillPolicy({}, skill({ name: "constructor" }))).toEqual(SKILL_POLICY_DEFAULT);
+    expect(resolveSkillPolicy({}, skill({ name: "toString" }))).toEqual(SKILL_POLICY_DEFAULT);
+  });
+
+  it("ignores a rule that names some other skill", () => {
+    expect(resolveSkillPolicy({ elsewhere: "off" }, skill({ name: "here" }))).toEqual(
+      SKILL_POLICY_DEFAULT,
+    );
+  });
+});
+
+describe("sameSkillPolicy / isSkillUnavailable / authorSkillMode", () => {
+  it("compares both axes", () => {
+    expect(sameSkillPolicy(SKILL_POLICY_DEFAULT, { ...SKILL_POLICY_DEFAULT })).toBe(true);
+    expect(sameSkillPolicy(MANUAL, BACKGROUND)).toBe(false);
+    expect(sameSkillPolicy(BACKGROUND, SKILL_POLICY_DEFAULT)).toBe(false);
+  });
+
+  it("calls a policy unavailable only when neither route resolves", () => {
+    expect(isSkillUnavailable(CLOSED)).toBe(true);
+    expect(isSkillUnavailable(MANUAL)).toBe(false);
+    expect(isSkillUnavailable(BACKGROUND)).toBe(false);
+  });
+
+  it("reads a policy back as the mode column's value", () => {
+    expect(authorSkillMode(SKILL_POLICY_DEFAULT)).toBe("auto");
+    expect(authorSkillMode(MANUAL)).toBe("manual");
+    expect(authorSkillMode(CLOSED)).toBe("off");
+    expect(authorSkillMode(BACKGROUND)).toBe(AUTHOR_MODEL_ONLY_MODE);
+  });
+
+  it("recognizes only a complete mode policy as the author default", () => {
+    expect(skillModeMatchesAuthor("manual", skill({ policy: MANUAL }))).toBe(true);
+    expect(skillModeMatchesAuthor("auto", skill({ policy: BACKGROUND }))).toBe(false);
   });
 });
 
 describe("applySkillModes", () => {
   const tdd = skill({ name: "tdd" });
   const diagnose = skill({ name: "diagnose" });
-  const quiet = skill({ name: "quiet", userInvokeOnly: true });
+  const quiet = skill({ name: "quiet", policy: MANUAL });
 
   it("leaves an unruled project exactly as it loaded", () => {
     expect(applySkillModes([tdd, diagnose], {})).toEqual([tdd, diagnose]);
@@ -285,27 +473,28 @@ describe("applySkillModes", () => {
     // fresh Session's Volli-composed context, and an entry costs that budget
     // on every single turn. `manual` buys the budget back without losing the
     // skill — `/tdd` still resolves it.
-    const [ruled] = applySkillModes([tdd], { tdd: "manual" });
+    const ruled = applySkillModes([tdd], { tdd: "manual" });
 
-    expect(ruled?.userInvokeOnly).toBe(true);
-    expect(skillsIndexResource(applySkillModes([tdd], { tdd: "manual" }))).toBeNull();
-    expect(applySkillModes([tdd], { tdd: "manual" })).toHaveLength(1);
+    expect(ruled[0]?.effectivePolicy).toEqual(MANUAL);
+    expect(skillsIndexResource(ruled)).toBeNull();
+    expect(ruled).toHaveLength(1);
   });
 
-  it("does not clone a skill that is already manual", () => {
+  it("does not clone a skill whose policy the rule does not change", () => {
     // `toBe`, not `toEqual`: the point is that a rule matching what the
     // frontmatter already says hands back the SAME object, so a no-op rule
     // costs nothing. A deep-equality check would pass even if it cloned.
     expect(applySkillModes([quiet], { quiet: "manual" })[0]).toBe(quiet);
   });
 
-  it("cannot currently promote a frontmatter-quiet skill, because storage drops an auto rule", () => {
-    // The shipped limitation, pinned so it is a decision rather than a
-    // surprise: `parseSkillModes` drops `auto` to keep "never touched" and
-    // "set to the default" one state, and it cannot tell that `auto` IS a
-    // departure for this particular skill. Reachable only by widening the
-    // stored vocabulary, which is a change to make deliberately.
-    expect(applySkillModes([quiet], parseSkillModes({ quiet: "auto" }))).toEqual([quiet]);
+  it("promotes an author-manual skill when the project explicitly says auto", () => {
+    // The regression this ticket exists to close. `parseSkillModes` used to
+    // drop `auto`, so this override round-tripped to nothing and the Settings
+    // Select snapped back — which is why the pane had stopped offering it.
+    const ruled = applySkillModes([quiet], parseSkillModes({ quiet: "auto" }));
+
+    expect(ruled[0]?.effectivePolicy).toEqual(SKILL_POLICY_DEFAULT);
+    expect(skillsIndexResource(ruled)?.text).toContain("- quiet (");
   });
 
   it("honours the author's opt-out when the project has said nothing", () => {
@@ -313,8 +502,20 @@ describe("applySkillModes", () => {
     expect(skillsIndexResource(applySkillModes([quiet], {}))).toBeNull();
   });
 
-  it("keeps the existing reference when a manual rule already agrees", () => {
-    expect(applySkillModes([quiet], { quiet: "manual" })[0]).toBe(quiet);
+  it("drops a skill whose author closed both axes, with no project rule at all", () => {
+    // There is no empty-rules fast path for exactly this: "no rules" is not
+    // the same as "nothing to do".
+    expect(applySkillModes([skill({ name: "disabled", policy: CLOSED })], {})).toEqual([]);
+  });
+
+  it("turns an author-model-only skill into the complete selected Project mode", () => {
+    const background = skill({ name: "house-style", policy: BACKGROUND });
+    const manual = applySkillModes([background], { "house-style": "manual" })[0];
+    expect(manual?.authorPolicy).toEqual(BACKGROUND);
+    expect(manual?.effectivePolicy).toEqual(MANUAL);
+    expect(applySkillModes([background], { "house-style": "auto" })[0]?.effectivePolicy).toEqual(
+      SKILL_POLICY_DEFAULT,
+    );
   });
 
   it("ignores a rule naming a skill that is no longer installed", () => {
@@ -328,12 +529,30 @@ describe("resolveSkillMode", () => {
   });
 
   it("reads manual for a skill whose own frontmatter opted out", () => {
-    expect(resolveSkillMode({}, skill({ name: "quiet", userInvokeOnly: true }))).toBe("manual");
+    expect(resolveSkillMode({}, skill({ name: "quiet", policy: MANUAL }))).toBe("manual");
   });
 
-  it("lets the project's rule outrank the frontmatter default", () => {
-    const quiet = skill({ name: "quiet", userInvokeOnly: true });
+  it("lets the project's rule outrank the frontmatter default, both ways", () => {
+    const quiet = skill({ name: "quiet", policy: MANUAL });
     expect(resolveSkillMode({ quiet: "auto" }, quiet)).toBe("auto");
+    expect(resolveSkillMode({ quiet: "off" }, quiet)).toBe("off");
+
+    const loud = skill({ name: "loud" });
+    expect(resolveSkillMode({ loud: "manual" }, loud)).toBe("manual");
+  });
+
+  it("reads an exact author-only state for background knowledge", () => {
+    const background = skill({ name: "background", policy: BACKGROUND });
+    expect(resolveSkillMode({}, background)).toBe(AUTHOR_MODEL_ONLY_MODE);
+    expect(resolveSkillMode({ background: "auto" }, background)).toBe("auto");
+  });
+
+  it("reads off for a skill whose author closed both axes", () => {
+    expect(resolveSkillMode({}, skill({ name: "disabled", policy: CLOSED }))).toBe("off");
+  });
+
+  it("does not return inherited Object properties as a readout", () => {
+    expect(resolveSkillMode({}, skill({ name: "constructor" }))).toBe("auto");
   });
 });
 
@@ -344,10 +563,22 @@ describe("parseSkillModes", () => {
     });
   });
 
-  it("drops an auto rule, which is the same as no rule at all", () => {
-    // Storing the default would make "never touched" and "explicitly set to
-    // the default" two states that read identically everywhere above the db.
-    expect(parseSkillModes({ tdd: "auto" })).toEqual({});
+  it("keeps own prototype-looking slugs without mutating the result prototype", () => {
+    const parsed = parseSkillModes(JSON.parse('{"constructor":"off","__proto__":"manual"}'));
+    expect(Object.hasOwn(parsed, "constructor")).toBe(true);
+    expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+    expect(parsed["constructor"]).toBe("off");
+    expect(parsed["__proto__"]).toBe("manual");
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+  });
+
+  it("keeps an auto rule, because for some skills it IS a departure", () => {
+    // The storage normalization this ticket removed. Dropping `auto` here made
+    // an override the Settings pane offered snap straight back for exactly the
+    // skill it mattered for — one whose author wrote
+    // `disable-model-invocation: true`. Minimality now belongs to the writer,
+    // which is the layer that can tell a departure from a restatement.
+    expect(parseSkillModes({ tdd: "auto" })).toEqual({ tdd: "auto" });
   });
 
   it("reads anything that is not an object as no rules", () => {

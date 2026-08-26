@@ -33,6 +33,8 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
+  skillPromptResource,
+  SKILL_POLICY_DEFAULT,
   UtilityCompletionError,
   type AuthoritySnapshot,
   type ObservabilityEvent,
@@ -3186,6 +3188,24 @@ describe("startSession", () => {
         turnId: "turn-1",
         message: { role: "user", content: "accepted", timestamp: "now" },
       },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: Date.now() },
+        resources: null,
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: Date.now() },
+        resources: [{ name: "missing-text" }],
+      },
       // A reason no executor writes, and a token count nothing could have
       // counted — the durable ledger reads those as integers, so a marker
       // accepted here would recover into a Session that cannot be read.
@@ -6177,6 +6197,181 @@ describe("the Cache Prefix a Session sends", () => {
       expect(call.tools).toBe(calls[0]?.tools);
       expect(call.systemPrompt).toBe(calls[0]?.systemPrompt);
     }
+  });
+
+  it("carries an attached skill's instructions through a compaction (VC-181)", async () => {
+    // The lifecycle clause the ticket refuses to leave implicit: skill
+    // instructions must survive compaction or be deliberately restored, never
+    // silently lost. Attach-time selection rides `promptResources` into the
+    // SYSTEM PROMPT, and compaction replaces `agent.state.messages` only — it
+    // has no path to the prompt at all. So survival here is structural rather
+    // than a rule someone has to remember, and this pins it against the real
+    // compaction path rather than against the composer that builds the prompt.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture({
+      promptResources: [
+        skillPromptResource({
+          name: "house-style",
+          description: "How this repo writes things",
+          body: "volli-skill-marker: always spell the units out.",
+          authorPolicy: SKILL_POLICY_DEFAULT,
+          effectivePolicy: SKILL_POLICY_DEFAULT,
+          policyDiagnostic: null,
+          root: ".agents/skills/house-style",
+        }),
+      ],
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    const [firstTurn, , , afterCompaction] = calls;
+    // Delivered as a named resource with its root, so bundled relative files
+    // still resolve after the history around it is gone.
+    expect(firstTurn?.systemPrompt).toContain("volli-skill-marker");
+    expect(firstTurn?.systemPrompt).toContain("Skill directory: .agents/skills/house-style/");
+    // Still there on the far side, byte-identical — the history was summarized,
+    // the instructions were not.
+    expect(afterCompaction?.systemPrompt).toContain("volli-skill-marker");
+    expect(afterCompaction?.systemPrompt).toBe(firstTurn?.systemPrompt);
+    // And the turn that history WAS elided, so this is not passing by nothing
+    // having been compacted.
+    expect(afterCompaction?.messages).not.toContain("first answer");
+  });
+
+  it("restores the latest explicit activation after compaction and reattachment (VC-181)", async () => {
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const reference = {
+      name: "house-style",
+      description: "How this repo writes things",
+      authorPolicy: SKILL_POLICY_DEFAULT,
+      effectivePolicy: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
+      root: ".agents/skills/house-style",
+    } as const;
+    const oldResource = skillPromptResource({
+      ...reference,
+      body: "old-skill-marker: abbreviate the units.",
+    });
+    const latestResource = skillPromptResource({
+      ...reference,
+      body: "latest-skill-marker: always spell the units out.",
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settles("second answer")),
+          recording(calls, settlesHolding("third answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("fourth answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage(
+      "/house-style review this",
+      "queue",
+      "command-skill",
+      [],
+      [oldResource],
+    );
+    await handle.submitUserMessage(
+      "/house-style use the updated instructions",
+      "queue",
+      "command-skill-again",
+      [],
+      [latestResource],
+    );
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    const recovery = handle.recovery;
+    await handle.close();
+
+    // Message scope means a later invocation is delivered again, not silently
+    // session-deduplicated.
+    expect(calls[0]?.messages).toContain("old-skill-marker");
+    expect(calls[1]?.messages).toContain("latest-skill-marker");
+    const afterCompaction = calls[4];
+    expect(afterCompaction?.systemPrompt).not.toContain("latest-skill-marker");
+    expect(afterCompaction?.messages).toContain("latest-skill-marker");
+    expect(afterCompaction?.messages.match(/latest-skill-marker/g)).toHaveLength(1);
+    expect(afterCompaction?.messages).not.toContain("old-skill-marker");
+    expect(afterCompaction?.messages).toContain("restored verbatim after context compaction");
+    expect(afterCompaction?.messages).not.toContain("first answer");
+
+    const reattachedRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after restart"))])),
+    });
+    const reattached = await reattachedRuntime.startSession({ ...attachment.spec, recovery });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    expect(calls[5]?.messages).toContain("latest-skill-marker");
+    expect(calls[5]?.messages.match(/latest-skill-marker/g)).toHaveLength(1);
+    expect(calls[5]?.messages).not.toContain("old-skill-marker");
+    expect(calls[5]?.messages).toContain("restored verbatim after context compaction");
+  });
+
+  it("recognizes a retained resource inside an image message without duplicating it", async () => {
+    const attachment = fixture();
+    const resource = skillPromptResource({
+      name: "vision-style",
+      description: "How to review images",
+      body: "retained-image-skill-marker",
+      authorPolicy: SKILL_POLICY_DEFAULT,
+      effectivePolicy: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
+      root: ".agents/skills/vision-style",
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("image answer", 200_000)),
+          recording(calls, settles("## Goal\nkeep reviewing the image")),
+          recording(calls, settles("after compaction")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("first");
+    await handle.submitUserMessage(
+      "/vision-style inspect this",
+      "queue",
+      "command-image-skill",
+      [{ data: "aGVsbG8=", mimeType: "image/png" }],
+      [resource],
+    );
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    expect(calls[3]?.messages).toContain("retained-image-skill-marker");
+    expect(calls[3]?.messages.match(/retained-image-skill-marker/g)).toHaveLength(1);
+    expect(calls[3]?.messages).not.toContain("restored verbatim after context compaction");
   });
 
   it("compacts into a new base under the same prefix", async () => {

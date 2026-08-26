@@ -19,7 +19,6 @@ import {
   BUILTIN_RULE_PACK_ID,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
-  promptResourceBlock,
   resolveAuthorityPolicy,
   sessionToolIds,
   skillResourcePart,
@@ -28,6 +27,7 @@ import {
   type DeliveryOutcome,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
+  type PromptResource,
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
@@ -109,6 +109,7 @@ class FakeRuntime implements AgentRuntime {
   readonly modelAccessInputs: Array<{ refresh?: boolean; signal?: AbortSignal } | undefined> = [];
   readonly specs: SessionRuntimeSpec[] = [];
   readonly submissions: string[] = [];
+  readonly submissionResources: Array<readonly PromptResource[]> = [];
   readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
   readonly submissionCommandIds: Array<
     Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
@@ -160,8 +161,15 @@ class FakeRuntime implements AgentRuntime {
     for (const observation of this.startupObservations) await spec.observer(observation);
     if (this.startFailure !== null) throw this.startFailure;
     return {
-      submitUserMessage: async (text, delivery, commandId): Promise<DeliveryOutcome> => {
+      submitUserMessage: async (
+        text,
+        delivery,
+        commandId,
+        _images,
+        resources = [],
+      ): Promise<DeliveryOutcome> => {
         this.submissions.push(text);
+        this.submissionResources.push(resources);
         this.deliveries.push(delivery);
         this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
@@ -1107,7 +1115,7 @@ describe("Pi native adapter dispatch", () => {
     });
   });
 
-  it("appends a skill resource part as a delimited block AFTER the intact text (VC-49)", async () => {
+  it("hands a skill to the runtime as a typed resource beside intact text (VC-181)", async () => {
     const { binding, runtime } = await attached();
     const resource = { name: "hussain-sol", text: "Skill directory: x/\n\n# The skill body" };
 
@@ -1120,8 +1128,8 @@ describe("Pi native adapter dispatch", () => {
         id: "message-1",
         role: "user",
         parts: [
-          // The repro: a mid-sentence skill reference. The sentence must reach
-          // Pi exactly as typed, with the body adjacent — never spliced in.
+          // The repro: a mid-sentence skill reference. The sentence reaches
+          // Pi exactly as typed; the runtime owns structured framing.
           { type: "text", text: "can you tell me what /hussain-sol does?" },
           skillResourcePart(resource),
         ],
@@ -1132,9 +1140,8 @@ describe("Pi native adapter dispatch", () => {
       variant: null,
     });
 
-    expect(runtime.submissions).toEqual([
-      `can you tell me what /hussain-sol does?\n\n${promptResourceBlock(resource)}`,
-    ]);
+    expect(runtime.submissions).toEqual(["can you tell me what /hussain-sol does?"]);
+    expect(runtime.submissionResources).toEqual([[resource]]);
   });
 
   it("drops a malformed skill resource part rather than delivering half a block", async () => {

@@ -28,7 +28,7 @@ import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import type { SkillReference } from "@volli/shared";
+import { userInvokableSkills, type SkillReference } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -125,7 +125,8 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
-  const skillRows = onNewChatWithSkill === undefined || skills === undefined ? [] : skills;
+  const skillRows =
+    onNewChatWithSkill === undefined || skills === undefined ? [] : userInvokableSkills(skills);
 
   const items = (
     <>
