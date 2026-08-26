@@ -132,6 +132,8 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     ],
     changed: [
       "Sync contacts no remote. It merges the base ref this checkout already has — origin/<base> when a fetch has landed one, the local base branch otherwise — so no credential is used and nothing can block on one.",
+      "Sync runs local Git asynchronously behind a hard deadline, so a hung hook, signing helper, or filter cannot freeze Electron main or wait forever. A hook failure that leaves a merge in flight names --abort recovery.",
+      "conflicts now compares each worktree's complete Change Set (committed, staged, unstaged, and untracked paths versus its base) and keeps each project's matrix separate.",
       "An authenticated Session may run worktree.sync by default, on the same grounds as its other coordination verbs: the merge is already inside the ambient authority its own execute tool reaches.",
     ],
     fixed: [],

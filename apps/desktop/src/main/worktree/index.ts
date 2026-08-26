@@ -38,6 +38,7 @@ export {
   readWorktreeStatus,
   readWorktreeDiff,
   readWorktreeChangeSet,
+  readWorktreeChangeSetPaths,
   readWorktreeBaseFile,
 } from "./read";
 export type {
@@ -45,9 +46,10 @@ export type {
   WorktreeStatusRead,
   WorktreeDiffRead,
   WorktreeChangeSetRead,
+  WorktreeChangeSetPathsRead,
   WorktreeBaseFileRead,
 } from "./read";
-export { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
+export { changeSetPaths, changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
 
 // Worktree sync (VC-185): the one worktree verb that writes. It merges the base
 // ref this checkout already has, reports conflicts per path, and returns —

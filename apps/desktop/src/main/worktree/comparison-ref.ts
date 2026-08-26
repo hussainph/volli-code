@@ -34,6 +34,26 @@ export function resolveComparisonRef(
 }
 
 /**
+ * Async counterpart for operations such as sync that must leave Electron main
+ * responsive while Git runs local hooks. It deliberately keeps the same
+ * origin-first answer as {@link resolveComparisonRef}; only execution changes.
+ */
+export async function resolveComparisonRefAsync(
+  git: RunGitAsync,
+  cwd: string,
+  baseBranch: string | null,
+): Promise<string | null> {
+  if (!baseBranch) return null;
+  const remoteRef = `origin/${baseBranch}`;
+  try {
+    await git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remoteRef}`], cwd);
+    return remoteRef;
+  } catch {
+    return baseBranch;
+  }
+}
+
+/**
  * The concrete SHA a Change Set is stamped against: the MERGE BASE of the
  * comparison ref and HEAD, never the ref's tip.
  *

@@ -3,7 +3,7 @@
  * happened, and return (VC-185, split from VC-89 slice 2).
  *
  * The shallow half, in the shape `status.ts` and `diff.ts` already have — it
- * takes an assembled `{ worktreePath, baseBranch }` and runs git, leaving the
+ * takes an assembled `{ worktreePath, branch, baseBranch }` and runs git, leaving the
  * ticket→identity resolution to the composed verb in `read.ts`. What it exists
  * to delete is the per-kickoff prose: "if your branch is stale, merge main in
  * and resolve the conflicts" was written into every orchestration brief, and
@@ -14,10 +14,11 @@
  * VC-92's amendment on VC-89 pinned exactly one hard constraint on this verb:
  * it merges, reports conflicts, and returns. If it waits on anything, it has
  * become a watch/wake tool (VC-85) and belongs on the Agent Tool Surface where
- * a runtime can suspend the turn — not on a socket with a ten-second request
- * deadline. The `gh pr checks --watch` wedge that killed two merge sessions is
- * the failure class this verb was invented to remove, so reintroducing it here
- * would be an unusually complete own goal.
+ * a runtime can suspend the turn. The socket cannot cancel a child once a
+ * request is accepted, so this verb runs every Git command asynchronously
+ * through a hard-deadline runner of its own. The `gh pr checks --watch` wedge
+ * that killed two merge sessions is the failure class this verb was invented to
+ * remove, so reintroducing it here would be an unusually complete own goal.
  *
  * That constraint is why nothing here touches a REMOTE. No fetch, no pull, no
  * push, no ls-remote: every one of those can block on a credential prompt (the
@@ -25,21 +26,22 @@
  * and credential custody is control tier anyway — VC-92 moved it off the CLI
  * door entirely. Sync merges the base ref this checkout already has, which is
  * `origin/<base>` when a fetch has landed one and the local base branch when it
- * has not — the same {@link resolveComparisonRef} choice the diff and the
+ * has not — the same {@link resolveComparisonRefAsync} choice the diff and the
  * ahead/behind counts already measure against, so "behind by 3" and "sync
  * brought 3 commits" agree by construction. `sync.test.ts` pins the absence of
  * every network subcommand in every outcome.
  *
  * ## A conflict is an outcome, not a failure
  *
- * `git merge` exiting non-zero means one of two very different things, and the
+ * `git merge` exiting non-zero can mean three different things, and the
  * caller's next move differs completely: a conflict leaves per-path work to do
- * IN THIS WORKTREE, and anything else (a dirty tree, unrelated history, a base
- * that does not resolve) leaves nothing merged at all. So the non-zero exit is
- * discriminated by asking git which paths are unmerged, and only the first case
- * becomes a `conflicted` outcome carrying its paths. The second stays an error
- * carrying git's own stderr, because a session told "conflicted" would go
- * hunting for conflict markers that were never written.
+ * IN THIS WORKTREE; a hook can reject after writing `MERGE_HEAD` without any
+ * unmerged path; and a dirty tree, unrelated history, or missing base leaves
+ * no merge in flight. The first becomes a `conflicted` outcome carrying paths.
+ * The second stays an error carrying Git's stderr *and* the explicit `--abort`
+ * recovery. Only the third is an ordinary error, because a session told
+ * "conflicted" would otherwise hunt for conflict markers that were never
+ * written.
  *
  * Nothing here tidies up after a conflict. The worktree is left conflicted, on
  * purpose: the session resolving it is the one with the context to resolve it,
@@ -49,14 +51,16 @@
  */
 import type { DiffStat } from "@volli/shared";
 
-import { resolveComparisonRef } from "./comparison-ref";
+import { resolveComparisonRefAsync } from "./comparison-ref";
 import { parseNumstat, total } from "./diff";
-import { stderrOf } from "./git";
+import { runGitCapturingAsync, stderrOf } from "./git";
 import { resolveWorktreeTarget, type WorktreeReadDeps, type WorktreeReadFailure } from "./read";
-import { err, ok, type RunGit, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface SyncInput {
   worktreePath: string;
+  /** The ticket branch that must still be checked out before any mutation. */
+  branch: string | null;
   /** The branch merged IN. Sync fails fast when it is unknown. */
   baseBranch: string | null;
 }
@@ -118,9 +122,9 @@ export type WorktreeSyncRead =
     };
 
 /** Whether a merge is mid-flight, asked of git rather than of the filesystem. */
-function mergeInFlight(git: RunGit, cwd: string): boolean {
+async function mergeInFlight(git: RunGitAsync, cwd: string): Promise<boolean> {
   try {
-    git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd);
+    await git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd);
     return true;
   } catch {
     return false;
@@ -128,9 +132,9 @@ function mergeInFlight(git: RunGit, cwd: string): boolean {
 }
 
 /** The unmerged paths git is holding, or none when the failure was something else. */
-function unmergedPaths(git: RunGit, cwd: string): string[] {
+async function unmergedPaths(git: RunGitAsync, cwd: string): Promise<string[]> {
   try {
-    return git(["diff", "--name-only", "--diff-filter=U"], cwd)
+    return (await git(["diff", "--name-only", "--diff-filter=U"], cwd))
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
@@ -140,8 +144,13 @@ function unmergedPaths(git: RunGit, cwd: string): string[] {
 }
 
 /** What one revision range moved, as a `--stat` summary. */
-function movement(git: RunGit, cwd: string, from: string, to: string): DiffStat {
-  const files = parseNumstat(git(["diff", "--numstat", `${from}..${to}`], cwd));
+async function movement(
+  git: RunGitAsync,
+  cwd: string,
+  from: string,
+  to: string,
+): Promise<DiffStat> {
+  const files = parseNumstat(await git(["diff", "--numstat", `${from}..${to}`], cwd));
   return {
     files,
     insertions: total(files, "insertions"),
@@ -149,33 +158,73 @@ function movement(git: RunGit, cwd: string, from: string, to: string): DiffStat 
   };
 }
 
-function commitCount(git: RunGit, cwd: string, from: string, to: string): number {
-  const parsed = Number.parseInt(git(["rev-list", "--count", `${from}..${to}`], cwd).trim(), 10);
+async function commitCount(
+  git: RunGitAsync,
+  cwd: string,
+  from: string,
+  to: string,
+): Promise<number> {
+  const parsed = Number.parseInt(
+    (await git(["rev-list", "--count", `${from}..${to}`], cwd)).trim(),
+    10,
+  );
   return Number.isInteger(parsed) ? parsed : 0;
 }
 
+type CheckedOutBranch = { ok: true; branch: string | null } | { ok: false; error: string };
+
+/** Reads the actual checkout identity; an empty answer is detached HEAD. */
+async function checkedOutBranch(git: RunGitAsync, cwd: string): Promise<CheckedOutBranch> {
+  try {
+    const branch = (await git(["branch", "--show-current"], cwd)).trim();
+    return { ok: true, branch: branch.length > 0 ? branch : null };
+  } catch (caught) {
+    return { ok: false, error: stderrOf(caught) };
+  }
+}
+
 /**
- * Merges `baseBranch` into whatever the worktree has checked out — or aborts a
- * merge already in flight — and reports the outcome without waiting on
- * anything.
+ * Merges `baseBranch` into the ticket branch currently checked out in the
+ * worktree — or aborts a merge already in flight — and reports the outcome.
+ * Every call is async and deadline-bounded, so a hook/filter/signing helper
+ * can neither freeze Electron main nor wait forever.
  */
-export function syncWithBase(
-  git: RunGit,
+export async function syncWithBase(
+  git: RunGitAsync,
   input: SyncInput,
   mode: SyncMode,
-): WorktreeResult<SyncReport> {
+): Promise<WorktreeResult<SyncReport>> {
   if (!input.baseBranch) {
     return err("No base branch is known for this worktree, so there is nothing to sync from.");
   }
+  if (!input.branch) {
+    return err(
+      "This ticket has no recorded worktree branch, so Volli cannot verify a safe checkout to sync.",
+    );
+  }
+
   const cwd = input.worktreePath;
-  const inFlight = mergeInFlight(git, cwd);
+  const checkout = await checkedOutBranch(git, cwd);
+  if (!checkout.ok) {
+    return err(`Couldn't verify this worktree's checked-out branch: ${checkout.error}`);
+  }
+  if (checkout.branch !== input.branch) {
+    const state =
+      checkout.branch === null ? "in detached HEAD state" : `on branch ${checkout.branch}`;
+    return err(
+      `A worktree exists at ${cwd} ${state}, not ${input.branch}. ` +
+        `Check out ${input.branch} there, then retry sync.`,
+    );
+  }
+
+  const inFlight = await mergeInFlight(git, cwd);
 
   if (mode === "abort") {
     if (!inFlight) {
       return err("There is no merge in progress in this worktree, so there is nothing to abort.");
     }
     try {
-      git(["merge", "--abort"], cwd);
+      await git(["merge", "--abort"], cwd);
     } catch (caught) {
       return err(stderrOf(caught));
     }
@@ -184,7 +233,7 @@ export function syncWithBase(
       // The ref a sync WOULD merge, which is what the caller is being returned
       // to — git records nothing about what the abandoned merge was against, so
       // claiming to name that would be inventing evidence.
-      mergedRef: resolveComparisonRef(git, cwd, input.baseBranch)!,
+      mergedRef: (await resolveComparisonRefAsync(git, cwd, input.baseBranch))!,
       commits: 0,
       diff: emptyDiff(),
       conflicts: [],
@@ -200,30 +249,41 @@ export function syncWithBase(
     );
   }
 
-  const mergedRef = resolveComparisonRef(git, cwd, input.baseBranch)!;
+  const mergedRef = (await resolveComparisonRefAsync(git, cwd, input.baseBranch))!;
   let before: string;
   try {
-    before = git(["rev-parse", "HEAD"], cwd).trim();
+    before = (await git(["rev-parse", "HEAD"], cwd)).trim();
   } catch (caught) {
     return err(stderrOf(caught));
   }
 
   try {
-    // `--no-edit` because an editor prompt on a merge commit is a wedge with a
-    // different name: the socket would time out waiting for a session that is
-    // waiting for a text editor nobody can see.
-    git(["merge", "--no-edit", mergedRef], cwd);
+    // `--no-edit` removes the editor prompt; the async runner's deadline also
+    // bounds hooks, signing, filters, and any other local child Git starts.
+    await git(["merge", "--no-edit", mergedRef], cwd);
   } catch (caught) {
-    const conflicts = unmergedPaths(git, cwd);
+    const conflicts = await unmergedPaths(git, cwd);
     // Deliberately no cleanup — see the header. The conflicted worktree IS the
     // handoff to the session that will resolve it.
-    if (conflicts.length === 0) return err(stderrOf(caught));
-    return ok({ status: "conflicted", mergedRef, commits: 0, diff: emptyDiff(), conflicts });
+    if (conflicts.length > 0) {
+      return ok({ status: "conflicted", mergedRef, commits: 0, diff: emptyDiff(), conflicts });
+    }
+    // A pre-merge-commit hook can reject after Git has written MERGE_HEAD but
+    // before any path is unmerged. Do not call that a clean failure: preserve
+    // the state and name the same explicit exit as a textual conflict.
+    if (await mergeInFlight(git, cwd)) {
+      const detail = stderrOf(caught);
+      return err(
+        `${detail}\n\nGit left a merge in progress without conflicted paths. ` +
+          "Resolve it and commit, or rerun this sync command with --abort.",
+      );
+    }
+    return err(stderrOf(caught));
   }
 
   let after: string;
   try {
-    after = git(["rev-parse", "HEAD"], cwd).trim();
+    after = (await git(["rev-parse", "HEAD"], cwd)).trim();
   } catch (caught) {
     return err(stderrOf(caught));
   }
@@ -238,13 +298,11 @@ export function syncWithBase(
   }
 
   try {
-    return ok({
-      status: "merged",
-      mergedRef,
-      commits: commitCount(git, cwd, before, after),
-      diff: movement(git, cwd, before, after),
-      conflicts: [],
-    });
+    const [commits, diff] = await Promise.all([
+      commitCount(git, cwd, before, after),
+      movement(git, cwd, before, after),
+    ]);
+    return ok({ status: "merged", mergedRef, commits, diff, conflicts: [] });
   } catch {
     // The merge COMMITTED. A failure measuring it is a reporting failure, not a
     // sync failure, and saying "sync failed" would send a session to undo work
@@ -265,17 +323,21 @@ export function syncWithBase(
  * three ways that question fails ("no such ticket", "no worktree yet", "stamped
  * but deleted") are the same three however the answer is going to be used.
  */
-export function syncTicketWorktree(
+export async function syncTicketWorktree(
   deps: WorktreeReadDeps,
   ticketId: string,
   mode: SyncMode,
-): WorktreeSyncRead {
+): Promise<WorktreeSyncRead> {
   const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
-  const result = syncWithBase(
-    deps.git,
-    { worktreePath: target.worktreePath, baseBranch: target.baseBranch },
+  const result = await syncWithBase(
+    deps.gitAsync ?? runGitCapturingAsync,
+    {
+      worktreePath: target.worktreePath,
+      branch: target.branch,
+      baseBranch: target.baseBranch,
+    },
     mode,
   );
   if (!result.ok) {

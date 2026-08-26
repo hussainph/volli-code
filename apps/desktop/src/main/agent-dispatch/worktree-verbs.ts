@@ -267,12 +267,12 @@ export async function worktreeSyncVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, git, worktreeExists } = context;
+  const { options, projects, envSession, git, gitAsync, worktreeExists } = context;
   const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   const mode = request.args["abort"] === true ? "abort" : "merge";
-  const read = syncTicketWorktree(
-    { db: options.db, git, worktreeExists },
+  const read = await syncTicketWorktree(
+    { db: options.db, git, gitAsync, worktreeExists },
     resolved.ticket.id,
     mode,
   );

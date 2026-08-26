@@ -3,9 +3,19 @@ import { describe, expect, it } from "vite-plus/test";
 import { GitError } from "./git";
 import { scriptedGit } from "./scripted-git";
 import { syncWithBase } from "./sync";
+import type { RunGitAsync } from "./types";
 
 /** Every git subcommand that talks to a remote — none of which sync may run. */
 const NETWORK_SUBCOMMANDS = ["fetch", "pull", "push", "ls-remote", "clone", "remote"];
+
+const TICKET_BRANCH = "volli/VC-1-ship";
+const SYNC_INPUT = { worktreePath: "/wt", branch: TICKET_BRANCH, baseBranch: "main" };
+
+/** Gives sync's branch-identity guard the ticket checkout every unit scenario intends. */
+function ticketBranchGit(git: RunGitAsync): RunGitAsync {
+  return async (args, cwd) =>
+    args[0] === "branch" && args[1] === "--show-current" ? `${TICKET_BRANCH}\n` : git(args, cwd);
+}
 
 /**
  * A scripted repo where HEAD moves when the merge runs, so the "what moved"
@@ -39,10 +49,10 @@ function mergingRepo(options: { conflicts?: readonly string[] } = {}) {
 }
 
 describe("syncWithBase — a clean merge", () => {
-  it("merges the base into the worktree and reports what moved", () => {
-    const { git, calls } = mergingRepo();
+  it("merges the base into the worktree and reports what moved", async () => {
+    const { gitAsync, calls } = mergingRepo();
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -66,10 +76,10 @@ describe("syncWithBase — a clean merge", () => {
     ]);
   });
 
-  it("reports an unmoved HEAD as already up to date rather than as a merge", () => {
+  it("reports an unmoved HEAD as already up to date rather than as a merge", async () => {
     // git exits 0 for "Already up to date", so the outcome has to be read off
     // HEAD, not off the exit code.
-    const { git } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
         throw new GitError("no MERGE_HEAD", "fatal: Needed a single revision", args);
       }
@@ -79,7 +89,7 @@ describe("syncWithBase — a clean merge", () => {
       return "";
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -88,11 +98,11 @@ describe("syncWithBase — a clean merge", () => {
     expect(result.value.diff).toEqual({ files: [], insertions: 0, deletions: 0 });
   });
 
-  it("keeps a landed merge landed when measuring it fails", () => {
+  it("keeps a landed merge landed when measuring it fails", async () => {
     // The merge COMMITTED and a later read broke. Reporting the sync as failed
     // would send a session to undo work that is already in the branch, so the
     // outcome stands and only its size degrades to unknown.
-    const { git } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
         throw new GitError("no MERGE_HEAD", "fatal: Needed a single revision", args);
       }
@@ -103,15 +113,15 @@ describe("syncWithBase — a clean merge", () => {
       return "";
     });
     let head = 0;
-    const moving = ((args: readonly string[], cwd: string) => {
+    const moving = (async (args: readonly string[], cwd: string) => {
       if (args[0] === "rev-parse" && args[1] === "HEAD") {
         head += 1;
         return head === 1 ? "aaaaaaa\n" : "ddddddd\n";
       }
-      return git(args, cwd);
-    }) as typeof git;
+      return gitAsync(args, cwd);
+    }) as typeof gitAsync;
 
-    const result = syncWithBase(moving, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(moving), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -120,8 +130,8 @@ describe("syncWithBase — a clean merge", () => {
     expect(result.value.diff).toBeNull();
   });
 
-  it("measures against the local base when no remote-tracking ref exists", () => {
-    const { git, calls } = scriptedGit((args) => {
+  it("measures against the local base when no remote-tracking ref exists", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") {
         throw new GitError("no ref", "fatal: Needed a single revision", args);
       }
@@ -129,7 +139,7 @@ describe("syncWithBase — a clean merge", () => {
       return "";
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -143,12 +153,12 @@ describe("syncWithBase — a clean merge", () => {
 });
 
 describe("syncWithBase — a conflicted merge", () => {
-  it("reports the conflicted paths and leaves the merge in flight", () => {
-    const { git, calls } = mergingRepo({
+  it("reports the conflicted paths and leaves the merge in flight", async () => {
+    const { gitAsync, calls } = mergingRepo({
       conflicts: ["packages/shared/src/x.ts", "apps/desktop/src/y.tsx"],
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -161,11 +171,11 @@ describe("syncWithBase — a conflicted merge", () => {
     expect(calls.some((call) => call.args[0] === "checkout")).toBe(false);
   });
 
-  it("surfaces a merge that failed for any other reason as an error", () => {
+  it("surfaces a merge that failed for any other reason as an error", async () => {
     // A dirty tree, an unrelated history, a missing ref: git exits non-zero and
     // no path is unmerged. Reporting that as "conflicted" would send a session
     // hunting for conflict markers that do not exist.
-    const { git } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
         throw new GitError("no MERGE_HEAD", "fatal: Needed a single revision", args);
       }
@@ -182,33 +192,74 @@ describe("syncWithBase — a conflicted merge", () => {
       return "";
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("would be overwritten by merge");
   });
 
-  it("refuses to start a second merge on top of one already in flight", () => {
-    const { git, calls } = scriptedGit((args) => {
+  it("refuses to start a second merge on top of one already in flight", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
         return "cccccccc\n";
       }
       return "";
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("merge is already in progress");
     expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
   });
+
+  it("names --abort when a hook rejects the merge after MERGE_HEAD was written", async () => {
+    let mergeInFlight = false;
+    const { gitAsync, calls } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
+        if (mergeInFlight) return "cccccccc\n";
+        throw new GitError("no MERGE_HEAD", "fatal: Needed a single revision", args);
+      }
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "rev-parse") return "aaaaaaa\n";
+      if (args[0] === "merge") {
+        mergeInFlight = true;
+        throw new GitError(
+          "merge hook rejected commit",
+          "Not committing merge; use 'git commit' to complete the merge.\npre-merge-commit rejected it",
+          args,
+        );
+      }
+      if (args[0] === "diff" && args.includes("--diff-filter=U")) return "";
+      return "";
+    });
+
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("pre-merge-commit rejected it");
+    expect(result.error).toContain("--abort");
+    // A hook failure has no unmerged paths, but Git has still left its merge
+    // sequencer active. The post-error probe must observe that state instead
+    // of returning a bare error against a silently broken worktree.
+    expect(mergeInFlight).toBe(true);
+    expect(
+      calls.filter(
+        (call) =>
+          call.args[0] === "rev-parse" &&
+          call.args[1] === "--verify" &&
+          call.args[3] === "MERGE_HEAD",
+      ),
+    ).toHaveLength(2);
+  });
 });
 
 describe("syncWithBase — the abort story", () => {
-  it("aborts a merge that is in flight and says so", () => {
-    const { git, calls } = scriptedGit((args) => {
+  it("aborts a merge that is in flight and says so", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
         return "cccccccc\n";
       }
@@ -216,7 +267,7 @@ describe("syncWithBase — the abort story", () => {
       return "";
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "abort");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "abort");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -224,15 +275,15 @@ describe("syncWithBase — the abort story", () => {
     expect(calls.find((call) => call.args[0] === "merge")?.args).toEqual(["merge", "--abort"]);
   });
 
-  it("refuses to abort when no merge is in flight", () => {
-    const { git, calls } = scriptedGit((args) => {
+  it("refuses to abort when no merge is in flight", async () => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
         throw new GitError("no MERGE_HEAD", "fatal: Needed a single revision", args);
       }
       return "";
     });
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: "main" }, "abort");
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "abort");
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -242,11 +293,10 @@ describe("syncWithBase — the abort story", () => {
 });
 
 describe("syncWithBase — it never blocks", () => {
-  it("runs no command that reaches the network, in any outcome", () => {
-    // The hard constraint VC-92 pinned on this verb: it must not wait on gates
-    // or CI, and the way a local git verb starts waiting is by touching a
-    // remote — the osxkeychain hang that froze every push for two hours is the
-    // failure class, and `--watch` is the wedge this verb exists to delete.
+  it("runs no command that reaches the network, in any outcome", async () => {
+    // The hard constraint VC-92 pinned on this verb: it starts no gate, CI,
+    // watch, or remote command. The separate bounded-runner test covers a hung
+    // local hook/filter; this one pins the no-network half of the contract.
     for (const scenario of [
       mergingRepo(),
       mergingRepo({ conflicts: ["src/x.ts"] }),
@@ -257,8 +307,8 @@ describe("syncWithBase — it never blocks", () => {
         return "";
       }),
     ]) {
-      syncWithBase(scenario.git, { worktreePath: "/wt", baseBranch: "main" }, "merge");
-      syncWithBase(scenario.git, { worktreePath: "/wt", baseBranch: "main" }, "abort");
+      await syncWithBase(ticketBranchGit(scenario.gitAsync), SYNC_INPUT, "merge");
+      await syncWithBase(ticketBranchGit(scenario.gitAsync), SYNC_INPUT, "abort");
       for (const call of scenario.calls) {
         expect(NETWORK_SUBCOMMANDS).not.toContain(call.args[0]);
       }
@@ -266,10 +316,14 @@ describe("syncWithBase — it never blocks", () => {
     }
   });
 
-  it("fails fast when no base branch is known instead of guessing one", () => {
-    const { git, calls } = scriptedGit(() => "");
+  it("fails fast when no base branch is known instead of guessing one", async () => {
+    const { gitAsync, calls } = scriptedGit(() => "");
 
-    const result = syncWithBase(git, { worktreePath: "/wt", baseBranch: null }, "merge");
+    const result = await syncWithBase(
+      ticketBranchGit(gitAsync),
+      { ...SYNC_INPUT, baseBranch: null },
+      "merge",
+    );
 
     expect(result.ok).toBe(false);
     if (result.ok) return;

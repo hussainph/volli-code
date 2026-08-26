@@ -471,7 +471,7 @@ Example: volli worktree sync VC-12
 Notes:
 - Defaults to the ticket owning the current directory.
 - Merges the base ref this checkout already has (origin/<base> when present, else the local branch) and contacts no remote.
-- It never waits: no gate, no CI, no watch. It merges, reports, and returns.
+- It never waits: no gate, no CI, no watch. Local Git runs asynchronously behind a hard deadline, then it reports and returns.
 - A conflict is an outcome, not an error: status is conflicted, every conflicted path is listed, and the worktree is left conflicted for this session to resolve.
 - --abort undoes a merge left in flight. Nothing else here cleans up after a conflict.
 
@@ -864,6 +864,8 @@ Added
 - volli conflicts — the file-collision radar: which active ticket worktrees touch the same paths, as a per-path list and a worst-first list of colliding ticket pairs. Read tier, any caller, --json like every other read.
 Changed
 - Sync contacts no remote. It merges the base ref this checkout already has — origin/<base> when a fetch has landed one, the local base branch otherwise — so no credential is used and nothing can block on one.
+- Sync runs local Git asynchronously behind a hard deadline, so a hung hook, signing helper, or filter cannot freeze Electron main or wait forever. A hook failure that leaves a merge in flight names --abort recovery.
+- conflicts now compares each worktree's complete Change Set (committed, staged, unstaged, and untracked paths versus its base) and keeps each project's matrix separate.
 - An authenticated Session may run worktree.sync by default, on the same grounds as its other coordination verbs: the merge is already inside the ambient authority its own execute tool reaches.
 Fixed
 - None in this record.

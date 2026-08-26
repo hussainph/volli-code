@@ -51,10 +51,13 @@ export async function conflictsVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, git, worktreeExists } = context;
+  const { options, projects, git, gitAsync, worktreeExists } = context;
   const scope = scopedProjects(projects, request.args["project"]);
   if (!scope.ok) return scope.response;
-  const scan = scanCollisions({ db: options.db, git, worktreeExists }, scope.projects);
+  const scan = await scanCollisions(
+    { db: options.db, git, gitAsync, worktreeExists },
+    scope.projects,
+  );
   return {
     v: 1,
     ok: true,

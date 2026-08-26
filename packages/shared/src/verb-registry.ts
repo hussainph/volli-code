@@ -833,8 +833,9 @@ export const VERB_REGISTRY = [
     // not on a remote. A verb that waits is a watch/wake tool (VC-85) and
     // belongs on the Agent Tool Surface where a runtime can suspend the turn —
     // the `--watch` wedge is the exact failure this verb was invented to
-    // delete, and the socket's own request deadline enforces the same rule
-    // mechanically. It merges, reports conflicts, and returns.
+    // delete. Its own async Git runner enforces a hard child-process deadline
+    // mechanically; the socket cannot cancel a child once it has accepted a
+    // request. It merges, reports conflicts, and returns.
     //
     // Deliberately no `--dry-run`, for `ticket.signal`'s reason: the verb's
     // whole output IS the report of what it did, the merge is undone by this
@@ -852,7 +853,7 @@ export const VERB_REGISTRY = [
     notes: [
       "Defaults to the ticket owning the current directory.",
       "Merges the base ref this checkout already has (origin/<base> when present, else the local branch) and contacts no remote.",
-      "It never waits: no gate, no CI, no watch. It merges, reports, and returns.",
+      "It never waits: no gate, no CI, no watch. Local Git runs asynchronously behind a hard deadline, then it reports and returns.",
       "A conflict is an outcome, not an error: status is conflicted, every conflicted path is listed, and the worktree is left conflicted for this session to resolve.",
       "--abort undoes a merge left in flight. Nothing else here cleans up after a conflict.",
     ],

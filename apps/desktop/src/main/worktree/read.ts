@@ -29,7 +29,12 @@ import type { WorktreeDiffMode } from "../../ipc/contract";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
-import { changeSetSnapshot, readChangeSetBaseFile, type ChangeSetBaseFile } from "./change-set";
+import {
+  changeSetPaths,
+  changeSetSnapshot,
+  readChangeSetBaseFile,
+  type ChangeSetBaseFile,
+} from "./change-set";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { diffStat } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
@@ -92,6 +97,12 @@ export type WorktreeChangeSetRead =
   | WorktreeReadFailure
   | { kind: "change-set-error"; displayId: string; error: string }
   | { kind: "ok"; displayId: string; changeSet: ChangeSetSnapshot };
+
+/** The uncapped current Change Set paths a collision scan needs. */
+export type WorktreeChangeSetPathsRead =
+  | WorktreeReadFailure
+  | { kind: "change-set-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; paths: readonly string[] };
 
 /** The discriminated result of {@link readWorktreeBaseFile}. */
 export type WorktreeBaseFileRead =
@@ -217,6 +228,28 @@ export async function readWorktreeChangeSet(
     return { kind: "change-set-error", displayId: target.displayId, error: result.error };
   }
   return { kind: "ok", displayId: target.displayId, changeSet: result.value };
+}
+
+/**
+ * Composes the complete uncapped path set for a collision scan. This stays a
+ * sibling of the capped Change Set snapshot: UI transport may cap its rows,
+ * while scheduling must not miss a path merely because it appears late.
+ */
+export async function readWorktreeChangeSetPaths(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): Promise<WorktreeChangeSetPathsRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = await changeSetPaths(deps.gitAsync ?? runGitCapturingAsync, {
+    worktreePath: target.worktreePath,
+    baseBranch: target.baseBranch,
+  });
+  if (!result.ok) {
+    return { kind: "change-set-error", displayId: target.displayId, error: result.error };
+  }
+  return { kind: "ok", displayId: target.displayId, paths: result.value };
 }
 
 /**

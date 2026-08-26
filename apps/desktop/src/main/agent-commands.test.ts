@@ -4029,6 +4029,7 @@ describe("agent command service", () => {
   /** A project + one seeded VC-1 worktree, with git scripted by the caller. */
   const syncScenario = async (
     handler: (args: readonly string[], cwd: string) => string,
+    checkedOutBranch = "volli/VC-1-ship",
   ): Promise<{
     service: ReturnType<typeof createAgentCommandService>;
     calls: { args: readonly string[]; cwd: string }[];
@@ -4043,13 +4044,17 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, calls } = scriptedGit(handler);
+    const { git, gitAsync, calls } = scriptedGit((args, cwd) => {
+      if (args[0] === "branch" && args[1] === "--show-current") return `${checkedOutBranch}\n`;
+      return handler(args, cwd);
+    });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4100,6 +4105,32 @@ describe("agent command service", () => {
     });
   });
 
+  it("refuses to mutate a checkout that is no longer on the ticket branch", async () => {
+    const { service, calls } = await syncScenario((args) => {
+      if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "rev-parse") return "aaaaaaa\n";
+      if (args[0] === "merge") return "";
+      if (args[0] === "rev-list") return "2\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      return "";
+    }, "some-other-branch");
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.sync",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    expect(res).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    if (!res.ok) {
+      expect(res.error.reason).toContain("some-other-branch");
+      expect(res.error.reason).toContain("volli/VC-1-ship");
+    }
+    expect(calls.some((call) => call.args[0] === "merge")).toBe(false);
+  });
+
   it("reports a conflicted sync per path and leaves the worktree conflicted", async () => {
     const { service, calls } = await syncScenario((args) => {
       if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
@@ -4135,10 +4166,9 @@ describe("agent command service", () => {
   });
 
   it("returns without waiting on anything, in either outcome", async () => {
-    // The hard constraint VC-92 pinned: sync must not block on gates or CI. A
-    // verb that waits is a watch/wake tool (VC-85), and the way a local git
-    // verb starts waiting is by reaching a remote — which is also credential
-    // custody, and therefore not on this door at all.
+    // The hard constraint VC-92 pinned: sync starts no gate, CI, watch, or
+    // remote command. Its local-hook deadline is exercised by the worktree
+    // runner suite; this door test keeps the no-network contract visible here.
     for (const conflicted of [false, true]) {
       const { service, calls } = await syncScenario((args) => {
         if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
@@ -4221,8 +4251,8 @@ describe("agent command service", () => {
   // ---- conflicts, the file-collision radar (VC-185, VC-89 slice 3) ---------
 
   /**
-   * A project with `count` ticket worktrees, each answering its own numstat
-   * keyed by the cwd git was invoked in.
+   * A project with `count` ticket worktrees, each answering its own complete
+   * Change Set path list keyed by the cwd git was invoked in.
    */
   const radarScenario = (
     touched: Readonly<Record<string, readonly string[]>>,
@@ -4253,12 +4283,14 @@ describe("agent command service", () => {
       );
       void paths;
     }
-    const { git } = scriptedGit((args, cwd) => {
-      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
-      if (args[0] === "diff") {
+    const { git, gitAsync } = scriptedGit((args, cwd) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      if (args[0] === "diff" && args.includes("--name-status")) {
         const display = cwd.slice("/wt/".length);
-        return (touched[display] ?? []).map((path) => `1\t0\t${path}`).join("\n");
+        return (touched[display] ?? []).map((path) => `M\u0000${path}\u0000`).join("");
       }
+      if (args[0] === "status") return "";
       return "";
     });
     return createAgentCommandService({
@@ -4266,6 +4298,7 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
   };
@@ -4300,6 +4333,149 @@ describe("agent command service", () => {
       { ticket: "VC-68", branch: "volli/VC-68-work", baseBranch: "main", files: 1 },
       { ticket: "VC-70", branch: "volli/VC-70-work", baseBranch: "main", files: 1 },
     ]);
+  });
+
+  it("detects overlap across staged, unstaged, and untracked work", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    for (const [number, title] of [
+      [1, "Staged change"],
+      [2, "Unstaged change"],
+      [3, "Untracked change"],
+    ] as const) {
+      insertTicket(
+        ctx.db,
+        testTicket("project-one", {
+          id: `ticket-${number}`,
+          ticketNumber: number,
+          title,
+          worktreePath: `/wt/VC-${number}`,
+          branch: `volli/VC-${number}-work`,
+          baseBranch: "main",
+        }),
+      );
+    }
+    const { git, gitAsync } = scriptedGit((args, cwd) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      if (args[0] === "diff" && args.includes("--name-status")) {
+        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? "M\u0000src/shared.ts\u0000" : "";
+      }
+      if (args[0] === "diff") return "";
+      if (args[0] === "status") {
+        // VC-1 has a staged tracked change, VC-2 an unstaged tracked change,
+        // and VC-3 a brand-new file at the same path. All are current Change
+        // Set paths, even before either session commits.
+        if (cwd === "/wt/VC-1") {
+          return "1 M. N... 100644 100644 100644 aaaa bbbb src/shared.ts\u0000";
+        }
+        if (cwd === "/wt/VC-2") {
+          return "1 .M N... 100644 100644 100644 aaaa bbbb src/shared.ts\u0000";
+        }
+        return "? src/shared.ts\u0000";
+      }
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      git,
+      gitAsync,
+      worktreeExists: () => true,
+    });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "conflicts",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        overlaps: [{ path: "src/shared.ts", tickets: ["VC-1", "VC-2", "VC-3"] }],
+        pairs: [
+          { tickets: ["VC-1", "VC-2"], paths: ["src/shared.ts"] },
+          { tickets: ["VC-1", "VC-3"], paths: ["src/shared.ts"] },
+          { tickets: ["VC-2", "VC-3"], paths: ["src/shared.ts"] },
+        ],
+      },
+    });
+  });
+
+  it("keeps same-named paths in separate projects out of one matrix", async () => {
+    ctx = openTestDb();
+    const alpha = testProject({
+      id: "project-alpha",
+      name: "Alpha",
+      path: "/repo/alpha",
+      ticketPrefix: "AL",
+    });
+    const beta = testProject({
+      id: "project-beta",
+      name: "Beta",
+      path: "/repo/beta",
+      ticketPrefix: "BE",
+    });
+    insertProject(ctx.db, alpha);
+    insertProject(ctx.db, beta);
+    insertTicket(
+      ctx.db,
+      testTicket(alpha.id, {
+        id: "alpha-ticket",
+        ticketNumber: 1,
+        title: "Alpha package",
+        worktreePath: "/wt/AL-1",
+        branch: "volli/AL-1-work",
+        baseBranch: "main",
+      }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket(beta.id, {
+        id: "beta-ticket",
+        ticketNumber: 1,
+        title: "Beta package",
+        worktreePath: "/wt/BE-1",
+        branch: "volli/BE-1-work",
+        baseBranch: "main",
+      }),
+    );
+    const { git, gitAsync } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      if (args[0] === "diff" && args.includes("--name-status")) return "M\u0000package.json\u0000";
+      if (args[0] === "diff") return "1\t0\tpackage.json\n";
+      if (args[0] === "status") return "";
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      git,
+      gitAsync,
+      worktreeExists: () => true,
+    });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "conflicts",
+      args: {},
+      ctx: { cwd: "/outside", env: {} },
+    });
+
+    expect(res).toMatchObject({ ok: true, data: { scanned: 2, overlaps: [], pairs: [] } });
   });
 
   it("renders the empty case as an answer, not as an absence", async () => {
@@ -4345,7 +4521,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "diff") throw new Error("fatal: bad revision");
       throw new Error("no origin ref");
     });
@@ -4354,6 +4530,7 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
 
