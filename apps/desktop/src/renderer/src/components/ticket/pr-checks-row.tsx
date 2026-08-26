@@ -25,6 +25,22 @@
  * always read, whose `statusCheckRollup` used to be reduced to a count of
  * failures and thrown away. No new subprocess, no new cadence, no second
  * network seam.
+ *
+ * NO SKELETON, AND IT COSTS SOMETHING. The watch holds its observations in
+ * memory and polls candidates SEQUENTIALLY, one `gh` subprocess each, so on a
+ * board of twenty tickets a late one has no observation for tens of seconds
+ * after launch. Open it in that window and the row is absent, then appears —
+ * pushing the publish controls below it down. The changes row solves its own
+ * version of this with a `Skeleton`, and this one deliberately does not.
+ *
+ * The reason is that a skeleton here cannot be honest. "Checks are coming" is
+ * not knowable before the first poll: the most we have is `prUrl`, and plenty
+ * of repositories have pull requests and no pipeline. Drawing a placeholder on
+ * that evidence would trade a settle for repositories WITH CI against a phantom
+ * row on every ticket in a repository WITHOUT it — flashing a feature you do
+ * not have, at the cost of the one property this design is built on: that it
+ * costs nothing to a project that will never use it. The settle is paid by the
+ * people the row is for, which is the right way round.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -164,8 +180,14 @@ export function ChecksDetail({ view }: { view: PrChecksView }) {
         )}
       </div>
       {/* Capped and scrollable: a monorepo's matrix can publish thirty rows,
-          and a popover as tall as the window is a panel that happens to float. */}
-      <ul className="flex max-h-64 flex-col overflow-y-auto">
+          and a popover as tall as the window is a panel that happens to float.
+          The `Checks` line above is a `<p>` (the card's popovers all are), so it
+          names nothing on its own — the list says what it is for a reader who
+          arrives inside it. */}
+      <ul
+        aria-label="Checks on this pull request"
+        className="flex max-h-64 flex-col overflow-y-auto"
+      >
         {/* Workflow + name IS the check's identity — GitHub makes a job name
             unique within its workflow, and a matrix leg carries its axis in the
             name ("test (20)"). Not the url: a re-run mints a fresh `detailsUrl`
@@ -215,7 +237,12 @@ export function PrChecksRow({ retention }: { retention: TicketRetentionState | n
           type="button"
           data-testid="ticket-repository-checks"
           title={view.summary ?? view.label}
-          aria-label={`${view.label}, show checks`}
+          // The breakdown goes in BOTH, because `aria-label` overrides the
+          // accessible name outright: with only `title` carrying it, a mouse
+          // user hovering got "1 failing · 3 passed" and a screen-reader user
+          // got the one-line verdict and no way to reach the rest without
+          // opening the popover. Same information, both ways in.
+          aria-label={`${view.label}${view.summary === null ? "" : `, ${view.summary}`}. Show checks`}
           className={cn(
             RAIL_CARD_ROW,
             "min-h-8 border-t border-sidebar-border/70 py-2 hover:bg-accent/50",

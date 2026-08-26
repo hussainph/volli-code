@@ -64,12 +64,19 @@ describe("PrChecksRow — the row", () => {
     expect(html).toContain("focus-visible:ring-2");
   });
 
-  it("names itself for assistive tech and hangs the breakdown off the title", () => {
+  it("gives the breakdown to a pointer and a screen reader alike", () => {
     const html = render(
       retention({ checks: [check("lint", "failing"), check("test", "passing")] }),
     );
-    expect(html).toContain('aria-label="1 check failing, show checks"');
+    // `aria-label` overrides the accessible name, so a breakdown living only in
+    // `title` would reach a hover and nothing else. Both carry it.
     expect(html).toContain('title="1 failing · 1 passed"');
+    expect(html).toContain('aria-label="1 check failing, 1 failing · 1 passed. Show checks"');
+  });
+
+  it("drops the breakdown from the name when one state accounts for everything", () => {
+    const html = render(retention({ checks: [check("test", "passing")] }));
+    expect(html).toContain('aria-label="All checks passed. Show checks"');
   });
 });
 
@@ -128,6 +135,11 @@ describe("PrChecksRow — the popover", () => {
   it("always offers the way out to the PR's own Checks tab", () => {
     const html = renderDetail(retention({ checks: [check("a", "passing")] }));
     expect(html).toContain("All checks on GitHub");
+  });
+
+  it("names the list, which the popover's `p` heading cannot do", () => {
+    const html = renderDetail(retention({ checks: [check("a", "passing")] }));
+    expect(html).toContain('aria-label="Checks on this pull request"');
   });
 
   it("heads the list with the breakdown when more than one state is in play", () => {
