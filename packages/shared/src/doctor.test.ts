@@ -48,13 +48,13 @@ function door(overrides: Partial<DoctorDoorContext> = {}): DoctorDoorContext {
 }
 
 function doctorChecks(
-  observation: DoctorObservation,
-  facts: DoctorFacts,
+  observed: DoctorObservation,
+  known: DoctorFacts,
   context: DoctorDoorContext = door({
-    authenticatedSessionId: observation.sessionId === "s-1" ? "s-1" : null,
+    authenticatedSessionId: observed.sessionId === "s-1" ? "s-1" : null,
   }),
 ): DoctorCheck[] {
-  return runChecks(observation, facts, context);
+  return runChecks(observed, known, context);
 }
 
 function find(checks: DoctorCheck[], id: string): DoctorCheck {

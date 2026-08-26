@@ -4154,6 +4154,15 @@ describe("identify env block (VC-94)", () => {
   });
 });
 
+/** The session check out of a doctor response built by a service the caller owns. */
+function sessionCheckOf(response: AgentResponse): DoctorCheck {
+  if (!response.ok) throw new Error("expected doctor report");
+  const checks = (response.data as { checks: DoctorCheck[] }).checks;
+  const check = checks.find(({ id }) => id === "session");
+  if (check === undefined) throw new Error("expected session check");
+  return check;
+}
+
 describe("doctor", () => {
   const observation = {
     pathEntries: ["/ud/bin", "/usr/bin"],
@@ -4266,20 +4275,13 @@ describe("doctor", () => {
         args: observation,
         ctx: { cwd: "/repo/volli", env },
       });
-    const sessionCheck = (response: AgentResponse): DoctorCheck => {
-      if (!response.ok) throw new Error("expected doctor report");
-      const checks = (response.data as { checks: DoctorCheck[] }).checks;
-      const check = checks.find(({ id }) => id === "session");
-      if (check === undefined) throw new Error("expected session check");
-      return check;
-    };
 
     expect(await writeSignal()).toMatchObject({ ok: true });
-    expect(sessionCheck(await doctor())).toMatchObject({ status: "ok", detail: sessionId });
+    expect(sessionCheckOf(await doctor())).toMatchObject({ status: "ok", detail: sessionId });
 
     tokens.revoke("doctor-attachment");
     expect(await writeSignal()).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
-    const ended = sessionCheck(await doctor());
+    const ended = sessionCheckOf(await doctor());
     expect(ended.status).toBe("warn");
     expect(ended.detail).toContain("has ended");
   });
