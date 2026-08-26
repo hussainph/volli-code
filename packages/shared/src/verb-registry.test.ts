@@ -16,9 +16,10 @@ import {
 import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
 
 /**
- * The socket surface as VC-85 and VC-163 leave it. VC-85 adds the typed
+ * The socket surface as VC-85, VC-163 and VC-185 leave it. VC-85 adds the typed
  * `ticket.signal` coordination verb; VC-163 removes `session.start` (tool-only
- * control tier) and `ticket.archive` (app-only curation). Every change is named
+ * control tier) and `ticket.archive` (app-only curation); VC-185 adds
+ * `worktree.sync` (coordination) and `conflicts` (read). Every change is named
  * here so growing or shrinking the socket remains an explicit tier decision.
  */
 const SOCKET_SURFACE = [
@@ -35,6 +36,8 @@ const SOCKET_SURFACE = [
   "ticket.brief",
   "worktree.status",
   "worktree.diff",
+  "worktree.sync",
+  "conflicts",
   "project.list",
   "label.list",
   "model.list",
@@ -61,6 +64,7 @@ const REFERENCE_SURFACE = [
   "ticket.brief",
   "worktree.status",
   "worktree.diff",
+  "conflicts",
   "project.list",
   "label.list",
   "model.list",
@@ -70,6 +74,7 @@ const REFERENCE_SURFACE = [
   "ticket.move",
   "ticket.comment",
   "ticket.signal",
+  "worktree.sync",
   "session.list",
   "session.peek",
   "session.done",
@@ -113,6 +118,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "ticket.brief": "read",
   "worktree.status": "read",
   "worktree.diff": "read",
+  // The radar (VC-185). Read tier by VC-92's amendment on VC-89: it projects
+  // worktree diffs Volli already holds, and its whole value is being cheap
+  // enough to run in a bash pipeline.
+  conflicts: "read",
   "project.list": "read",
   "label.list": "read",
   "model.list": "read",
@@ -133,6 +142,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // be the first to REQUIRE its session actor rather than merely record one
   // (VC-163); until that door authenticates, the tier reads as it is.
   "ticket.signal": "coordination",
+  // VC-185, and VC-92's audit principle in one row: sync mutates only a
+  // worktree the `execute` coding tool already reaches, so it earns no
+  // control-tier ceremony — an authenticated session actor on the Agent CLI.
+  "worktree.sync": "coordination",
   notify: "coordination",
   "session.done": "coordination",
   "session.blocked": "coordination",
@@ -316,11 +329,12 @@ describe("verbTier", () => {
       (AGENT_COMMANDS as readonly string[]).includes(entry.key),
     ).map((entry) => verbTier(entry));
     // 15 in VC-92's audit, plus `cost` — which the amendment staged read tier
-    // in the same breath, on the grounds that spend has to be cheap to sample.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(16);
+    // in the same breath, on the grounds that spend has to be cheap to sample —
+    // plus VC-185's `conflicts`, staged read tier by the same amendment.
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(17);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
-    // to the remaining coordination surface.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(11);
+    // and VC-185 adds worktree.sync to the remaining coordination surface.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);
     expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
   });
 

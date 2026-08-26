@@ -1,11 +1,17 @@
 /**
- * The two read-only worktree verbs, and the ticket resolution they share.
+ * The worktree verbs, and the ticket resolution all three share.
  *
  * Context resolution (which ticket the agent means) is this door's concern;
  * the git compose and the no-worktree / stamped-but-deleted discrimination
- * live behind the ticketId-in read verbs (CONCEPT #42). Both verbs resolve an
+ * live behind the ticketId-in verbs (CONCEPT #42). All three resolve an
  * ARCHIVED ticket too, which nothing else here does: retention deliberately
  * retains worktrees past archive (decision #76).
+ *
+ * Two are reads. `worktree.sync` (VC-185) is the one that writes — coordination
+ * tier, authenticated session actor — and it shares this file because it asks
+ * the identical question first: WHICH worktree. What it must never do, and the
+ * reason it is a CLI verb at all, is wait: it merges, reports its conflicts per
+ * path, and returns.
  */
 
 import type Database from "better-sqlite3";
@@ -14,7 +20,7 @@ import type { AgentRequest, AgentResponse, Project, Ticket } from "@volli/shared
 import type { WorktreeDiffMode } from "../../ipc/contract";
 
 import { listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
-import { readWorktreeDiff, readWorktreeStatus } from "../worktree";
+import { readWorktreeDiff, readWorktreeStatus, syncTicketWorktree } from "../worktree";
 import { isInside } from "../worktree/paths";
 import { failure } from "./context";
 import type { AgentCommandContext, EnvSessionIdentity } from "./context";
@@ -232,6 +238,81 @@ export async function worktreeDiffVerb(
           deletions: read.diff.deletions,
           totalFiles: read.diff.files.length,
           omittedFiles: read.diff.files.length - shown.length,
+        },
+      };
+    }
+  }
+}
+
+/** How many per-file rows a sync report prints before rolling the rest up. */
+const SYNC_FILE_CAP = 20;
+
+/**
+ * `volli worktree sync` — merge the base into the ticket's branch, say what
+ * happened, and return.
+ *
+ * The whole verb is that last clause. It starts nothing it would have to wait
+ * for, and it reports a conflict as an OUTCOME rather than as a refusal: the
+ * caller's next move is per-path work in this worktree, and an error object has
+ * nowhere to carry the paths. `status` is what a script branches on, never the
+ * exit code.
+ *
+ * It inherits this family's archived-ticket rule rather than the write family's,
+ * and deliberately: retention keeps a worktree past archive (decision #76), so
+ * an archived ticket's checkout is a real one someone may still be finishing,
+ * and the tier argument for this verb — that the effect already lies inside what
+ * `execute` reaches — does not change when the Ticket leaves the board.
+ */
+export async function worktreeSyncVerb(
+  context: AgentCommandContext,
+  request: AgentRequest,
+): Promise<AgentResponse> {
+  const { options, projects, envSession, git, worktreeExists } = context;
+  const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
+  if (!resolved.ok) return resolved.response;
+  const mode = request.args["abort"] === true ? "abort" : "merge";
+  const read = syncTicketWorktree(
+    { db: options.db, git, worktreeExists },
+    resolved.ticket.id,
+    mode,
+  );
+  switch (read.kind) {
+    case "missing-ticket":
+      return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
+    case "no-worktree":
+      return failure("INVALID_REQUEST", noWorktreeRefusal(read.displayId, read.usesWorktree));
+    case "missing-on-disk":
+      return failure(
+        "INVALID_REQUEST",
+        `Ticket ${read.displayId}'s worktree folder is missing (expected at ${read.worktreePath}).`,
+      );
+    case "sync-error":
+      return failure("INVALID_REQUEST", read.error);
+    case "ok": {
+      const { report } = read;
+      // Same cap the diff verb holds, for the same reason: a sync that pulls in
+      // a week of main must not blow the caller's token ceiling, and the rollup
+      // keeps the omission honest.
+      const files = report.diff?.files ?? [];
+      const shown = files.slice(0, SYNC_FILE_CAP);
+      return {
+        v: 1,
+        ok: true,
+        data: {
+          ticket: read.displayId,
+          project: resolved.project.name,
+          worktreePath: read.worktreePath,
+          branch: read.branch,
+          baseBranch: read.baseBranch,
+          mergedRef: report.mergedRef,
+          status: report.status,
+          commits: report.commits,
+          files: shown,
+          insertions: report.diff?.insertions ?? null,
+          deletions: report.diff?.deletions ?? null,
+          totalFiles: report.diff === null ? null : files.length,
+          omittedFiles: report.diff === null ? null : files.length - shown.length,
+          conflicts: report.conflicts,
         },
       };
     }

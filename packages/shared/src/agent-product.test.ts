@@ -50,6 +50,30 @@ describe("agent product guidance", () => {
     expect(stated).toContain("coordination");
   });
 
+  it("records both VC-185 verbs in the Added/Changed/Fixed/Removed shape", () => {
+    // The VC-178 lesson: a verb that lands without a line here is a capability
+    // an agent can only discover by typing it. Both halves are named, with the
+    // tier each was staged at — the two facts a caller cannot infer from the
+    // usage line.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-185");
+    expect(entry).toBeDefined();
+    // The shape itself: all four headings present, so `volli help changes`
+    // renders "None in this record" rather than omitting a heading.
+    for (const bucket of ["added", "changed", "fixed", "removed"] as const) {
+      expect(Array.isArray(entry![bucket])).toBe(true);
+    }
+    const added = entry!.added.join("\n");
+    expect(added).toContain("worktree sync");
+    expect(added).toContain("conflicts");
+    // The two claims most likely to be misread if unstated: what sync will not
+    // do (wait), and what the radar costs (nothing, any caller). Matched case
+    // -insensitively — a tier word is capitalized when it opens a sentence.
+    const prose = added.toLowerCase();
+    expect(prose).toContain("coordination tier");
+    expect(prose).toContain("read tier");
+    expect(prose).toContain("never waits");
+  });
+
   it("ships concepts and changes as canonical local help topics", () => {
     expect(HELP_TOPIC_NAMES).toEqual([
       "concepts",

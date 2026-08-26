@@ -275,6 +275,115 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
 }
 
 /**
+ * The worktree.sync report (VC-185): one outcome line, then only what that
+ * outcome has to say.
+ *
+ * `status` leads because it is what a reader (and a script) branches on, and
+ * because the four outcomes want four different second halves: a merge names
+ * what moved, a conflict names the paths and the way out, an up-to-date branch
+ * has nothing more to say, and an abort says only that it undid one.
+ *
+ * The conflict block carries the recovery command literally. That is the whole
+ * "decide and document the abort story" clause: a session reading its own
+ * conflict is exactly the reader who needs to know that `--abort` exists, and
+ * that nothing has cleaned up behind the failed merge.
+ */
+function renderWorktreeSync(data: Record<string, unknown>): string {
+  const branch = typeof data["branch"] === "string" ? data["branch"] : "(detached)";
+  const header = `${terminalSafeInline(data["ticket"])}  ${terminalSafeInline(data["status"])}  ${terminalSafeInline(branch)} ← ${terminalSafeInline(data["mergedRef"])}`;
+  const lines = [header];
+
+  const conflicts = Array.isArray(data["conflicts"])
+    ? data["conflicts"].filter((path): path is string => typeof path === "string")
+    : [];
+  if (conflicts.length > 0) {
+    lines.push(`  conflicts  ${conflicts.length}`);
+    for (const path of conflicts) lines.push(`    ${terminalSafeInline(path)}`);
+    lines.push(
+      `  Resolve them here and commit, or volli worktree sync ${terminalSafeInline(data["ticket"])} --abort.`,
+    );
+    return lines.join("\n");
+  }
+
+  if (data["status"] !== "merged") return lines.join("\n");
+  // A merge that landed unmeasured says so. Printing `0 commits  0 files` would
+  // be a measurement claiming nothing moved, which is the one thing it is not.
+  if (data["totalFiles"] === null || data["totalFiles"] === undefined) {
+    lines.push("  merged, but what moved could not be measured");
+    return lines.join("\n");
+  }
+  lines.push(
+    `  ${countCell(data["commits"])} commits  ${countCell(data["totalFiles"])} files  +${terminalSafeInline(data["insertions"])} -${terminalSafeInline(data["deletions"])}`,
+  );
+  const files = Array.isArray(data["files"]) ? data["files"].filter(isRecord) : [];
+  for (const file of files) lines.push(diffFileLine(file));
+  const omitted = data["omittedFiles"];
+  if (typeof omitted === "number" && omitted > 0) {
+    lines.push(`  … and ${terminalSafeInline(omitted)} more files`);
+  }
+  return lines.join("\n");
+}
+
+/** How many of one pair's shared paths print before the rest are rolled up. */
+const COLLISION_PATH_CAP = 20;
+
+/**
+ * The conflicts radar (VC-185): what was compared, then one block per pair of
+ * tickets that will collide.
+ *
+ * The header counts first because the empty case is the common one and it is
+ * only reassuring WITH a denominator — "no overlapping paths" across twelve
+ * worktrees is a clean bill, and across zero worktrees is a scan that found
+ * nothing to look at. Those are different answers and print differently.
+ *
+ * Skipped worktrees print last and always. A radar that quietly drops a
+ * worktree it could not read gives the healthy answer for a collision it never
+ * examined.
+ */
+function renderConflicts(data: Record<string, unknown>): string {
+  const scanned = typeof data["scanned"] === "number" ? data["scanned"] : 0;
+  const overlaps = recordsAt(data, "overlaps") ?? [];
+  const pairs = recordsAt(data, "pairs") ?? [];
+  const skipped = recordsAt(data, "skipped") ?? [];
+
+  const lines: string[] = [];
+  if (scanned === 0) {
+    lines.push("no active worktrees to compare");
+  } else {
+    const count =
+      overlaps.length === 0
+        ? "no overlapping paths"
+        : `${overlaps.length} overlapping ${overlaps.length === 1 ? "path" : "paths"}`;
+    lines.push(`${terminalSafeInline(scanned)} worktrees  ${count}`);
+  }
+
+  for (const pair of pairs) {
+    const tickets = Array.isArray(pair["tickets"])
+      ? pair["tickets"].filter((ticket): ticket is string => typeof ticket === "string")
+      : [];
+    const paths = Array.isArray(pair["paths"])
+      ? pair["paths"].filter((path): path is string => typeof path === "string")
+      : [];
+    lines.push(
+      `${tickets.map(terminalSafeInline).join(" ")}  ${paths.length} ${paths.length === 1 ? "path" : "paths"}`,
+    );
+    for (const path of paths.slice(0, COLLISION_PATH_CAP)) {
+      lines.push(`  ${terminalSafeInline(path)}`);
+    }
+    if (paths.length > COLLISION_PATH_CAP) {
+      lines.push(`  … and ${paths.length - COLLISION_PATH_CAP} more paths`);
+    }
+  }
+
+  for (const entry of skipped) {
+    lines.push(
+      `  skipped ${terminalSafeInline(entry["ticket"])}  ${terminalSafeInline(entry["reason"])}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
  * The model.list catalog: the app default first, then one header line per
  * provider with its copyable `provider/model` rows and reasoning levels
  * beneath it, and honest rollups for everything the default view withholds
@@ -494,6 +603,8 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "prompt.baseline") return renderPromptBaseline(data);
   if (command === "worktree.status") return renderWorktreeStatus(data);
   if (command === "worktree.diff") return renderWorktreeDiff(data);
+  if (command === "worktree.sync") return renderWorktreeSync(data);
+  if (command === "conflicts") return renderConflicts(data);
   if (["ticket.create", "ticket.update", "ticket.move"].includes(command)) {
     return renderTicketResult(data);
   }

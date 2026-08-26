@@ -50,8 +50,16 @@ function parseCount(field: string): number | null {
   return Number.isInteger(n) ? n : null;
 }
 
-/** Parses `git diff --numstat` output into per-file stats (untracked=false). */
-function parseNumstat(out: string): DiffFileStat[] {
+/**
+ * Parses `git diff --numstat` output into per-file stats (untracked=false).
+ *
+ * Exported for `sync.ts`, which measures what a merge moved with the same
+ * `--numstat` read over a different range. One parser rather than two: the
+ * binary and rename subtleties above are exactly the kind of detail a second
+ * copy gets subtly wrong, and a sync report that disagrees with a diff report
+ * about the same file is worse than either alone.
+ */
+export function parseNumstat(out: string): DiffFileStat[] {
   const files: DiffFileStat[] = [];
   for (const line of out.split("\n")) {
     if (line.trim().length === 0) continue;
@@ -83,7 +91,7 @@ function parseUntracked(out: string): DiffFileStat[] {
 }
 
 /** Sums the non-null (text) insertions/deletions into repo-wide totals. */
-function total(files: readonly DiffFileStat[], key: "insertions" | "deletions"): number {
+export function total(files: readonly DiffFileStat[], key: "insertions" | "deletions"): number {
   return files.reduce((sum, f) => sum + (f[key] ?? 0), 0);
 }
 

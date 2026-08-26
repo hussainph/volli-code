@@ -367,6 +367,14 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   "worktree.diff": {
     options: { "--working-tree": { kind: "flag", key: "workingTree", value: true } },
   },
+  // The one worktree verb that writes (VC-185). `--abort` is a MODE rather
+  // than a modifier: it is the documented way back out of a conflicted sync,
+  // and putting it on the same verb is what makes the exit discoverable from
+  // the entrance. No `--dry-run`, deliberately — see the registry entry.
+  "worktree.sync": {
+    options: { "--abort": { kind: "flag", key: "abort", value: true } },
+  },
+  conflicts: PROJECT_ONLY,
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
   "model.list": { options: { "--all": { kind: "flag", key: "all", value: true } } },

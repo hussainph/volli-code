@@ -15,6 +15,11 @@
  * to their own vocabulary (agent error codes vs. renderer toasts). The contract
  * unifies on the CLI's stance: a stamped-but-deleted worktree is its own
  * `missing-on-disk` state, NEVER the errs-dirty `uncommitted: true` lie.
+ *
+ * The resolution itself ({@link resolveWorktreeTarget}) is exported, because
+ * `sync.ts` — the one worktree verb that WRITES (VC-185) — has to make exactly
+ * the same three discriminations before it merges anything, and a second copy
+ * of them is how the two doors drifted apart the first time.
  */
 import { existsSync } from "node:fs";
 
@@ -50,8 +55,8 @@ export interface WorktreeReadDeps {
   worktreeExists?: (path: string) => boolean;
 }
 
-/** The failure arms both read verbs share, discriminated by `kind`. */
-type WorktreeReadFailure =
+/** The failure arms every ticketId-in worktree verb shares, discriminated by `kind`. */
+export type WorktreeReadFailure =
   | { kind: "missing-ticket" }
   /**
    * `usesWorktree` separates the two futures this arm used to collapse: a
@@ -94,8 +99,8 @@ export type WorktreeBaseFileRead =
   | { kind: "base-read-error"; displayId: string; error: string }
   | { kind: "ok"; displayId: string; baseRevision: string; file: ChangeSetBaseFile };
 
-/** The resolved, on-disk worktree identity a read verb git-queries against. */
-interface ReadTarget {
+/** The resolved, on-disk worktree identity a verb git-queries against. */
+export interface ReadTarget {
   displayId: string;
   worktreePath: string;
   branch: string | null;
@@ -108,7 +113,7 @@ interface ReadTarget {
  * stamped-but-deleted disk check. Returns the failure arm directly, or the
  * resolved {@link ReadTarget} to compose a git query from.
  */
-function resolveReadTarget(
+export function resolveWorktreeTarget(
   deps: WorktreeReadDeps,
   ticketId: string,
 ): WorktreeReadFailure | { kind: "ok"; target: ReadTarget } {
@@ -145,7 +150,7 @@ function resolveReadTarget(
  * `missing-on-disk`, never the errs-dirty `uncommitted: true`.
  */
 export function readWorktreeStatus(deps: WorktreeReadDeps, ticketId: string): WorktreeStatusRead {
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   const status = getWorktreeStatus(deps.git, {
@@ -174,7 +179,7 @@ export function readWorktreeDiff(
   ticketId: string,
   mode: WorktreeDiffMode,
 ): WorktreeDiffRead {
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   const result = diffStat(
@@ -201,7 +206,7 @@ export async function readWorktreeChangeSet(
   deps: WorktreeReadDeps,
   ticketId: string,
 ): Promise<WorktreeChangeSetRead> {
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   const result = await changeSetSnapshot(deps.gitAsync ?? runGitCapturingAsync, {
@@ -233,7 +238,7 @@ export async function readWorktreeBaseFile(
   pinnedRevision?: string,
 ): Promise<WorktreeBaseFileRead> {
   const git = deps.gitAsync ?? runGitCapturingAsync;
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   if (pinnedRevision !== undefined && pinnedRevision.length > 0) {
