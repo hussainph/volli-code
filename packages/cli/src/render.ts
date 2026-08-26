@@ -3,6 +3,7 @@ import {
   isAgentMutationPlan,
   SESSION_ENV_TOOLS,
   TICKET_STATUS_LABELS,
+  untrustedProseResponseLines,
 } from "@volli/shared";
 import type {
   AgentError,
@@ -149,12 +150,258 @@ function renderTicketResult(data: unknown): string | null {
   return ticketLine(data["ticket"]);
 }
 
+/** The most prose one ticket-show log field may hand an agent in text mode. */
+export const TICKET_SHOW_PROSE_MAX_CHARS = 1_000;
+
+interface TicketLogProse {
+  /** The `[n]` token the citing row prints, so a hoisted block names its own row. */
+  ref: string;
+  label: string;
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Collects the prose a ticket read surface hoists into its one response-wide
+ * envelope, handing each row back the reference token that finds it again.
+ *
+ * Prose leaves the row it belongs to so the envelope can be stated once, which
+ * is what makes a poll cheap. That trade only works if the reader can still
+ * pair the two: two `validate` signals or two comments produce blocks whose
+ * labels alone would be identical.
+ */
+interface TicketLogProseCollector {
+  /** Bounds and records one block, returning the `[n]` token its row cites. */
+  cite(label: string, text: string): string;
+  blocks(): readonly TicketLogProse[];
+}
+
+function ticketLogProse(): TicketLogProseCollector {
+  const blocks: TicketLogProse[] = [];
+  return {
+    cite(label, text) {
+      // A text-mode read must not let one prose field consume the caller's context.
+      const truncated = text.length > TICKET_SHOW_PROSE_MAX_CHARS;
+      const ref = `[${blocks.length + 1}]`;
+      blocks.push({
+        ref,
+        label,
+        text: truncated ? text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) : text,
+        truncated,
+      });
+      return ref;
+    },
+    blocks: () => blocks,
+  };
+}
+
+/** The verdict columns shared by ticket.signal's receipt and ticket show's latest-signal rows. */
+function ticketSignalLine(signal: Record<string, unknown>): string {
+  return ["ticket", "kind", "verdict"]
+    .map((field) => (typeof signal[field] === "string" ? terminalSafeInline(signal[field]) : "-"))
+    .join("  ");
+}
+
+/**
+ * Event fields a text row may render bare. Everything else is another author's
+ * data below the response-wide envelope, so a newly added free-text payload
+ * cannot silently bypass the bound and framing contract.
+ */
+const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  created: ["status"],
+  status_changed: ["from", "to"],
+  priority_changed: ["from", "to"],
+  harness_changed: ["from", "to"],
+  // Label names are short tokens this same response already prints bare on the
+  // ticket line; quoting them below as prose would say two things about one
+  // vocabulary.
+  labels_changed: ["added", "removed"],
+  body_edited: [],
+  archived: [],
+  unarchived: [],
+  commented: ["commentId"],
+  signaled: ["signalKind", "verdict"],
+  worktree_changed: ["from", "to"],
+  worktree_scope_changed: ["from", "to"],
+  worktree_failed: ["stage"],
+  worktree_committed: [],
+  pr_opened: ["url"],
+  pr_merged: ["url"],
+  worktree_reclaimed: ["branch", "daysInDone"],
+  attachment_added: ["attachmentId"],
+  attachment_removed: ["attachmentId"],
+  session_started: ["sessionId"],
+};
+
+/** Ticket events cross the socket under `payload`; a top-level kind is not an event payload. */
+function ticketEventPayload(event: Record<string, unknown>): Record<string, unknown> | null {
+  return isRecord(event["payload"]) ? event["payload"] : null;
+}
+
+/** One scalar or scalar list as a scan-friendly event field, with no silent record drop. */
+function ticketEventValue(value: unknown): string {
+  let text: string;
+  if (value === null) {
+    text = "-";
+  } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    text = String(value);
+  } else if (Array.isArray(value)) {
+    text = value.length === 0 ? "[]" : value.map(ticketEventValue).join(",");
+  } else {
+    text = "<record>";
+  }
+  // Inline fields are structured facts, not prose, but malformed or future
+  // data must still not turn one event line into an unbounded response.
+  const bounded =
+    text.length > TICKET_SHOW_PROSE_MAX_CHARS
+      ? `${text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS)}…`
+      : text;
+  return terminalSafeInline(bounded);
+}
+
+/** Flatten a nested structured fact instead of dropping its identities from the event row. */
+function ticketEventFacts(field: string, value: unknown): string[] {
+  if (!isRecord(value)) return [`${terminalSafeInline(field)}=${ticketEventValue(value)}`];
+  const entries = Object.entries(value);
+  if (entries.length === 0) return [`${terminalSafeInline(field)}=<empty>`];
+  return entries.flatMap(([nestedField, nestedValue]) =>
+    ticketEventFacts(`${field}.${nestedField}`, nestedValue),
+  );
+}
+
+/** A readable data representation for a field the response envelope quotes line by line. */
+function ticketEventProseText(value: unknown): string {
+  if (value === null) return "-";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0
+      ? "(empty)"
+      : value.map((entry, index) => `${index + 1}. ${ticketEventProseText(entry)}`).join("\n");
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    return entries.length === 0
+      ? "(empty)"
+      : entries
+          .map(([field, nestedValue]) => `${field}: ${ticketEventProseText(nestedValue)}`)
+          .join("\n");
+  }
+  return "<unrenderable>";
+}
+
+/** An empty container is a fact the row can state, not prose worth a block of its own. */
+function emptyContainerFact(value: unknown): string | null {
+  if (Array.isArray(value) && value.length === 0) return "[]";
+  if (isRecord(value) && Object.keys(value).length === 0) return "<empty>";
+  return null;
+}
+
+/** One durable event as columns plus any prose it directs to the response envelope. */
+function renderTicketEvent(
+  event: Record<string, unknown>,
+  prose: TicketLogProseCollector,
+): string[] {
+  const payload = ticketEventPayload(event);
+  const metadata: string[] = [];
+  if (typeof event["actor"] === "string") {
+    metadata.push(`actor=${terminalSafeInline(event["actor"])}`);
+  }
+  if (isRecord(event["actorContext"]) && typeof event["actorContext"]["session"] === "string") {
+    metadata.push(`session=${terminalSafeInline(event["actorContext"]["session"])}`);
+  }
+  if (typeof event["createdAt"] === "number") metadata.push(`at=${event["createdAt"]}`);
+  if (payload === null) {
+    return [["event", "-", "payload=<missing>", ...metadata].join("  ")];
+  }
+
+  const kindValue = payload["kind"];
+  const kind = typeof kindValue === "string" ? kindValue : "-";
+  const inlineFields = new Set(TICKET_EVENT_INLINE_FIELDS[kind] ?? []);
+  const facts = Object.entries(payload).flatMap(([field, value]) => {
+    if (field === "kind") return [];
+    if (inlineFields.has(field)) return ticketEventFacts(field, value);
+    // An omitted signal detail carries no prose; every other present field is
+    // named on the row and handed over as bounded, quoted data below it.
+    if (
+      field === "detail" &&
+      (value === null || (typeof value === "string" && value.trim().length === 0))
+    ) {
+      return [];
+    }
+    if (value === null || value === undefined) return [`${terminalSafeInline(field)}=-`];
+    const empty = emptyContainerFact(value);
+    if (empty !== null) return [`${terminalSafeInline(field)}=${empty}`];
+    const ref = prose.cite(
+      `event ${terminalSafeInline(kind)} ${terminalSafeInline(field)}`,
+      ticketEventProseText(value),
+    );
+    return [`${terminalSafeInline(field)}=${ref}`];
+  });
+  return [["event", terminalSafeInline(kind), ...facts, ...metadata].join("  ")];
+}
+
+function renderTicketSignal(
+  signal: Record<string, unknown>,
+  prose: TicketLogProseCollector,
+): string[] {
+  const row = `signal  ${ticketSignalLine(signal)}`;
+  if (typeof signal["detail"] !== "string" || signal["detail"].trim().length === 0) return [row];
+  // The signal kind is in the label because at most one signal per kind stands
+  // on a ticket, which makes it the block's own name rather than a repetition.
+  const kind = typeof signal["kind"] === "string" ? terminalSafeInline(signal["kind"]) : "-";
+  return [`${row}  detail=${prose.cite(`signal ${kind} detail`, signal["detail"])}`];
+}
+
+function renderTicketComment(
+  comment: Record<string, unknown>,
+  prose: TicketLogProseCollector,
+): string[] {
+  const metadata = [
+    typeof comment["ticket"] === "string" ? terminalSafeInline(comment["ticket"]) : "-",
+    typeof comment["actor"] === "string" ? terminalSafeInline(comment["actor"]) : "-",
+    typeof comment["session"] === "string"
+      ? `session=${terminalSafeInline(comment["session"])}`
+      : null,
+    typeof comment["createdAt"] === "number" ? `at=${comment["createdAt"]}` : null,
+  ].filter((value): value is string => value !== null);
+  const row = `comment  ${metadata.join("  ")}`;
+  if (typeof comment["body"] !== "string") return [row];
+  return [`${row}  body=${prose.cite("ticket comment", comment["body"])}`];
+}
+
+/** Rows first, then the one envelope that carries every prose block they cite. */
+function ticketLogLines(
+  response: string,
+  rows: readonly string[],
+  prose: TicketLogProseCollector,
+): string[] {
+  const blocks = prose.blocks();
+  if (blocks.length === 0) return [...rows];
+  const truncations = blocks
+    .filter((block) => block.truncated)
+    .map(
+      (block) =>
+        `The ${block.label} in ${block.ref} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`,
+    );
+  return [
+    ...rows,
+    ...truncations,
+    ...untrustedProseResponseLines({
+      response,
+      blocks: blocks.map(({ ref, label, text }) => ({ label: `${ref} ${label}`, text })),
+    }),
+  ];
+}
+
 function renderDetail(data: unknown): string | null {
   if (!isRecord(data) || !isRecord(data["ticket"])) return null;
   const ticket = data["ticket"];
   const first = ticketLine(ticket);
   if (first === null) return null;
   const lines = [first];
+  const prose = ticketLogProse();
   for (const key of ["priority", "harness", "baseBranch", "branch"] as const) {
     const value = ticket[key];
     if (typeof value === "string") lines.push(`${key}  ${terminalSafeInline(value)}`);
@@ -166,14 +413,15 @@ function renderDetail(data: unknown): string | null {
   // the ticket STANDS (VC-85): at most one line per kind, and the line an
   // orchestrator polling this ticket came to read.
   for (const signal of recordsAt(data, "signals") ?? []) {
-    lines.push(`signal  ${JSON.stringify(signal)}`);
+    lines.push(...renderTicketSignal(signal, prose));
   }
-  for (const event of recordsAt(data, "events") ?? [])
-    lines.push(`event  ${JSON.stringify(event)}`);
+  for (const event of recordsAt(data, "events") ?? []) {
+    lines.push(...renderTicketEvent(event, prose));
+  }
   for (const comment of recordsAt(data, "comments") ?? []) {
-    lines.push(`comment  ${JSON.stringify(comment)}`);
+    lines.push(...renderTicketComment(comment, prose));
   }
-  return lines.join("\n");
+  return ticketLogLines("ticket show response", lines, prose).join("\n");
 }
 
 /** A nullable ahead/behind/unpushed count: `-` when unknown, else the number. */
@@ -509,9 +757,7 @@ function renderStableLines(command: string, data: unknown): string | null {
   // reading it back is how a wrong `--kind` gets caught one line later.
   if (command === "ticket.signal" && isRecord(data["signal"])) {
     const signal = data["signal"];
-    return typeof signal["ticket"] === "string"
-      ? `${terminalSafeInline(signal["ticket"])}  ${terminalSafeInline(signal["kind"])}  ${terminalSafeInline(signal["verdict"])}`
-      : null;
+    return typeof signal["ticket"] === "string" ? ticketSignalLine(signal) : null;
   }
   if (command === "project.list") {
     const projects = recordsAt(data, "projects");
@@ -568,9 +814,15 @@ function renderStableLines(command: string, data: unknown): string | null {
     const output = typeof data["output"] === "string" ? data["output"] : "";
     return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
   }
+  // The dedicated event log reads the same rows `ticket show` does, at ten
+  // times the default count, so it takes the same formatter and the same
+  // bound rather than a second dialect of the same answer.
   if (command === "ticket.events") {
     const events = recordsAt(data, "events");
-    return events?.map((event) => JSON.stringify(event)).join("\n") ?? null;
+    if (events === null) return null;
+    const prose = ticketLogProse();
+    const rows = events.flatMap((event) => renderTicketEvent(event, prose));
+    return ticketLogLines("ticket events response", rows, prose).join("\n");
   }
   if (command === "identify") {
     const keys = [

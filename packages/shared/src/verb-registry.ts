@@ -660,10 +660,9 @@ export const VERB_REGISTRY = [
     // any same-uid process can mint is the convention again with better
     // syntax. Today the socket attributes; VC-163 is where it authenticates.
     //
-    // Deliberately no `--dry-run`. The ratified preview matrix covers writes
-    // whose blast radius is worth rehearsing; this one appends a single typed
-    // row that supersedes nothing and moves nothing, and a preview of it would
-    // cost a round trip to be told exactly what the verb says it does.
+    // Append-only makes this coordination write the one that most needs a
+    // rehearsal: unlike a move or an update, a mistaken verdict cannot be
+    // edited away. Its preview follows the shared mutation-plan contract.
     key: "ticket.signal",
     accessModes: ["cli"],
     actor: "session",
@@ -721,6 +720,7 @@ export const VERB_REGISTRY = [
         placeholder: "<text>",
         help: "One line of prose for a reader; the verdict is what machines read.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {

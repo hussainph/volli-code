@@ -485,21 +485,21 @@ describe("the registry table", () => {
     }
   });
 
-  it("keeps the ratified preview matrix on the verbs themselves", () => {
-    const previewed = VERB_REGISTRY.filter((entry) =>
-      entry.options.some((option) => option.name === "--dry-run"),
-    ).map((entry) => entry.key);
-    expect(previewed).toEqual([
-      "ticket.create",
-      "ticket.update",
-      "ticket.move",
-      "ticket.comment",
-      "session.done",
-      "session.blocked",
-      "session.link",
-      "notify",
-      "doctor",
-    ]);
+  it("keeps a preview on every voluntary coordination write", () => {
+    // Tier is derived from the registry, so this candidate set grows with a
+    // newly declared coordination verb instead of preserving a stale list of
+    // the ones that happened to exist when the test was written. Unlisted
+    // harness plumbing is involuntary and intentionally has no preview.
+    const voluntaryCoordinationWrites = VERB_REGISTRY.filter(
+      (entry) => entry.listed && verbTier(entry) === "coordination",
+    );
+    expect(voluntaryCoordinationWrites).not.toHaveLength(0);
+    for (const entry of voluntaryCoordinationWrites) {
+      expect(
+        entry.options.some((option) => option.name === "--dry-run"),
+        entry.key,
+      ).toBe(true);
+    }
   });
 
   it("pins human-visible effects and explicit non-effects on every voluntary write", () => {

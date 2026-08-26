@@ -172,7 +172,7 @@ export async function doctorVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options } = context;
+  const { options, authenticatedSessionId } = context;
   if (!options.doctorFacts) {
     return failure("APP_UNREACHABLE", "The harness runtime is not available this launch.");
   }
@@ -205,7 +205,9 @@ export async function doctorVerb(
       return failure("MUTATION_FAILED", `Repair failed: ${errorMessage(error)}`);
     }
   }
-  const checks = runDoctorChecks(observation, await options.doctorFacts());
+  const checks = runDoctorChecks(observation, await options.doctorFacts(), {
+    authenticatedSessionId,
+  });
   return {
     v: 1,
     ok: true,

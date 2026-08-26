@@ -122,7 +122,22 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
-    baseline: "VC-162",
+    baseline: "VC-163",
+    build: "VC-178",
+    added: [
+      "ticket signal --dry-run. Every voluntary coordination write now previews through the shared contract, and the append-only one is where a rehearsal matters most.",
+    ],
+    changed: [
+      "ticket show and ticket events print formatted signal, event and comment rows in text mode instead of raw JSON, so the cheap poll returns lines rather than blobs.",
+      "Comment bodies, signal details and free-text event payloads are bounded per field and hoisted into one untrusted-prose envelope per response, cited from their row by a [n] token. Quoting keeps identical polls byte-identical; ticket_await keeps its per-wake nonce because one wake is delivered once.",
+    ],
+    fixed: [
+      "volli doctor decides Session liveness from the attachment token the socket door verified rather than from the live-PTY map, so an environment that can write is no longer reported as ended.",
+    ],
+    removed: [],
+  },
+  {
+    baseline: "VC-85",
     build: "VC-163",
     added: [
       "Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.",
@@ -140,6 +155,21 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.",
       "ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.",
     ],
+  },
+  {
+    baseline: "VC-162",
+    build: "VC-85",
+    added: [
+      "ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.",
+      "ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.",
+    ],
+    changed: [
+      "ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.",
+    ],
+    fixed: [
+      "ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.",
+    ],
+    removed: [],
   },
   {
     baseline: "VC-91",

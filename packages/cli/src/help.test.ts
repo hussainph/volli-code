@@ -79,6 +79,16 @@ describe("renderHelp command detail", () => {
     expect(detail).toContain("The move does not start a Session");
   });
 
+  it("advertises a signal rehearsal alongside its append-only warning", () => {
+    const detail = renderHelp(["ticket", "signal"]);
+
+    expect(detail).toContain(
+      "Usage: volli ticket signal <id> --kind <kind> --verdict <verdict> [options]",
+    );
+    expect(detail).toContain("--dry-run");
+    expect(detail).toContain("Append-only");
+  });
+
   it("collapses a required grouped option and hides its alias", () => {
     const detail = renderHelp(["notify"]);
     expect(detail).toContain("Usage: volli notify -m <text> [options]");
@@ -244,6 +254,10 @@ describe("renderHelp groups and topics", () => {
     expect(text).toContain("Running app: 0.1.1");
     for (const heading of ["Added", "Changed", "Fixed", "Removed"]) {
       expect(text).toContain(`\n${heading}\n`);
+    }
+    expect(text).toContain("VC-85 (after VC-162)");
+    for (const capability of ["ticket signal", "ticket_await", "lossless", "--events 0"]) {
+      expect(text).toContain(capability);
     }
   });
 

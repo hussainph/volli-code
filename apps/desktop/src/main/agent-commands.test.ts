@@ -273,6 +273,11 @@ describe("agent command service", () => {
       execute("ticket.update", { id: "VC-1", title: "After", dryRun: true }),
       execute("ticket.move", { id: "VC-1", to: "doing", dryRun: true }),
       execute("ticket.comment", { id: "VC-1", message: "Preview comment", dryRun: true }),
+      execute(
+        "ticket.signal",
+        { id: "VC-1", kind: "implement", verdict: "pass", dryRun: true },
+        true,
+      ),
       execute("session.done", { reason: "Preview done", dryRun: true }, true),
       execute("session.blocked", { reason: "Preview blocked", dryRun: true }, true),
       execute("session.link", { id: "native-conversation", dryRun: true }, true),
@@ -304,6 +309,7 @@ describe("agent command service", () => {
     await execute("ticket.update", { id: "VC-1", title: "After" });
     await execute("ticket.move", { id: "VC-1", to: "doing" });
     await execute("ticket.comment", { id: "VC-1", message: "Real comment" });
+    await execute("ticket.signal", { id: "VC-1", kind: "implement", verdict: "pass" }, true);
     await execute("session.done", { reason: "Real done" }, true);
     await execute("session.blocked", { reason: "Real blocked" }, true);
     await execute("session.link", { id: "native-conversation" }, true);
@@ -319,6 +325,7 @@ describe("agent command service", () => {
     expect(listTicketsByProject(ctx.db, "project-one")).toHaveLength(2);
     expect(getTicket(ctx.db, "ticket-one")).toMatchObject({ title: "After", status: "doing" });
     expect(listComments(ctx.db, "ticket-one")).toHaveLength(1);
+    expect(listLatestSignals(ctx.db, "ticket-one")).toHaveLength(1);
     // Twice: the `notify` verb itself, plus the Doing-entry guardrail. Since
     // VC-163 every socket move is made by an authenticated Session rather than
     // by an unattributable "user", and a Session moving work into Doing is
@@ -328,7 +335,7 @@ describe("agent command service", () => {
     expect(doctorFacts).toHaveBeenCalledTimes(1);
     expect(interruptTicketSessions).not.toHaveBeenCalled();
     expect(newId).toHaveBeenCalledTimes(3);
-    expect(onMutation).toHaveBeenCalledTimes(6);
+    expect(onMutation).toHaveBeenCalledTimes(7);
   });
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
@@ -4147,6 +4154,15 @@ describe("identify env block (VC-94)", () => {
   });
 });
 
+/** The session check out of a doctor response built by a service the caller owns. */
+function sessionCheckOf(response: AgentResponse): DoctorCheck {
+  if (!response.ok) throw new Error("expected doctor report");
+  const checks = (response.data as { checks: DoctorCheck[] }).checks;
+  const check = checks.find(({ id }) => id === "session");
+  if (check === undefined) throw new Error("expected session check");
+  return check;
+}
+
 describe("doctor", () => {
   const observation = {
     pathEntries: ["/ud/bin", "/usr/bin"],
@@ -4211,6 +4227,64 @@ describe("doctor", () => {
     if (found === undefined) throw new Error(`no ${id} check in ${checks.map((c) => c.id).join()}`);
     return found;
   }
+
+  it("reports the same token-authenticated Session that can write as live, then an ended one", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionId = "d0c70a00-0000-4000-8000-000000000001";
+    insertSession(
+      ctx.db,
+      testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
+    );
+    const tokens = createSessionTokenRegistry();
+    const token = tokens.mint({ sessionId, attachmentId: "doctor-attachment" });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      verifySessionToken: tokens.verify,
+      doctorFacts: async () => ({
+        binDir: "/ud/bin",
+        wrappers: {},
+        refused: [],
+        shellInitDir: null,
+        shellInitPresent: false,
+        shimPath: "/ud/bin/volli",
+        // The same registry this service's socket door verifies, not the PTY
+        // map that misses a structured attachment.
+        liveSessionIds: tokens.liveSessionIds(),
+        reporting: [],
+        skillConflicts: [],
+      }),
+    });
+    const env = { session: sessionId, token };
+    const writeSignal = () =>
+      service.execute({
+        v: 1,
+        cmd: "ticket.signal",
+        args: { id: "VC-1", kind: "validate", verdict: "pass" },
+        ctx: { cwd: "/repo/volli", env },
+      });
+    const doctor = () =>
+      service.execute({
+        v: 1,
+        cmd: "doctor",
+        args: observation,
+        ctx: { cwd: "/repo/volli", env },
+      });
+
+    expect(await writeSignal()).toMatchObject({ ok: true });
+    expect(sessionCheckOf(await doctor())).toMatchObject({ status: "ok", detail: sessionId });
+
+    tokens.revoke("doctor-attachment");
+    expect(await writeSignal()).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+    const ended = sessionCheckOf(await doctor());
+    expect(ended.status).toBe("warn");
+    expect(ended.detail).toContain("has ended");
+  });
 
   // Measured-absent and never-measured are different facts, and collapsing the
   // second into the first is how a diagnostic states a plausible wrong answer
