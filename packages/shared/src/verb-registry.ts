@@ -1504,6 +1504,88 @@ export const VERB_REGISTRY = [
     },
     options: [],
   },
+  {
+    // The orchestrator's Automation verb (VC-134), filed by VC-112's ruling
+    // rather than minted beside it: "Do not mint a verb in this ticket. File it
+    // as a Verb Registry entry under VC-92's rules, in the `project` Role
+    // bundle only." So the whole of that ticket is this row plus one name in
+    // one bundle — no CLI verb, no IPC channel of its own, and no second
+    // implementation of a Run. The handler binding resolves the same Run door
+    // (`main/automations/run.ts`) the palette, the rail and the board already
+    // call, which is what makes a Run an agent started indistinguishable in
+    // its record from a Run a person started by hand.
+    //
+    // Control tier, and tool-only for the reason `session.start` is: this verb
+    // spends model budget and opens agent work, so a socket door would put it
+    // within reach of any process running as the user. A tool call carries its
+    // caller in the binding instead of in the request.
+    //
+    // Why it fans out without the Automation format growing a control flow:
+    // VC-112 keeps one Run to one Session deliberately, and points at the
+    // orchestrator for multi-Ticket work. An agent holding this verb walks the
+    // Tickets itself and starts one Run each, so "one Run, one Session" stays
+    // true while a scheduled sweep still covers a board.
+    //
+    // Appended, never inserted. Declaration order is the canonical tool order,
+    // and a Session whose surface was frozen before this verb existed must find
+    // every tool it already held exactly where it already was.
+    key: "automation.run",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "automation.run" },
+    listed: false,
+    group: "Session",
+    summary: "Run a saved Automation on one Ticket, opening one fresh Session.",
+    effects: {
+      durableWrites: [
+        {
+          resource: "automation-run",
+          operation: "create",
+          summary:
+            "Create one Automation Run with its resolved model and reasoning, open the fresh Session it names with the `automation` Actor, and deliver the Automation's Instructions as that Session's first message.",
+        },
+      ],
+      humanVisible: [
+        "The Run appears in the Ticket's Run history and its Session is marked with the `automation` Actor \u2014 the same record a person's Run by hand writes, with nothing naming the agent that asked for it.",
+      ],
+      nonEffects: [
+        "The Ticket does not move, and no existing Session is woken: a Run always opens a fresh one.",
+        "It does not wait for the Run to finish, and the Run does not report back into the calling Session.",
+        "No Automation is created, edited or armed \u2014 this verb runs a saved one and authors nothing.",
+      ],
+    },
+    tool: {
+      name: "automation_run",
+      // Written for the model, and again mostly about restraint. The third
+      // line is the one a caller cannot learn from the schema: an Automation
+      // is a saved thing a person authored, so there is no way to pass
+      // Instructions here and no way to invent one \u2014 a name that does not exist
+      // is answered with the names that do.
+      description: [
+        "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
+        "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
+        "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
+        "It does not move the Ticket, and it does not wait for the work to finish.",
+        "Volli binds the calling Session and project itself: name the Automation and the Ticket, and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "automation",
+          type: "string",
+          required: true,
+          description:
+            "The name of the Automation to run, spelled as it is in Volli, for example 'Nightly sweep'.",
+        },
+        {
+          name: "ticket",
+          type: "string",
+          required: true,
+          description: "The display id of the Ticket to run it on, for example VC-12.",
+        },
+      ],
+    },
+    options: [],
+  },
 ] as const satisfies readonly VerbEntry[];
 
 type RegistryEntry = (typeof VERB_REGISTRY)[number];

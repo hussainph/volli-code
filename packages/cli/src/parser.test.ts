@@ -918,13 +918,22 @@ describe("registry ↔ argv mechanics", () => {
   });
 
   // `hook` bypasses the walker, `help` has its own command-path grammar,
-  // ticket.archive is app-only, session.start is tool-only, and ticket.await
-  // is the blocking control-tier tool a CLI must never execute.
+  // ticket.archive is app-only, session.start is tool-only, ticket.await is the
+  // blocking control-tier tool a CLI must never execute, and automation.run is
+  // the orchestrator's control-tier tool (VC-134) — a shell door for it would
+  // be the socket door VC-92 §6 refuses.
   it("leaves exactly the verbs the CLI cannot execute without mechanics", () => {
     const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
       (entry) => entry.key,
     );
-    expect(missing).toEqual(["ticket.archive", "session.start", "hook", "help", "ticket.await"]);
+    expect(missing).toEqual([
+      "ticket.archive",
+      "session.start",
+      "hook",
+      "help",
+      "ticket.await",
+      "automation.run",
+    ]);
   });
 });
 
