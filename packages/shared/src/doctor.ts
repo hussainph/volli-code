@@ -53,20 +53,16 @@ export interface DoctorCheck {
 export type Observed<T> = T | null | undefined;
 
 /**
- * What the calling process can see from inside the environment being audited,
- * plus the socket door's one request-scoped identity fact. The shell reports
- * the PATH and tool resolutions no other process can observe; the door reports
- * whether this request actually carries a live attachment token. A `volli
- * doctor` run in a Volli PTY reports that PTY's reality; one run from a plain
- * terminal correctly reports that it is not in a session.
+ * What the calling process can see from inside the environment being audited.
+ * The shell reports the PATH and tool resolutions no other process can
+ * observe. A `volli doctor` run in a Volli PTY reports that PTY's reality; one
+ * run from a plain terminal correctly reports that it is not in a session.
  */
 export interface DoctorObservation {
   /** The caller's own `PATH`, split — the real one, not one main reconstructed. */
   pathEntries: readonly string[];
   /** `VOLLI_SESSION`, or null outside a session. This is a claim, not proof. */
   sessionId: string | null;
-  /** The Session attachment the socket authenticated for this caller, or null when it did not. */
-  authenticatedSessionId: string | null;
   /** `ZDOTDIR` as the caller sees it. */
   zdotDir: Observed<string>;
   /** Where each harness command resolves for the caller, by command name. */
@@ -87,6 +83,16 @@ export interface DoctorObservation {
   requiredTools: readonly RequirableSessionEnvTool[];
   /** Where `volli` itself resolves for the caller. */
   volliPath: Observed<string>;
+}
+
+/**
+ * What the socket door decided for this request. It is neither a caller
+ * observation nor an app-wide runtime fact: this one request either presented
+ * a currently valid attachment token or it did not.
+ */
+export interface DoctorDoorContext {
+  /** The Session attachment the socket authenticated for this caller, or null when it did not. */
+  authenticatedSessionId: string | null;
 }
 
 /** What only main can answer: what it wrote, and what it knows. */
@@ -389,15 +395,19 @@ function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorC
   );
 }
 
-function sessionCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck {
+function sessionCheck(
+  observation: DoctorObservation,
+  facts: DoctorFacts,
+  door: DoctorDoorContext,
+): DoctorCheck {
   const id = "session";
   const title = "Session context";
   // This is the same fact a coordination write starts from: a valid,
   // attachment-scoped token this request presented. A live PTY map excludes a
   // structured attachment and was therefore able to call a working caller
   // ended; the authenticated door is the source of truth.
-  if (typeof observation.authenticatedSessionId === "string") {
-    return ok(id, title, observation.authenticatedSessionId);
+  if (typeof door.authenticatedSessionId === "string") {
+    return ok(id, title, door.authenticatedSessionId);
   }
   if (observation.sessionId === null) {
     return ok(
@@ -411,8 +421,8 @@ function sessionCheck(observation: DoctorObservation, facts: DoctorFacts): Docto
       id,
       title,
       "warn",
-      `VOLLI_SESSION names ${observation.sessionId}, but this caller is not authenticated for it`,
-      "This environment has no valid attachment token for that Session. Events from here are refused.",
+      `VOLLI_SESSION names ${observation.sessionId}, but this caller is not authenticated for it, so coordination events from here are refused.`,
+      "Run `volli doctor` from inside the live Session attachment whose VOLLI_SESSION_TOKEN authenticates this caller.",
     );
   }
   // The tmux/daemon leak: an environment that outlived the attachment that
@@ -421,8 +431,8 @@ function sessionCheck(observation: DoctorObservation, facts: DoctorFacts): Docto
     id,
     title,
     "warn",
-    `VOLLI_SESSION names ${observation.sessionId}, which has ended`,
-    "This environment outlived its session (a tmux server or background process). Events from here are refused.",
+    `VOLLI_SESSION names ${observation.sessionId}, which has ended; coordination events from here are refused.`,
+    "Open or resume a live Session, then run `volli doctor` from its attachment.",
   );
 }
 
@@ -463,13 +473,17 @@ function skillCheck(facts: DoctorFacts): DoctorCheck[] {
  * first. Ordering within a status is stable and follows the order the checks are
  * defined, which runs roughly from "nothing works" to "a detail is off".
  */
-export function runDoctorChecks(observation: DoctorObservation, facts: DoctorFacts): DoctorCheck[] {
+export function runDoctorChecks(
+  observation: DoctorObservation,
+  facts: DoctorFacts,
+  door: DoctorDoorContext,
+): DoctorCheck[] {
   const checks: DoctorCheck[] = [
     pathPositionCheck(observation, facts),
     ...toolChecks(observation),
     shellInitCheck(observation, facts),
     volliCheck(observation, facts),
-    sessionCheck(observation, facts),
+    sessionCheck(observation, facts, door),
     ...resolutionChecks(observation, facts),
     ...refusedChecks(facts),
     ...reportingChecks(facts),

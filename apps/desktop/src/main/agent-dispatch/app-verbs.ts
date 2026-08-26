@@ -119,10 +119,7 @@ function observedRequiredTools(value: unknown): readonly RequirableSessionEnvToo
   return REQUIRABLE_SESSION_ENV_TOOLS.filter((tool) => value.includes(tool));
 }
 
-function parseDoctorObservation(
-  request: AgentRequest,
-  authenticatedSessionId: string | null,
-): DoctorObservation | null {
+function parseDoctorObservation(request: AgentRequest): DoctorObservation | null {
   const pathEntries = request.args["pathEntries"];
   const resolved = request.args["resolved"];
   if (!Array.isArray(pathEntries) || !pathEntries.every((entry) => typeof entry === "string")) {
@@ -132,7 +129,6 @@ function parseDoctorObservation(
   return {
     pathEntries,
     sessionId: request.ctx.env.session ?? null,
-    authenticatedSessionId,
     zdotDir: observedText(request.args["zdotDir"]),
     resolved: Object.fromEntries(
       Object.entries(resolved as Record<string, unknown>).map(([key, value]) => [
@@ -197,7 +193,7 @@ export async function doctorVerb(
   // test; main supplies only what it alone knows. Keeping those apart is
   // the point — an observation main reconstructed would be exactly the
   // kind of plausible, wrong answer this command exists to catch.
-  const observation = parseDoctorObservation(request, authenticatedSessionId);
+  const observation = parseDoctorObservation(request);
   if (observation === null) {
     return failure("INVALID_REQUEST", "doctor requires the caller's observed environment.");
   }
@@ -209,7 +205,9 @@ export async function doctorVerb(
       return failure("MUTATION_FAILED", `Repair failed: ${errorMessage(error)}`);
     }
   }
-  const checks = runDoctorChecks(observation, await options.doctorFacts());
+  const checks = runDoctorChecks(observation, await options.doctorFacts(), {
+    authenticatedSessionId,
+  });
   return {
     v: 1,
     ok: true,

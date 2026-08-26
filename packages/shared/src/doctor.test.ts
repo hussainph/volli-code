@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
-import { doctorSummary, runDoctorChecks } from "./doctor";
-import type { DoctorCheck, DoctorFacts, DoctorObservation } from "./doctor";
+import { doctorSummary, runDoctorChecks as runChecks } from "./doctor";
+import type { DoctorCheck, DoctorDoorContext, DoctorFacts, DoctorObservation } from "./doctor";
 
 const BIN = "/ud/bin";
 
 function observation(overrides: Partial<DoctorObservation> = {}): DoctorObservation {
   const sessionId = overrides.sessionId === undefined ? "s-1" : overrides.sessionId;
-  const authenticatedSessionId =
-    overrides.authenticatedSessionId === undefined
-      ? overrides.sessionId === undefined
-        ? "s-1"
-        : null
-      : overrides.authenticatedSessionId;
   return {
     pathEntries: [BIN, "/usr/bin", "/bin"],
     sessionId,
-    authenticatedSessionId,
     zdotDir: "/ud/shell/zsh",
     resolved: {
       claude: `${BIN}/claude`,
@@ -50,6 +43,20 @@ function facts(overrides: Partial<DoctorFacts> = {}): DoctorFacts {
   };
 }
 
+function door(overrides: Partial<DoctorDoorContext> = {}): DoctorDoorContext {
+  return { authenticatedSessionId: null, ...overrides };
+}
+
+function doctorChecks(
+  observation: DoctorObservation,
+  facts: DoctorFacts,
+  context: DoctorDoorContext = door({
+    authenticatedSessionId: observation.sessionId === "s-1" ? "s-1" : null,
+  }),
+): DoctorCheck[] {
+  return runChecks(observation, facts, context);
+}
+
 function find(checks: DoctorCheck[], id: string): DoctorCheck {
   const check = checks.find((entry) => entry.id === id);
   if (!check) throw new Error(`no check ${id}`);
@@ -58,14 +65,14 @@ function find(checks: DoctorCheck[], id: string): DoctorCheck {
 
 describe("runDoctorChecks — PATH position", () => {
   it("passes only when the bin dir is actually first", () => {
-    expect(find(runDoctorChecks(observation(), facts()), "path-position").status).toBe("ok");
+    expect(find(doctorChecks(observation(), facts()), "path-position").status).toBe("ok");
   });
 
   // The exact outage this command exists for: membership held the whole time.
   it("fails on membership without primacy, and says what is shadowing it", () => {
     const entries = ["/opt/homebrew/bin", "/usr/local/bin", BIN];
     const check = find(
-      runDoctorChecks(observation({ pathEntries: entries }), facts()),
+      doctorChecks(observation({ pathEntries: entries }), facts()),
       "path-position",
     );
 
@@ -76,7 +83,7 @@ describe("runDoctorChecks — PATH position", () => {
 
   it("uses singular wording when exactly one entry shadows it", () => {
     const check = find(
-      runDoctorChecks(observation({ pathEntries: ["/usr/bin", BIN] }), facts()),
+      doctorChecks(observation({ pathEntries: ["/usr/bin", BIN] }), facts()),
       "path-position",
     );
     expect(check.detail).toContain("1 entry shadows it");
@@ -84,7 +91,7 @@ describe("runDoctorChecks — PATH position", () => {
 
   it("fails when the bin dir is absent entirely", () => {
     const check = find(
-      runDoctorChecks(observation({ pathEntries: ["/usr/bin"] }), facts()),
+      doctorChecks(observation({ pathEntries: ["/usr/bin"] }), facts()),
       "path-position",
     );
     expect(check.status).toBe("fail");
@@ -94,7 +101,7 @@ describe("runDoctorChecks — PATH position", () => {
 
 describe("runDoctorChecks — resolution", () => {
   it("passes when the harness name reaches the wrapper", () => {
-    expect(find(runDoctorChecks(observation(), facts()), "resolves-claude").status).toBe("ok");
+    expect(find(doctorChecks(observation(), facts()), "resolves-claude").status).toBe("ok");
   });
 
   // A harness resolving to the user's OWN install is not a fault. Volli's
@@ -103,7 +110,7 @@ describe("runDoctorChecks — resolution", () => {
   // and doctor telling them to repair a working machine is doctor being wrong.
   it("passes, naming the binary, when the name reaches the user's own install", () => {
     const check = find(
-      runDoctorChecks(observation({ resolved: { claude: "/Users/x/.local/bin/claude" } }), facts()),
+      doctorChecks(observation({ resolved: { claude: "/Users/x/.local/bin/claude" } }), facts()),
       "resolves-claude",
     );
     expect(check.status).toBe("ok");
@@ -112,7 +119,7 @@ describe("runDoctorChecks — resolution", () => {
 
   it("offers no remedy for it, because there is nothing to repair", () => {
     const check = find(
-      runDoctorChecks(observation({ resolved: { claude: "/Users/x/.local/bin/claude" } }), facts()),
+      doctorChecks(observation({ resolved: { claude: "/Users/x/.local/bin/claude" } }), facts()),
       "resolves-claude",
     );
     expect(check.remedy).toBeUndefined();
@@ -121,7 +128,7 @@ describe("runDoctorChecks — resolution", () => {
 
   it("warns rather than failing when the command resolves nowhere", () => {
     const check = find(
-      runDoctorChecks(observation({ resolved: { claude: null } }), facts()),
+      doctorChecks(observation({ resolved: { claude: null } }), facts()),
       "resolves-claude",
     );
     expect(check.status).toBe("warn");
@@ -131,7 +138,7 @@ describe("runDoctorChecks — resolution", () => {
   // A wrapper nobody tried to resolve. Reporting it as resolving to nothing is
   // the diagnostic inventing a negative about a harness that may work fine.
   it("says so when no resolution was reported, rather than calling it absent", () => {
-    const check = find(runDoctorChecks(observation({ resolved: {} }), facts()), "resolves-claude");
+    const check = find(doctorChecks(observation({ resolved: {} }), facts()), "resolves-claude");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("no resolution was reported");
     expect(check.detail).not.toContain("resolves to nothing");
@@ -140,7 +147,7 @@ describe("runDoctorChecks — resolution", () => {
 
 describe("runDoctorChecks — session tools", () => {
   it("passes each tool that resolves on the reported PATH, with its absolute path", () => {
-    const check = find(runDoctorChecks(observation(), facts()), "tool-gh");
+    const check = find(doctorChecks(observation(), facts()), "tool-gh");
     expect(check.status).toBe("ok");
     expect(check.detail).toBe("/opt/homebrew/bin/gh");
   });
@@ -149,10 +156,7 @@ describe("runDoctorChecks — session tools", () => {
   // session PATH never adopted it", so the remedy must name both causes and
   // the discriminator — never a bare "install git".
   it("fails a required tool's measured absence with a remedy naming both causes", () => {
-    const check = find(
-      runDoctorChecks(observation({ resolved: { git: null } }), facts()),
-      "tool-git",
-    );
+    const check = find(doctorChecks(observation({ resolved: { git: null } }), facts()), "tool-git");
     expect(check.status).toBe("fail");
     expect(check.detail).toContain("resolves to nothing");
     expect(check.remedy).toContain("xcode-select --install");
@@ -164,7 +168,7 @@ describe("runDoctorChecks — session tools", () => {
     const base = observation();
     for (const tool of ["git", "node", "npm", "pnpm", "yarn", "bun"] as const) {
       const check = find(
-        runDoctorChecks(
+        doctorChecks(
           observation({
             resolved: { ...base.resolved, [tool]: null },
             requiredTools: [tool],
@@ -183,7 +187,7 @@ describe("runDoctorChecks — session tools", () => {
   // and cannot install. Both facts must be visible in the same report.
   it("reports git present and node missing together, which is the incident's shape", () => {
     const base = observation();
-    const checks = runDoctorChecks(
+    const checks = doctorChecks(
       observation({ resolved: { ...base.resolved, node: null } }),
       facts(),
     );
@@ -194,7 +198,7 @@ describe("runDoctorChecks — session tools", () => {
   // A caller that never measured a required tool is silence, not absence;
   // reporting it as absent would be the diagnostic inventing a negative.
   it("warns rather than failing when no resolution was reported", () => {
-    const check = find(runDoctorChecks(observation({ resolved: {} }), facts()), "tool-node");
+    const check = find(doctorChecks(observation({ resolved: {} }), facts()), "tool-node");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("no resolution was reported");
     expect(check.detail).not.toContain("resolves to nothing");
@@ -207,7 +211,7 @@ describe("runDoctorChecks — session tools", () => {
 describe("runDoctorChecks — tools this project does not require", () => {
   it("reports a missing gh as a measurement, and says where its absence is judged", () => {
     const check = find(
-      runDoctorChecks(observation({ resolved: { ...observation().resolved, gh: null } }), facts()),
+      doctorChecks(observation({ resolved: { ...observation().resolved, gh: null } }), facts()),
       "tool-gh",
     );
     expect(check.status).toBe("ok");
@@ -218,7 +222,7 @@ describe("runDoctorChecks — tools this project does not require", () => {
   });
 
   it("never faults the package managers a yarn workspace does not name", () => {
-    const checks = runDoctorChecks(
+    const checks = doctorChecks(
       observation({
         resolved: { claude: `${BIN}/claude`, git: "/usr/bin/git", node: "/opt/node" },
         requiredTools: ["git", "node", "yarn"],
@@ -233,7 +237,7 @@ describe("runDoctorChecks — tools this project does not require", () => {
   // A Python or Go repo: git is the only implication, and a host with no
   // Node toolchain at all reports a clean bill.
   it("passes a repo that implies only git, whatever else is missing", () => {
-    const checks = runDoctorChecks(
+    const checks = doctorChecks(
       observation({
         resolved: {
           claude: `${BIN}/claude`,
@@ -255,7 +259,7 @@ describe("runDoctorChecks — tools this project does not require", () => {
   // known to be needed, an absence has no consequence to name.
   it("reports an unmeasured, unrequired tool without inventing a finding", () => {
     const check = find(
-      runDoctorChecks(observation({ resolved: {}, requiredTools: [] }), facts()),
+      doctorChecks(observation({ resolved: {}, requiredTools: [] }), facts()),
       "tool-node",
     );
     expect(check.status).toBe("ok");
@@ -266,14 +270,14 @@ describe("runDoctorChecks — tools this project does not require", () => {
 
 describe("runDoctorChecks — shell integration", () => {
   it("fails when this shell's ZDOTDIR is not the generated one", () => {
-    const check = find(runDoctorChecks(observation({ zdotDir: null }), facts()), "shell-init");
+    const check = find(doctorChecks(observation({ zdotDir: null }), facts()), "shell-init");
     expect(check.status).toBe("fail");
     expect(check.detail).toContain("unset");
   });
 
   it("fails when the chain was never written", () => {
     const check = find(
-      runDoctorChecks(observation(), facts({ shellInitPresent: false })),
+      doctorChecks(observation(), facts({ shellInitPresent: false })),
       "shell-init",
     );
     expect(check.status).toBe("fail");
@@ -282,7 +286,7 @@ describe("runDoctorChecks — shell integration", () => {
   // "unset" is a measurement. Saying it about a field that never arrived is
   // the diagnostic asserting a fact nobody established.
   it("distinguishes an unreported ZDOTDIR from one that is genuinely unset", () => {
-    const check = find(runDoctorChecks(observation({ zdotDir: undefined }), facts()), "shell-init");
+    const check = find(doctorChecks(observation({ zdotDir: undefined }), facts()), "shell-init");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("was not reported");
     expect(check.detail).not.toContain("unset");
@@ -290,7 +294,7 @@ describe("runDoctorChecks — shell integration", () => {
 
   // bash and fish: a real, permanent, partial state — not a failure.
   it("warns for a shell with no post-startup hook", () => {
-    const check = find(runDoctorChecks(observation(), facts({ shellInitDir: null })), "shell-init");
+    const check = find(doctorChecks(observation(), facts({ shellInitDir: null })), "shell-init");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("only Volli-started agents are wrapped");
   });
@@ -298,63 +302,48 @@ describe("runDoctorChecks — shell integration", () => {
 
 describe("runDoctorChecks — session", () => {
   it("is content outside a session, and says the other checks are shell-local", () => {
-    const check = find(runDoctorChecks(observation({ sessionId: null }), facts()), "session");
+    const check = find(doctorChecks(observation({ sessionId: null }), facts()), "session");
     expect(check.status).toBe("ok");
     expect(check.detail).toContain("not in a Volli session");
   });
 
   it("distinguishes an authenticated live caller from a genuinely ended session", () => {
     const live = find(
-      runDoctorChecks(
-        observation({ sessionId: "s-1", authenticatedSessionId: "s-1" }),
+      doctorChecks(
+        observation({ sessionId: "s-1" }),
         facts({ liveSessionIds: ["s-1"] }),
+        door({ authenticatedSessionId: "s-1" }),
       ),
       "session",
     );
     const ended = find(
-      runDoctorChecks(
-        observation({ sessionId: "gone", authenticatedSessionId: null }),
-        facts({ liveSessionIds: [] }),
-      ),
+      doctorChecks(observation({ sessionId: "gone" }), facts({ liveSessionIds: [] }), door()),
       "session",
     );
 
     expect(live).toMatchObject({ status: "ok", detail: "s-1" });
     expect(ended.status).toBe("warn");
     expect(ended.detail).toContain("has ended");
-    expect(ended.remedy).toContain("outlived its session");
+    expect(ended.remedy).toContain("Open or resume a live Session");
   });
 
   it("does not call an unauthenticated claim for another live session healthy", () => {
     const check = find(
-      runDoctorChecks(
-        observation({ sessionId: "s-1", authenticatedSessionId: null }),
-        facts({ liveSessionIds: ["s-1"] }),
-      ),
+      doctorChecks(observation({ sessionId: "s-1" }), facts({ liveSessionIds: ["s-1"] }), door()),
       "session",
     );
 
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("not authenticated");
     expect(check.detail).not.toContain("has ended");
-  });
-
-  it("does not read a missing door fact as a live Session", () => {
-    const legacy = {
-      ...observation({ sessionId: "gone", authenticatedSessionId: null }),
-      authenticatedSessionId: undefined,
-    } as unknown as DoctorObservation;
-    const check = find(runDoctorChecks(legacy, facts({ liveSessionIds: [] })), "session");
-
-    expect(check.status).toBe("warn");
-    expect(check.detail).toContain("has ended");
+    expect(check.remedy).toContain("Run `volli doctor` from inside the live Session attachment");
   });
 });
 
 describe("runDoctorChecks — other findings", () => {
   it("reports a refused wrapper as a warning naming what it would have shadowed", () => {
     const check = find(
-      runDoctorChecks(
+      doctorChecks(
         observation(),
         facts({
           refused: [
@@ -374,7 +363,7 @@ describe("runDoctorChecks — other findings", () => {
   // would send the user to check a system tool that was never involved.
   it("says a refused wrapper's own reason rather than the shadow rule for all three", () => {
     const owned = find(
-      runDoctorChecks(
+      doctorChecks(
         observation(),
         facts({
           refused: [
@@ -388,7 +377,7 @@ describe("runDoctorChecks — other findings", () => {
     expect(owned.remedy).toContain("one file per name");
 
     const argv = find(
-      runDoctorChecks(
+      doctorChecks(
         observation(),
         facts({
           refused: [
@@ -404,7 +393,7 @@ describe("runDoctorChecks — other findings", () => {
 
   it("warns about a harness that declares events but has never delivered one", () => {
     const check = find(
-      runDoctorChecks(
+      doctorChecks(
         observation(),
         facts({ reporting: [{ harnessId: "codex", declared: 4, verified: 0 }] }),
       ),
@@ -416,7 +405,7 @@ describe("runDoctorChecks — other findings", () => {
 
   it("has nothing to verify for a harness that declares no events", () => {
     const check = find(
-      runDoctorChecks(
+      doctorChecks(
         observation(),
         facts({ reporting: [{ harnessId: "cursor", declared: 0, verified: 0 }] }),
       ),
@@ -426,9 +415,9 @@ describe("runDoctorChecks — other findings", () => {
   });
 
   it("mentions skill conflicts only when there are some", () => {
-    expect(runDoctorChecks(observation(), facts()).some((c) => c.id === "skills")).toBe(false);
+    expect(doctorChecks(observation(), facts()).some((c) => c.id === "skills")).toBe(false);
     const check = find(
-      runDoctorChecks(observation(), facts({ skillConflicts: ["~/.claude/skills/volli"] })),
+      doctorChecks(observation(), facts({ skillConflicts: ["~/.claude/skills/volli"] })),
       "skills",
     );
     expect(check.status).toBe("warn");
@@ -436,7 +425,7 @@ describe("runDoctorChecks — other findings", () => {
 
   it("warns when volli resolves to a different install's shim", () => {
     const check = find(
-      runDoctorChecks(observation({ volliPath: "/usr/local/bin/volli" }), facts()),
+      doctorChecks(observation({ volliPath: "/usr/local/bin/volli" }), facts()),
       "volli-cli",
     );
     expect(check.status).toBe("warn");
@@ -444,7 +433,7 @@ describe("runDoctorChecks — other findings", () => {
   });
 
   it("fails when volli resolves to nothing at all", () => {
-    const check = find(runDoctorChecks(observation({ volliPath: null }), facts()), "volli-cli");
+    const check = find(doctorChecks(observation({ volliPath: null }), facts()), "volli-cli");
     expect(check.status).toBe("fail");
     expect(check.detail).toContain("resolves to nothing");
   });
@@ -452,10 +441,7 @@ describe("runDoctorChecks — other findings", () => {
   // "agents cannot reach the planner" is a strong claim to make about a field
   // that never arrived.
   it("warns instead of failing when no volli path was reported", () => {
-    const check = find(
-      runDoctorChecks(observation({ volliPath: undefined }), facts()),
-      "volli-cli",
-    );
+    const check = find(doctorChecks(observation({ volliPath: undefined }), facts()), "volli-cli");
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("no `volli` path was reported");
   });
@@ -463,7 +449,7 @@ describe("runDoctorChecks — other findings", () => {
 
 describe("runDoctorChecks — ordering", () => {
   it("puts failures first, then warnings, so the worst thing is read first", () => {
-    const checks = runDoctorChecks(
+    const checks = doctorChecks(
       observation({ pathEntries: ["/usr/bin", BIN], sessionId: "gone" }),
       facts(),
     );
@@ -480,13 +466,13 @@ describe("runDoctorChecks — ordering", () => {
 
 describe("doctorSummary", () => {
   it("says so plainly when everything passed", () => {
-    expect(doctorSummary(runDoctorChecks(observation(), facts()))).toMatch(
+    expect(doctorSummary(doctorChecks(observation(), facts()))).toMatch(
       /^All \d+ checks passed\.$/,
     );
   });
 
   it("counts failures and warnings separately", () => {
-    const checks = runDoctorChecks(
+    const checks = doctorChecks(
       observation({ pathEntries: ["/usr/bin", BIN], sessionId: "gone" }),
       facts(),
     );
@@ -516,7 +502,7 @@ describe("doctorSummary", () => {
   });
 
   it("uses singular wording for exactly one warning", () => {
-    const checks = runDoctorChecks(observation({ sessionId: "gone" }), facts());
+    const checks = doctorChecks(observation({ sessionId: "gone" }), facts());
     expect(doctorSummary(checks)).toContain("1 warning of");
   });
 });
