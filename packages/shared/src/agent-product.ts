@@ -122,7 +122,7 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
-    baseline: "VC-162",
+    baseline: "VC-85",
     build: "VC-163",
     added: [
       "Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.",
@@ -142,7 +142,22 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     ],
   },
   {
-    baseline: "VC-85",
+    baseline: "VC-162",
+    build: "VC-85",
+    added: [
+      "ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.",
+      "ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.",
+    ],
+    changed: [
+      "ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.",
+    ],
+    fixed: [
+      "ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.",
+    ],
+    removed: [],
+  },
+  {
+    baseline: "VC-91",
     build: "VC-162",
     added: [
       "A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.",
@@ -155,21 +170,6 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
       "A Ticket Session's tool array contains no agent-control tool, and cannot acquire one while it runs. Availability is decided once, when the Session is created.",
     ],
     fixed: [],
-    removed: [],
-  },
-  {
-    baseline: "VC-91",
-    build: "VC-85",
-    added: [
-      "ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.",
-      "ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.",
-    ],
-    changed: [
-      "ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.",
-    ],
-    fixed: [
-      "ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.",
-    ],
     removed: [],
   },
   {

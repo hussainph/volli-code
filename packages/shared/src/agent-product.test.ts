@@ -26,7 +26,7 @@ describe("agent product guidance", () => {
     });
   });
 
-  it("is newest-first, and each entry follows the one below it", () => {
+  it("keeps the capability record in its historic build order", () => {
     // The heading `volli help changes` renders is `<build> (after <baseline>)`,
     // so a record whose chain is broken prints a lineage that never happened.
     const builds = AGENT_CAPABILITY_CHANGES.map((change) => change.build);
@@ -35,6 +35,20 @@ describe("agent product guidance", () => {
       const older = AGENT_CAPABILITY_CHANGES[index + 1];
       if (older !== undefined) expect(change.baseline).toBe(older.build);
     }
+
+    // Continuity alone cannot distinguish a self-consistent but invented
+    // order. Keep the known VC-91 → VC-162 → VC-85 → VC-163 build spine in
+    // its actual order and with each actual predecessor.
+    const historicBuilds = ["VC-163", "VC-85", "VC-162", "VC-91"];
+    const historicRecord = AGENT_CAPABILITY_CHANGES.filter((change) =>
+      historicBuilds.includes(change.build),
+    );
+    expect(historicRecord.map(({ build, baseline }) => ({ build, baseline }))).toEqual([
+      { build: "VC-163", baseline: "VC-85" },
+      { build: "VC-85", baseline: "VC-162" },
+      { build: "VC-162", baseline: "VC-91" },
+      { build: "VC-91", baseline: AGENT_CAPABILITY_BASELINE },
+    ]);
   });
 
   it("records the Role-scoped tool surface as an agent-facing capability (VC-162)", () => {
@@ -53,7 +67,7 @@ describe("agent product guidance", () => {
   it("records all four VC-85 coordination capabilities", () => {
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-85");
 
-    expect(entry).toMatchObject({ baseline: "VC-91" });
+    expect(entry).toBeDefined();
     const stated = [...entry!.added, ...entry!.changed, ...entry!.fixed];
     expect(stated).toHaveLength(4);
     expect(stated.join("\n")).toContain("ticket signal");

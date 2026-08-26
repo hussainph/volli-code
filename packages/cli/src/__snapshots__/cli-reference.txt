@@ -804,7 +804,7 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
-VC-163 (after VC-162)
+VC-163 (after VC-85)
 Added
 - Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.
 - The unauthenticated Actor, for a socket caller Volli cannot identify. It may read the board and, by default, write nothing — a posture a person can widen per project, per verb.
@@ -820,7 +820,18 @@ Removed
 - session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
 - ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.
 
-VC-162 (after VC-85)
+VC-85 (after VC-162)
+Added
+- ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.
+- ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.
+Changed
+- ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.
+Fixed
+- ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.
+Removed
+- None in this record.
+
+VC-162 (after VC-91)
 Added
 - A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.
 - session_start as a named tool in the project Role's bundle. A Project Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.
@@ -831,17 +842,6 @@ Changed
 - A Ticket Session's tool array contains no agent-control tool, and cannot acquire one while it runs. Availability is decided once, when the Session is created.
 Fixed
 - None in this record.
-Removed
-- None in this record.
-
-VC-85 (after VC-91)
-Added
-- ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.
-- ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.
-Changed
-- ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.
-Fixed
-- ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.
 Removed
 - None in this record.
 

@@ -255,7 +255,7 @@ describe("renderHelp groups and topics", () => {
     for (const heading of ["Added", "Changed", "Fixed", "Removed"]) {
       expect(text).toContain(`\n${heading}\n`);
     }
-    expect(text).toContain("VC-85 (after VC-91)");
+    expect(text).toContain("VC-85 (after VC-162)");
     for (const capability of ["ticket signal", "ticket_await", "lossless", "--events 0"]) {
       expect(text).toContain(capability);
     }
