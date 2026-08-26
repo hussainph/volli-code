@@ -378,6 +378,18 @@ Ticket mapping: the brief's five complaints land as 4.1 (diff buttons), 4.5
 (no way to add files), 4.6 (markdown), 4.3 (tab reorder), 4.2 + 4.8 (language
 intelligence).
 
+**A nearer-term cut: the solo review-and-hand-edit session.** The slices also
+serve a concrete workflow worth naming — one person, one session at a time,
+reading everything the agent writes and sometimes implementing changes by
+hand; the review-first shape §2's spectrum converges on. For that cut the
+order tightens to **4.1 → 4.4 → 4.5 → 4.7** (polish, then navigate, then
+create, then find usages), because those four are what a desktop editor would
+otherwise be opened for. 4.2 stays cheap and first when the repo is TS/JS;
+Python and Ruby (grammars and extension maps already shipped) have no Monaco
+worker and therefore no false diagnostics to fix — the honest check loop
+there is the repo's own commands in the terminal, which the product already
+has. 4.3 and 4.6 trail without harm. No slice changes; only order.
+
 ## 5. Non-goals, recorded
 
 Unchanged from the audit's spirit — the ADE bet is that deep authoring
@@ -404,3 +416,12 @@ sanctioned door):
   Conductor's line-anchored diff comments that feed the agent, and Warp's ⌘L
   selection-as-context. §4.1's slim control band and the tab model leave room
   for both without new chrome.
+- **Change review at project scope** — observed while cutting priorities: the
+  diff stack is ticket-scoped (`diff-view.tsx:150` and
+  `ticket-changes-panel.tsx:419` both key off `ticket.id`; Home's rail pages
+  are now/sessions/files, `home-rail-model.ts:21`), so a Project Session
+  working the Main checkout has no diff surface at all. **Not a slice of this
+  plan** — the ticket workspace is the product's review home, and a
+  lightweight ticket already buys the whole review stack (worktree, Changes
+  panel, diff tabs, PR row) with no new build. Worth a ticket of its own only
+  if Main-checkout sessions become a primary workflow.
