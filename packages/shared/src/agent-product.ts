@@ -122,6 +122,21 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-163",
+    build: "VC-178",
+    added: [
+      "ticket signal --dry-run. Every voluntary coordination write now previews through the shared contract, and the append-only one is where a rehearsal matters most.",
+    ],
+    changed: [
+      "ticket show and ticket events print formatted signal, event and comment rows in text mode instead of raw JSON, so the cheap poll returns lines rather than blobs.",
+      "Comment bodies, signal details and free-text event payloads are bounded per field and hoisted into one untrusted-prose envelope per response, cited from their row by a [n] token. Quoting keeps identical polls byte-identical; ticket_await keeps its per-wake nonce because one wake is delivered once.",
+    ],
+    fixed: [
+      "volli doctor decides Session liveness from the attachment token the socket door verified rather than from the live-PTY map, so an environment that can write is no longer reported as ended.",
+    ],
+    removed: [],
+  },
+  {
     baseline: "VC-85",
     build: "VC-163",
     added: [

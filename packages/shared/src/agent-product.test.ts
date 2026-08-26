@@ -39,9 +39,9 @@ describe("agent product guidance", () => {
     // Continuity alone cannot distinguish a self-consistent but invented
     // order. Keep the known VC-91 → VC-162 → VC-85 → VC-163 build spine in
     // its actual order and with each actual predecessor.
-    const historicBuilds = ["VC-163", "VC-85", "VC-162", "VC-91"];
+    const historicBuilds = new Set(["VC-163", "VC-85", "VC-162", "VC-91"]);
     const historicRecord = AGENT_CAPABILITY_CHANGES.filter((change) =>
-      historicBuilds.includes(change.build),
+      historicBuilds.has(change.build),
     );
     expect(historicRecord.map(({ build, baseline }) => ({ build, baseline }))).toEqual([
       { build: "VC-163", baseline: "VC-85" },
@@ -74,6 +74,19 @@ describe("agent product guidance", () => {
     expect(stated.join("\n")).toContain("ticket_await");
     expect(stated.join("\n")).toContain("lossless");
     expect(stated.join("\n")).toContain("--events 0 and --comments 0");
+  });
+
+  it("records the surfaces VC-178 changed, including the one it added a preview to", () => {
+    // The record is the CLI's own answer to "what can I do now", so a change to
+    // a read surface's shape belongs in it for the same reason a new verb does.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-178");
+
+    expect(entry).toMatchObject({ baseline: "VC-163" });
+    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
+    const stated = [...entry!.added, ...entry!.changed, ...entry!.fixed].join("\n");
+    expect(stated).toContain("ticket signal --dry-run");
+    expect(stated).toContain("ticket events");
+    expect(stated).toContain("volli doctor");
   });
 
   it("ships concepts and changes as canonical local help topics", () => {
