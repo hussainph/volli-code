@@ -402,6 +402,16 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
         title,
         ...(refineFrom === undefined ? {} : { refineFrom }),
       });
+      // The desktop dependency makes this optimistic write synchronously,
+      // before its IPC round trip starts. Keep the core fixture honest so a
+      // rapid steer sees the opening title the same way the app does.
+      const slice = store.getState().sessions[target];
+      if (slice?.projection !== null && slice?.projection !== undefined) {
+        store.getState().setProjection(target, {
+          ...slice.projection,
+          session: { ...slice.projection.session, title },
+        });
+      }
     },
   });
   void client.connect();
@@ -1522,6 +1532,38 @@ describe("auto-title on delivery", () => {
         refineFrom: "Fix the parser\nmore detail",
       },
     ]);
+  });
+
+  it("uses the opening message before its turn settles, not a later steer", async () => {
+    const firstTurn = deferred();
+    const { client, rpc, sessionId, renames } = await readyWithTitle(null);
+    rpc.answer = (request) =>
+      request.command.kind === "message.submit" && request.command.message.id === "opening"
+        ? firstTurn.promise.then(() => ACCEPTED)
+        : ACCEPTED;
+
+    const opening = client.submit(
+      { id: "opening", text: "Investigate the authentication timeout" },
+      "queue",
+    );
+
+    // Pi resolves an opening prompt only after its whole turn, but the title
+    // must begin from the first prompt while that turn remains in flight.
+    expect(renames).toEqual([
+      {
+        sessionId,
+        title: "Investigate the authentication timeout",
+        refineFrom: "Investigate the authentication timeout",
+      },
+    ]);
+
+    await expect(
+      client.submit({ id: "steer", text: "Prioritize the deployment logs" }, "steer"),
+    ).resolves.toBe("delivered");
+    expect(renames).toHaveLength(1);
+
+    firstTurn.release();
+    await expect(opening).resolves.toBe("delivered");
   });
 
   it("refines an attachment-only message from the file label", async () => {

@@ -24,7 +24,7 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
   it("gives a Project Session the agent-control family and a Ticket Session none", () => {
-    expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await"]);
+    expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await", "automation.run"]);
     // The property this ticket exists to make true, asserted as absence
     // rather than described. An injected instruction telling a Ticket Session
     // to start ten Sessions has nothing to call. `ticket.await` is not of the
@@ -55,12 +55,18 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_search",
       "session.start",
       "ticket.await",
+      "automation.run",
     ]);
   });
 
   it("puts a Ticket Session in a room with no agent-control tool in it", () => {
     const surface = resolveAgentToolSurface(capabilities({ role: "ticket" }));
     expect(surface).not.toContain("session.start");
+    // VC-134's whole enforcement, stated as absence: an Automation Run fans a
+    // sweep out across Tickets, so the verb that starts one belongs to the
+    // Role that orchestrates. A Ticket Session's room does not hold it, and
+    // that is why no inheritance or capping rule is needed to keep it out.
+    expect(surface).not.toContain("automation.run");
     // The await tool is deliberately in this room too (VC-92's ruling on
     // VC-85): blocking is a runtime property, not a privilege, and what may
     // be awaited is policy data judged at call time.
@@ -86,7 +92,16 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       resolveAgentToolSurface(
         capabilities({ capabilities: { coding: EVERY_CODING, interaction: ["ask_user"] } }),
       ),
-    ).toEqual(["read", "edit", "write", "execute", "ask_user", "session.start", "ticket.await"]);
+    ).toEqual([
+      "read",
+      "edit",
+      "write",
+      "execute",
+      "ask_user",
+      "session.start",
+      "ticket.await",
+      "automation.run",
+    ]);
   });
 
   it("orders interaction tools by the vocabulary, not by the caller's array", () => {
@@ -108,7 +123,35 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_search",
       "session.start",
       "ticket.await",
+      "automation.run",
     ]);
+  });
+});
+
+describe("automation.run is the orchestrator's verb, and only that (VC-134)", () => {
+  it("is in the project bundle only, with no cap or inheritance rule beside it", () => {
+    expect(roleVerbBundle("project")).toContain("automation.run");
+    // VC-112 is explicit that OpenClaw's "cap a created job to the creating
+    // turn's tools" rule is NOT adopted: it patches a hole that
+    // `bundle(Role) ∪ grants(session)` never opens. Absence from these two
+    // bundles is the entire mechanism, so it is asserted rather than described.
+    expect(roleVerbBundle("ticket")).not.toContain("automation.run");
+    expect(roleVerbBundle("subagent")).not.toContain("automation.run");
+  });
+
+  it("names a verb the registry can actually project as a tool", () => {
+    expect(VERB_TOOL_KEYS).toContain("automation.run");
+    expect(isSessionToolId("automation.run")).toBe(true);
+    // The durable identity keeps its dot; `automation_run` is the wire
+    // rendering and is not what a record or a grant may spell.
+    expect(isSessionToolId("automation_run")).toBe(false);
+  });
+
+  it("is last in canonical order, so no frozen surface shifted under it", () => {
+    // Appended, never inserted: a Session frozen before this verb existed must
+    // find every tool it already held at the position it already had, or it
+    // pays a full Cache Prefix miss for a list that did not change for it.
+    expect(VERB_TOOL_KEYS.at(-1)).toBe("automation.run");
   });
 });
 

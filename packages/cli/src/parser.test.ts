@@ -380,9 +380,14 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "model.list", args: {}, json: false },
     });
-    expect(parseCliArgs(["model", "list", "--all", "--json"])).toEqual({
+    expect(parseCliArgs(["model", "list", "--json"])).toEqual({
       ok: true,
-      invocation: { command: "model.list", args: { all: true }, json: true },
+      invocation: { command: "model.list", args: {}, json: true },
+    });
+    expect(parseCliArgs(["model", "list", "--all"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "Unknown option --all — see volli help model list",
     });
     expect(parseCliArgs(["session", "list", "--project", "VC", "--ticket", "VC-12"])).toEqual({
       ok: true,
@@ -673,6 +678,7 @@ describe("parseCliArgs", () => {
       ["ticket", "update", "VC-1", "--dry-run"],
       ["ticket", "move", "VC-1", "--to", "doing", "--dry-run"],
       ["ticket", "comment", "VC-1", "-m", "note", "--dry-run"],
+      ["ticket", "signal", "VC-1", "--kind", "implement", "--verdict", "pass", "--dry-run"],
       ["session", "done", "--dry-run"],
       ["session", "blocked", "--dry-run"],
       ["session", "link", "native-id", "--dry-run"],
@@ -918,13 +924,22 @@ describe("registry ↔ argv mechanics", () => {
   });
 
   // `hook` bypasses the walker, `help` has its own command-path grammar,
-  // ticket.archive is app-only, session.start is tool-only, and ticket.await
-  // is the blocking control-tier tool a CLI must never execute.
+  // ticket.archive is app-only, session.start is tool-only, ticket.await is the
+  // blocking control-tier tool a CLI must never execute, and automation.run is
+  // the orchestrator's control-tier tool (VC-134) — a shell door for it would
+  // be the socket door VC-92 §6 refuses.
   it("leaves exactly the verbs the CLI cannot execute without mechanics", () => {
     const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
       (entry) => entry.key,
     );
-    expect(missing).toEqual(["ticket.archive", "session.start", "hook", "help", "ticket.await"]);
+    expect(missing).toEqual([
+      "ticket.archive",
+      "session.start",
+      "hook",
+      "help",
+      "ticket.await",
+      "automation.run",
+    ]);
   });
 });
 

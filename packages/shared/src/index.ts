@@ -29,6 +29,7 @@ export * from "./ticket-comment";
 export * from "./blob";
 export * from "./ticket-events";
 export * from "./ticket-await";
+export * from "./untrusted-content";
 export * from "./change-set";
 export * from "./worktree-collisions";
 export * from "./ticket-filter";

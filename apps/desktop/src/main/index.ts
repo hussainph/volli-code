@@ -1415,6 +1415,18 @@ app.whenReady().then(async () => {
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
+          // `automation.run`'s host (VC-134). Read through a closure like
+          // every other dependency here, because the runner is composed much
+          // further down this same function; and it is the RUNNER, never the
+          // Session facade, so an agent's Run travels the one Run door the
+          // palette and the Ticket rail already call.
+          automations: () =>
+            automationRunner === null
+              ? null
+              : {
+                  list: (projectId) => listAutomationsForProject(sessionDb, projectId),
+                  run: (input) => automationRunner!.run(input),
+                },
           // `ticket.await`'s two ports (VC-85): the wait is judged against the
           // caller's project policy when it starts, and parks on the
           // post-commit wake bus until a planner fact matches.
@@ -2528,7 +2540,10 @@ app.whenReady().then(async () => {
             // it actually points at. An unresolved comparison would call a
             // correct install "another Volli install owns the link".
             shimPath: await realpath(shimPath).catch(() => shimPath),
-            liveSessionIds: ptyManager.liveSessionIds(),
+            // A writing caller is live exactly while its attachment token is
+            // valid at the socket door. PTY membership excludes structured
+            // attachments, so it cannot answer this diagnostic truthfully.
+            liveSessionIds: sessionTokens.liveSessionIds(),
             reporting: dbHandle.ok
               ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
                   harnessId: record.slug,

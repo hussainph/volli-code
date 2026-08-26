@@ -546,7 +546,9 @@ _resolved_ model and reasoning produced a given Session. A Run owns exactly one
 Session and always starts a fresh one: it never wakes an existing Session, whose
 Authority Snapshot was granted while a person was present and whose context is
 stale by the time a schedule fires. A ticket has at most one Run in flight at a
-time. Runs outlive the app — one whose Session died is interrupted, never lost,
+time. A Project Session can start one too, through the `automation.run` tool its
+Role bundle holds; the Run it starts carries the automation Actor and is
+indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,
 and only a human restarts it. A Session a user opens from the composer belongs
 to no Run and never moves the board.
 _Avoid_: job, task, session (a Run has a Session — it is not one)

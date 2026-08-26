@@ -660,10 +660,9 @@ export const VERB_REGISTRY = [
     // any same-uid process can mint is the convention again with better
     // syntax. Today the socket attributes; VC-163 is where it authenticates.
     //
-    // Deliberately no `--dry-run`. The ratified preview matrix covers writes
-    // whose blast radius is worth rehearsing; this one appends a single typed
-    // row that supersedes nothing and moves nothing, and a preview of it would
-    // cost a round trip to be told exactly what the verb says it does.
+    // Append-only makes this coordination write the one that most needs a
+    // rehearsal: unlike a move or an update, a mistaken verdict cannot be
+    // edited away. Its preview follows the shared mutation-plan contract.
     key: "ticket.signal",
     accessModes: ["cli"],
     actor: "session",
@@ -721,6 +720,7 @@ export const VERB_REGISTRY = [
         placeholder: "<text>",
         help: "One line of prose for a reader; the verdict is what machines read.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -938,7 +938,8 @@ export const VERB_REGISTRY = [
   },
   {
     // Model discovery (VC-78): the same Model Access snapshot the app reads,
-    // filtered for a context window — never a parallel provider probe.
+    // narrowed to models the runtime can use — never a parallel provider probe
+    // or a signed-out catalog in an agent's context.
     key: "model.list",
     accessModes: ["cli"],
     actor: "any",
@@ -946,19 +947,13 @@ export const VERB_REGISTRY = [
     listed: true,
     referenceOrder: 11,
     group: "Read",
-    summary: "List signed-in providers, model ids, and reasoning levels.",
+    summary: "List available providers, model ids, and reasoning levels.",
     example: "volli model list",
     notes: [
       "Copy a printed <provider/model> verbatim into session start --model.",
-      "Shows available models only; --all includes signed-out providers.",
+      "Shows only models this profile can run.",
     ],
-    options: [
-      {
-        name: "--all",
-        kind: "flag",
-        help: "Include signed-out providers and unavailable models.",
-      },
-    ],
+    options: [],
   },
   {
     // What a pass cost, and where it went (VC-87).
@@ -1593,6 +1588,88 @@ export const VERB_REGISTRY = [
           type: "string",
           description:
             "Wake immediately on the first matching event after this opaque cursor. Copy the cursor returned by the previous wake or timeout unchanged; omit it on the first wait to start watching from now.",
+        },
+      ],
+    },
+    options: [],
+  },
+  {
+    // The orchestrator's Automation verb (VC-134), filed by VC-112's ruling
+    // rather than minted beside it: "Do not mint a verb in this ticket. File it
+    // as a Verb Registry entry under VC-92's rules, in the `project` Role
+    // bundle only." So the whole of that ticket is this row plus one name in
+    // one bundle — no CLI verb, no IPC channel of its own, and no second
+    // implementation of a Run. The handler binding resolves the same Run door
+    // (`main/automations/run.ts`) the palette, the rail and the board already
+    // call, which is what makes a Run an agent started indistinguishable in
+    // its record from a Run a person started by hand.
+    //
+    // Control tier, and tool-only for the reason `session.start` is: this verb
+    // spends model budget and opens agent work, so a socket door would put it
+    // within reach of any process running as the user. A tool call carries its
+    // caller in the binding instead of in the request.
+    //
+    // Why it fans out without the Automation format growing a control flow:
+    // VC-112 keeps one Run to one Session deliberately, and points at the
+    // orchestrator for multi-Ticket work. An agent holding this verb walks the
+    // Tickets itself and starts one Run each, so "one Run, one Session" stays
+    // true while a scheduled sweep still covers a board.
+    //
+    // Appended, never inserted. Declaration order is the canonical tool order,
+    // and a Session whose surface was frozen before this verb existed must find
+    // every tool it already held exactly where it already was.
+    key: "automation.run",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "automation.run" },
+    listed: false,
+    group: "Session",
+    summary: "Run a saved Automation on one Ticket, opening one fresh Session.",
+    effects: {
+      durableWrites: [
+        {
+          resource: "automation-run",
+          operation: "create",
+          summary:
+            "Create one Automation Run with its resolved model and reasoning, open the fresh Session it names with the `automation` Actor, and deliver the Automation's Instructions as that Session's first message.",
+        },
+      ],
+      humanVisible: [
+        "The Run appears in the Ticket's Run history and its Session is marked with the `automation` Actor \u2014 the same record a person's Run by hand writes, with nothing naming the agent that asked for it.",
+      ],
+      nonEffects: [
+        "The Ticket does not move, and no existing Session is woken: a Run always opens a fresh one.",
+        "It does not wait for the Run to finish, and the Run does not report back into the calling Session.",
+        "No Automation is created, edited or armed \u2014 this verb runs a saved one and authors nothing.",
+      ],
+    },
+    tool: {
+      name: "automation_run",
+      // Written for the model, and again mostly about restraint. The third
+      // line is the one a caller cannot learn from the schema: an Automation
+      // is a saved thing a person authored, so there is no way to pass
+      // Instructions here and no way to invent one \u2014 a name that does not exist
+      // is answered with the names that do.
+      description: [
+        "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
+        "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
+        "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
+        "It does not move the Ticket, and it does not wait for the work to finish.",
+        "Volli binds the calling Session and project itself: name the Automation and the Ticket, and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "automation",
+          type: "string",
+          required: true,
+          description:
+            "The name of the Automation to run, spelled as it is in Volli, for example 'Nightly sweep'.",
+        },
+        {
+          name: "ticket",
+          type: "string",
+          required: true,
+          description: "The display id of the Ticket to run it on, for example VC-12.",
         },
       ],
     },

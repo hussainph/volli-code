@@ -158,6 +158,11 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // The first verb born on VC-92's target assignment directly: tool-only,
   // Role-gated, never on the socket (VC-85). No delta to grow out of.
   "ticket.await": "control",
+  // The second (VC-134, under VC-112's "the agent's verb"): starting an
+  // Automation Run is agent control, so it is tool-only, Role-gated, and in
+  // the `project` bundle alone. Filed as a registry entry rather than minted
+  // as a verb surface of its own, exactly as the parent ruling asked.
+  "automation.run": "control",
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
@@ -468,7 +473,7 @@ describe("the registry table", () => {
     // pair: it has no cli access mode at all, so a reference line would teach
     // an invocation the socket refuses. Its discovery surface is the tool
     // schema itself.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await"]);
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "automation.run"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -499,21 +504,21 @@ describe("the registry table", () => {
     }
   });
 
-  it("keeps the ratified preview matrix on the verbs themselves", () => {
-    const previewed = VERB_REGISTRY.filter((entry) =>
-      entry.options.some((option) => option.name === "--dry-run"),
-    ).map((entry) => entry.key);
-    expect(previewed).toEqual([
-      "ticket.create",
-      "ticket.update",
-      "ticket.move",
-      "ticket.comment",
-      "session.done",
-      "session.blocked",
-      "session.link",
-      "notify",
-      "doctor",
-    ]);
+  it("keeps a preview on every voluntary coordination write", () => {
+    // Tier is derived from the registry, so this candidate set grows with a
+    // newly declared coordination verb instead of preserving a stale list of
+    // the ones that happened to exist when the test was written. Unlisted
+    // harness plumbing is involuntary and intentionally has no preview.
+    const voluntaryCoordinationWrites = VERB_REGISTRY.filter(
+      (entry) => entry.listed && verbTier(entry) === "coordination",
+    );
+    expect(voluntaryCoordinationWrites).not.toHaveLength(0);
+    for (const entry of voluntaryCoordinationWrites) {
+      expect(
+        entry.options.some((option) => option.name === "--dry-run"),
+        entry.key,
+      ).toBe(true);
+    }
   });
 
   it("pins human-visible effects and explicit non-effects on every voluntary write", () => {
@@ -527,6 +532,49 @@ describe("the registry table", () => {
     for (const key of ["doctor", "app.launch"] as const) {
       expect(verbEntry(key)?.effects, key).toBeDefined();
     }
+  });
+
+  // VC-134, filed by VC-112 ("The agent's verb") under VC-92 §5's rules. The
+  // whole ticket is this entry: one row in this table, in one Role bundle,
+  // with no second implementation and no verb surface of its own.
+  it("carries automation.run as a control-tier entry and nothing more", () => {
+    const entry = verbEntry("automation.run");
+    expect(entry).toBeDefined();
+    // Tool-only and Role-gated, which is what makes the tier read `control`
+    // (VC-92 §2). A `cli` mode here would be an orchestrator verb any same-uid
+    // process could reach, which is the door VC-163 shut for `session.start`.
+    expect(entry!.accessModes).toEqual(["tool"]);
+    expect(entry!.actor).toBe("role");
+    expect(verbTier(entry!)).toBe("control");
+    expect(AGENT_COMMANDS).not.toContain("automation.run");
+    // One handler binding, named by the verb's own key (VC-167).
+    expect(entry!.handler).toEqual({ site: "main", id: "automation.run" });
+  });
+
+  it("shows automation.run a semantic schema with no caller field in it", () => {
+    const tool = verbEntry("automation.run")?.tool;
+    expect(tool?.name).toBe("automation_run");
+    expect(tool?.input.map((field) => field.name)).toEqual(["automation", "ticket"]);
+    for (const field of tool?.input ?? []) {
+      expect(field.required).toBe(true);
+      expect(field.name).not.toMatch(/^-/);
+    }
+    // Nothing names the caller: the door binds the Session and its project, so
+    // there is no project, session or actor field a model could supply.
+    for (const name of ["project", "session", "actor", "model", "reasoning"]) {
+      expect(tool?.input.map((field) => field.name)).not.toContain(name);
+    }
+  });
+
+  it("records that an agent's Run is written with the automation Actor", () => {
+    // VC-112's observability rule, carried on the entry itself: the Run this
+    // verb starts is the same record a person's Run by hand writes, so the
+    // effects contract must not describe a second kind of Run.
+    const effects = verbEntry("automation.run")?.effects;
+    expect(effects?.durableWrites.map((write) => write.resource)).toEqual(["automation-run"]);
+    expect(JSON.stringify(effects)).toContain("automation");
+    expect(effects?.humanVisible.length).toBeGreaterThan(0);
+    expect(effects?.nonEffects.length).toBeGreaterThan(0);
   });
 
   it("looks an entry up by key, and admits when it holds none", () => {

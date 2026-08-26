@@ -601,6 +601,12 @@ export async function ticketSignalVerb(
     resolved.project.ticketPrefix,
     resolved.ticket.ticketNumber,
   );
+  const signalPreview = dryRunResponse(request, {
+    kind: "ticket",
+    id: signalDisplayId,
+    label: signalDisplayId,
+  });
+  if (signalPreview !== null) return signalPreview;
   try {
     // The wake a waiter is most likely parked on (VC-85): a verdict is the
     // fact another Session delegated work to find out.

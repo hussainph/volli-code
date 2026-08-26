@@ -325,6 +325,14 @@ export interface AgentCommandContext {
    */
   readonly envSession: EnvSessionIdentity | null;
   /**
+   * The Session this request's attachment token authenticated at the socket
+   * door, or null when the caller presented no valid matching token. Kept
+   * beside the raw env-session claim so diagnostics can report the same
+   * liveness a coordination write would receive rather than treating a claim
+   * as proof.
+   */
+  readonly authenticatedSessionId: string | null;
+  /**
    * Who to ATTRIBUTE this caller's writes to, decided once by the dispatch
    * (VC-163).
    *

@@ -187,6 +187,7 @@ export function createAgentCommandService(
         projections,
         sessions,
         envSession,
+        authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
       };
       return binding.handle(context, request);

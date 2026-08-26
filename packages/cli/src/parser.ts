@@ -353,6 +353,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--kind": { kind: "value", key: "kind", parse: signalKindValue },
       "--verdict": { kind: "value", key: "verdict", parse: signalVerdictValue },
       "--detail": { kind: "value", key: "detail" },
+      "--dry-run": DRY_RUN,
     },
     // Both are required because a signal with either half missing is not a
     // weaker signal, it is not one: "review" says nothing without a verdict,
@@ -377,7 +378,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   conflicts: PROJECT_ONLY,
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
-  "model.list": { options: { "--all": { kind: "flag", key: "all", value: true } } },
+  "model.list": { options: {} },
   cost: {
     options: {
       "--ticket": { kind: "value", key: "ticket" },

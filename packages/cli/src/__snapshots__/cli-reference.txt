@@ -15,7 +15,7 @@ Read
   conflicts [--project <p>]
   project list
   label list [--project <p>]
-  model list [--all]
+  model list
   cost [--ticket <id>] [--session <handle>] [--project <p>] [--all-projects] [--since <when>] [--group-by <dimension>]
 
 Write
@@ -23,7 +23,7 @@ Write
   ticket update <id> [--title <text>] [--body <text>|--body-file <path>|--append <text>|--edit <old> <new>] [--priority low|medium|high] [--add-label <name>]... [--remove-label <name>]... [--harness <h>] [--base <branch>] [--dry-run]
   ticket move <id> --to <column> [--dry-run]
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
-  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>]
+  ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
   worktree sync [<id>] [--abort]
 
 Session
@@ -240,21 +240,18 @@ Example: volli label list --project VC
 ============================================================================
 volli help model list
 ============================================================================
-model list — List signed-in providers, model ids, and reasoning levels.
+model list — List available providers, model ids, and reasoning levels.
 
 Door: Agent CLI
 Verb tier: read
 
-Usage: volli model list [options]
-
-Options:
-  --all  Include signed-out providers and unavailable models.
+Usage: volli model list
 
 Example: volli model list
 
 Notes:
 - Copy a printed <provider/model> verbatim into session start --model.
-- Shows available models only; --all includes signed-out providers.
+- Shows only models this profile can run.
 
 ============================================================================
 volli help cost
@@ -416,6 +413,7 @@ Options:
   --kind <kind>        Which stage this verdict is about. (valid: validate, implement, review, merge, human-gate, budget)
   --verdict <verdict>  How that stage went. (valid: pass, fail, blocked)
   --detail <text>      One line of prose for a reader; the verdict is what machines read.
+  --dry-run            Validate and preview without side effects.
 
 Effects:
 - Durable write: Create one attributed Ticket signal and its signaled Ticket event, in one transaction.
@@ -772,7 +770,7 @@ Run volli help label <subcommand> for detail.
 volli help model
 ============================================================================
 model subcommands:
-  model list  List signed-in providers, model ids, and reasoning levels. [Agent CLI]
+  model list  List available providers, model ids, and reasoning levels. [Agent CLI]
 Run volli help model <subcommand> for detail.
 
 ============================================================================
@@ -856,7 +854,7 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
-VC-185 (after VC-163)
+VC-185 (after VC-178)
 Added
 - volli worktree sync [<id>] — merge a ticket's base branch into its worktree branch and report what happened. Coordination tier: an authenticated Session, on the Agent CLI. It never waits on a gate, a check, or CI; it merges, reports, and returns.
 - A conflicted sync is an outcome rather than a refusal: status reads conflicted, every conflicted path is listed, and the worktree is left conflicted for the Session to resolve. Branch on status, not on the exit code.
@@ -872,7 +870,18 @@ Fixed
 Removed
 - None in this record.
 
-VC-163 (after VC-162)
+VC-178 (after VC-163)
+Added
+- ticket signal --dry-run. Every voluntary coordination write now previews through the shared contract, and the append-only one is where a rehearsal matters most.
+Changed
+- ticket show and ticket events print formatted signal, event and comment rows in text mode instead of raw JSON, so the cheap poll returns lines rather than blobs.
+- Comment bodies, signal details and free-text event payloads are bounded per field and hoisted into one untrusted-prose envelope per response, cited from their row by a [n] token. Quoting keeps identical polls byte-identical; ticket_await keeps its per-wake nonce because one wake is delivered once.
+Fixed
+- volli doctor decides Session liveness from the attachment token the socket door verified rather than from the live-PTY map, so an environment that can write is no longer reported as ended.
+Removed
+- None in this record.
+
+VC-163 (after VC-85)
 Added
 - Per-attachment session tokens. Volli mints one when it spawns a Session's terminal or attachment and exports it as VOLLI_SESSION_TOKEN; the socket verifies it. A Session now authenticates itself instead of announcing itself.
 - The unauthenticated Actor, for a socket caller Volli cannot identify. It may read the board and, by default, write nothing — a posture a person can widen per project, per verb.
@@ -887,6 +896,17 @@ Fixed
 Removed
 - session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
 - ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.
+
+VC-85 (after VC-162)
+Added
+- ticket signal, an authenticated Session's typed verdict channel for the stage and outcome of ticket work.
+- ticket_await, the named Agent Tool Surface tool that parks a Session until a ticket signals, is commented on, or moves.
+Changed
+- ticket show treats --events 0 and --comments 0 as none, so a cheap poll returns latest signals without either history log.
+Fixed
+- ticket_await waits are lossless: its opaque cursor replays a matching event committed between calls or while no wait was parked.
+Removed
+- None in this record.
 
 VC-162 (after VC-91)
 Added
@@ -1191,7 +1211,7 @@ USAGE Unknown option --not-an-option (options: --project) — see volli help lab
 ============================================================================
 volli model list --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --all) — see volli help model list
+USAGE Unknown option --not-an-option — see volli help model list
 
 ============================================================================
 volli cost --not-an-option
@@ -1221,7 +1241,7 @@ USAGE Unknown option --not-an-option (options: -m, --message, --file, --dry-run)
 ============================================================================
 volli ticket signal ORACLE-1 --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail) — see volli help ticket signal
+USAGE Unknown option --not-an-option (options: --kind, --verdict, --detail, --dry-run) — see volli help ticket signal
 
 ============================================================================
 volli ticket archive ORACLE-1 --not-an-option
