@@ -76,7 +76,24 @@ function retentionState(ticketId: string): TicketRetentionState {
     prUrl: archiveReady ? "https://github.com/demo/voltaic/pull/482" : null,
     prState: archiveReady ? "merged" : null,
     hasConflicts: false,
-    failingChecks: [],
+    // A rollup worth drawing: the lab is where the card's CI row (VC-182) is
+    // looked at, and an empty array is exactly the shape that makes it vanish.
+    checks: archiveReady
+      ? [
+          {
+            name: "Check + Test",
+            workflow: "CI",
+            state: "passing",
+            url: "https://github.com/demo/voltaic/actions/runs/1",
+          },
+          {
+            name: "Desktop smoke (manual)",
+            workflow: "CI",
+            state: "skipped",
+            url: "https://github.com/demo/voltaic/actions/runs/2",
+          },
+        ]
+      : [],
     archiveReady,
     reason: archiveReady ? "pr-merged" : null,
     keep: false,

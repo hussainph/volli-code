@@ -2393,13 +2393,36 @@ export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;
 // imported above.
 
 /**
+ * One PR check, normalized off the two shapes GitHub's rollup mixes together
+ * (VC-182): a GitHub Actions `CheckRun` and a legacy `StatusContext`.
+ *
+ * FOUR states, not gh's nine conclusions crossed with its five status values.
+ * The reader's question is "can I merge this?", and the answer has exactly four
+ * shapes — it failed, it is still going, it passed, it did not run. Collapsing
+ * happens ONCE, in `ghPrStatus`, so every surface reads the same verdict rather
+ * than each re-deciding what `NEUTRAL` means.
+ */
+export type PrCheckState = "passing" | "failing" | "pending" | "skipped";
+
+/** One row of the PR's check rollup, as the rail draws it. */
+export interface PrCheck {
+  /** Display name — a job name ("Check + Test") or a status context ("ci/legacy"). */
+  name: string;
+  /** The Actions workflow the job belongs to; `null` for a legacy commit status. */
+  workflow: string | null;
+  state: PrCheckState;
+  /** The run's log page, or `null` when the provider published no link. */
+  url: string | null;
+}
+
+/**
  * The composed retention state for ONE ticket, returned by
  * `volli:retention-state`. Everything but `keep` is TRANSIENT (decision #42:
  * persist identity, compute state) — recomputed from the merge-watch's last
  * poll plus the live Done-TTL clock, never stored. `keep` is the durable pin
- * (migration 010). `hasConflicts`/`failingChecks` are surfacing-only (the
- * #44/#45 button-never-gate rule): they explain why a PR can't merge yet, they
- * do not block the wrap-up prompt.
+ * (migration 010). `hasConflicts`/`checks` are surfacing-only (the #44/#45
+ * button-never-gate rule): they explain why a PR can't merge yet, they do not
+ * block the wrap-up prompt.
  */
 export interface TicketRetentionState {
   ticketId: string;
@@ -2409,8 +2432,12 @@ export interface TicketRetentionState {
   prState: "open" | "merged" | "closed" | null;
   /** The PR's base branch conflicts with it (`mergeStateStatus` DIRTY). */
   hasConflicts: boolean;
-  /** Display names of the PR's failing/errored checks (may be empty). */
-  failingChecks: string[];
+  /**
+   * The PR's whole check rollup (VC-182), empty when the PR has no checks —
+   * which is also how a project with no GitHub Actions pipeline reads, and is
+   * what makes the rail's checks row self-detecting rather than a setting.
+   */
+  checks: PrCheck[];
   /** Whether the Archive & clean prompt should be offered right now. */
   archiveReady: boolean;
   /** The condition behind `archiveReady` (still set when suppressed by dismissal). */
