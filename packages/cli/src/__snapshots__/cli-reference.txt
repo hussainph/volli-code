@@ -469,6 +469,7 @@ Example: volli session list --ticket VC-12
 
 Notes:
 - Prints each session's title and short id; session peek takes either type.
+- Chat rows carry liveness: working, waiting (with what on), or idle, plus the age of the last durable fact — triage from the list before spending a peek.
 
 ============================================================================
 volli help session peek

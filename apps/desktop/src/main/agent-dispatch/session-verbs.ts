@@ -198,6 +198,15 @@ export async function sessionListVerb(
           ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
           : null,
       title: record.title,
+      // Liveness on the row itself (VC-86): the same three words and waiting
+      // reason `session.peek` answers and the app sidebar shows, off the same
+      // `chatSessionRecord` fold — never a second derivation. An orchestrator
+      // triaging a fleet reads these instead of spending a peek per Session.
+      status: record.activity,
+      waitingOn: record.waitingOn,
+      // Age of the newest durable fact, against the caller's clock — beside
+      // `ageMs` (age since creation), which stays for sorting what is old.
+      lastActivityAgeMs: Math.max(0, now() - record.lastActivityAt),
       ageMs: Math.max(0, now() - record.createdAt),
     };
     return [Object.assign(row, usageCells(usageById.get(record.sessionId)))];

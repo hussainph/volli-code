@@ -2005,6 +2005,155 @@ describe("agent command service", () => {
     });
   });
 
+  // VC-86 slice A. An orchestrator reading this list is triaging a fleet:
+  // "which of these needs me" must be answerable from the rows alone, in the
+  // same three words and the same clock-relative age `session.peek` and the
+  // app sidebar already answer with — without spending a peek per session.
+  it("answers liveness on session.list chat rows the way peek does", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const provenance = {
+      source: { kind: "adapter" as const, id: "pi", detail: null },
+      venue: { id: "local" as const, kind: "local" as const },
+    };
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+    // Three chat Sessions in the three states a row can honestly be in.
+    const working = await sessionEngine.createSession({
+      commandId: "create-working",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Working",
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "working-attach",
+      kind: "attachment.opened",
+      sessionId: working.session.id,
+      occurredAt: 1_000,
+      provenance,
+      attachment: {
+        id: "attachment-working",
+        sessionId: working.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "pi-working", detail: null },
+        authority: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "working-turn",
+      kind: "turn.started",
+      sessionId: working.session.id,
+      attachmentId: "attachment-working",
+      occurredAt: 2_000,
+      provenance,
+      turnId: "turn-working",
+    });
+    const waiting = await sessionEngine.createSession({
+      commandId: "create-waiting",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Waiting",
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "waiting-attach",
+      kind: "attachment.opened",
+      sessionId: waiting.session.id,
+      occurredAt: 1_000,
+      provenance,
+      attachment: {
+        id: "attachment-waiting",
+        sessionId: waiting.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "pi-waiting", detail: null },
+        authority: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "waiting-turn",
+      kind: "turn.started",
+      sessionId: waiting.session.id,
+      attachmentId: "attachment-waiting",
+      occurredAt: 2_000,
+      provenance,
+      turnId: "turn-waiting",
+    });
+    await sessionEngine.observe({
+      id: "waiting-attention",
+      kind: "attention.raised",
+      sessionId: waiting.session.id,
+      attachmentId: "attachment-waiting",
+      occurredAt: 3_000,
+      provenance,
+      attention: {
+        id: "attention-waiting",
+        kind: "permission_required",
+        attachmentId: "attachment-waiting",
+        detail: null,
+        diagnostic: null,
+      },
+    });
+    const idle = await sessionEngine.createSession({
+      commandId: "create-idle",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Idle",
+      provenance,
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 10_000,
+      sessionEngine,
+    });
+
+    const sessions = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    expect(sessions).toMatchObject({
+      ok: true,
+      data: {
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            id: working.session.id.slice(0, 8),
+            kind: "chat",
+            status: "working",
+            waitingOn: null,
+            // The newest durable fact is the turn start at 2_000, read against
+            // the caller's clock — the liveness signal a wedge hides in.
+            lastActivityAgeMs: 8_000,
+          }),
+          // Waiting outranks working, and the reason rides beside it: a row
+          // that said "working" would hide the one thing the caller could do.
+          expect.objectContaining({
+            id: waiting.session.id.slice(0, 8),
+            status: "waiting",
+            waitingOn: "permission",
+            lastActivityAgeMs: 7_000,
+          }),
+          // No attachment, no turn: idle since creation.
+          expect.objectContaining({
+            id: idle.session.id.slice(0, 8),
+            status: "idle",
+            waitingOn: null,
+            lastActivityAgeMs: 9_000,
+          }),
+        ]),
+      },
+    });
+  });
+
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
     ctx = openTestDb();
     insertProject(

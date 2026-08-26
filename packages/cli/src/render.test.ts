@@ -298,6 +298,48 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("fedcba98  chat  VC-52  ~$1.50  184000  Validate VC-52\n");
+    // Liveness on chat rows (VC-86): the same words peek's activity line uses,
+    // in two cells — the state (with its waiting reason inline) and the age of
+    // the newest durable fact. A row without them renders exactly as before.
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [
+            {
+              id: "fedcba98",
+              kind: "chat",
+              status: "working",
+              waitingOn: null,
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-52",
+              costUsd: 1.5,
+              costBasis: "catalog-estimate",
+              costCoverage: "complete",
+              tokens: 184_000,
+              title: "Validate VC-52",
+            },
+            {
+              id: "0a1b2c3d",
+              kind: "chat",
+              status: "waiting",
+              waitingOn: "permission",
+              lastActivityAgeMs: 420_000,
+              ticket: "VC-53",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Review VC-53",
+            },
+          ],
+        },
+        options,
+      ),
+    ).toBe(
+      "fedcba98  chat  working  last 8s  VC-52  ~$1.50  184000  Validate VC-52\n" +
+        "0a1b2c3d  chat  waiting on permission  last 7m  VC-53  \u2014  0  Review VC-53\n",
+    );
     expect(renderCliSuccess("ticket.events", { events: [{ kind: "created" }] }, options)).toBe(
       '{"kind":"created"}\n',
     );

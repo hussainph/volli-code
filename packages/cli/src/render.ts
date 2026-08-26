@@ -543,7 +543,22 @@ function renderStableLines(command: string, data: unknown): string | null {
       sessions
         ?.map((session) =>
           [
-            ...[session["id"], session["kind"], session["status"], session["ticket"]]
+            ...[
+              session["id"],
+              session["kind"],
+              // The liveness cell (VC-86): peek's own vocabulary — the state,
+              // with its waiting reason inline so "waiting" never hides the
+              // one thing the caller could act on.
+              typeof session["waitingOn"] === "string"
+                ? `${session["status"]} on ${session["waitingOn"]}`
+                : session["status"],
+              // Age of the newest durable fact — the signal a wedge hides in.
+              // Absent on rows that do not measure it (terminals), never "-".
+              typeof session["lastActivityAgeMs"] === "number"
+                ? `last ${ageText(session["lastActivityAgeMs"])}`
+                : null,
+              session["ticket"],
+            ]
               .filter((value) => value !== null && value !== undefined)
               .map(terminalSafeInline),
             // Cost and tokens sit BEFORE the title and are never filtered out,

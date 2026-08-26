@@ -935,7 +935,10 @@ export const VERB_REGISTRY = [
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
-    notes: ["Prints each session's title and short id; session peek takes either type."],
+    notes: [
+      "Prints each session's title and short id; session peek takes either type.",
+      "Chat rows carry liveness: working, waiting (with what on), or idle, plus the age of the last durable fact — triage from the list before spending a peek.",
+    ],
     options: [
       { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },
       { name: "--ticket", kind: "value", placeholder: "<id>", help: "Filter by ticket." },
