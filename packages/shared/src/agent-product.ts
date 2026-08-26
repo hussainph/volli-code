@@ -88,7 +88,7 @@ export const AGENT_CONCEPT_SECTIONS: readonly AgentConceptSection[] = [
   {
     heading: "The three product surfaces",
     paragraphs: [
-      "The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session's Role bundle. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role was or was not handed that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.",
+      "The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session from its Role bundle and durable birth grants. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role and its birth grants did or did not hand that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.",
       "Every agent-facing operation has one Verb Registry key everywhere, and that key is its identity: help, authority, a Role bundle, and a Session's durable frozen tool list all spell it. Only the surface spelling changes. For example, session.start renders as volli session start in shell syntax, and reaches a model as the named tool session_start, because no model provider accepts a dot in a tool name. The two are one verb with one handler, not two capabilities. Help names the right door. A wrong-door refusal redirects to that door; a no-door refusal means this build declares no such verb.",
     ],
   },
@@ -263,7 +263,7 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
   },
   WRONG_DOOR: {
     why: "The verb exists, but the shell is not the surface that executes it.",
-    next: "Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.",
+    next: "Use the surface named in the refusal; if tool availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.",
   },
   FORBIDDEN_ACTOR: {
     why: "The verb is on this surface, and this caller is not one the project's policy lets run it. Coordination-tier verbs want an authenticated Volli Session; a process that merely runs as your user is not one.",

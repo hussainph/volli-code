@@ -482,7 +482,7 @@ session start — Start an agent chat session on a ticket.
 
 Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
-Role availability: not claimed outside a resolved Session.
+Tool availability: not claimed outside a resolved Session.
 
 Tool: session_start
 
@@ -832,7 +832,7 @@ The local socket authenticates a Session by a per-attachment token, exported int
 Scope that claim honestly. The token defeats an injected string and cross-session confusion; it does not defeat a hostile process running as the signed-in macOS user, which can read the token out of any environment it can see. That is precisely why the control tier is absent from the socket rather than gated on the token: a named tool call is bound to the attachment that made it and never crosses a socket, so there is no credential to steal.
 
 The three product surfaces
-The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session's Role bundle. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role was or was not handed that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.
+The Agent CLI is the shell-composable discovery and coordination surface. It carries reads and low-risk writes that are visible, attributable, and reversible. The Agent Tool Surface is the ordered set of named tools frozen into one Session from its Role bundle and durable birth grants. Tool availability is enforcement: a tool-only verb is absent from shell execution because the Role and its birth grants did or did not hand that capability, not because the operation does not exist. The app is the attended human surface for navigation, decisions, curation, and visible outcomes.
 Every agent-facing operation has one Verb Registry key everywhere, and that key is its identity: help, authority, a Role bundle, and a Session's durable frozen tool list all spell it. Only the surface spelling changes. For example, session.start renders as volli session start in shell syntax, and reaches a model as the named tool session_start, because no model provider accepts a dot in a tool name. The two are one verb with one handler, not two capabilities. Help names the right door. A wrong-door refusal redirects to that door; a no-door refusal means this build declares no such verb.
 
 Derived Verb Tiers
@@ -959,7 +959,7 @@ Error codes:
     Next: Run `volli help` and choose one of the commands or topics it lists.
   WRONG_DOOR           2 usage
     Why: The verb exists, but the shell is not the surface that executes it.
-    Next: Use the surface named in the refusal; if Role availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.
+    Next: Use the surface named in the refusal; if tool availability is unknown, inspect the Session Runtime Brief or `volli help <verb>` first.
   FORBIDDEN_ACTOR      1 failure
     Why: The verb is on this surface, and this caller is not one the project's policy lets run it. Coordination-tier verbs want an authenticated Volli Session; a process that merely runs as your user is not one.
     Next: Run the command from inside a Volli Session. If you already are, the project's per-actor policy withholds this verb and only a person can widen it in Settings — do not work around the refusal.

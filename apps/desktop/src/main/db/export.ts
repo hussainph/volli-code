@@ -229,6 +229,34 @@ export interface ExportSessionCommandReceipt {
   receiptEventId: string | null;
 }
 
+/** One Ticket Session's durable delegation ancestry (migration 030). */
+export interface ExportSessionDelegation {
+  sessionId: string;
+  /** Null once the Ticket is deleted; the ancestry outlives it. */
+  ticketId: string | null;
+  parentSessionId: string | null;
+  depth: number;
+}
+
+/** One canonical Registry verb grant, with its separate scope and fixed limits. */
+export interface ExportSessionVerbGrant {
+  sessionId: string;
+  verb: string;
+  scope: string;
+  maxDepth: number;
+  maxChildren: number;
+}
+
+/** One fan-out slot claimed by a Ticket Session tool call. */
+export interface ExportSessionDelegationClaim {
+  parentSessionId: string;
+  toolCallId: string;
+  ticketId: string;
+  createCommandId: string;
+  childSessionId: string | null;
+  createdAt: number;
+}
+
 export interface ExportTicketComment {
   id: string;
   ticketId: string;
@@ -293,6 +321,9 @@ export interface ExportDocument {
   sessionEvents: ExportSessionEvent[];
   sessionCommands: ExportSessionCommand[];
   sessionCommandReceipts: ExportSessionCommandReceipt[];
+  sessionDelegations: ExportSessionDelegation[];
+  sessionVerbGrants: ExportSessionVerbGrant[];
+  sessionDelegationClaims: ExportSessionDelegationClaim[];
   ticketComments: ExportTicketComment[];
   appState: ExportAppState[];
   automations: ExportAutomation[];
@@ -690,6 +721,78 @@ function exportSessionCommandReceipts(db: Database.Database): ExportSessionComma
   }));
 }
 
+interface SessionDelegationRow {
+  session_id: string;
+  ticket_id: string | null;
+  parent_session_id: string | null;
+  depth: number;
+}
+
+function exportSessionDelegations(db: Database.Database): ExportSessionDelegation[] {
+  const rows = prepared<[], SessionDelegationRow>(
+    db,
+    `SELECT session_id, ticket_id, parent_session_id, depth
+       FROM session_delegations
+      ORDER BY session_id COLLATE BINARY`,
+  ).all();
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    ticketId: row.ticket_id,
+    parentSessionId: row.parent_session_id,
+    depth: row.depth,
+  }));
+}
+
+interface SessionVerbGrantRow {
+  session_id: string;
+  verb: string;
+  scope: string;
+  max_depth: number;
+  max_children: number;
+}
+
+function exportSessionVerbGrants(db: Database.Database): ExportSessionVerbGrant[] {
+  const rows = prepared<[], SessionVerbGrantRow>(
+    db,
+    `SELECT session_id, verb, scope, max_depth, max_children
+       FROM session_verb_grants
+      ORDER BY session_id COLLATE BINARY, verb COLLATE BINARY`,
+  ).all();
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    verb: row.verb,
+    scope: row.scope,
+    maxDepth: row.max_depth,
+    maxChildren: row.max_children,
+  }));
+}
+
+interface SessionDelegationClaimRow {
+  parent_session_id: string;
+  tool_call_id: string;
+  ticket_id: string;
+  create_command_id: string;
+  child_session_id: string | null;
+  created_at: number;
+}
+
+function exportSessionDelegationClaims(db: Database.Database): ExportSessionDelegationClaim[] {
+  const rows = prepared<[], SessionDelegationClaimRow>(
+    db,
+    `SELECT parent_session_id, tool_call_id, ticket_id, create_command_id, child_session_id, created_at
+       FROM session_delegation_claims
+      ORDER BY parent_session_id COLLATE BINARY, tool_call_id COLLATE BINARY`,
+  ).all();
+  return rows.map((row) => ({
+    parentSessionId: row.parent_session_id,
+    toolCallId: row.tool_call_id,
+    ticketId: row.ticket_id,
+    createCommandId: row.create_command_id,
+    childSessionId: row.child_session_id,
+    createdAt: row.created_at,
+  }));
+}
+
 interface TicketCommentRow {
   id: string;
   ticket_id: string;
@@ -756,6 +859,9 @@ export function buildExportDocument(
     sessionEvents: exportSessionEvents(db),
     sessionCommands: exportSessionCommands(db),
     sessionCommandReceipts: exportSessionCommandReceipts(db),
+    sessionDelegations: exportSessionDelegations(db),
+    sessionVerbGrants: exportSessionVerbGrants(db),
+    sessionDelegationClaims: exportSessionDelegationClaims(db),
     ticketComments: exportTicketComments(db),
     appState: exportAppState(db),
     automations: exportAutomations(db),

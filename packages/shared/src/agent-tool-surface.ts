@@ -68,9 +68,10 @@ import type { VerbToolKey } from "./verb-registry";
  * stays empty until VC-9 defines what a Subagent Session is.
  *
  * A `ticket` bundle without agent-control verbs is not a gap in this ticket;
- * it is the property this ticket exists to make true. A Ticket Session's tool
- * array holds no agent-control tool, so an injected instruction telling it to
- * start ten Sessions has nothing to call.
+ * it is the default property this map exists to make true. A Ticket Session can
+ * receive an explicit durable grant at birth (VC-183), but that exception feeds
+ * the `grants` parameter below and never edits this bundle map — a Ticket with
+ * no such record still has nothing an injected instruction can call.
  *
  * `ticket.await` sits in BOTH working bundles, by VC-92's ruling on VC-85:
  * blocking is a runtime property, not a privilege, so an executor waiting on

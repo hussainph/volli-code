@@ -232,12 +232,12 @@ function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string |
   if (!entry.accessModes.includes("tool") || entry.accessModes.includes("cli")) return null;
   if (runtime.surface !== null) {
     return runtime.surface.tools.includes(entry.key)
-      ? `Role availability: carried by this ${runtime.surface.role} Session's frozen bundle.`
-      : `Role availability: not carried by this ${runtime.surface.role} Session's frozen bundle.`;
+      ? `Tool availability: carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`
+      : `Tool availability: not carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`;
   }
   return runtime.surfaceUnknownReason === null
-    ? "Role availability: not claimed outside a resolved Session."
-    : `Role availability: unknown (${runtime.surfaceUnknownReason}).`;
+    ? "Tool availability: not claimed outside a resolved Session."
+    : `Tool availability: unknown (${runtime.surfaceUnknownReason}).`;
 }
 
 /** The complete compact shell reference plus honest discovery of non-shell doors. */

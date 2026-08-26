@@ -56,6 +56,11 @@ import { awaitTicketTool } from "./agent-await";
 import type { SubscribeTicketWake } from "./agent-await";
 import type { RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
+import type {
+  TicketSessionDelegation,
+  TicketSessionDelegationClaims,
+} from "./session-runtime/delegation-policy";
+import { sessionCreateCommandId } from "./session-runtime/sessions";
 import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
 import type { StartSessionPorts } from "./session-runtime/start-session";
 
@@ -104,6 +109,8 @@ export interface AgentToolDoorOptions extends Omit<
   projects: () => readonly Project[];
   sessions: () => StartSessionPorts["sessions"] | null;
   actorTicketDisplay: StartSessionPorts["actorTicketDisplay"];
+  /** Durable own-ticket claims for Ticket Role's birth grants (VC-183). */
+  delegation: TicketSessionDelegationClaims;
   /**
    * The Automation host, read per call and `null` when the Session runtime
    * never came up this launch — the same absence the IPC transport reports.
@@ -221,6 +228,47 @@ async function startSessionTool(
     );
   }
 
+  // Trusted caller identity plus the runtime's own call id, and never a fresh
+  // random one. Every durable write in the start is keyed on this, so replaying
+  // one tool call lands one Session, one kickoff and one `session_started`
+  // rather than a second set of all three.
+  const operationId = `${session.sessionId}:${request.toolCallId}`;
+  const claimRef = { parentSessionId: session.sessionId, toolCallId: request.toolCallId };
+
+  // Project Sessions retain the existing project-wide control bound. A Ticket
+  // Session only reaches this handler because its frozen birth surface carried
+  // a stored `session.start` grant, and that grant's scope is narrower than the
+  // generic project lookup above: exactly its attached Ticket.
+  let delegation: TicketSessionDelegation | undefined;
+  if (session.role === "ticket") {
+    if (resolved.ticket.id !== session.ticketId) {
+      return refusal("This Ticket Session can only start Sessions on its own Ticket.");
+    }
+    const claimed = options.delegation.claimStart({
+      ...claimRef,
+      ticketId: session.ticketId,
+      createCommandId: sessionCreateCommandId(operationId),
+    });
+    if (!claimed.ok) {
+      return refusal(
+        claimed.reason === "limit"
+          ? `This Ticket Session has already started the ${claimed.maxChildren} Sessions its in-ticket delegation allows.`
+          : "This Ticket Session was not granted in-ticket delegation when it started.",
+      );
+    }
+    delegation = claimed.delegation;
+  } else if (options.delegation.startGrantScope(session.sessionId) !== null) {
+    // Born a Ticket Session, presenting as a ticketless one. Deleting a Ticket
+    // sets `sessions.ticket_id` to NULL, and the frozen tool surface is replayed
+    // rather than re-derived — so without this the Session would keep a
+    // `session.start` it was granted under an own-ticket bound and be judged by
+    // the project-wide one instead. The durable grant outlives the Ticket
+    // precisely so this refusal can exist.
+    return refusal(
+      "This Session's start authority is scoped to its own Ticket, which is no longer attached, so nothing was started.",
+    );
+  }
+
   try {
     const started = await startSessionOperation(
       {
@@ -235,11 +283,7 @@ async function startSessionTool(
         now: options.now,
       },
       {
-        // Trusted caller identity plus the runtime's own call id, and never a
-        // fresh random one. Every durable write in the start is keyed on this,
-        // so replaying one tool call lands one Session, one kickoff and one
-        // `session_started` rather than a second set of all three.
-        operationId: `${session.sessionId}:${request.toolCallId}`,
+        operationId,
         project: resolved.project,
         ticket: resolved.ticket,
         ...(message.value === undefined ? {} : { message: message.value }),
@@ -248,6 +292,7 @@ async function startSessionTool(
           const built = startSessionModelOverride(override.model, override.reasoning);
           return built === undefined ? {} : { modelOverride: built };
         })(),
+        ...(delegation === undefined ? {} : { delegation }),
         actor: callerActor(session),
       },
       { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
@@ -266,6 +311,12 @@ async function startSessionTool(
       ].join("\n"),
     };
   } catch (error) {
+    // A failure before the Session's create command is durable must not burn a
+    // fan-out slot. Once create exists, replay owns recovery and the claim stays
+    // put — a later retry records the same child's birth grant rather than
+    // starting another Session. The ledger reads that evidence off the claim it
+    // stored, so this call does not restate how a create id is spelled.
+    if (delegation !== undefined) options.delegation.releaseIfUnstarted(claimRef);
     // A refusal the facade named is still an answer about the request, so the
     // model gets its words. Anything else is a host that could not carry out
     // the start at all, and that fails the call.

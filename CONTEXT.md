@@ -179,9 +179,11 @@ such process still does not belong here.
 _Avoid_: agent surface (alone), planning CLI
 
 **Agent Tool Surface**:
-The named, schema'd tools a Session's Role bundle offers inside the Agent
-Runtime. A tool call is bound to the Session that made it and never crosses the
-agent socket, so availability itself is enforcement: what a Role was not handed
+The named, schema'd tools a Session receives inside the Agent Runtime:
+`bundle(Role) ∪ grants(session)`. A grant is durable app-owned data, scoped with
+its verb, and frozen at Session birth; it is never a hot bundle edit. A tool call
+is bound to the Session that made it and never crosses the agent socket, so
+availability itself is enforcement: what a Role or birth grant did not hand it
 cannot be called.
 _Avoid_: Pi tools (as product vocabulary)
 
@@ -210,9 +212,9 @@ surface's projection)
 **Verb Tier**:
 The governance class a verb's access modes imply, never a stored field. Read
 tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
-session actor, judged by per-actor policy. Control tier: named tool only,
-Role-bundled, absent from the agent socket. A verb on no agent surface at all
-holds no tier. No verb needs a higher tier than the ambient authority its
+session actor, judged by per-actor policy. Control tier: named tool only, held
+through a Role bundle or a scoped birth grant, absent from the agent socket. A
+verb on no agent surface at all holds no tier. No verb needs a higher tier than the ambient authority its
 effect already lies within.
 _Avoid_: dangerous tier, middle tier
 

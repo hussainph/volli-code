@@ -342,8 +342,8 @@ export interface PiAdapterOptions {
    */
   resolveWebPorts?: () => SessionWebPorts;
   /**
-   * Runs one product verb a Session's Role bundle names, in main's own process
-   * (VC-162).
+   * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
+   * own process (VC-162).
    *
    * Unlike {@link resolveWebPorts}, this decides no membership. The Session's
    * frozen record decides that, and this supplies the one closure every verb in

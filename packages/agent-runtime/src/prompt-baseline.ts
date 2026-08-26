@@ -60,9 +60,12 @@ export const PROMPT_BASELINE_CHARS_PER_TOKEN = 4;
  * How wide a set of requests can reuse a section's bytes — which is to say how
  * often those bytes are bought at cache-write price instead of read at ~0.1x.
  *
- * - `role-static`: composed from Role, its frozen bundle, and product version.
- *   Every Session with those terms composes the same bytes, so the first one to
- *   run pays for them and every overlapping Session reads them.
+ * - `role-static`: composed from Role, its default verb bundle, and product
+ *   version. Every Session with those terms composes the same bytes, so the
+ *   first one to run pays for them and every overlapping Session reads them.
+ *   A per-Session birth grant is deliberately NOT one of those terms — it
+ *   varies within a Role, which is why the surface block below is
+ *   `session-static` instead.
  * - `project-static`: composed from a project fact. Shared by every Session in
  *   the project — which is where the skills index, far the largest section,
  *   lands.
@@ -128,7 +131,7 @@ export type PromptCachePlacement = "prefix" | "message";
 export const WORKSPACE_ENVIRONMENT_REMINDER_ID = "reminder:workspace-environment";
 
 /**
- * The Role bundle block riding the same first message (VC-162).
+ * The frozen Agent Tool Surface block riding the same first message (VC-162).
  *
  * `session-static` and not `role-static`, which is the whole reason it is a
  * message-side block instead of a system-prompt layer: membership is
@@ -183,15 +186,15 @@ export interface PromptBaseline {
    */
   reminder: PromptBaselineTotal;
   /**
-   * The Role bundle block riding that same message (VC-162).
+   * The frozen Agent Tool Surface block riding that same message (VC-162).
    *
    * Its own rollup rather than folded into {@link reminder}, because that field
    * means one specific thing — the workspace-environment fact, whose measured
    * zero for a healthy workspace is an assertion several callers make. Adding
    * bytes to it would have quietly changed what a zero there proves.
    *
-   * Never zero in practice: every Session is told what its Role bundle holds,
-   * including the Sessions that hold nothing.
+   * Never zero in practice: every Session is told what its frozen tool surface
+   * holds, including the Sessions that hold nothing.
    */
   toolSurface: PromptBaselineTotal;
   /**

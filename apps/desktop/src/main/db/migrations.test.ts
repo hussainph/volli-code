@@ -1843,3 +1843,141 @@ describe("migration 029 — durable Ticket Event sequence", () => {
     db.close();
   });
 });
+
+describe("migration 030 — birth-frozen Ticket Session delegation grants", () => {
+  it("stores canonical scoped grants, ancestry, and one-way claim completion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    for (const id of ["parent", "child"]) {
+      db.prepare(
+        `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+         VALUES (?, 'p1', 't1', NULL, 0)`,
+      ).run(id);
+    }
+
+    expect(tableExists(db, "session_delegations")).toBe(true);
+    expect(tableExists(db, "session_verb_grants")).toBe(true);
+    expect(tableExists(db, "session_delegation_claims")).toBe(true);
+    db.prepare(
+      `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+       VALUES ('parent', 't1', NULL, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+       VALUES ('parent', 'session.start', 'own-ticket', 1, 3)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+       VALUES ('child', 't1', 'parent', 1)`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+           VALUES ('child', 'session_start', 'own-ticket', 1, 3)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+           VALUES ('child', 'session.start', 'own-ticket', 2, 4)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare("UPDATE session_verb_grants SET max_children = 4 WHERE session_id = 'parent'")
+        .run(),
+    ).toThrow("session verb grant is immutable");
+
+    db.prepare(
+      `INSERT INTO session_delegation_claims
+         (parent_session_id, tool_call_id, ticket_id, create_command_id, child_session_id, created_at)
+       VALUES ('parent', 'call-1', 't1', 'parent:call-1:create', NULL, 0)`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE session_delegation_claims
+              SET child_session_id = 'child'
+            WHERE parent_session_id = 'parent' AND tool_call_id = 'call-1'`,
+        )
+        .run(),
+    ).not.toThrow();
+    // One claim opens at most one Session: re-pointing a completed claim is the
+    // write the trigger exists to stop.
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('other', 'p1', 't1', NULL, 0)`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE session_delegation_claims
+              SET child_session_id = 'other'
+            WHERE parent_session_id = 'parent' AND tool_call_id = 'call-1'`,
+        )
+        .run(),
+    ).toThrow("session delegation claim is immutable once completed");
+    db.close();
+  });
+
+  /**
+   * The grant has to survive its Ticket. `sessions.ticket_id` detaches on
+   * delete, so a Ticket Session becomes a ticketless one holding a frozen
+   * `session.start` — and the tool door can only recognise it as born-scoped
+   * if the ancestry and grant rows are still there to be read.
+   */
+  it("detaches a deleted Ticket from its delegations instead of erasing the grant", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('parent', 'p1', 't1', NULL, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+       VALUES ('parent', 't1', NULL, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+       VALUES ('parent', 'session.start', 'own-ticket', 1, 3)`,
+    ).run();
+
+    expect(() => db.prepare("DELETE FROM tickets WHERE id = 't1'").run()).not.toThrow();
+
+    expect(db.prepare("SELECT ticket_id FROM session_delegations").get()).toEqual({
+      ticket_id: null,
+    });
+    expect(db.prepare("SELECT scope FROM session_verb_grants").get()).toEqual({
+      scope: "own-ticket",
+    });
+    // Everything else about the ancestry stays frozen.
+    expect(() =>
+      db.prepare("UPDATE session_delegations SET depth = 1 WHERE session_id = 'parent'").run(),
+    ).toThrow("session delegation is immutable");
+    db.close();
+  });
+});

@@ -23,12 +23,12 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 }
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
-  it("gives a Project Session the agent-control family and a Ticket Session none", () => {
+  it("gives a Project Session the agent-control family and a Ticket Role's default bundle none", () => {
     expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await", "automation.run"]);
-    // The property this ticket exists to make true, asserted as absence
-    // rather than described. An injected instruction telling a Ticket Session
-    // to start ten Sessions has nothing to call. `ticket.await` is not of the
-    // agent-control family — waiting controls nobody (VC-85/VC-92).
+    // The default-bundle property is asserted as absence rather than prose. A
+    // durable birth grant is the explicit exception (VC-183), never a bundle
+    // edit. `ticket.await` is not part of the agent-control family — waiting
+    // controls nobody (VC-85/VC-92).
     expect(roleVerbBundle("ticket")).toEqual(["ticket.await"]);
     // VC-9 defines this one; until then an empty bundle is the honest answer.
     expect(roleVerbBundle("subagent")).toEqual([]);
@@ -59,7 +59,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     ]);
   });
 
-  it("puts a Ticket Session in a room with no agent-control tool in it", () => {
+  it("puts an ungranted Ticket Session in a room with no agent-control tool", () => {
     const surface = resolveAgentToolSurface(capabilities({ role: "ticket" }));
     expect(surface).not.toContain("session.start");
     // VC-134's whole enforcement, stated as absence: an Automation Run fans a
@@ -155,11 +155,10 @@ describe("automation.run is the orchestrator's verb, and only that (VC-134)", ()
   });
 });
 
-describe("resolveAgentToolSurface — grants, as data with no store behind them", () => {
+describe("resolveAgentToolSurface — grants stay distinct from Role bundles", () => {
   it("adds a granted verb to a Role that does not carry it", () => {
-    // The seam VC-162 ships. No product caller supplies grants yet; the rules
-    // over them are enforced here so the slice that adds the durable store
-    // inherits a resolver that already fails closed.
+    // The resolver remains the fail-closed vocabulary seam for the durable
+    // store: it validates grants before a Session receives a tool.
     expect(
       resolveAgentToolSurface(capabilities({ role: "ticket", grants: ["session.start"] })),
     ).toContain("session.start");

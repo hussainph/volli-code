@@ -94,7 +94,9 @@ describe("runCli", () => {
     );
     expect(carried).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining("project Role's frozen bundle carries session.start"),
+      reason: expect.stringContaining(
+        "project Session's frozen tool surface carries session.start",
+      ),
       next: expect.stringContaining("named session.start tool"),
     });
 
@@ -109,7 +111,9 @@ describe("runCli", () => {
     );
     expect(absent).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining("ticket Role's frozen bundle does not carry session.start"),
+      reason: expect.stringContaining(
+        "ticket Session's frozen tool surface does not carry session.start",
+      ),
       next: expect.stringContaining("do not bypass the refusal"),
     });
 
@@ -122,16 +126,16 @@ describe("runCli", () => {
       },
       lookup,
     );
-    expect(unknown.reason).toContain("Role availability is unknown because the app is stopped");
+    expect(unknown.reason).toContain("Tool availability is unknown because the app is stopped");
 
-    // A wrong door whose declared entry is not a tool teaches without Role
-    // claims: there is no bundle that could carry it.
+    // A wrong door whose declared entry is not a tool teaches without
+    // availability claims: there is no surface that could carry it.
     const undeclared = teachingErrorForParseResult(parsed, null, () => undefined);
     expect(undeclared).toEqual(makeAgentError("WRONG_DOOR", parsed.message));
 
     // Without a runtime at all, the refusal names the missing Session honestly.
     const outside = teachingErrorForParseResult(parsed, null, lookup);
-    expect(outside.reason).toContain("Role availability is unknown outside a resolved Session");
+    expect(outside.reason).toContain("Tool availability is unknown outside a resolved Session");
   });
 
   it("renders a wrong door through the optional Role read and every other parse error locally", async () => {
@@ -225,7 +229,7 @@ describe("runCli", () => {
       }),
     ).toBe(0);
     expect(socketless.join("")).toContain(
-      "unknown (VOLLI_SOCKET is absent, so the frozen bundle cannot be read)",
+      "unknown (VOLLI_SOCKET is absent, so the frozen Agent Tool Surface cannot be read)",
     );
 
     // The read itself failed in transit.
