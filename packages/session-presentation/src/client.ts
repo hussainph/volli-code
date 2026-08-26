@@ -661,11 +661,17 @@ export class ChatSessionClient {
         ],
       };
       const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
-      const delivered = await this.#rpc.session.command.mutate({
+      const deliveryResult = this.#rpc.session.command.mutate({
         commandId: message.id,
         sessionId: this.sessionId,
         command,
       });
+      // Pi answers an opening prompt only after its whole turn settles. Its
+      // subject is already known when this message starts, so the detached
+      // title write cannot wait on that answer: a steering message can resolve
+      // first and would otherwise name the Session instead of this prompt.
+      this.#autoTitle(body, attachments);
+      const delivered = await deliveryResult;
       // A harness that cannot take a message says so in its receipt rather than
       // by throwing, and that receipt is the failure. It is also proof the
       // round trip completed, which means the runtime committed the intent and
@@ -677,12 +683,6 @@ export class ChatSessionClient {
         return "recorded";
       }
       this.#writes().delivered(this.sessionId, slice.transcript.turnEpoch);
-      // The first accepted message — direct or released off the queue, this is
-      // the one choke point both go through — is the moment a Session gains a
-      // subject. Fire-and-forget: a failed rename is the rename dep's to
-      // surface (the desktop's renameChatSession toasts one), never the
-      // message that just landed.
-      this.#autoTitle(body, attachments);
       return "delivered";
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
@@ -1019,9 +1019,10 @@ export class ChatSessionClient {
   }
 
   /**
-   * Retitles this Session from a just-delivered message, if nothing has named
-   * it yet. A non-null title was explicitly set by a person, including one
-   * that happens to read `Chat 1`, so automatic naming never replaces it.
+   * Retitles this Session from the first message it starts delivering, if
+   * nothing has named it yet. A non-null title was explicitly set by a person,
+   * including one that happens to read `Chat 1`, so automatic naming never
+   * replaces it.
    *
    * The rename carries the first user message with it (VC-81), which asks
    * main to derive a sharper title behind this write with one model call.
