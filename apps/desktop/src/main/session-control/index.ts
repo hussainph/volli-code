@@ -30,3 +30,5 @@ export { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment
 export { sessionListingRow, sessionListingRows } from "./listing-row";
 export { watchSessionActivity } from "./activity-watch";
 export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";
+export { createSessionWatchdog } from "./session-watchdog";
+export type { SessionWatchdog, SessionWatchdogPorts } from "./session-watchdog";

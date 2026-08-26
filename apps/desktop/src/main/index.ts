@@ -77,6 +77,7 @@ import { recordSessionStartedOnce } from "./db/events-repo";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
+  createSessionWatchdog,
   watchSessionActivity,
 } from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
@@ -1481,6 +1482,24 @@ app.whenReady().then(async () => {
       ? undefined
       : `Agent telemetry settings are unavailable — the local database failed to open: ${dbHandle.error}`,
   );
+  // The session watchdog (VC-86): every executor this process holds open is
+  // scanned on a coarse clock, and an open turn silent past the app-wide
+  // threshold self-reports — one durable blocked signal naming the watchdog
+  // and the silence, one notification for the person. Observe posture:
+  // self-termination exists behind the watchdog's optional port and is
+  // deliberately unwired here, so a false positive costs a notification,
+  // never the work.
+  const sessionWatchdog =
+    sessionRuntime !== null && sessionEngine !== null
+      ? createSessionWatchdog({
+          listBindings: () => sessionRuntime.openNativeBindings(),
+          projection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection,
+          submit: (request) => sessionEngine.submit(request),
+          notify: ({ title, body }) => new Notification({ title, body }).show(),
+        })
+      : null;
+  sessionWatchdog?.start();
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -1489,6 +1508,7 @@ app.whenReady().then(async () => {
   registerAcceptedQuitCoordinator({
     lifecycle: app,
     shutdownNativeSessions: async () => {
+      sessionWatchdog?.stop();
       const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
       for (const result of results) {
         if (result.status === "rejected") {
