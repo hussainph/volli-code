@@ -123,6 +123,8 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     "A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.",
     "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
     "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
+    "Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.",
+    "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the project Role bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
     "",
   ].join("\n");
 }
