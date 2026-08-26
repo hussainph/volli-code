@@ -1156,7 +1156,10 @@ app.whenReady().then(async () => {
             }
             // A skill this project switched off is not "hidden from the model"
             // — it is not available, so resolving it by name fails like any
-            // other name the project does not have.
+            // other name the project does not have. Same for one whose author
+            // closed both axes: `applySkillModes` drops anything no route can
+            // reach, so attach-time selection asks the same ruled supply the
+            // picker and the index do (VC-181).
             const available = applySkillModes(read.skills, project.skillModes ?? {});
             // Order and dedup follow the request, not the directory: the
             // record should say what was asked for, once each.
@@ -1180,15 +1183,17 @@ app.whenReady().then(async () => {
             // the user installed rather than to hold an opinion about it.
             //
             // Two things can narrow that, and neither is Volli deciding on the
-            // user's behalf: the skill's own frontmatter (`isUserInvokeOnly`),
-            // and this project's explicit per-skill rule (VC-111, migration
-            // 023). The second exists because this index is ~94% of a fresh
+            // user's behalf: the skill's own frontmatter -- the portable
+            // `disable-model-invocation` every major harness honours -- and
+            // this project's explicit per-skill rule (VC-111, migration 023).
+            // The second exists because this index is ~94% of a fresh
             // Session's Volli-composed prompt and is re-sent as the stable
             // prefix of every turn, so "which skills are worth their prompt
             // share here" is a real question a project should be able to
-            // answer. Both land in the same place -- `applySkillModes` folds
-            // the rule onto `userInvokeOnly`, and `skillsIndexResource` reads
-            // only that.
+            // answer. Both land in the same place -- `applySkillModes` resolves
+            // them into one effective policy per skill, and
+            // `skillsIndexResource` reads only its `modelDiscoverable` axis
+            // (VC-181).
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(fsDeps.homeDir),

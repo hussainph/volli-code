@@ -27,7 +27,8 @@ const WAIT_WHAT: SkillReference = {
   name: "wait-what",
   description: "Re-pitch the last message",
   body: "Give me a little context.",
-  userInvokeOnly: true,
+  invocation: { modelDiscoverable: false, userInvokable: true },
+  policyDiagnostic: null,
   root: "/home/.agents/skills/wait-what",
 };
 

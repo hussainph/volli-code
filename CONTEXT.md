@@ -567,3 +567,45 @@ not open. It is recorded with its reason and never replayed — the next
 occurrence stands — and a person may start it by hand from the Run history
 afterwards. A skip and a silence must not look the same.
 _Avoid_: missed run, failed run
+
+**Skill**:
+A directory holding a `SKILL.md` — frontmatter naming and describing it, body
+of instructions — under the `.agents/skills/` convention, in either the
+project's own tier or the personal `~/.agents/skills/`. Its identity is the
+directory slug, not the frontmatter `name`: the slug is what a person types
+after `/`, what the picker offers, and what the delivered RESOURCE block
+carries, so the reference and the injection can never disagree about what the
+thing is called. A Skill's body reaches a model three ways, each visible in the
+prompt or the transcript — an explicit `/slug` in the composer, an attach-time
+selection, or the model's own read of a SKILL.md it found in the Skills index.
+_Avoid_: plugin, tool, extension, macro
+
+**Invocation policy**:
+What one Skill is currently allowed to do, on two independent axes: **Model
+discoverable** (its metadata rides the Skills index and the model may activate
+it unprompted) and **User invokable** (it appears in `/` completion and an
+explicit reference resolves). A Skill that is neither is **Unavailable**. The
+two are separate questions — the index is a prompt-budget question, the picker
+a discoverability question for a person — and every consumer resolves the same
+policy, so the index, the picker, explicit submit, attach-time selection and
+Settings can never disagree.
+_Avoid_: enabled, visibility, permission, scope
+
+**Skill mode**:
+A Project's per-Skill override of the model axis: `Auto` (in the index),
+`Manual` (out of the index, still typed by name), `Off` (removed). It is a
+budget lever, so it governs discoverability and leaves the user axis to the
+Skill's author — `Off` is the exception, being a removal rather than a budget
+answer, and closes both. A mode is stored only where it departs from what the
+file itself declared.
+_Avoid_: skill setting, toggle, enablement
+
+**Author invocation default**:
+What a `SKILL.md` asks for before any Project has its say, spelled with the
+portable top-level `disable-model-invocation` and `user-invocable` flags that
+Claude Code, Cursor, Copilot and Pi all honour. Neither is in the Agent Skills
+core format — both are client extensions — so they are read leniently and a
+declaration that cannot be taken at face value earns a surfaced diagnostic
+rather than a silent reinterpretation. A Project override outranks it in both
+directions.
+_Avoid_: frontmatter flag (alone), skill config

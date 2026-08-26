@@ -31,6 +31,8 @@ import {
   isWritablePromptTemplateName,
   mergePromptTemplates,
   promptTemplateDescription,
+  SKILL_DISABLE_MODEL_INVOCATION_KEY,
+  SKILL_USER_INVOCABLE_KEY,
   type PromptTemplate,
 } from "@volli/shared";
 
@@ -49,13 +51,32 @@ interface Frontmatter {
   readonly description: unknown;
   /**
    * The spec's `metadata` map, unread and untyped at this layer. Templates
-   * ignore it; skills read one key out of it (`isUserInvokeOnly`). Surfaced
+   * ignore it; skills read the legacy invocation alias out of it. Surfaced
    * here rather than parsed twice because this is the module that already
    * holds the YAML.
    */
   readonly metadata: unknown;
+  /**
+   * The two top-level invocation flags, likewise unread here (VC-181):
+   * `disable-model-invocation` and `user-invocable`. Neither is in the Agent
+   * Skills core format — both are client extensions Claude Code, Cursor,
+   * Copilot and Pi converged on — so they are surfaced as `unknown` and given
+   * their meaning by `@volli/shared`'s `readAuthorInvocationPolicy`, which is
+   * the one place that decides what a declared policy means. Templates ignore
+   * them the way they ignore `metadata`.
+   */
+  readonly disableModelInvocation: unknown;
+  readonly userInvocable: unknown;
   readonly body: string;
 }
+
+/** No frontmatter at all, or none this parser could read. */
+const NO_FRONTMATTER = {
+  description: undefined,
+  metadata: undefined,
+  disableModelInvocation: undefined,
+  userInvocable: undefined,
+} as const;
 
 /**
  * Split `---`-fenced YAML frontmatter from the body.
@@ -71,10 +92,9 @@ interface Frontmatter {
  */
 export function parsePromptTemplateFile(raw: string): Frontmatter {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith(FRONTMATTER_FENCE))
-    return { description: undefined, metadata: undefined, body: normalized };
+  if (!normalized.startsWith(FRONTMATTER_FENCE)) return { ...NO_FRONTMATTER, body: normalized };
   const endIndex = normalized.indexOf(`\n${FRONTMATTER_FENCE}`, FRONTMATTER_FENCE.length);
-  if (endIndex === -1) return { description: undefined, metadata: undefined, body: normalized };
+  if (endIndex === -1) return { ...NO_FRONTMATTER, body: normalized };
   const body = normalized.slice(endIndex + 4).trim();
   try {
     const frontmatter: unknown = parseYaml(normalized.slice(4, endIndex));
@@ -82,9 +102,15 @@ export function parsePromptTemplateFile(raw: string): Frontmatter {
       typeof frontmatter === "object" && frontmatter !== null
         ? (frontmatter as Record<string, unknown>)
         : undefined;
-    return { description: fields?.["description"], metadata: fields?.["metadata"], body };
+    return {
+      description: fields?.["description"],
+      metadata: fields?.["metadata"],
+      disableModelInvocation: fields?.[SKILL_DISABLE_MODEL_INVOCATION_KEY],
+      userInvocable: fields?.[SKILL_USER_INVOCABLE_KEY],
+      body,
+    };
   } catch {
-    return { description: undefined, metadata: undefined, body };
+    return { ...NO_FRONTMATTER, body };
   }
 }
 

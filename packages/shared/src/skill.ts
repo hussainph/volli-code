@@ -22,8 +22,8 @@
  * ladder: metadata first, instructions when activated, bundled files as
  * needed.
  *
- * Metadata disclosure is ON, always, because that is what the format says it
- * is: the Agent Skills specification's progressive-disclosure ladder loads
+ * Metadata disclosure is ON by default, because that is what the format says
+ * it is: the Agent Skills specification's progressive-disclosure ladder loads
  * "the `name` and `description` fields ... at startup for all skills", then
  * the body on activation, then bundled files as needed. Volli's job is to
  * absorb the toolkit the user installed and make it faithfully available —
@@ -31,12 +31,16 @@
  * re-consent to the format's own default. Where a skill lives is likewise
  * theirs: personal and project tiers are offered identically.
  *
- * The one thing that can withhold a skill from the index is the SKILL a
- * user authored ({@link isUserInvokeOnly}) — a `metadata` key, which is the
- * extension point the spec itself sanctions ("clients can use this to store
- * additional properties not defined by the Agent Skills spec"). Such a skill
- * stays fully usable; it is simply not advertised to the model, so it runs
- * when a person asks for it by name and never otherwise.
+ * ## Two axes, one policy (VC-181)
+ *
+ * What can narrow that default is an INVOCATION POLICY, and it has two
+ * independent axes rather than one flag, because the harnesses that ship this
+ * feature all treat them independently ({@link SkillInvocationPolicy}):
+ * whether the MODEL may find the skill unprompted, and whether a PERSON may
+ * name it. Every consumer — the index, the `/` picker, submit-time expansion,
+ * attach-time selection and the Settings readout — reads the one policy
+ * {@link resolveSkillPolicy} computes, so no surface can hold its own opinion
+ * about what a skill is currently allowed to do.
  *
  * The name a skill goes by is its directory slug, NOT its frontmatter `name`:
  * the frontmatter says "SVG Logo Designer", which no one can type after a `/`
@@ -52,6 +56,55 @@
 import type { PromptResource } from "./agent-runtime";
 import { isPromptResource } from "./prompt-resource";
 
+/**
+ * The two independent things a skill may be allowed to do.
+ *
+ * NOT one flag with two names. Claude Code, Copilot/VS Code, Cursor and Pi all
+ * ship these as separate frontmatter fields, and the four combinations are
+ * each a real configuration a skill author picks on purpose:
+ *
+ * | modelDiscoverable | userInvokable | what it is                          |
+ * | ----------------- | ------------- | ----------------------------------- |
+ * | yes               | yes           | the format's default                |
+ * | no                | yes           | "run it only when I ask" (Manual)   |
+ * | yes               | no            | background knowledge, no `/` row    |
+ * | no                | no            | unavailable                         |
+ *
+ * Volli held the middle two as one boolean until VC-181, which made the third
+ * row unreachable and made "not in the index" and "not in the picker" the same
+ * fact. They are not: the index is a PROMPT COST question and the picker is a
+ * DISCOVERABILITY question for a person, and a skill can sensibly answer them
+ * differently.
+ */
+export interface SkillInvocationPolicy {
+  /** Metadata rides the skills index; the model may activate it unprompted. */
+  readonly modelDiscoverable: boolean;
+  /** The skill appears in `/` completion and an explicit reference resolves. */
+  readonly userInvokable: boolean;
+}
+
+/**
+ * The format's own default: both axes open.
+ *
+ * This is what a SKILL.md that declares no invocation fields means, and it is
+ * the bottom rung of {@link resolveSkillPolicy}'s precedence. Named rather
+ * than spelled inline so "the default" is one object every caller points at.
+ */
+export const SKILL_POLICY_DEFAULT: SkillInvocationPolicy = {
+  modelDiscoverable: true,
+  userInvokable: true,
+};
+
+/** Whether two policies say the same thing — the identity-preserving check. */
+export function sameSkillPolicy(a: SkillInvocationPolicy, b: SkillInvocationPolicy): boolean {
+  return a.modelDiscoverable === b.modelDiscoverable && a.userInvokable === b.userInvokable;
+}
+
+/** Neither route resolves it — the ticket's "Unavailable". */
+export function isSkillUnavailable(policy: SkillInvocationPolicy): boolean {
+  return !policy.modelDiscoverable && !policy.userInvokable;
+}
+
 /** One loaded skill: the slug it is invoked by, and what the file said. */
 export interface SkillReference {
   /** The skill's directory name — what the user types after `/`. */
@@ -61,11 +114,22 @@ export interface SkillReference {
   /** The instructions themselves: the SKILL.md body, frontmatter stripped. */
   readonly body: string;
   /**
-   * Whether the skill asked not to be advertised to the model — its own
-   * frontmatter's call, never Volli's. Out of the index, still `/`-invocable
-   * and still selectable at start.
+   * What the skill's own file asked for, before this project has its say —
+   * the AUTHOR default that {@link resolveSkillPolicy} resolves a Project
+   * override against, and the value {@link applySkillModes} rewrites when a
+   * rule departs from it. Never Volli's opinion; see
+   * {@link readAuthorInvocationPolicy} for how a SKILL.md spells it.
    */
-  readonly userInvokeOnly: boolean;
+  readonly invocation: SkillInvocationPolicy;
+  /**
+   * One line about a policy declaration that could not be taken at face
+   * value — conflicting spellings, or a flag whose value is not a boolean.
+   * `null` is the normal case. Carried on the reference rather than logged so
+   * the Settings pane can show it against the row it is about: a skill whose
+   * declared policy was silently discarded is exactly the fault a person
+   * cannot diagnose from the behaviour alone.
+   */
+  readonly policyDiagnostic: string | null;
   /**
    * The skill's own directory, spelled the way the MODEL must address it —
    * and therefore tier-dependent, which is the whole reason it is carried as
@@ -166,8 +230,16 @@ export function isSkillName(value: string): boolean {
  *  - `off` — gone: unindexed, unlistable, unresolvable.
  *
  * `manual` is not a new mechanism. It is the frontmatter opt-out
- * ({@link isUserInvokeOnly}) with a per-project override in front of it, so
- * the author's default still holds wherever a project has said nothing.
+ * ({@link readAuthorInvocationPolicy}) with a per-project override in front of
+ * it, so the author's default still holds wherever a project has said nothing.
+ *
+ * ## The mode column governs the MODEL axis (VC-181)
+ *
+ * A mode is a budget lever: it answers "is this skill worth its index row on
+ * every turn in this project". It therefore sets `modelDiscoverable` outright
+ * and leaves `userInvokable` to the author — see {@link skillModePolicy}. The
+ * one exception is `off`, which is not a budget answer but a removal, and
+ * closes both axes.
  */
 export type SkillMode = "auto" | "manual" | "off";
 
@@ -184,17 +256,20 @@ export type SkillModes = Readonly<Record<string, SkillMode>>;
  * A stored `skill_modes` payload as rules — slugs the grammar can spell, modes
  * the vocabulary defines, and nothing else.
  *
- * `auto` rules are dropped rather than kept, because `auto` is what an absent
- * rule already means for an ordinary skill. Keeping it would make "never
- * touched" and "explicitly set to the default" two db states that are
- * indistinguishable everywhere above the db — a difference waiting to be
- * depended on by accident.
+ * ALL THREE MODES ARE READ BACK, `auto` INCLUDED (VC-181). This parser used to
+ * drop `auto` on the theory that it restates the absent-rule default, which is
+ * true for an ordinary skill and false for exactly the skill the override
+ * matters most for: one whose author wrote `disable-model-invocation: true`.
+ * For that skill an explicit `auto` is the only way a project can say "I want
+ * this one in my index after all", and dropping it on read made the Settings
+ * Select snap straight back to Manual — an override the UI had to stop
+ * offering because storage refused to keep it.
  *
- * NOTE the one asymmetry this creates, and it is deliberate: for a skill whose
- * frontmatter says `isUserInvokeOnly`, `auto` is NOT the default, so an
- * explicit `auto` on it is a real departure and IS stored. That is why the
- * drop is decided here against the vocabulary rather than against each skill.
- * See {@link resolveSkillMode} for where the two meet.
+ * Minimality moved to the WRITER instead, which is the layer that has the
+ * skill list and can therefore tell a departure from a restatement: see
+ * `skills-pane.tsx`'s `ruled`. A rule equal to the author's own default is
+ * simply not written; one that arrives anyway is harmless and resolves to the
+ * same policy.
  *
  * Degrades rather than throws, like `parseCanvas` beside it: a project row is
  * read at boot in a loop over every project, and a hand-edited value must cost
@@ -205,39 +280,102 @@ export function parseSkillModes(value: unknown): SkillModes {
   const rules: Record<string, SkillMode> = {};
   for (const [slug, mode] of Object.entries(value as Record<string, unknown>)) {
     if (!isSkillName(slug)) continue;
-    if (mode !== "manual" && mode !== "off") continue;
+    if (mode !== "auto" && mode !== "manual" && mode !== "off") continue;
     rules[slug] = mode;
   }
   return rules;
 }
 
 /**
- * What a skill's mode actually resolves to: the project's rule if it has one,
- * otherwise the skill author's own declaration.
+ * One Project mode applied over one author default — the whole of what a mode
+ * MEANS, in one pure function.
  *
- * `auto` can be stored (see {@link parseSkillModes}) but is never READ back
- * from the rules here, because `parseSkillModes` drops it — which means a
- * project cannot currently promote a frontmatter-quiet skill into the index.
- * That is a real limitation and it is the honest one to ship: the alternative
- * is storing a rule that says the same thing as no rule for every other skill.
+ * ## Why `userInvokable` passes through
+ *
+ * `auto` does not force a skill into the `/` menu and `manual` does not force
+ * it out. A mode answers the index-cost question; the picker question belongs
+ * to the author, who is the only party with an opinion about whether their
+ * skill is something a person names or background knowledge a model reaches
+ * for. This is the ticket's fourth combination decided AUTHOR-ONLY rather than
+ * left as an accidental parser outcome: `user-invocable: false` survives Auto
+ * and Manual alike, and the Project's escape hatch from it is `off`, which
+ * removes the skill rather than pretending to promote it.
+ *
+ * `off` closes both axes because it is the one mode that is not a budget
+ * answer: a person who set it wants the skill gone from this project, and a
+ * row that stayed typable would make Off a lie.
+ */
+export function skillModePolicy(
+  mode: SkillMode,
+  author: SkillInvocationPolicy,
+): SkillInvocationPolicy {
+  if (mode === "off") return { modelDiscoverable: false, userInvokable: false };
+  return { modelDiscoverable: mode === "auto", userInvokable: author.userInvokable };
+}
+
+/**
+ * THE resolver: one skill's effective policy under one project's rules.
+ *
+ * The precedence the whole feature is defined by, and the only place it is
+ * spelled:
+ *
+ *   1. the Project's override for this slug, if it has one
+ *   2. the author's own declaration ({@link readAuthorInvocationPolicy})
+ *   3. the format's default — already folded into (2)
+ *
+ * Every consumer resolves through here or through {@link applySkillModes},
+ * which is this function in a loop. Before VC-181 the same question was
+ * answered in four places against a single boolean, and "is it in the picker"
+ * and "is it in the index" could not be asked separately at all.
+ */
+export function resolveSkillPolicy(
+  modes: SkillModes,
+  skill: SkillReference,
+): SkillInvocationPolicy {
+  const mode = modes[skill.name];
+  return mode === undefined ? skill.invocation : skillModePolicy(mode, skill.invocation);
+}
+
+/**
+ * The mode a policy reads as — the Settings Select's value, and the rule the
+ * writer uses to tell a real override from a restatement.
+ *
+ * Lossy on purpose, and only in the direction that cannot mislead: a skill
+ * whose author closed both axes reads as `off`, and one that is merely not
+ * user-invokable still reads by its model axis, because that is the axis the
+ * column governs.
+ */
+export function authorSkillMode(policy: SkillInvocationPolicy): SkillMode {
+  if (isSkillUnavailable(policy)) return "off";
+  return policy.modelDiscoverable ? "auto" : "manual";
+}
+
+/**
+ * What a skill's mode resolves to: the project's rule if it has one, otherwise
+ * the mode the author's own declaration reads as.
+ *
+ * Now that {@link parseSkillModes} keeps `auto`, this answers in both
+ * directions — a project can demote a discoverable skill to Manual AND
+ * promote an author-manual one to Auto, and neither answer snaps back.
  */
 export function resolveSkillMode(modes: SkillModes, skill: SkillReference): SkillMode {
-  return modes[skill.name] ?? (skill.userInvokeOnly ? "manual" : "auto");
+  return modes[skill.name] ?? authorSkillMode(skill.invocation);
 }
 
 /**
  * One project's skill list, with its rules applied — the single seam every
  * consumption point goes through.
  *
- * It works by REWRITING `userInvokeOnly` rather than by teaching each consumer
- * about modes, which is why nothing downstream needed to change:
- * {@link skillsIndexResource} already withholds a `userInvokeOnly` skill from
- * the model, `resolveSlashNamespace` already offers it to the person, and
- * explicit resolution already ignores the flag. `off` is the only PROJECT
- * MODE that removes a merged, successfully loaded skill from the renderer's
- * picker supply; filesystem read limits and unreadable entries remain the
- * loader's separate safety policy. A shadowed loaded name is renamed rather
- * than dropped.
+ * It works by REWRITING each reference's {@link SkillReference.invocation} to
+ * its effective policy rather than by teaching every consumer about modes, so
+ * a downstream surface asks one question of the row in front of it:
+ * {@link skillsIndexResource} reads `modelDiscoverable`, `resolveSlashNamespace`
+ * reads `userInvokable`, and neither has to know a Project exists.
+ *
+ * A skill left {@link isSkillUnavailable} is DROPPED, which is `off`'s job and
+ * also an author's when they close both axes themselves. Filesystem read
+ * limits and unreadable entries remain the loader's separate safety policy; a
+ * shadowed loaded name is renamed rather than dropped.
  *
  * Applied AFTER {@link mergeSkills}, so project-over-personal is already
  * resolved and a slug names exactly one surviving skill — a rule cannot mean
@@ -246,22 +384,20 @@ export function resolveSkillMode(modes: SkillModes, skill: SkillReference): Skil
  * A rule naming nothing installed is ignored: a skill can be uninstalled while
  * its slug is still in the row, and a stale entry is not a reason to fail a
  * read that every composer open depends on.
+ *
+ * NOTE there is no empty-rules fast path. An author can close both axes with
+ * no Project rule at all, so "no rules" is not the same as "nothing to do".
+ * References whose policy is unchanged are still returned by identity.
  */
 export function applySkillModes(
   skills: readonly SkillReference[],
   modes: SkillModes,
 ): readonly SkillReference[] {
-  if (Object.keys(modes).length === 0) return skills;
   const ruled: SkillReference[] = [];
   for (const skill of skills) {
-    const mode = modes[skill.name];
-    if (mode === "off") continue;
-    if (mode === undefined) {
-      ruled.push(skill);
-      continue;
-    }
-    const userInvokeOnly = mode === "manual";
-    ruled.push(skill.userInvokeOnly === userInvokeOnly ? skill : { ...skill, userInvokeOnly });
+    const invocation = resolveSkillPolicy(modes, skill);
+    if (isSkillUnavailable(invocation)) continue;
+    ruled.push(sameSkillPolicy(skill.invocation, invocation) ? skill : { ...skill, invocation });
   }
   return ruled;
 }
@@ -290,31 +426,156 @@ export function skillPromptResource(skill: SkillReference): PromptResource {
 export const SKILLS_INDEX_RESOURCE_NAME = "skills index";
 
 /**
- * The `metadata` key a skill sets to keep itself out of the index.
+ * The portable top-level field that withholds a skill from the model.
  *
- * Namespaced because the spec asks for it — "we recommend making your key
- * names reasonably unique to avoid accidental conflicts" — and read out of
- * `metadata` rather than invented as a top-level field because that map is
- * precisely where the spec puts client-specific properties. Nothing else in
- * a SKILL.md is Volli's business.
+ * Not a Volli invention and not read out of `metadata`: Claude Code,
+ * Cursor, VS Code/Copilot and Pi all read this exact top-level key, and Codex
+ * spells the same split as `policy.allow_implicit_invocation: false`. The open
+ * Agent Skills core format does not standardize it — the spec's frontmatter
+ * table stops at `name`, `description`, `license`, `compatibility`,
+ * `metadata` and `allowed-tools` — so it remains a client extension. It is
+ * nevertheless the one a skill author actually writes, which makes reading it
+ * the difference between absorbing the user's toolkit and ignoring half of
+ * what it declared.
+ */
+export const SKILL_DISABLE_MODEL_INVOCATION_KEY = "disable-model-invocation";
+
+/**
+ * The portable top-level field that withholds a skill from the `/` menu.
+ *
+ * The other axis, and the one Volli could not previously express at all.
+ * Copilot's table is the clearest statement of it: `user-invocable: false`
+ * hides the row "while still allowing the agent to load it automatically" —
+ * background knowledge a person never types.
+ */
+export const SKILL_USER_INVOCABLE_KEY = "user-invocable";
+
+/**
+ * Volli's original `metadata` spelling of "keep me out of the index".
+ *
+ * KEPT AS AN ALIAS, NOT AS THE PRIMARY SPELLING (VC-181). It was chosen
+ * because `metadata` is where the spec sanctions client-specific properties,
+ * which is correct about the spec and wrong about the ecosystem: no skill in
+ * the wild carries it, and a Volli-only key asks an author to write something
+ * for Volli alone. {@link SKILL_DISABLE_MODEL_INVOCATION_KEY} is now the
+ * spelling Volli documents; this one still resolves so a SKILL.md written
+ * against the old rule does not silently change behaviour.
  */
 export const SKILL_USER_INVOKE_ONLY_KEY = "volli-user-invoke-only";
 
+/** What one frontmatter flag turned out to be. */
+type FlagRead =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly value: boolean }
+  | { readonly kind: "malformed"; readonly raw: string };
+
 /**
- * Whether a parsed `metadata` map opts its skill out of the index.
+ * One boolean-ish frontmatter flag, read leniently.
  *
- * Lenient in what it accepts, like every other frontmatter read here: the
- * spec types `metadata` as string→string, so `"true"` is the spelling to
- * expect, but a YAML author who writes a bare `true` meant the same thing and
- * is not going to be told otherwise by silence. Anything else — absent, empty,
- * `"false"`, a nested map — leaves the skill advertised, because the default
- * has to be the format's default.
+ * YAML gives a bare `true` as a boolean, but `metadata` is typed string→string
+ * by the spec and plenty of authors quote their flags regardless, so `"true"`
+ * and `"false"` are accepted in either case. Anything else is MALFORMED rather
+ * than false: a value nobody can act on is a mistake worth naming, and
+ * silently reading `disable-model-invocation: yes` as "no" is precisely the
+ * kind of quiet wrong answer this module exists to avoid.
  */
-export function isUserInvokeOnly(metadata: unknown): boolean {
-  if (typeof metadata !== "object" || metadata === null) return false;
-  const value = (metadata as Record<string, unknown>)[SKILL_USER_INVOKE_ONLY_KEY];
-  if (typeof value === "boolean") return value;
-  return typeof value === "string" && value.trim().toLowerCase() === "true";
+function readFlag(value: unknown): FlagRead {
+  if (value === undefined || value === null) return { kind: "absent" };
+  if (typeof value === "boolean") return { kind: "read", value };
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "") return { kind: "absent" };
+    if (normalized === "true") return { kind: "read", value: true };
+    if (normalized === "false") return { kind: "read", value: false };
+    return { kind: "malformed", raw: value.trim() };
+  }
+  return { kind: "malformed", raw: String(value) };
+}
+
+/** The invocation-shaped fields of a parsed SKILL.md, as the reader hands them over. */
+export interface SkillPolicyFrontmatter {
+  /** Top-level `disable-model-invocation`. */
+  readonly disableModelInvocation?: unknown;
+  /** Top-level `user-invocable`. */
+  readonly userInvocable?: unknown;
+  /** The spec's `metadata` map, for the legacy alias alone. */
+  readonly metadata?: unknown;
+}
+
+/** An author's declared policy, and anything about it worth saying out loud. */
+export interface AuthorInvocationPolicy {
+  readonly policy: SkillInvocationPolicy;
+  /** One line naming a conflict or a value that could not be read. */
+  readonly diagnostic: string | null;
+}
+
+/** The legacy `metadata` alias, or absent. */
+function readLegacyFlag(metadata: unknown): FlagRead {
+  if (typeof metadata !== "object" || metadata === null) return { kind: "absent" };
+  return readFlag((metadata as Record<string, unknown>)[SKILL_USER_INVOKE_ONLY_KEY]);
+}
+
+/**
+ * What a SKILL.md's own frontmatter asked for — rung 2 of
+ * {@link resolveSkillPolicy}'s precedence, and the only place a file's words
+ * become a policy.
+ *
+ * ## The deterministic answer to a conflict
+ *
+ * The model axis has two spellings and they can disagree. The portable
+ * top-level field WINS, always, and the disagreement is reported rather than
+ * absorbed. That direction is the only defensible one: the top-level field is
+ * what the author wrote for every other harness they use, so a Volli-only
+ * `metadata` key quietly overriding it would make this the one client that
+ * reads their file differently. The alias still decides the axis when the
+ * portable field is absent, which is the whole point of keeping it.
+ *
+ * A malformed value never silently becomes `false`. It falls through to the
+ * next rung — alias, then the format's default — and says so, because
+ * `disable-model-invocation: yes` is a skill whose author believes it is
+ * withheld from the model and is wrong about that.
+ */
+export function readAuthorInvocationPolicy(
+  frontmatter: SkillPolicyFrontmatter,
+): AuthorInvocationPolicy {
+  const diagnostics: string[] = [];
+  const portable = readFlag(frontmatter.disableModelInvocation);
+  const legacy = readLegacyFlag(frontmatter.metadata);
+  const invocable = readFlag(frontmatter.userInvocable);
+
+  if (portable.kind === "malformed") {
+    diagnostics.push(
+      `${SKILL_DISABLE_MODEL_INVOCATION_KEY}: "${portable.raw}" is not true or false — ignored.`,
+    );
+  }
+  if (legacy.kind === "malformed") {
+    diagnostics.push(
+      `metadata.${SKILL_USER_INVOKE_ONLY_KEY}: "${legacy.raw}" is not true or false — ignored.`,
+    );
+  }
+  if (invocable.kind === "malformed") {
+    diagnostics.push(
+      `${SKILL_USER_INVOCABLE_KEY}: "${invocable.raw}" is not true or false — ignored.`,
+    );
+  }
+  if (portable.kind === "read" && legacy.kind === "read" && portable.value !== legacy.value) {
+    diagnostics.push(
+      `${SKILL_DISABLE_MODEL_INVOCATION_KEY}: ${String(portable.value)} conflicts with ` +
+        `metadata.${SKILL_USER_INVOKE_ONLY_KEY}: ${String(legacy.value)} — ` +
+        `${SKILL_DISABLE_MODEL_INVOCATION_KEY} wins.`,
+    );
+  }
+
+  // Precedence, top down: portable field, legacy alias, format default.
+  const withheld =
+    portable.kind === "read" ? portable.value : legacy.kind === "read" ? legacy.value : false;
+  return {
+    policy: {
+      modelDiscoverable: !withheld,
+      userInvokable: invocable.kind === "read" ? invocable.value : true,
+    },
+    diagnostic: diagnostics.length === 0 ? null : diagnostics.join(" "),
+  };
 }
 
 /**
@@ -341,9 +602,11 @@ const INDEX_PREAMBLE = [
  * which lands in the transcript as an ordinary tool call, visible by
  * construction.
  *
- * Two kinds of skill are left out, and only two. A skill that asked to be
- * user-invoked only ({@link isUserInvokeOnly}) is not advertised — its own
- * decision, made in its own file. And `injectedNames` are removed because a
+ * Two kinds of skill are left out, and only two. A skill whose effective
+ * policy is not `modelDiscoverable` is not advertised — its author's decision,
+ * its project's, or both. Hidden ENTIRELY rather than listed and refused at
+ * activation, which is the client guide's own rule: listing a skill the model
+ * cannot load only buys a wasted turn. And `injectedNames` are removed because a
  * skill whose full body already rides this Session's promptResources has
  * nothing left to disclose; an index entry beside the body would tell the
  * model to go read what it was already handed. `null` when nothing remains,
@@ -356,7 +619,7 @@ export function skillsIndexResource(
 ): PromptResource | null {
   const injected = new Set(injectedNames);
   const rows = skills
-    .filter((skill) => !skill.userInvokeOnly && !injected.has(skill.name))
+    .filter((skill) => skill.invocation.modelDiscoverable && !injected.has(skill.name))
     .toSorted((a, b) => a.name.localeCompare(b.name));
   if (rows.length === 0) return null;
   const entries = rows.map((skill) => {

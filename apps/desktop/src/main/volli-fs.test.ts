@@ -2096,7 +2096,8 @@ describe("registerFileIpcHandlers", () => {
         name: string;
         description: string;
         body: string;
-        userInvokeOnly: boolean;
+        invocation: { modelDiscoverable: boolean; userInvokable: boolean };
+        policyDiagnostic: string | null;
         root: string;
       }[];
     }>("volli:prompt-templates", {}, { projectId: setup.projectId });
@@ -2107,14 +2108,16 @@ describe("registerFileIpcHandlers", () => {
         name: "logos",
         description: "Draw logos",
         body: "# Logos",
-        userInvokeOnly: false,
+        invocation: { modelDiscoverable: true, userInvokable: true },
+        policyDiagnostic: null,
         root: ".agents/skills/logos",
       },
       {
         name: "pdf",
         description: "Fill PDFs",
         body: "# PDF",
-        userInvokeOnly: false,
+        invocation: { modelDiscoverable: true, userInvokable: true },
+        policyDiagnostic: null,
         root: `${setup.globalSkillsDir}/pdf`,
       },
     ]);

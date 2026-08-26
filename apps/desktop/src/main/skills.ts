@@ -12,12 +12,19 @@
  * frontmatter parses under the same rules as a prompt template — same fence,
  * same description key, same first-line fallback — which is why this module
  * borrows `prompt-templates.ts`'s parser instead of writing a second one.
- * Only spec fields are read: `description`, and the one `metadata` key that
- * lets a skill keep itself out of the model's index (`isUserInvokeOnly`).
- * `metadata` is where the specification puts client-specific properties, so
- * reading a namespaced key out of it is the format working as designed — and
- * a skill that sets nothing behaves the way the format says it should, which
- * is disclosed.
+ * Two kinds of field are read and no others: `description`, and the invocation
+ * policy — the portable top-level `disable-model-invocation` and
+ * `user-invocable` flags, plus Volli's original `metadata` alias for the first
+ * of them. What those declarations MEAN is not decided here: the frontmatter
+ * goes to `@volli/shared`'s `readAuthorInvocationPolicy`, which owns
+ * precedence and the diagnostics a conflicting file earns, so main and the
+ * renderer cannot hold two answers about one file. A skill that declares
+ * nothing behaves the way the format says it should, which is disclosed.
+ *
+ * Codex's `agents/openai.yaml` is deliberately NOT read. It is that client's
+ * own presentation/configuration file and lives beside a skill rather than
+ * inside its frontmatter; parsing it here would make Volli's answer depend on
+ * whether another harness happened to be configured in this checkout.
  *
  * The failure policy is `prompt-templates.ts`'s, verbatim: a missing
  * directory is the normal case and reads as empty, only a directory that
@@ -30,9 +37,9 @@ import { join } from "node:path";
 import {
   errorMessage,
   isSkillName,
-  isUserInvokeOnly,
   mergeSkills,
   promptTemplateDescription,
+  readAuthorInvocationPolicy,
   skillRootDir,
   type SkillReference,
 } from "@volli/shared";
@@ -97,12 +104,19 @@ export async function readSkillDir(
       // No readable SKILL.md — not a skill, and one loss never costs the rest.
       continue;
     }
-    const { description, metadata, body } = parsePromptTemplateFile(raw);
+    const { description, metadata, disableModelInvocation, userInvocable, body } =
+      parsePromptTemplateFile(raw);
+    const { policy, diagnostic } = readAuthorInvocationPolicy({
+      disableModelInvocation,
+      userInvocable,
+      metadata,
+    });
     skills.push({
       name: slug,
       description: promptTemplateDescription({ body, frontmatterDescription: description }),
       body,
-      userInvokeOnly: isUserInvokeOnly(metadata),
+      invocation: policy,
+      policyDiagnostic: diagnostic,
       root: rootFor(slug),
     });
   }

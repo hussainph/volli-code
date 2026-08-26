@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { skillPromptResource } from "./skill";
+import { skillPromptResource, SKILL_POLICY_DEFAULT } from "./skill";
 import {
   expandCommandInvocation,
   formatPromptTemplateInvocation,
@@ -247,7 +247,8 @@ describe("expandCommandInvocation", () => {
       name: "compact",
       description: "Shadowed by the verb",
       body: "never delivered",
-      userInvokeOnly: false,
+      invocation: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
       root: ".agents/skills/compact",
     };
 
@@ -304,7 +305,8 @@ describe("expandCommandInvocation", () => {
       name: "logos",
       description: "Design logos",
       body: "# Logos\n\nRun `awk '{print $1}'` first.",
-      userInvokeOnly: false,
+      invocation: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
       root: ".agents/skills/logos",
     };
     const skills = [
@@ -313,7 +315,8 @@ describe("expandCommandInvocation", () => {
         name: "ship",
         description: "Shadowed by the template",
         body: "never delivered",
-        userInvokeOnly: false,
+        invocation: SKILL_POLICY_DEFAULT,
+        policyDiagnostic: null,
         root: ".agents/skills/ship",
       },
     ];

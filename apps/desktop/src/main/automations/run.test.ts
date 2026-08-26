@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { expandCommandInvocation } from "@volli/shared";
+import { expandCommandInvocation, SKILL_POLICY_DEFAULT } from "@volli/shared";
 import type { ModelSelection, PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
@@ -38,7 +38,8 @@ const SKILL: SkillReference = {
   name: "tdd",
   description: "Red, green, refactor",
   body: "Write the failing test first.",
-  userInvokeOnly: false,
+  invocation: SKILL_POLICY_DEFAULT,
+  policyDiagnostic: null,
   root: ".agents/skills/tdd",
 };
 

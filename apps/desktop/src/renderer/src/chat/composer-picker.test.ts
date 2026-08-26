@@ -4,6 +4,7 @@ import {
   COMPOSER_VERBS,
   expandCommandInvocation,
   resolveSlashNamespace,
+  SKILL_POLICY_DEFAULT,
   type IndexedFile,
   type PromptTemplate,
   type SkillReference,
@@ -33,7 +34,8 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     name,
     description: "Create professional SVG logos",
     body: "# Logos\n\nDo the thing.",
-    userInvokeOnly: false,
+    invocation: SKILL_POLICY_DEFAULT,
+    policyDiagnostic: null,
     root: `.agents/skills/${name}`,
     ...overrides,
   };

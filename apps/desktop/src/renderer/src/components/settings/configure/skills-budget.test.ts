@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { SkillReference } from "@volli/shared";
+import { SKILL_POLICY_DEFAULT, type SkillReference } from "@volli/shared";
 
 import { estimateTokens, skillBodyTokens, skillsIndexTokens } from "./skills-budget";
 
@@ -8,7 +8,8 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     name: "tdd",
     description: "Test-driven development.",
     body: "Write the failing test first.",
-    userInvokeOnly: false,
+    invocation: SKILL_POLICY_DEFAULT,
+    policyDiagnostic: null,
     root: ".agents/skills/tdd",
     ...overrides,
   };

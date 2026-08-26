@@ -33,6 +33,8 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
+  skillPromptResource,
+  SKILL_POLICY_DEFAULT,
   UtilityCompletionError,
   type AuthoritySnapshot,
   type ObservabilityEvent,
@@ -6177,6 +6179,60 @@ describe("the Cache Prefix a Session sends", () => {
       expect(call.tools).toBe(calls[0]?.tools);
       expect(call.systemPrompt).toBe(calls[0]?.systemPrompt);
     }
+  });
+
+  it("carries an attached skill's instructions through a compaction (VC-181)", async () => {
+    // The lifecycle clause the ticket refuses to leave implicit: skill
+    // instructions must survive compaction or be deliberately restored, never
+    // silently lost. Attach-time selection rides `promptResources` into the
+    // SYSTEM PROMPT, and compaction replaces `agent.state.messages` only — it
+    // has no path to the prompt at all. So survival here is structural rather
+    // than a rule someone has to remember, and this pins it against the real
+    // compaction path rather than against the composer that builds the prompt.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture({
+      promptResources: [
+        skillPromptResource({
+          name: "house-style",
+          description: "How this repo writes things",
+          body: "volli-skill-marker: always spell the units out.",
+          invocation: SKILL_POLICY_DEFAULT,
+          policyDiagnostic: null,
+          root: ".agents/skills/house-style",
+        }),
+      ],
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    const [firstTurn, , , afterCompaction] = calls;
+    // Delivered as a named resource with its root, so bundled relative files
+    // still resolve after the history around it is gone.
+    expect(firstTurn?.systemPrompt).toContain("volli-skill-marker");
+    expect(firstTurn?.systemPrompt).toContain("Skill directory: .agents/skills/house-style/");
+    // Still there on the far side, byte-identical — the history was summarized,
+    // the instructions were not.
+    expect(afterCompaction?.systemPrompt).toContain("volli-skill-marker");
+    expect(afterCompaction?.systemPrompt).toBe(firstTurn?.systemPrompt);
+    // And the turn that history WAS elided, so this is not passing by nothing
+    // having been compacted.
+    expect(afterCompaction?.messages).not.toContain("first answer");
   });
 
   it("compacts into a new base under the same prefix", async () => {

@@ -4,6 +4,7 @@ import {
   type PromptResource,
   type RuntimeWorkspaceEnvironment,
   type SkillReference,
+  SKILL_POLICY_DEFAULT,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -32,7 +33,8 @@ function skill(name: string): SkillReference {
     name,
     description: `${name} description`,
     body: `# ${name}\n\nDo ${name}.`,
-    userInvokeOnly: false,
+    invocation: SKILL_POLICY_DEFAULT,
+    policyDiagnostic: null,
     root: `.agents/skills/${name}`,
   };
 }
