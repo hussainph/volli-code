@@ -265,6 +265,12 @@ export default defineConfig(({ mode }) => ({
         "src/editor/document-identity.ts",
         "src/editor/document-mode.ts",
         "src/editor/document-registry.ts",
+        // Which repository Markdown may open as a document, and what a file
+        // that may not is told (VC-192). In the gate because this is the one
+        // place a rendered surface is allowed to disagree with the bytes: a
+        // branch missed here shows frontmatter as a heading, and the person
+        // editing it would have no way to know.
+        "src/editor/document-view-policy.ts",
         "src/editor/emphasis-wrap.ts",
         "src/editor/file-refs.ts",
         // Which editor an outside-Monaco Go to Line lands in (VC-187), and
