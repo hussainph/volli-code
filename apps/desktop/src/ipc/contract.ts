@@ -433,6 +433,20 @@ export interface FilePathInput {
   relPath: string;
 }
 
+/**
+ * One find-across-files request (plan §4.7): the same `{ projectId, ticketId }`
+ * scope pair a read takes, plus the literal text to look for.
+ *
+ * `query` is a LITERAL, not a pattern — v1 is find-only and never interprets
+ * what was typed as a regex, so a search for `foo(bar)` finds `foo(bar)`. Main
+ * trims it and refuses an empty one rather than listing the whole checkout.
+ */
+export interface FileSearchInput {
+  projectId: string;
+  ticketId?: string;
+  query: string;
+}
+
 /** A known macOS app that can open a safely resolved Files target. */
 export type { ExternalAppId } from "../external-app-ids";
 
@@ -722,6 +736,12 @@ export interface VolliFileIpcContract {
   "volli:file-index": { args: [input: FileIndexInput]; result: FileIndexResult };
   /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
   "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
+  /**
+   * Find across files (plan §4.7), through the same `{ projectId, ticketId }`
+   * seam a read resolves through: literal text, gitignore-respecting, capped in
+   * both matches and time, with the cap that ended it reported.
+   */
+  "volli:search": { args: [input: FileSearchInput]; result: FileSearchResult };
   /** Writes utf8 text to an existing file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
   /**
@@ -2193,6 +2213,54 @@ export type FileReadResult = Result<{
 
 /** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
 export type FileWriteResult = Result<{ mtime: number }>;
+
+// ---- find across files (plan §4.7) ----------------------------------------
+
+/**
+ * One matched line, as the Search page draws it and opens it.
+ *
+ * `line`/`column` are 1-based — Monaco's own numbering, so the click that opens
+ * the file hands them straight to `revealLineInCenter`/`setPosition` without a
+ * translation step nobody would think to test. `preview` is the matched line,
+ * possibly windowed around the match (a minified bundle's single 400 KB line is
+ * not a preview), and `start`/`end` are the match's offsets INSIDE that
+ * preview — never into the original line, which the renderer never sees.
+ */
+export interface FileSearchMatch {
+  line: number;
+  column: number;
+  preview: string;
+  /** 0-based, half-open `[start, end)` offsets of the match within `preview`. */
+  start: number;
+  end: number;
+}
+
+/** Every match in one file, in file order — the Search page's group. */
+export interface FileSearchFile {
+  relPath: string;
+  matches: readonly FileSearchMatch[];
+}
+
+/**
+ * Which cap ended the search, if any — the honest twin of the 1 MiB read cap's
+ * `truncated` flag, saying WHICH bound was hit rather than only that one was:
+ *
+ *  - `none`    — ripgrep ran to completion; this is everything there is.
+ *  - `matches` — the match cap was reached and the search was stopped there.
+ *  - `time`    — the time budget ran out; what is here is what had arrived.
+ */
+export type FileSearchLimit = "none" | "matches" | "time";
+
+/**
+ * A completed search — returned by `volli:search`. `matches` counts what is
+ * carried in `files` (not what exists on disk, which a capped search cannot
+ * know), and `limit` is why counting stopped.
+ */
+export type FileSearchResult = Result<{
+  files: readonly FileSearchFile[];
+  matches: number;
+  limit: FileSearchLimit;
+}>;
 
 /**
  * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),

@@ -4,7 +4,9 @@
  * ls-files, gitignore-respecting, `.volli/artifacts/` force-included),
  * worktree-aware read/write/reveal and external-app launch of any repo file,
  * the single project-scoped `.volli/artifacts/` create flow, the navigators'
- * create/rename/duplicate/delete track (VC-191, plan §4.5), and a per-open-tab
+ * create/rename/duplicate/delete track (VC-191, plan §4.5), find across files
+ * (VC-193, plan §4.7 — the ripgrep run itself lives in `file-search.ts`; what
+ * is here is the scope it runs under), and a per-open-tab
  * debounced file watch —
  * plus, for the Project Files workspace (issue #106), a per-expanded-directory
  * watch that refreshes one listing at a time rather than mirroring the repo.
@@ -52,6 +54,7 @@ import {
   withMarkdownExtension,
 } from "@volli/shared";
 import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
+import { searchFiles } from "./file-search";
 import { systemExternalAppGateway } from "./external-apps";
 import type { ExternalAppGateway } from "./external-apps";
 import type { FileKind, FileSource, IndexedFile } from "@volli/shared";
@@ -72,6 +75,8 @@ import type {
   FilePathInput,
   FileReadResult,
   FileRenameInput,
+  FileSearchInput,
+  FileSearchResult,
   FileWriteInput,
   FileWriteResult,
   PromptTemplateCreateInput,
@@ -1508,6 +1513,21 @@ interface FileScope {
 }
 
 /**
+ * The one directory a scoped search walks: the ticket's live worktree, else the
+ * project's main checkout.
+ *
+ * The read path picks its root PER PATH ({@link resolveFileRoot}, so `.volli/**`
+ * stays on Main whatever the scope). A search has no path to pick with, and
+ * `.volli` is self-gitignored and therefore not searched at all — so the rule
+ * collapses to the checkout the scope named, and a ticket whose worktree row
+ * has gone stale degrades to Main for exactly the reason a read of one of its
+ * files does.
+ */
+function searchRoot(scope: FileScope): string {
+  return scope.worktreeRoot ?? scope.projectPath;
+}
+
+/**
  * The main-repo path plus the ticket's worktree root (the seam) for a file
  * request. `ticketId` is optional; when given it's checked against `projectId`
  * (defense-in-depth — a mismatched pair is rejected, not trusted).
@@ -1673,6 +1693,20 @@ export function registerFileIpcHandlers(
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
       return await readFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
+    },
+
+    // Find across files (plan §4.7), scoped by the SAME seam as the read above
+    // — so the checkout that answered the search is the checkout the click on a
+    // result reads from. `searchRoot` is the one difference: a search has no
+    // relPath to route on, so `.volli/**`'s always-Main rule has nothing to
+    // apply to, and a ticket searches its worktree whole (falling back to Main
+    // when that worktree is gone, exactly as a read does).
+    "volli:search": async (input: FileSearchInput): Promise<FileSearchResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      const run = await searchFiles({ root: searchRoot(scope.value), query: input.query });
+      if (!run.ok) return run;
+      return { ok: true, ...run.value };
     },
 
     "volli:external-app-list": async (): Promise<ExternalAppListResult> => ({

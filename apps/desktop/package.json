@@ -48,6 +48,7 @@
     "@volli/session-presentation": "workspace:*",
     "@volli/session-rpc": "workspace:*",
     "@volli/shared": "workspace:*",
+    "@vscode/ripgrep": "^1.18.0",
     "ai": "^7.0.60",
     "better-sqlite3": "^12.4.1",
     "class-variance-authority": "^0.7.1",
@@ -94,7 +95,8 @@
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "0.35.3",
-    "@img/sharp-libvips-darwin-arm64": "1.3.2"
+    "@img/sharp-libvips-darwin-arm64": "1.3.2",
+    "@vscode/ripgrep-darwin-arm64": "1.18.0"
   },
   "productName": "Volli Code"
 }

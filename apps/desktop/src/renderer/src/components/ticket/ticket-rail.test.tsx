@@ -53,37 +53,42 @@ function render(subject: Ticket = ticket) {
         activeTabId="doc"
         changesContent={<p>diffs navigator</p>}
         filesContent={<p>files navigator</p>}
+        searchContent={<p>search page</p>}
       />
     </TooltipProvider>,
   );
 }
 
 describe("TicketRail header", () => {
-  it("draws one centred tablist of the three Calm Stack pages", () => {
+  it("draws one centred tablist of the four Calm Stack pages", () => {
     const html = render();
 
     expect(html).toContain('role="tablist"');
     expect(html).toContain('data-testid="ticket-rail-tab-now"');
     expect(html).toContain('data-testid="ticket-rail-tab-changes"');
     expect(html).toContain('data-testid="ticket-rail-tab-files"');
+    expect(html).toContain('data-testid="ticket-rail-tab-search"');
     // One tab is selected, and it is the one holding the roving tab stop.
     expect(html.match(/aria-selected="true"/g)?.length).toBe(1);
     expect(html.match(/tabindex="0"/g)?.length).toBe(1);
   });
 
-  // The design of record shows exactly one word in the pill; the other two
-  // pages are bare glyphs until selected. That is what makes three pages fit
-  // 160px, so the unselected labels are genuinely absent from the DOM — every
-  // tab still carries its name for assistive tech through `aria-label`.
-  it("labels only the selected page, and names the other two for screen readers", () => {
+  // The design of record shows exactly one word in the pill; the other pages
+  // are bare glyphs until selected. That is what lets four of them fit the
+  // rail's narrowest width, so the unselected labels are genuinely absent from
+  // the DOM — every tab still carries its name for assistive tech through
+  // `aria-label`.
+  it("labels only the selected page, and names the others for screen readers", () => {
     const html = render();
 
     expect(html).toContain(">Now<");
     expect(html).not.toContain(">Diffs<");
     expect(html).not.toContain(">Files<");
+    expect(html).not.toContain(">Search<");
     expect(html).toContain('aria-label="Now"');
     expect(html).toContain('aria-label="Diffs"');
     expect(html).toContain('aria-label="Files"');
+    expect(html).toContain('aria-label="Search"');
   });
 
   it("retires the vertical icon-mode strip and its Properties page", () => {
@@ -126,8 +131,10 @@ describe("TicketRail's Now page", () => {
 
     expect(html).not.toContain("diffs navigator");
     expect(html).not.toContain("files navigator");
+    expect(html).not.toContain("search page");
     expect(html).not.toContain('id="ticket-rail-page-changes"');
     expect(html).not.toContain('id="ticket-rail-page-files"');
+    expect(html).not.toContain('id="ticket-rail-page-search"');
   });
 
   it("keeps the ticket's repository facts out of the properties fold", () => {

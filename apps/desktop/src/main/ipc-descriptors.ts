@@ -789,6 +789,16 @@ function isFilePathInput(
 }
 
 /**
+ * The search shape (plan §4.7): the index's scope pair plus the literal text.
+ * Only its TYPE is judged here — an empty or whitespace-only query is a request
+ * main answers with an empty result rather than a malformed-request refusal,
+ * because it is what a Search page holds every time it is opened.
+ */
+function isFileSearchInput(value: unknown): boolean {
+  return isRecord(value) && typeof value["query"] === "string" && isFileIndexInput(value);
+}
+
+/**
  * The rename shape: the file-path input plus the destination path (VC-191).
  * Both are checked as strings HERE; whether either is a safe relative path, and
  * whether the two resolve against the same checkout, is main's two-layer job.
@@ -844,6 +854,11 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
   "volli:file-read": {
     guard: (args): args is IpcArgs<"volli:file-read"> =>
       args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:search": {
+    guard: (args): args is IpcArgs<"volli:search"> =>
+      args.length === 1 && isFileSearchInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:external-app-list": {

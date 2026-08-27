@@ -4,8 +4,8 @@
  * `SidebarPanel` + `ActiveLabelTabs` + `NowPanel` and is now the design of
  * record).
  *
- * The panel owns its own header: one centred pill of three pages — Now, Diffs,
- * Files — floating above whichever page is showing. The vertical icon strip
+ * The panel owns its own header: one centred pill of four pages — Now, Diffs,
+ * Files, Search — floating above whichever page is showing. The icon strip
  * that used to run down the rail's outer edge is gone, and so is Properties as
  * a page of its own: it folds inline into Now, under the repository card.
  *
@@ -30,6 +30,7 @@ import * as React from "react";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import type { SkillReference, Ticket } from "@volli/shared";
 
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
@@ -52,6 +53,7 @@ const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = 
   now: ChatCircleDotsIcon,
   changes: GitDiffIcon,
   files: FoldersIcon,
+  search: MagnifyingGlassIcon,
 };
 
 /** This surface's pages, in pill order, as {@link RailModeTabs} takes them. */
@@ -80,6 +82,7 @@ export function TicketRail({
   activeTabId,
   filesContent,
   changesContent,
+  searchContent,
 }: {
   projectId: string;
   ticket: Ticket;
@@ -109,6 +112,8 @@ export function TicketRail({
   filesContent?: React.ReactNode;
   /** The Diffs navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
+  /** The Search page (VC-193, plan §4.7) — the same seam again. */
+  searchContent?: React.ReactNode;
 }) {
   const storedMode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
@@ -188,6 +193,7 @@ export function TicketRail({
         ) : null}
         {mode === "changes" ? changesContent : null}
         {mode === "files" ? filesContent : null}
+        {mode === "search" ? searchContent : null}
       </section>
     </div>
   );

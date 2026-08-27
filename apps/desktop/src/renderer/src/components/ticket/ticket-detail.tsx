@@ -18,6 +18,7 @@ import {
   type TabCloseResolution,
 } from "@renderer/components/files/close-guard";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
+import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type {
   DocumentFileRefs,
@@ -1199,6 +1200,16 @@ export function TicketDetail({
                     onPinFile={pinFileFromRail}
                     onOpenCreatedFile={openCreatedFileFromRail}
                     onRenameFile={renameFileFromRail}
+                  />
+                }
+                searchContent={
+                  // Scoped to THIS ticket, so the search runs in its worktree
+                  // through the same seam a read does — and a match opens in
+                  // the same preview slot a navigator row opens (VC-193).
+                  <FileSearchPanel
+                    scope={{ kind: "ticket", projectId, ticketId: ticket.id }}
+                    root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
+                    onOpenMatch={previewFileFromRail}
                   />
                 }
               />

@@ -19,6 +19,7 @@ import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/docu
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { rearmWatch } from "@renderer/editor/rearm-watch";
+import { fileRevealKey } from "@renderer/editor/reveal-line";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
@@ -726,6 +727,10 @@ export function FileView({
             value={state.text}
             revision={state.revision}
             viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
+            // How a Search result that opened this file says which line to land
+            // on (VC-193). The key is the REQUEST pair, which is what the rail
+            // that made the request has.
+            revealKey={fileRevealKey({ projectId, ticketId, relPath })}
             ariaLabel={`${name} contents`}
             readOnly={!state.editable || liveError !== null}
             wordWrap={wordWrap}
