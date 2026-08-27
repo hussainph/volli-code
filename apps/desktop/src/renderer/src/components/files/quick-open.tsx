@@ -141,7 +141,14 @@ export function QuickOpen({
       );
       const intent = quickOpenIntent({ relPath, pin, ...surface });
       if (scope.kind === "ticket") {
-        if (intent === "pin") workspace.pinTicketFile(scope.projectId, scope.ticketId, relPath);
+        // `openTicketFile`, not `pinTicketFile`: pinning from a NAVIGATOR row
+        // may not steal focus (the row can be a context menu on a tab nobody
+        // is looking at), but pinning from HERE is the act of opening — the
+        // bare `pinFile` leaves `activeRelPath` alone for an already-open tab
+        // and is identity for an already-pinned one, so ⌘↵ on a file already
+        // in the strip would land nowhere, or do nothing at all. This is the
+        // pin-AND-activate pair `pinHomeFile` already is at the other scope.
+        if (intent === "pin") workspace.openTicketFile(scope.projectId, scope.ticketId, relPath);
         else workspace.previewTicketFile(scope.projectId, scope.ticketId, relPath);
       } else if (intent === "pin") {
         workspace.pinHomeFile(scope.projectId, relPath);
