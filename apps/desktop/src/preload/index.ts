@@ -753,7 +753,7 @@ const api = {
     repair: (): Promise<CliRepairResult> => invoke("volli:cli-repair"),
   },
   files: {
-    /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+    /** The scoped file index the `@` picker and quick-open rank over: Main, or a ticket's worktree when `ticketId` is given. Fetched fresh per picker open. */
     index: (input: FileIndexInput): Promise<FileIndexResult> => invoke("volli:file-index", input),
     /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
     read: (input: FilePathInput): Promise<FileReadResult> => invoke("volli:file-read", input),

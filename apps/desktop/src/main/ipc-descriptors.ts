@@ -769,13 +769,23 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 // external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
+/**
+ * The `{ projectId, ticketId? }` scope pair the file index is listed for
+ * (VC-190) — {@link isFilePathInput} minus the path. An absent `ticketId` means
+ * the project's main checkout; a present one means that ticket's worktree, and
+ * main re-checks the pair against the db before it resolves anything.
+ */
+function isFileIndexInput(value: unknown): value is { projectId: string; ticketId?: string } {
+  if (!isRecord(value)) return false;
+  if (typeof value["projectId"] !== "string") return false;
+  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+}
+
 /** The `{ projectId, ticketId?, relPath }` shape shared by read/reveal/watch/unwatch. */
 function isFilePathInput(
   value: unknown,
 ): value is { projectId: string; ticketId?: string; relPath: string } {
-  if (!isRecord(value)) return false;
-  if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
-  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+  return isRecord(value) && typeof value["relPath"] === "string" && isFileIndexInput(value);
 }
 
 /** The file-path shape plus one closed app id — callers never name a bundle or command. */
@@ -819,7 +829,7 @@ function isDirPathInput(value: unknown): value is { projectId: string; relPath: 
 export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:file-index": {
     guard: (args): args is IpcArgs<"volli:file-index"> =>
-      args.length === 1 && isProjectIdInput(args[0]),
+      args.length === 1 && isFileIndexInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:file-read": {

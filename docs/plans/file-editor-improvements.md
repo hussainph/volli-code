@@ -65,7 +65,7 @@ place where the UI actively lies.
 | W1 | Create a file or folder; rename, move, delete, duplicate | NEW-FILE POLICY refuses writes to nonexistent paths outside `.volli/**` (`main/volli-fs.ts:593`); no affordance anywhere in the renderer |
 | W2 | Reorder tabs | No drag or move operation in any strip; order is insertion order (`packages/shared/src/file-workspace.ts` has preview/pin/activate/close only; both strips compose kind-grouped) |
 | W3 | Edit repository markdown in rendered form | `fileSavePolicy` routes all non-artifact markdown to the raw source editor (`packages/shared/src/file-save-policy.ts:37-41`); Document Mode never mounts for it |
-| W4 | Jump to a file by name | No quick-open; the command palette has no file entries (`command-palette-model.ts`); the rail navigator is a one-level-at-a-time walk |
+| W4 | Jump to a file by name | ~~No quick-open; the command palette has no file entries (`command-palette-model.ts`); the rail navigator is a one-level-at-a-time walk~~ — **removed by §4.4 (VC-190)**: ⌘P over the scoped file index (`components/files/quick-open.tsx`) |
 | W5 | Search across files | No search IPC exists at all (`main/volli-fs.ts`, `ipc/contract.ts`) |
 
 **Lies — things shown that are wrong:**
@@ -191,7 +191,7 @@ first session. Each item names its current state and verdict.
 | F2 | Find/replace in file | Monaco built-in | Done |
 | F3 | Reorder tabs by drag | Absent (W2) | **Must** |
 | F4 | Create/rename/delete/duplicate files and folders | Absent (W1) | **Must** |
-| F5 | Quick-open by name | Absent (W4); `volli:file-index` IPC already serves the `@` picker (`ipc/contract.ts:696`) | **Must** |
+| F5 | Quick-open by name | ⌘P over `volli:file-index`, now scope-taking (`components/files/quick-open.tsx`) | Done (§4.4, VC-190) |
 | F6 | Diagnostics that tell the truth | Actively wrong for TS/JS (L1) | **Must** |
 | F7 | Rendered markdown editing for repo files | Machinery built, policy withholds it (W3) | **Must** |
 | F8 | Editor controls drawn as controls (diff toggle icons, word wrap, go-to-line, copy path) | Rough (§1.3) | **Must** (cheap) |
@@ -274,7 +274,13 @@ The "big L". dnd-kit is already in-house, patched, and proven on the board
   replaced").
 - Out of scope: dragging tabs *between* windows/surfaces, split-pane docking.
 
-### 4.4 Quick-open (S–M)
+### 4.4 Quick-open (S–M) — **landed: VC-190**
+
+Shipped as written below, minus the command-palette file section, which the
+ticket cut: ⌘P is the whole surface, and a second door onto the same list is a
+separate decision. The index IPC now takes `{ projectId, ticketId }` and lists
+the repo half from the worktree while `.volli/**` stays on Main — decision #6
+spelled for a listing instead of a path.
 
 - ⌘P (and a command-palette file section) over the existing
   `volli:file-index` — the ranking/match code already exists in the `@` picker

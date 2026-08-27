@@ -409,9 +409,16 @@ export interface RetentionTtlSetInput {
 
 // ---- file-channel input shapes (docs/plans/global-artifacts.md) -----------
 
-/** The whole-project file index is always read from the project's MAIN checkout. */
+/**
+ * The scope pair the index is listed for — the same `{ projectId, ticketId }`
+ * shape read/reveal/watch already take (see {@link FilePathInput}), resolved
+ * through the same seam: with no `ticketId`, the project's MAIN checkout; with
+ * one, that ticket's live worktree, while `.volli/artifacts/**` still comes
+ * from Main (decision #6, the rule the index and a read cannot disagree on).
+ */
 export interface FileIndexInput {
   projectId: string;
+  ticketId?: string;
 }
 
 /**
@@ -692,7 +699,7 @@ export type DataIpcChannel = keyof VolliDataIpcContract;
  * surface — the file channels `src/main/volli-fs.ts` owns.
  */
 export interface VolliFileIpcContract {
-  /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+  /** The scoped file index the `@` picker and quick-open rank over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
   "volli:file-index": { args: [input: FileIndexInput]; result: FileIndexResult };
   /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
   "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
@@ -2068,10 +2075,10 @@ export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
 // ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 
 /**
- * The whole-project file index the `@` picker ranks over — returned by
+ * The file index the `@` picker and quick-open rank over — returned by
  * `volli:file-index`. Built fresh on each picker open from `git ls-files`
- * (gitignore-respecting) plus a walk of `.volli/artifacts/`; `truncated` is set
- * when the ~20k entry cap was hit.
+ * (gitignore-respecting) in the scope's checkout, plus a walk of Main's
+ * `.volli/artifacts/`; `truncated` is set when the ~20k entry cap was hit.
  */
 export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
 
