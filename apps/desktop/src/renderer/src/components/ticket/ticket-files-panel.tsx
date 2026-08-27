@@ -21,6 +21,7 @@ import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
@@ -43,6 +44,7 @@ import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes"
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { ListRow } from "@renderer/components/ui/list-row";
@@ -128,6 +130,11 @@ function FileRow({
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent>
         <ExternalAppContextMenu target={{ kind: "file", projectId, ticketId, relPath }} />
+        <ContextMenuSeparator />
+        {/* The row's hover Copy button already writes the relative path; these
+            two are the keyboard-and-right-click route to both spellings, and
+            the only route to the absolute one. */}
+        <CopyPathContextMenuItems target={{ projectId, ticketId, relPath }} />
       </ContextMenuContent>
     </ContextMenu>
   );

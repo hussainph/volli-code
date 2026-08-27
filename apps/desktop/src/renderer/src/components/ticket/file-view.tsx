@@ -22,6 +22,7 @@ import { rearmWatch } from "@renderer/editor/rearm-watch";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
+import { useUiStore } from "@renderer/stores/ui";
 
 interface FileViewProps {
   projectId: string;
@@ -140,6 +141,9 @@ export function FileView({
   // `expectedMtime`. `null` = no conflict, autosave live.
   const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
   const [liveError, setLiveError] = React.useState<string | null>(null);
+  // App-wide (stores/ui), toggled from the file tab's menu or the diff's band.
+  // Source mode only: Document Mode's prose always wraps.
+  const wordWrap = useUiStore((ui) => ui.wordWrap);
 
   const draftRef = React.useRef(""); // current autosave-editor content
   const syncedRef = React.useRef(""); // last content loaded or saved (disk baseline)
@@ -724,6 +728,7 @@ export function FileView({
             viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
             ariaLabel={`${name} contents`}
             readOnly={!state.editable || liveError !== null}
+            wordWrap={wordWrap}
             onSave={saveSource}
             onDirtyChange={handleSourceDirtyChange}
             initialViewState={initialViewState}

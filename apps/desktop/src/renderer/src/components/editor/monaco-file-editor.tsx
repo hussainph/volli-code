@@ -5,6 +5,7 @@ import { errorMessage } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import { documentIdentityKey, type DocumentIdentity } from "@renderer/editor/document-identity";
+import { surfaceGoToLine } from "@renderer/editor/go-to-line";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import {
   applyLiveDocumentReconciliation,
@@ -71,6 +72,11 @@ export function attachEditorContribution(
   return contribute?.(context) ?? null;
 }
 
+/** How a word-wrap preference reaches Monaco. */
+export function wordWrapOption(wordWrap: boolean): "on" | "off" {
+  return wordWrap ? "on" : "off";
+}
+
 /** The source-mode look: a code file, with its gutter and monospace measure. */
 const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
   automaticLayout: true,
@@ -95,11 +101,18 @@ const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
 export function fileEditorConstructionOptions(input: {
   readOnly: boolean;
   ariaLabel: string;
+  /**
+   * The user's word-wrap choice (stores/ui). Omitted by a host that has an
+   * opinion of its own — Document Mode always wraps, because prose that did not
+   * would not be prose.
+   */
+  wordWrap?: boolean;
   overrides?: MonacoDocumentOptions;
 }): editor.IStandaloneEditorConstructionOptions {
   return {
     ...SOURCE_MODE_OPTIONS,
     ...input.overrides,
+    ...(input.wordWrap === undefined ? {} : { wordWrap: wordWrapOption(input.wordWrap) }),
     theme: activeMonacoEditorThemeId(),
     readOnly: input.readOnly,
     domReadOnly: input.readOnly,
@@ -117,6 +130,13 @@ export interface MonacoFileEditorProps {
   ariaLabel: string;
   /** Renders a read-only editor (truncated/oversize reads); Cmd-S then never writes. */
   readOnly: boolean;
+  /**
+   * Wrap long lines? The app-wide preference (stores/ui), pushed down rather
+   * than read here so this component keeps taking its whole state from props.
+   * Applied live with `updateOptions` — unlike {@link MonacoFileEditorProps.options},
+   * a wrap flip is the same document in the same view, not a different one.
+   */
+  wordWrap?: boolean;
   /** Performs the actual write. The editor only reads the model and delegates. */
   onSave(text: string): Promise<MonacoFileSaveResult>;
   /** Fires on every dirty transition so the workbench can pin/guard the tab. */
@@ -254,6 +274,7 @@ export function MonacoFileEditor({
   viewId,
   ariaLabel,
   readOnly,
+  wordWrap,
   onSave,
   onDirtyChange,
   options,
@@ -286,6 +307,7 @@ export function MonacoFileEditor({
   const liveRef = React.useRef({
     readOnly,
     ariaLabel,
+    wordWrap,
     onSave,
     onViewStateChange,
     initialViewState,
@@ -295,6 +317,7 @@ export function MonacoFileEditor({
   liveRef.current = {
     readOnly,
     ariaLabel,
+    wordWrap,
     onSave,
     onViewStateChange,
     initialViewState,
@@ -377,6 +400,7 @@ export function MonacoFileEditor({
     let lease: MonacoLease | null = null;
     let changeSubscription: { dispose(): void } | null = null;
     let contribution: { dispose(): void } | null = null;
+    let goToLine: { dispose(): void } | null = null;
     host.dataset.monacoStatus = "loading";
 
     void loadMonacoRuntime()
@@ -414,11 +438,18 @@ export function MonacoFileEditor({
               readOnly: liveRef.current.readOnly,
               dirty: lease.snapshot().dirty,
             }),
+            wordWrap: liveRef.current.wordWrap,
             overrides: liveRef.current.options,
           }),
           model: lease.model,
         });
         editorRef.current = editorView;
+
+        // ⌃G, and the editor a palette row means (editor/go-to-line.ts).
+        goToLine = surfaceGoToLine(
+          editorView,
+          runtime.monaco.KeyMod.WinCtrl | runtime.monaco.KeyCode.KeyG,
+        );
 
         // Monaco swallows Cmd-S inside the editor, so the binding has to be
         // editor-local. It only reads the model and delegates to the host.
@@ -477,6 +508,8 @@ export function MonacoFileEditor({
         if (cancelled) return;
         contribution?.dispose();
         contribution = null;
+        goToLine?.dispose();
+        goToLine = null;
         changeSubscription?.dispose();
         changeSubscription = null;
         editorView?.dispose();
@@ -496,6 +529,7 @@ export function MonacoFileEditor({
       // Before the editor goes: a contribution's widgets and view zones belong
       // to it, and its provider registrations are global.
       contribution?.dispose();
+      goToLine?.dispose();
       changeSubscription?.dispose();
       if (leaseRef.current?.key === key) leaseRef.current = null;
       editorRef.current = null;
@@ -564,6 +598,14 @@ export function MonacoFileEditor({
       ariaLabel: fileEditorAriaLabel({ label: ariaLabel, readOnly, dirty }),
     });
   }, [ariaLabel, dirty, readOnly]);
+
+  // The word-wrap control is elsewhere (the file tab's menu, the diff's band),
+  // so this arrives while the editor is up and mid-draft: `updateOptions`, never
+  // a remount, which would cost the caret and the undo stack to change a view.
+  React.useEffect(() => {
+    if (wordWrap === undefined) return;
+    editorRef.current?.updateOptions({ wordWrap: wordWrapOption(wordWrap) });
+  }, [wordWrap]);
 
   /**
    * The conflict banner's "use disk" consequence: the draft is genuinely thrown

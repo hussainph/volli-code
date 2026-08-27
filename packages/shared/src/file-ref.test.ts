@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  absoluteFilePath,
   artifactBaseName,
   baseNameOf,
   classifyFileKind,
@@ -11,7 +12,9 @@ import {
   isSafeArtifactEntryName,
   isSafeRelPath,
   isValidNewArtifactName,
+  isVolliRelPath,
   parseFileRefs,
+  resolveFileRoot,
   scoreFileMatch,
   withMarkdownExtension,
 } from "./file-ref";
@@ -97,6 +100,65 @@ describe("isArtifactRelPath", () => {
     expect(isArtifactRelPath(".volli/tickets/VC-1/notes.md")).toBe(false);
     // A sibling that merely shares the prefix string is not under the dir.
     expect(isArtifactRelPath(".volli/artifacts-old.md")).toBe(false);
+  });
+});
+
+describe("isVolliRelPath", () => {
+  it("recognizes the .volli tier and only it", () => {
+    expect(isVolliRelPath(".volli")).toBe(true);
+    expect(isVolliRelPath(".volli/artifacts/notes.md")).toBe(true);
+    expect(isVolliRelPath("src/index.ts")).toBe(false);
+    // A sibling that merely shares the prefix string is not under the dir.
+    expect(isVolliRelPath(".vollix/notes.md")).toBe(false);
+  });
+});
+
+describe("resolveFileRoot", () => {
+  const projectPath = "/repos/volli";
+  const worktreePath = "/worktrees/VC-187";
+
+  it("resolves a repo path to the ticket's live worktree copy (decision #6)", () => {
+    expect(resolveFileRoot({ projectPath, worktreePath, relPath: "src/index.ts" })).toEqual({
+      root: worktreePath,
+      source: "worktree",
+    });
+  });
+
+  it("keeps the .volli tier on the main checkout even under a worktree", () => {
+    expect(
+      resolveFileRoot({ projectPath, worktreePath, relPath: ".volli/artifacts/notes.md" }),
+    ).toEqual({ root: projectPath, source: "main" });
+  });
+
+  it("falls back to the main checkout when there is no worktree", () => {
+    expect(resolveFileRoot({ projectPath, worktreePath: null, relPath: "src/index.ts" })).toEqual({
+      root: projectPath,
+      source: "main",
+    });
+  });
+});
+
+describe("absoluteFilePath", () => {
+  it("joins the resolved root to the project-relative path", () => {
+    expect(
+      absoluteFilePath({
+        projectPath: "/repos/volli",
+        worktreePath: "/worktrees/VC-187",
+        relPath: "src/index.ts",
+      }),
+    ).toBe("/worktrees/VC-187/src/index.ts");
+  });
+
+  it("never doubles a separator a root already carries", () => {
+    expect(absoluteFilePath({ projectPath: "/", worktreePath: null, relPath: "README.md" })).toBe(
+      "/README.md",
+    );
+  });
+
+  it("is the root itself for the empty path", () => {
+    expect(absoluteFilePath({ projectPath: "/repos/volli", worktreePath: null, relPath: "" })).toBe(
+      "/repos/volli",
+    );
   });
 });
 

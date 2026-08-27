@@ -241,6 +241,10 @@ export default defineConfig(({ mode }) => ({
         "src/editor/document-registry.ts",
         "src/editor/emphasis-wrap.ts",
         "src/editor/file-refs.ts",
+        // Which editor an outside-Monaco Go to Line lands in (VC-187), and
+        // whether there is one at all — a pure `.ts` beside the two editor
+        // components precisely so the gate can reach it.
+        "src/editor/go-to-line.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-runtime.ts",

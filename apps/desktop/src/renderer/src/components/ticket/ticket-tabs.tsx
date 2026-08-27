@@ -23,6 +23,8 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type { SkillReference } from "@volli/shared";
 
+import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
+import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
@@ -283,8 +285,9 @@ function TicketTab({
   );
 
   // Session and chat tabs rename; File tabs hold the external-app/Finder
-  // submenu whether pinned or previewed; preview tabs additionally get Keep
-  // Open. Doc and Diff tabs still have nothing to offer.
+  // submenu, the two Copy Path items and Word Wrap whether pinned or previewed;
+  // preview tabs additionally get Keep Open. Doc and Diff tabs still have
+  // nothing to offer.
   if (!renamable && fileTarget === null && !(preview && onPin !== undefined)) return inner;
 
   return (
@@ -294,6 +297,12 @@ function TicketTab({
         {fileTarget !== null ? (
           <>
             <ExternalAppContextMenu target={fileTarget} />
+            <ContextMenuSeparator />
+            <CopyPathContextMenuItems target={fileTarget} />
+            <ContextMenuSeparator />
+            {/* The file tab has no band to hang this on, and this slice adds
+                none — the menu is the sanctioned other door. */}
+            <WordWrapContextMenuItem />
             {preview ? <ContextMenuSeparator /> : null}
           </>
         ) : null}
