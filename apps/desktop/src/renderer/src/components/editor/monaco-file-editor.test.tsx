@@ -172,6 +172,23 @@ describe("fileEditorConstructionOptions", () => {
     });
   });
 
+  it("draws the DOCUMENT surface for markdown that still saves explicitly", () => {
+    // VC-192: the same editor, the same model, the same ⌘S — a different look.
+    // Everything Source Mode puts in the margin is gone, and the measure is the
+    // app's own sans face rather than the mono one.
+    expect(fileEditorConstructionOptions({ ...base, surface: "document" })).toMatchObject({
+      lineNumbers: "off",
+      glyphMargin: false,
+      folding: false,
+      fontFamily: "var(--font-sans)",
+      wordWrap: "on",
+      theme: "vitesse-dark",
+      ariaLabel: "notes.md",
+    });
+    // And the source look is what an unnamed surface still gets.
+    expect(fileEditorConstructionOptions(base)).toMatchObject({ lineNumbers: "on" });
+  });
+
   it("wraps when nobody asked — Document Mode's prose has no toggle to obey", () => {
     // Omitted rather than defaulted here: `SOURCE_MODE_OPTIONS` already wraps,
     // and a host that restyles the document (Document Mode) must keep its own
