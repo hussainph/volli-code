@@ -240,6 +240,10 @@ export default defineConfig(({ mode }) => ({
         // component installs the listener, but this module owns when it may
         // remap the gesture into horizontal travel.
         "src/components/ui/tab-scroll.ts",
+        // And what a DROP on the strip means (VC-189). dnd-kit owns the
+        // gesture; which tab ended up where is arithmetic, and an off-by-one
+        // in it is a tab that lands one slot from where it was let go.
+        "src/components/ui/tab-reorder.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.

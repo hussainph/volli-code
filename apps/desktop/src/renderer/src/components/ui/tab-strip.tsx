@@ -32,9 +32,35 @@
  * `data-*` hooks and how Radix's `ContextMenuTrigger asChild` merges its
  * listeners and ref in; a shell that dropped them would be a tab whose
  * right-click opens nothing.
+ *
+ * ARRANGEMENT (VC-189) is opt-in and stays the caller's too: hand {@link
+ * TabStrip} a `reorder` and give each movable tab a `dragId`, and the strip
+ * grows a horizontal dnd-kit sortable over its `role="tab"` elements. A strip
+ * that passes neither mounts no `DndContext` at all and is byte-for-byte the
+ * fixed strip it was. What order a drop MEANS is `tab-reorder.ts`; where that
+ * order is kept is the workspace store's `tabOrder` overlay.
  */
 import * as React from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DraggableSyntheticListeners,
+} from "@dnd-kit/core";
+import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import {
+  horizontalListSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import type { TabOrder } from "@volli/shared";
 
 // Imported rather than accepted as a slot so the two strips that rename cannot
 // drift the field's size apart again — which is exactly what they had done
@@ -43,9 +69,11 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
+import { tabDropOrder } from "./tab-reorder";
 import { scrollTabsWithWheel } from "./tab-scroll";
 
 export type TabVariant = "folder" | "pill";
@@ -58,6 +86,16 @@ export type TabVariant = "folder" | "pill";
  * drawings in it.
  */
 const TabVariantContext = React.createContext<TabVariant>("folder");
+
+/**
+ * Whether this strip arranges. Travels by context for the same reason the
+ * variant does — a tab is wrapped in its own context menu, so the strip cannot
+ * reach its `Tab` children — and it exists at all because `useSortable` is a
+ * hook: a tab may not decide per render whether to call one. The flag chooses
+ * between two components instead, and the tabs of a fixed strip register
+ * nothing with dnd-kit rather than registering a disabled sortable.
+ */
+const TabReorderContext = React.createContext(false);
 
 // ---------------------------------------------------------------------------
 // Focus, in the DOM
@@ -107,6 +145,20 @@ function focusSuccessorTab(from: HTMLElement): void {
 // ---------------------------------------------------------------------------
 // The strip
 
+/**
+ * Drag-to-reorder, as the caller's half of the bargain (VC-189).
+ *
+ * `ids` is the strip's MOVABLE tabs in drawn order: the permanent first tab is
+ * left out, so it is neither draggable nor a place anything can be dropped.
+ * Build it however is convenient — the strip holds its identity steady for
+ * dnd-kit itself ({@link useSteadyIds}).
+ */
+export interface TabStripReorder {
+  ids: TabOrder;
+  /** A drop that moved something: what moved, and the movable ids after it. */
+  onReorder(movedId: string, ids: TabOrder): void;
+}
+
 export interface TabStripProps extends React.ComponentProps<"div"> {
   variant?: TabVariant;
   /**
@@ -123,12 +175,18 @@ export interface TabStripProps extends React.ComponentProps<"div"> {
    * more tab.
    */
   actions?: React.ReactNode;
+  /**
+   * Opt into drag-to-reorder. Absent — and the strip mounts no `DndContext`,
+   * no sensors and no sortable: a strip nobody arranges pays nothing.
+   */
+  reorder?: TabStripReorder;
 }
 
 export function TabStrip({
   variant = "folder",
   label,
   actions,
+  reorder,
   className,
   children,
   ...props
@@ -151,7 +209,7 @@ export function TabStrip({
     return () => scroller.removeEventListener("wheel", onWheel);
   }, []);
 
-  return (
+  const strip = (
     <div
       data-slot="tab-strip"
       data-variant={variant}
@@ -179,7 +237,16 @@ export function TabStrip({
           aria-orientation="horizontal"
           className={cn("flex gap-1", folder ? "items-end" : "items-center")}
         >
-          <TabVariantContext.Provider value={variant}>{children}</TabVariantContext.Provider>
+          <TabVariantContext.Provider value={variant}>
+            {reorder === undefined ? (
+              children
+            ) : (
+              // Inside the tablist, where the tabs are; the sensors and the
+              // DndContext sit outside it (below) so dnd-kit's two hidden
+              // announcement nodes are not children of a `role="tablist"`.
+              <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+            )}
+          </TabVariantContext.Provider>
         </div>
       </div>
       {actions !== undefined ? (
@@ -198,6 +265,90 @@ export function TabStrip({
         </div>
       ) : null}
     </div>
+  );
+
+  return reorder === undefined ? strip : <TabStripDnd reorder={reorder}>{strip}</TabStripDnd>;
+}
+
+/** The sortable list itself, and the flag that tells a tab it may register. */
+function SortableTabs({ ids, children }: { ids: TabOrder; children: React.ReactNode }) {
+  return (
+    // `items` is typed mutable though dnd-kit never writes to it; these ids are
+    // the same readonly list the order model uses everywhere else.
+    <SortableContext items={useSteadyIds(ids) as string[]} strategy={horizontalListSortingStrategy}>
+      <TabReorderContext.Provider value>{children}</TabReorderContext.Provider>
+    </SortableContext>
+  );
+}
+
+/**
+ * The same ids, at the same array identity until one of them actually changes.
+ *
+ * `SortableContext` keys its context value on this array, so a fresh one per
+ * render re-renders every sortable tab and re-measures the strip. Both strips
+ * compose their descriptors from scratch on every render — and re-render on
+ * every streamed chat token — so "a fresh one per render" is the default, not
+ * the exception. Held here rather than asked of each caller: there is one right
+ * answer, and it is not one every strip should have to remember.
+ */
+function useSteadyIds(ids: TabOrder): TabOrder {
+  const steady = React.useRef(ids);
+  const same =
+    steady.current.length === ids.length && steady.current.every((id, i) => id === ids[i]);
+  // A cache write during render: same value in, same value out, so it is
+  // idempotent and safe under a re-render React throws away.
+  if (!same) steady.current = ids;
+  return steady.current;
+}
+
+/**
+ * The strip's drag machinery: sensors, collision, modifiers, and the one
+ * handler that turns a drop into an arrangement.
+ *
+ * Its own component so a strip that does not arrange mounts none of it — and
+ * so the hooks below are unconditional.
+ *
+ * `distance: 4` on the pointer keeps a plain click (select), a double-click
+ * (rename / Keep Open) and the hover-revealed × working; the drag engages only
+ * after real travel, the same constraint the board and the project rail use.
+ * The keyboard sensor is what makes arranging reachable without a pointer: it
+ * claims Space on a tab, and `Tab` below hands it exactly that key (see the
+ * keydown there for the Enter/Space split it forces).
+ *
+ * Horizontal-axis and parent-element modifiers because a tab strip is one row
+ * that owns its own width: a tab must not be liftable out of its strip, and
+ * vertical travel would only ever be noise from a hand moving sideways.
+ */
+function TabStripDnd({
+  reorder,
+  children,
+}: {
+  reorder: TabStripReorder;
+  children: React.ReactNode;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function handleDragEnd({ active, over }: DragEndEvent) {
+    const drop = tabDropOrder(
+      reorder.ids,
+      String(active.id),
+      over === null ? null : String(over.id),
+    );
+    if (drop !== null) reorder.onReorder(drop.movedId, drop.ids);
+  }
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+      onDragEnd={handleDragEnd}
+    >
+      {children}
+    </DndContext>
   );
 }
 
@@ -256,12 +407,118 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
   revealLabel?: boolean;
   /** Non-null while this tab is being renamed in place. */
   renaming?: TabRenaming | null;
+  /**
+   * This tab's identity for a strip that ARRANGES (VC-189) — the same id the
+   * caller put in {@link TabStripReorder.ids}. Omit it and the tab does not
+   * drag and cannot be dropped on, which is exactly what the permanent first
+   * tab (Board / Body) passes. Ignored by a strip with no `reorder`.
+   */
+  dragId?: string;
   /** Not `onSelect`, which a div already owns as a DOM event. */
   onActivate(): void;
   onClose?(): void;
 }
 
-export function Tab({
+/**
+ * dnd-kit's live state for one tab, or `null` for a tab that does not drag.
+ * Internal: {@link Tab} decides which of the two it is.
+ */
+interface TabDrag {
+  listeners: DraggableSyntheticListeners;
+  dragging: boolean;
+}
+
+/**
+ * Sibling shift while a drag reorders the strip. The board's value
+ * (`ticket-card.tsx`'s `SORT_TRANSITION`) by deliberate copy of the NUMBER,
+ * not by import: one is a card crossing a column, the other is a tab crossing a
+ * strip, and the day one of them wants a different curve it should be able to
+ * have it without moving the other. dnd-kit's own 250ms default reads floaty
+ * for both.
+ */
+const TAB_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
+
+export function Tab({ dragId, ...props }: TabProps) {
+  const arranges = React.useContext(TabReorderContext);
+  // Two components rather than a conditional hook — see TabReorderContext. A
+  // fixed strip's tabs, and the permanent tab of an arranging one, render the
+  // shell directly and touch no dnd-kit machinery at all.
+  if (!arranges || dragId === undefined) return <TabShell {...props} />;
+  return <SortableTab {...props} dragId={dragId} />;
+}
+
+/**
+ * One draggable tab: dnd-kit's sortable, wrapped around the same shell every
+ * other tab draws.
+ *
+ * A tab being RENAMED does not drag. The inline field lives inside the tab, and
+ * the pointer sensor would read a drag across the text you are trying to select
+ * as a drag of the tab under it — dnd-kit even clears the document selection
+ * once a drag activates. Commit or cancel first; the tab is still there.
+ */
+function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
+  const reducedMotion = useReducedMotion();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: dragId,
+    // `null` is dnd-kit's own "do not animate": under reduced motion the
+    // siblings jump to their new places instead of sliding (same gate the board
+    // card takes).
+    transition: reducedMotion ? null : TAB_SORT_TRANSITION,
+  });
+  const renamingNow = props.renaming !== null && props.renaming !== undefined;
+  const ref = useComposedTabRef(setNodeRef, props.ref);
+
+  return (
+    <TabShell
+      {...props}
+      ref={ref}
+      // dnd-kit's `attributes` are NOT spread: they carry `role="button"`, a
+      // `tabIndex` of their own and `aria-roledescription="draggable"`, each of
+      // which would overwrite something a tab must keep saying — its role, the
+      // strip's roving tabindex, and its own name. The described-by is the one
+      // that adds: it points at dnd-kit's hidden instructions, which is how a
+      // screen reader learns Space picks the tab up.
+      aria-describedby={attributes["aria-describedby"]}
+      style={{
+        ...props.style,
+        transform: CSS.Transform.toString(transform),
+        transition: transition ?? undefined,
+      }}
+      // Above its neighbours while it travels, so the tab being dragged is not
+      // drawn under the ones it is passing.
+      className={cn(isDragging && "z-10", props.className)}
+      drag={renamingNow ? null : { listeners, dragging: isDragging }}
+    />
+  );
+}
+
+/**
+ * dnd-kit's node ref joined with whatever ref the caller already put on the tab
+ * — Radix's `ContextMenuTrigger asChild` puts one on every tab that has a menu.
+ *
+ * The identity of the returned callback never changes, and that is the point:
+ * Radix memoizes ITS composed ref on the child's, so a fresh closure per render
+ * would make React detach and re-attach the node on every render — and a node
+ * that goes null mid-drag is a drag dnd-kit can no longer measure.
+ */
+function useComposedTabRef(
+  setNodeRef: (node: HTMLElement | null) => void,
+  outer: React.Ref<HTMLDivElement> | undefined,
+): (node: HTMLDivElement | null) => void {
+  const latest = React.useRef(outer);
+  latest.current = outer;
+  return React.useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      const ref = latest.current;
+      if (typeof ref === "function") ref(node);
+      else if (ref !== null && ref !== undefined) ref.current = node;
+    },
+    [setNodeRef],
+  );
+}
+
+function TabShell({
   label,
   hint,
   active,
@@ -274,11 +531,12 @@ export function Tab({
   labelClassName,
   revealLabel = false,
   renaming = null,
+  drag = null,
   onActivate,
   onClose,
   className,
   ...props
-}: TabProps) {
+}: TabProps & { drag?: TabDrag | null }) {
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
@@ -296,7 +554,20 @@ export function Tab({
       aria-selected={active}
       tabIndex={tabStop ? 0 : -1}
       onClick={onActivate}
+      // dnd-kit's pointer activator, composed over whatever the caller already
+      // listens for here (Radix's context menu uses this event for its
+      // long-press). A drag that actually engages stops the click that would
+      // follow it, so arranging a tab never also selects it.
+      onPointerDown={(event) => {
+        props.onPointerDown?.(event);
+        drag?.listeners?.onPointerDown?.(event);
+      }}
       onKeyDown={(event) => {
+        // A keyboard drag in flight belongs entirely to dnd-kit's own document
+        // listener: arrows move the tab, Space drops it, Escape cancels. The
+        // strip's roving focus has to stand down for the duration, or an arrow
+        // would walk focus off the very tab being carried.
+        if (drag?.dragging === true) return;
         const move = tabFocusMove(event.key);
         if (move !== null) {
           event.preventDefault();
@@ -309,6 +580,17 @@ export function Tab({
           // select the tab the user was trying to close. Arrows stay unguarded
           // above — roving out of the × is exactly what they are for.
           if (event.target !== event.currentTarget) return;
+          // ON A STRIP THAT ARRANGES, SPACE PICKS THE TAB UP and Enter stays
+          // the activation. dnd-kit's keyboard sensor claims both keys, a tab
+          // needs one of them to select with, and this is the same split the
+          // board card makes for the same reason (`ticket-card.tsx`). It is
+          // what keeps reorder off the pointer-only list; the sensor's own
+          // hidden instructions say "press space", and they are what this tab
+          // points its `aria-describedby` at.
+          if (event.key === " " && drag?.listeners?.onKeyDown !== undefined) {
+            drag.listeners.onKeyDown(event);
+            return;
+          }
           event.preventDefault();
           onActivate();
         }

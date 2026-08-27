@@ -99,7 +99,13 @@ describe("quickOpenSurfaceFiles", () => {
       projectFiles: { tabs: [tab("README.md", false)], activeRelPath: "README.md" },
       homeActiveTab: fileTabId("README.md"),
       ticketTabs: {
-        t1: { files: [tab("app.ts", false)], diffs: [], diffMeta: {}, active: fileTabId("app.ts") },
+        t1: {
+          files: [tab("app.ts", false)],
+          diffs: [],
+          diffMeta: {},
+          tabOrder: [],
+          active: fileTabId("app.ts"),
+        },
       },
     });
     expect(quickOpenSurfaceFiles({ kind: "ticket", projectId: "p1", ticketId: "t1" }, ui)).toEqual({
@@ -110,7 +116,9 @@ describe("quickOpenSurfaceFiles", () => {
 
   it("reports no active file when the ticket's Body tab is in front", () => {
     const ui = workspace({
-      ticketTabs: { t1: { files: [], diffs: [], diffMeta: {}, active: TICKET_BODY_TAB_ID } },
+      ticketTabs: {
+        t1: { files: [], diffs: [], diffMeta: {}, tabOrder: [], active: TICKET_BODY_TAB_ID },
+      },
     });
     expect(
       quickOpenSurfaceFiles({ kind: "ticket", projectId: "p1", ticketId: "t1" }, ui)

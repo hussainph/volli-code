@@ -143,6 +143,41 @@ export function renameFile(
   return { tabs, activeRelPath };
 }
 
+/**
+ * Arrange a tab: move `relPath` to `toIndex` in the strip, and PIN it (VC-189,
+ * plan §4.3).
+ *
+ * THE PIN IS THE DECISION. Arranging a tab is a deliberate act — the person
+ * said where this file belongs — and a tab the person placed must not be
+ * silently replaced by the next glance from the navigator. That is decision
+ * #56's "a dirty tab is never replaced" applied to the other way a tab earns
+ * its slot, and it is here in the reducer rather than at the two call sites so
+ * Home and the ticket workspace cannot answer it differently.
+ *
+ * `toIndex` is clamped into the strip rather than validated: a drop lands
+ * between two tabs that exist, so an index past either end means "the end it
+ * ran past". Focus is untouched — arranging a tab is not selecting it, and a
+ * drag can start on a tab that is not in front. A path that is not open is
+ * ignored, like every other operation here: a strip cannot arrange a tab it
+ * does not have.
+ */
+export function moveFile(
+  state: FileWorkspaceState,
+  relPath: string,
+  toIndex: number,
+): FileWorkspaceState {
+  const from = state.tabs.findIndex((tab) => tab.relPath === relPath);
+  if (from === -1) return state;
+  const to = Math.min(Math.max(toIndex, 0), state.tabs.length - 1);
+  const pinned = state.tabs.some((tab) => tab.relPath === relPath && tab.pinned);
+  // A pinned tab dropped back on its own slot changed nothing — return by
+  // identity so subscribers don't re-render for a drag that went nowhere.
+  if (from === to && pinned) return state;
+  const tabs = state.tabs.filter((tab) => tab.relPath !== relPath);
+  tabs.splice(to, 0, { relPath, pinned: true });
+  return { tabs, activeRelPath: state.activeRelPath };
+}
+
 /** Whether `relPath` is currently the replaceable preview tab. */
 export function isPreviewTab(state: FileWorkspaceState, relPath: string): boolean {
   return state.tabs.some((tab) => tab.relPath === relPath && !tab.pinned);

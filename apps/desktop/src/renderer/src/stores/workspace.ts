@@ -9,7 +9,7 @@
  * single delete no matter how many fields the record grows.
  *
  * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, `openTicketId`,
- * `ticketTabs`, `homeActiveTab`, the Diff-tab view-state map
+ * `ticketTabs`, `homeActiveTab`, `homeTabOrder`, the Diff-tab view-state map
  * (`ticketDiffViewStates`), and the Project Files pair (`projectFiles` +
  * `projectFileViewStates`) survive relaunch (they're deliberate per-project
  * state — a view preference, the ticket-detail-mvp decision that the open
@@ -35,14 +35,18 @@ import {
   closeFile,
   DEFAULT_TICKET_SORT,
   EMPTY_FILE_WORKSPACE,
+  EMPTY_TAB_ORDER,
   markFileEdited,
+  moveFile,
   pinFile,
   previewFile,
   renameFile,
   sanitizeFileWorkspace,
+  sanitizeTabOrder,
   TICKET_SORT_KEYS,
   type FileWorkspaceState,
   type FileWorkspaceTab,
+  type TabOrder,
   type TicketSort,
 } from "@volli/shared";
 import { create } from "zustand";
@@ -132,6 +136,19 @@ export interface TicketTabsState {
   diffs: string[];
   /** Rename/status metadata for open diffs, keyed by current relPath. */
   diffMeta: Record<string, TicketDiffTabMeta>;
+  /**
+   * How this ticket's strip is ARRANGED (VC-189): tab ids in the order the
+   * person dragged them into, sorted over the composed kind groups by
+   * `@volli/shared`'s `arrangeTabs`. Empty means composed order.
+   *
+   * Beside the lists rather than inside them because an arrangement crosses
+   * kinds — a file tab dragged in front of a chat tab has no representation in
+   * `files` or `diffs` at all — and because it must be able to name a Session
+   * that has not hydrated yet. Persisted and tolerant-read; see the module doc
+   * on `tab-order.ts` for the whole model, which VC-105 extends rather than
+   * duplicates.
+   */
+  tabOrder: TabOrder;
   active: string;
 }
 
@@ -213,6 +230,20 @@ export interface WorkspaceUiState {
    */
   homeActiveTab: string;
   /**
+   * How Home's strip is ARRANGED (VC-189): tab ids in the order the person
+   * dragged them into, overlaid on the composed Board → terminals → chats →
+   * files groups. The Board tab is never among them — it is the permanent
+   * first tab, it does not drag, and nothing lands before it.
+   *
+   * PERSISTED, and read for shape alone: an id here need not name anything on
+   * screen. That is what lets an arrangement outlive a relaunch in which the
+   * Sessions it names come back one at a time, and it is the seam VC-105 (Home
+   * remembers its whole strip) builds its restore on — one order model, not
+   * two. This ticket persists the ARRANGEMENT only; which Sessions reopen is
+   * still VC-105's.
+   */
+  homeTabOrder: TabOrder;
+  /**
    * Home tabs in least-to-most-recent visit order. Session-only: it answers
    * where closing an active File tab returns during this app run, while VC-105
    * owns durable restoration of the whole strip.
@@ -262,6 +293,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   projectFiles: EMPTY_FILE_WORKSPACE,
   projectFileViewStates: {},
   homeActiveTab: HOME_BOARD_TAB_ID,
+  homeTabOrder: EMPTY_TAB_ORDER,
   homeTabHistory: [],
   markdownDocumentFiles: [],
   dependencyOfferDismissed: false,
@@ -310,7 +342,31 @@ const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
 /** Empty ticket-tabs record — Ticket Body alone, nothing open. */
 function emptyTicketTabs(active: string = BODY_TAB_ID): TicketTabsState {
-  return { files: [], diffs: [], diffMeta: Object.create(null), active };
+  return {
+    files: [],
+    diffs: [],
+    diffMeta: Object.create(null),
+    tabOrder: EMPTY_TAB_ORDER,
+    active,
+  };
+}
+
+/**
+ * Where `relPath` sits among the FILE tabs of an arranged id list — the index
+ * `moveFile` takes, read back out of a strip-wide arrangement.
+ *
+ * The overlay orders every kind at once, while the File-tab reducer orders only
+ * files; this is the translation between them. `-1` when the arrangement does
+ * not name that file's tab, which is a caller that arranged one strip and
+ * described another — see the move actions, which then leave the reducer alone.
+ */
+function fileSlotInOrder(order: TabOrder, relPath: string): number {
+  const paths: string[] = [];
+  for (const tabId of order) {
+    const path = parseFileTabId(tabId);
+    if (path !== null) paths.push(path);
+  }
+  return paths.indexOf(relPath);
 }
 
 /**
@@ -426,6 +482,17 @@ interface WorkspaceState {
    * considering `openSessionTabIds` as the live non-file tabs in the strip.
    */
   closeHomeFile(projectId: string, relPath: string, openSessionTabIds: readonly string[]): void;
+  /**
+   * Arrange Home's strip (VC-189): `order` is the strip's movable tab ids in
+   * the order the drag left them (the Board tab is never among them).
+   *
+   * Two writes, because a File tab is arranged on two ledgers. The overlay is
+   * what the strip draws; the File-tab reducer additionally moves the dragged
+   * file inside its own list and PINS it, so the tab the person just placed
+   * cannot be replaced by the next glance from the navigator (`moveFile`).
+   * A dragged tab of any other kind moves the overlay alone.
+   */
+  moveHomeTab(projectId: string, movedId: string, order: readonly string[]): void;
   /**
    * Follow a file the navigator just renamed (VC-191): the Home tab showing
    * `from` now shows `to`, keeping its slot, its pin, its place in the MRU
@@ -560,6 +627,17 @@ interface WorkspaceState {
    * `file:<relPath>`, a `diff:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /**
+   * {@link WorkspaceState.moveHomeTab} at ticket scope (VC-189) — same overlay,
+   * same pin-what-you-arranged rule, one scope down. The Ticket Body tab is
+   * never among `order`.
+   */
+  moveTicketTab(
+    projectId: string,
+    ticketId: string,
+    movedId: string,
+    order: readonly string[],
+  ): void;
+  /**
    * The first edit of a preview tab promotes it to persistent (decision #56:
    * a dirty tab is never replaced). Safe to fire on every keystroke — the pure
    * `markFileEdited` returns unchanged state once the tab is persistent.
@@ -627,6 +705,7 @@ type PersistedWorkspaceUi = Pick<
   | "projectFiles"
   | "projectFileViewStates"
   | "homeActiveTab"
+  | "homeTabOrder"
   | "markdownDocumentFiles"
   | "dependencyOfferDismissed"
 >;
@@ -649,7 +728,10 @@ interface PersistedWorkspaceState {
  * Body when it matches no live tab. Legacy `"doc"` values are normalized
  * through {@link normalizeTicketBodyTabId}. Missing `diffs`/`diffMeta`
  * (pre-#109 writes) default to empty. Legacy `files: string[]` (pre-#56)
- * rehydrates as pinned persistent tabs.
+ * rehydrates as pinned persistent tabs. `tabOrder` (pre-VC-189 writes have
+ * none) is read for shape alone — it may legally name tabs this record does
+ * not, and pruning it against them is the mistake `tab-order.ts` exists to
+ * refuse.
  */
 function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
   if (typeof raw !== "object" || raw === null) return {};
@@ -663,6 +745,7 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
       files?: unknown;
       diffs?: unknown;
       diffMeta?: unknown;
+      tabOrder?: unknown;
       active?: unknown;
     };
     const files = sanitizeTicketFiles(record.files);
@@ -670,6 +753,7 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
       ? record.diffs.filter((path): path is string => typeof path === "string" && path.length > 0)
       : [];
     const diffMeta = sanitizeDiffMeta(record.diffMeta, diffs);
+    const tabOrder = sanitizeTabOrder(record.tabOrder);
     let active =
       typeof record.active === "string" ? normalizeTicketBodyTabId(record.active) : BODY_TAB_ID;
     // A persisted active pointing at a file/diff that did not survive sanitize
@@ -680,8 +764,9 @@ function sanitizeTicketTabs(raw: unknown): Record<string, TicketTabsState> {
     }
     const activeDiffPath = parseDiffTabId(active);
     if (activeDiffPath !== null && !diffs.includes(activeDiffPath)) active = BODY_TAB_ID;
-    if (files.length === 0 && diffs.length === 0 && active === BODY_TAB_ID) continue;
-    out[ticketId] = { files, diffs, diffMeta, active };
+    const restored: TicketTabsState = { files, diffs, diffMeta, tabOrder, active };
+    if (isEmptyTicketTabs(restored)) continue;
+    out[ticketId] = restored;
   }
   return out;
 }
@@ -712,9 +797,20 @@ function sanitizeDiffMeta(
   return out;
 }
 
-/** Whether a ticket-tabs record still carries anything worth keeping. */
+/**
+ * Whether a ticket-tabs record still carries anything worth keeping.
+ *
+ * An arrangement counts: a ticket whose only open tabs are chat Sessions has
+ * no files and no diffs, and those Sessions DO come back — dropping the record
+ * would forget the order they come back in.
+ */
 function isEmptyTicketTabs(tabs: TicketTabsState): boolean {
-  return tabs.files.length === 0 && tabs.diffs.length === 0 && tabs.active === BODY_TAB_ID;
+  return (
+    tabs.files.length === 0 &&
+    tabs.diffs.length === 0 &&
+    tabs.tabOrder.length === 0 &&
+    tabs.active === BODY_TAB_ID
+  );
 }
 
 /**
@@ -826,6 +922,9 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     // the project's durable listing (`home-tabs.ts`) — a boot-time guess here
     // could only be the "not hydrated yet reads as gone" bug.
     homeActiveTab: sanitizeHomeActiveTab(persisted.homeActiveTab),
+    // Shape only, for the same reason and then one more: an arrangement is
+    // allowed to name a Session the strip has not put back yet (VC-189).
+    homeTabOrder: sanitizeTabOrder(persisted.homeTabOrder),
     markdownDocumentFiles: sanitizeMarkdownDocumentFiles(persisted.markdownDocumentFiles),
     // Only an explicit `true` dismisses: anything else in the JSON — a missing
     // key from a build before this existed, a corrupt value — means the offer
@@ -846,6 +945,7 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     ui.projectFiles.tabs.length === 0 &&
     Object.keys(ui.projectFileViewStates).length === 0 &&
     ui.homeActiveTab === DEFAULT_WORKSPACE_UI.homeActiveTab &&
+    ui.homeTabOrder.length === 0 &&
     ui.markdownDocumentFiles.length === 0 &&
     ui.dependencyOfferDismissed === DEFAULT_WORKSPACE_UI.dependencyOfferDismissed
   );
@@ -1040,6 +1140,24 @@ export function createWorkspaceStore(storage?: StateStorage) {
               homeActiveTab: close.active,
               homeTabHistory: close.history,
             });
+          });
+        },
+
+        moveHomeTab(projectId, movedId, order) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const homeTabOrder = sanitizeTabOrder(order);
+            // The File half: keep the reducer's own list in the arrangement the
+            // strip now shows, and pin what was dragged. `moveFile` returns by
+            // identity when neither changed, so a dragged Session tab costs the
+            // File workspace nothing.
+            const relPath = parseFileTabId(movedId);
+            let projectFiles = current.projectFiles;
+            if (relPath !== null) {
+              const slot = fileSlotInOrder(homeTabOrder, relPath);
+              if (slot !== -1) projectFiles = moveFile(projectFiles, relPath, slot);
+            }
+            return patchWorkspace(state, projectId, { homeTabOrder, projectFiles });
           });
         },
 
@@ -1320,6 +1438,30 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
+        moveTicketTab(projectId, ticketId, movedId, order) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
+            const tabOrder = sanitizeTabOrder(order);
+            let next: TicketTabsState = { ...existing, tabOrder };
+            const relPath = parseFileTabId(movedId);
+            if (relPath !== null) {
+              const slot = fileSlotInOrder(tabOrder, relPath);
+              // Through the shared transition so the ticket's unified `active`
+              // stays in step with its File list — `moveFile` never moves the
+              // focus, so in practice this only rewrites `files`.
+              if (slot !== -1) {
+                next =
+                  applyTicketFileTransition(next, (files) => moveFile(files, relPath, slot)) ??
+                  next;
+              }
+            }
+            return patchWorkspace(state, projectId, {
+              ticketTabs: { ...current.ticketTabs, [ticketId]: next },
+            });
+          });
+        },
+
         markProjectFileEdited(projectId, relPath) {
           set((state) =>
             applyProjectFiles(state, projectId, (files) => markFileEdited(files, relPath)),
@@ -1433,6 +1575,9 @@ export function createWorkspaceStore(storage?: StateStorage) {
                   // The Home tab that was in front — an id, never the Session
                   // behind it, which is recovered from its own durable record.
                   homeActiveTab: ui.homeActiveTab,
+                  // And the order the rest were in: an arrangement is a
+                  // deliberate act, so it outlives the sitting that made it.
+                  homeTabOrder: ui.homeTabOrder,
                   // Which markdown files open as documents. A choice, not a
                   // sitting's state, and remembered past the tab's close.
                   markdownDocumentFiles: ui.markdownDocumentFiles,

@@ -63,7 +63,7 @@ place where the UI actively lies.
 | # | Wall | Where it is enforced |
 |---|---|---|
 | W1 | Create a file or folder; rename, move, delete, duplicate | ~~NEW-FILE POLICY refuses writes to nonexistent paths outside `.volli/**` (`main/volli-fs.ts:593`); no affordance anywhere in the renderer~~ — **removed by §4.5 (VC-191)**: five scoped IPC verbs in `main/volli-fs.ts` behind the same two path-safety layers, and a context menu + New File header action on both navigators. The write path still refuses a nonexistent path; creating one is now its own door |
-| W2 | Reorder tabs | No drag or move operation in any strip; order is insertion order (`packages/shared/src/file-workspace.ts` has preview/pin/activate/close only; both strips compose kind-grouped) |
+| W2 | Reorder tabs | ~~No drag or move operation in any strip; order is insertion order (`packages/shared/src/file-workspace.ts` has preview/pin/activate/close only; both strips compose kind-grouped)~~ — **removed by §4.3 (VC-189)**: a per-surface `tabOrder` overlay (`packages/shared/src/tab-order.ts`) sorted over the same kind-grouped composition, plus a horizontal dnd-kit sortable in `ui/tab-strip.tsx`. Both strips compose exactly as before; arrangement is the layer above them |
 | W3 | Edit repository markdown in rendered form | ~~`fileSavePolicy` routes all non-artifact markdown to the raw source editor (`packages/shared/src/file-save-policy.ts:37-41`); Document Mode never mounts for it~~ — **removed by §4.6 (VC-192)**: a per-file Source ⇄ Document toggle on markdown file tabs. `fileSavePolicy` is untouched, because it never was the obstacle — the save contract is about which FILES, and Document Mode now mounts inside the same explicit-⌘S editor |
 | W4 | Jump to a file by name | ~~No quick-open; the command palette has no file entries (`command-palette-model.ts`); the rail navigator is a one-level-at-a-time walk~~ — **removed by §4.4 (VC-190)**: ⌘P over the scoped file index (`components/files/quick-open.tsx`) |
 | W5 | Search across files | No search IPC exists at all (`main/volli-fs.ts`, `ipc/contract.ts`) |
@@ -189,7 +189,7 @@ first session. Each item names its current state and verdict.
 |---|---|---|---|
 | F1 | Open/edit/save with conflict safety | Solid (§1.2) | Done |
 | F2 | Find/replace in file | Monaco built-in | Done |
-| F3 | Reorder tabs by drag | Absent (W2) | **Must** |
+| F3 | Reorder tabs by drag | Pointer or keyboard, on both strips; one `tabOrder` overlay per surface (`stores/workspace.ts`) | Done (§4.3, VC-189) |
 | F4 | Create/rename/delete/duplicate files and folders | Absent (W1) | **Must** |
 | F5 | Quick-open by name | ⌘P over `volli:file-index`, now scope-taking (`components/files/quick-open.tsx`) | Done (§4.4, VC-190) |
 | F6 | Diagnostics that tell the truth | Configured `typescriptDefaults`/`javascriptDefaults` on a tsconfig read (`editor/monaco-runtime.ts`) | Done (§4.2, VC-188) |
@@ -306,7 +306,28 @@ Kill L1 without building anything speculative:
 Explicitly not in this slice: any new language service. This is subtraction of
 falsehood, not addition of intelligence.
 
-### 4.3 Tab drag-reorder (M)
+### 4.3 Tab drag-reorder (M) — **landed: VC-189**
+
+Shipped as written below. Four things worth recording past the plan's own text:
+
+- **The overlay is the ONE order model, and it is deliberately allowed to be
+  wrong.** `sanitizeTabOrder` checks shape and never prunes against the live
+  strip, and `arrangeTabs` ignores ids it cannot find while appending tabs it
+  was not told about. That is what lets an arrangement outlive a relaunch in
+  which the Sessions it names come back one at a time — the seam VC-105 needs,
+  and the reason it extends this list rather than opening a second one.
+- **The permanent tab's exemption is stated twice, on purpose.** It is left out
+  of the sortable ids AND given no `dragId`, so neither "it cannot be picked
+  up" nor "nothing can be dropped on it" depends on the other still being true.
+- **A File tab is arranged on two ledgers.** The overlay is what the strip
+  draws; `moveFile` additionally moves the dragged file inside the File-tab
+  reducer's own list, because that list is what preview/pin and persistence
+  read. The pin below lives there rather than at the two call sites, so Home
+  and a ticket workspace cannot answer it differently.
+- **Space picks a tab up; Enter selects it.** dnd-kit's keyboard sensor claims
+  both, and a tab needs one of them — the same split `ticket-card.tsx` already
+  makes on the board, and the sensor's own hidden instructions (which each
+  draggable tab points its `aria-describedby` at) say "press space".
 
 The "big L". dnd-kit is already in-house, patched, and proven on the board
 (`apps/desktop/package.json:22-25`, `patches/@dnd-kit__core@6.3.1.patch`).

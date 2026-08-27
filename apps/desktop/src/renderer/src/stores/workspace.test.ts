@@ -639,6 +639,7 @@ describe("openTicketWorkspace", () => {
       files: [],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "doc",
     });
   });
@@ -743,6 +744,7 @@ describe("ticket diff tabs", () => {
       files: [],
       diffs: ["src/app.ts"],
       diffMeta: { "src/app.ts": { previousPath: "src/old.ts", status: "renamed" } },
+      tabOrder: [],
       active: "diff:src/app.ts",
     });
 
@@ -753,6 +755,7 @@ describe("ticket diff tabs", () => {
       files: [],
       diffs: ["src/app.ts", "src/other.ts"],
       diffMeta: { "src/app.ts": { previousPath: "src/old.ts", status: "renamed" } },
+      tabOrder: [],
       active: "diff:src/app.ts",
     });
   });
@@ -812,6 +815,7 @@ describe("ticket diff tabs", () => {
       files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "doc",
     });
   });
@@ -839,6 +843,7 @@ describe("ticket diff tabs", () => {
       ],
       diffs: ["b.ts"],
       diffMeta: {},
+      tabOrder: [],
       active: "diff:b.ts",
     });
   });
@@ -850,6 +855,7 @@ describe("ticket file tabs", () => {
       files: [{ relPath: "a.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:a.md",
     };
 
@@ -862,6 +868,7 @@ describe("ticket file tabs", () => {
       files: [],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "doc",
     });
   });
@@ -874,6 +881,7 @@ describe("ticket file tabs", () => {
       files: [{ relPath: "docs/plan.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:docs/plan.md",
     });
   });
@@ -891,6 +899,7 @@ describe("ticket file tabs", () => {
       ],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:a.md",
     });
 
@@ -926,6 +935,7 @@ describe("ticket file tabs", () => {
       files: [{ relPath: "a.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "doc",
     });
   });
@@ -940,6 +950,7 @@ describe("ticket file tabs", () => {
       files: [{ relPath: "b.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:b.md",
     });
   });
@@ -978,6 +989,7 @@ describe("ticket file tabs", () => {
       files: [{ relPath: "a.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "session-9",
     });
   });
@@ -1024,6 +1036,7 @@ describe("ticket file preview/pin (decision #56)", () => {
       files: [{ relPath: "src/app.ts", pinned: false }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:src/app.ts",
     });
 
@@ -1147,6 +1160,7 @@ describe("ticket file tab persistence", () => {
       files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: TICKET_BODY_TAB_ID,
     });
     expect(isTicketBodyTabId(tabs!.active)).toBe(true);
@@ -1163,6 +1177,7 @@ describe("ticket file tab persistence", () => {
       files: [{ relPath: "docs/plan.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "session-9",
     });
   });
@@ -1207,6 +1222,7 @@ describe("ticket file tab persistence", () => {
       files: [{ relPath: "ok.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:ok.md",
     });
     expect(tabs?.["ticket-2"]).toBeUndefined();
@@ -1239,6 +1255,7 @@ describe("ticket file tab persistence", () => {
       files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
       diffMeta: {},
+      tabOrder: [],
       active: "file:notes.md",
     });
   });
@@ -1389,6 +1406,7 @@ describe("ticket file tab persistence", () => {
                   files: ["keep.md"],
                   diffs: ["ok.ts"],
                   diffMeta: {},
+                  tabOrder: [],
                   active: "diff:missing.ts",
                 },
               },
@@ -1416,6 +1434,7 @@ describe("ticket file tab persistence", () => {
                   files: ["keep.md"],
                   diffs: ["ok.ts"],
                   diffMeta: {},
+                  tabOrder: [],
                   active: "file:missing.ts",
                 },
               },
@@ -2190,6 +2209,198 @@ describe("Home file workspace persistence", () => {
   });
 });
 
+describe("tab arrangement — Home (VC-189)", () => {
+  it("records the strip's new order for that project only", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "terminal-1"]);
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "chat:c1",
+      "terminal-1",
+    ]);
+    expect(store.getState().byProject["project-b"]).toBeUndefined();
+  });
+
+  it("PINS a preview File tab that was dragged, and moves it in the File list too", () => {
+    // The decision: arranging a tab is deliberate, so the tab the person just
+    // placed must not be replaced by the next glance from the navigator.
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "src/one.ts");
+    store.getState().previewHomeFile("project-a", "src/glance.ts");
+    store
+      .getState()
+      .moveHomeTab("project-a", "file:src/glance.ts", ["file:src/glance.ts", "file:src/one.ts"]);
+
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
+      { relPath: "src/glance.ts", pinned: true },
+      { relPath: "src/one.ts", pinned: true },
+    ]);
+    // And the proof it holds: the next glance opens its own tab.
+    store.getState().previewHomeFile("project-a", "src/next.ts");
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toHaveLength(3);
+  });
+
+  it("leaves the File workspace by identity when the tab dragged was a Session", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewHomeFile("project-a", "src/glance.ts");
+    const before = store.getState().byProject["project-a"]?.projectFiles;
+    store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "file:src/glance.ts"]);
+
+    expect(store.getState().byProject["project-a"]?.projectFiles).toBe(before);
+  });
+
+  it("leaves the File list alone when the arrangement does not name the moved tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewHomeFile("project-a", "src/glance.ts");
+    const before = store.getState().byProject["project-a"]?.projectFiles;
+    store.getState().moveHomeTab("project-a", "file:src/glance.ts", ["chat:c1"]);
+
+    expect(store.getState().byProject["project-a"]?.projectFiles).toBe(before);
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual(["chat:c1"]);
+  });
+
+  it("sanitizes the order it is handed", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "chat:c1", "", "terminal-1"]);
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "chat:c1",
+      "terminal-1",
+    ]);
+  });
+
+  it("survives a relaunch, naming Sessions the strip has not put back yet", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().moveHomeTab("project-a", "chat:c2", ["chat:c2", "chat:c1"]);
+
+    // An arrangement alone is worth persisting — the record is not "default".
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "chat:c2",
+      "chat:c1",
+    ]);
+  });
+
+  it("reads a stored arrangement tolerantly, and never prunes it against what is on screen", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": { homeTabOrder: ["chat:not-hydrated-yet", 7, "chat:c1", "chat:c1"] },
+            "project-b": { homeTabOrder: "nonsense" },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "chat:not-hydrated-yet",
+      "chat:c1",
+    ]);
+    expect(store.getState().byProject["project-b"]?.homeTabOrder).toEqual([]);
+  });
+});
+
+describe("tab arrangement — the ticket workspace (VC-189)", () => {
+  it("records the strip's new order on that ticket's record", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store
+      .getState()
+      .moveTicketTab("project-a", "ticket-1", "session-9", ["session-9", "file:docs/plan.md"]);
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
+      files: [],
+      diffs: [],
+      diffMeta: {},
+      tabOrder: ["session-9", "file:docs/plan.md"],
+      active: TICKET_BODY_TAB_ID,
+    });
+  });
+
+  it("PINS a preview File tab that was dragged, and moves it in the File list too", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
+    store.getState().previewTicketFile("project-a", "ticket-1", "src/glance.ts");
+    store
+      .getState()
+      .moveTicketTab("project-a", "ticket-1", "file:src/glance.ts", [
+        "file:src/glance.ts",
+        "file:docs/plan.md",
+      ]);
+
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
+    expect(tabs?.files).toEqual([
+      { relPath: "src/glance.ts", pinned: true },
+      { relPath: "docs/plan.md", pinned: true },
+    ]);
+    // Arranging is not selecting: the tab in front did not change.
+    expect(tabs?.active).toBe("file:src/glance.ts");
+  });
+
+  it("writes the arrangement even when the File list has nothing to say", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
+    // A pinned file dropped back on its own slot: the File reducer returns by
+    // identity, and the overlay still records what the strip now shows.
+    store
+      .getState()
+      .moveTicketTab("project-a", "ticket-1", "file:docs/plan.md", [
+        "file:docs/plan.md",
+        "session-9",
+      ]);
+    // And a drag whose order does not name the moved file at all.
+    store.getState().moveTicketTab("project-a", "ticket-1", "file:docs/plan.md", ["session-9"]);
+
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
+    expect(tabs?.files).toEqual([{ relPath: "docs/plan.md", pinned: true }]);
+    expect(tabs?.tabOrder).toEqual(["session-9"]);
+  });
+
+  it("persists an arrangement of chat tabs, which is a record with nothing else in it", () => {
+    // Chat Sessions DO come back after a relaunch, so the order they come back
+    // in is worth keeping even though no file or diff tab is open.
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().moveTicketTab("project-a", "ticket-1", "chat:c2", ["chat:c2", "chat:c1"]);
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.tabOrder).toEqual([
+      "chat:c2",
+      "chat:c1",
+    ]);
+  });
+
+  it("reads a stored arrangement tolerantly, and prunes a record that carries nothing", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              ticketTabs: {
+                "ticket-1": { files: [], tabOrder: ["chat:c1", 3, "chat:c1"], active: "doc" },
+                "ticket-2": { files: [], tabOrder: "nonsense", active: "doc" },
+              },
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs;
+    expect(tabs?.["ticket-1"]?.tabOrder).toEqual(["chat:c1"]);
+    expect(tabs?.["ticket-2"]).toBeUndefined();
+  });
+});
+
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -2214,6 +2425,7 @@ describe("forget", () => {
       projectFiles: EMPTY_FILE_WORKSPACE,
       projectFileViewStates: {},
       homeActiveTab: HOME_BOARD_TAB_ID,
+      homeTabOrder: [],
       homeTabHistory: [],
       markdownDocumentFiles: [],
       dependencyOfferDismissed: false,
@@ -2251,6 +2463,7 @@ describe("persistence", () => {
       "boardView",
       "dependencyOfferDismissed",
       "homeActiveTab",
+      "homeTabOrder",
       "markdownDocumentFiles",
       "openTicketId",
       "projectFileViewStates",
