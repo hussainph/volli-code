@@ -86,8 +86,10 @@ import type {
   FileChangedEvent,
   FileIndexInput,
   FileIndexResult,
+  FileMutationResult,
   FilePathInput,
   FileReadResult,
+  FileRenameInput,
   FileWriteInput,
   FileWriteResult,
   FirstPaintHint,
@@ -759,6 +761,25 @@ const api = {
     read: (input: FilePathInput): Promise<FileReadResult> => invoke("volli:file-read", input),
     /** Writes utf8 text to an EXISTING file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
     write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
+    /**
+     * The navigators' creation track (VC-191). Same scoped `{ projectId,
+     * ticketId }` resolution as `read`/`write`, so a Ticket workspace acts on
+     * its own worktree and Home on the main checkout.
+     */
+    /** Creates an EMPTY file (missing parent folders included); refuses an occupied path. */
+    create: (input: FilePathInput): Promise<FileMutationResult> =>
+      invoke("volli:file-create", input),
+    /** Creates one directory; refuses an occupied name rather than reporting success for it. */
+    createDirectory: (input: FilePathInput): Promise<FileMutationResult> =>
+      invoke("volli:dir-create", input),
+    /** Renames/moves within one checkout; refuses to clobber. Resolves with the new relPath. */
+    rename: (input: FileRenameInput): Promise<FileMutationResult> =>
+      invoke("volli:file-rename", input),
+    /** Copies a file to the first free `… copy` name beside it; resolves with that name. */
+    duplicate: (input: FilePathInput): Promise<FileMutationResult> =>
+      invoke("volli:file-duplicate", input),
+    /** Moves a file or folder to the Trash — never an in-place delete. */
+    delete: (input: FilePathInput): Promise<Result> => invoke("volli:file-delete", input),
     /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`; `name` is forced to `.md`. Resolves with its `@ref`-able relPath. */
     createArtifact: (input: ArtifactCreateInput): Promise<ArtifactCreateResult> =>
       invoke("volli:artifact-create", input),

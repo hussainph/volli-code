@@ -37,6 +37,7 @@ import {
   markFileEdited,
   pinFile,
   previewFile,
+  renameFile,
   sanitizeFileWorkspace,
   TICKET_SORT_KEYS,
   type FileWorkspaceState,
@@ -404,6 +405,19 @@ interface WorkspaceState {
    */
   closeHomeFile(projectId: string, relPath: string, openSessionTabIds: readonly string[]): void;
   /**
+   * Follow a file the navigator just renamed (VC-191): the Home tab showing
+   * `from` now shows `to`, keeping its slot, its pin, its place in the MRU
+   * history and its remembered cursor.
+   *
+   * The host carries the view state because document identity keys on relPath
+   * (`editor/document-identity.ts`), so the renamed file is a DIFFERENT
+   * document to the registry and remembers nothing of the old one. Persisted
+   * per-tab view state is the one thing that survives that, and moving it here
+   * is what makes the remount land where the reader left off. A file that is
+   * not open is a no-op — renaming one must not open it.
+   */
+  renameHomeFile(projectId: string, from: string, to: string): void;
+  /**
    * THE seam for "Home is now in front", optionally bringing `tabId` forward.
    *
    * Never touches `openTicketId`, and that is the point: a Home Session tab is
@@ -508,6 +522,12 @@ interface WorkspaceState {
    * Prunes the ticket's record entirely once nothing but Doc remains.
    */
   closeTicketFile(projectId: string, ticketId: string, relPath: string): void;
+  /**
+   * {@link renameHomeFile} at ticket scope (VC-191). No view-state map to carry
+   * here — a ticket File tab's cursor lives in the in-memory document registry
+   * for the session, which the renamed path leaves behind either way.
+   */
+  renameTicketFile(projectId: string, ticketId: string, from: string, to: string): void;
   /**
    * Closes `relPath`'s diff tab; if it was the active tab, falls back to Doc
    * (same pattern as {@link closeTicketFile}). Drops any rename/status meta
@@ -976,6 +996,37 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
+        renameHomeFile(projectId, from, to) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const projectFiles = renameFile(current.projectFiles, from, to);
+            if (projectFiles === current.projectFiles) return state;
+
+            const fromTabId = fileTabId(from);
+            const toTabId = fileTabId(to);
+            const projectFileViewStates = { ...current.projectFileViewStates };
+            const carried = projectFileViewStates[from];
+            delete projectFileViewStates[from];
+            // A view state under the DESTINATION path can only be a leftover of
+            // some earlier file of that name; the bytes are new, so restoring a
+            // cursor from it would land the reader at an arbitrary line.
+            if (carried === undefined) delete projectFileViewStates[to];
+            else projectFileViewStates[to] = carried;
+
+            return patchWorkspace(state, projectId, {
+              projectFiles,
+              projectFileViewStates,
+              homeActiveTab: current.homeActiveTab === fromTabId ? toTabId : current.homeActiveTab,
+              // The renamed tab keeps its place in the return history rather
+              // than dropping out of it: closing the tab in front must still
+              // come back here, and the tab did not go anywhere.
+              homeTabHistory: current.homeTabHistory
+                .map((tabId) => (tabId === fromTabId ? toTabId : tabId))
+                .filter((tabId, index, ids) => ids.indexOf(tabId) === index),
+            });
+          });
+        },
+
         openHome(projectId, tabId) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
@@ -1166,6 +1217,21 @@ export function createWorkspaceStore(storage?: StateStorage) {
             if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
             else nextTabs[ticketId] = next;
             return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
+          });
+        },
+
+        renameTicketFile(projectId, ticketId, from, to) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const existing = current.ticketTabs[ticketId];
+            if (existing === undefined) return state;
+            const next = applyTicketFileTransition(existing, (files) =>
+              renameFile(files, from, to),
+            );
+            if (next === null) return state;
+            return patchWorkspace(state, projectId, {
+              ticketTabs: { ...current.ticketTabs, [ticketId]: next },
+            });
           });
         },
 

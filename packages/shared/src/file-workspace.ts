@@ -106,6 +106,43 @@ export function closeFile(state: FileWorkspaceState, relPath: string): FileWorks
   return { tabs, activeRelPath: neighbour === null ? null : neighbour.relPath };
 }
 
+/**
+ * Follow a renamed file: the tab that was showing `from` now shows `to`, in the
+ * same slot, with its pinned state and (if it had it) its focus (VC-191).
+ *
+ * A rename is not a close and an open — the strip must not reshuffle, and a
+ * pinned tab must not come back replaceable — so this is a substitution rather
+ * than `closeFile` + `pinFile`. A file that was not open stays not open: main
+ * renames files, not tabs, and conjuring a tab for one would open a file nobody
+ * asked to see.
+ *
+ * `to` already being open is the odd case, and it is real: main refuses to
+ * clobber, but a tab can outlive the file it named (an agent deleted it, the
+ * user is renaming another file onto the freed name). The stale tab is absorbed
+ * rather than left beside its replacement, because two tabs for one relPath is
+ * exactly the duplicate `sanitizeFileWorkspace` exists to collapse — pinned if
+ * either was, since persistence must never be silently lost.
+ */
+export function renameFile(
+  state: FileWorkspaceState,
+  from: string,
+  to: string,
+): FileWorkspaceState {
+  const index = state.tabs.findIndex((tab) => tab.relPath === from);
+  if (index === -1 || from === to) return state;
+  const existing = state.tabs.find((tab) => tab.relPath === to);
+  const renamed: FileWorkspaceTab = {
+    relPath: to,
+    pinned: state.tabs[index]?.pinned === true || existing?.pinned === true,
+  };
+  const tabs = state.tabs
+    .map((tab, i) => (i === index ? renamed : tab))
+    .filter((tab, i) => i === index || tab.relPath !== to);
+  const activeRelPath =
+    state.activeRelPath === from || state.activeRelPath === to ? to : state.activeRelPath;
+  return { tabs, activeRelPath };
+}
+
 /** Whether `relPath` is currently the replaceable preview tab. */
 export function isPreviewTab(state: FileWorkspaceState, relPath: string): boolean {
   return state.tabs.some((tab) => tab.relPath === relPath && !tab.pinned);

@@ -788,6 +788,15 @@ function isFilePathInput(
   return isRecord(value) && typeof value["relPath"] === "string" && isFileIndexInput(value);
 }
 
+/**
+ * The rename shape: the file-path input plus the destination path (VC-191).
+ * Both are checked as strings HERE; whether either is a safe relative path, and
+ * whether the two resolve against the same checkout, is main's two-layer job.
+ */
+function isFileRenameInput(value: unknown): boolean {
+  return isRecord(value) && typeof value["toRelPath"] === "string" && isFilePathInput(value);
+}
+
 /** The file-path shape plus one closed app id — callers never name a bundle or command. */
 function isExternalAppOpenFileInput(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -863,6 +872,33 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
       if (typeof input["content"] !== "string") return false;
       return input["expectedMtime"] === undefined || typeof input["expectedMtime"] === "number";
     },
+    invalidError: "Invalid request",
+  },
+  // The creation track (plan §4.5). Four of the five carry nothing beyond the
+  // scoped path the read channels already take; only rename names a second one.
+  "volli:file-create": {
+    guard: (args): args is IpcArgs<"volli:file-create"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:dir-create": {
+    guard: (args): args is IpcArgs<"volli:dir-create"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-rename": {
+    guard: (args): args is IpcArgs<"volli:file-rename"> =>
+      args.length === 1 && isFileRenameInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-duplicate": {
+    guard: (args): args is IpcArgs<"volli:file-duplicate"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-delete": {
+    guard: (args): args is IpcArgs<"volli:file-delete"> =>
+      args.length === 1 && isFilePathInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:artifact-create": {

@@ -163,6 +163,13 @@ export default defineConfig(({ mode }) => ({
         // silently answered "Main" inside a Ticket workspace would open the
         // wrong file with no error anywhere.
         "src/components/files/quick-open-model.ts",
+        // What the navigators' inline field is allowed to mean (VC-191). Pure
+        // `.ts` beside the panels for the gate's sake: this is the last place a
+        // typed name is judged before it becomes a path main creates, renames
+        // or moves — a branch missed here is a file made somewhere nobody
+        // looked, and the two-layer safety in main would have refused it with a
+        // sentence written for a channel rather than for a person.
+        "src/components/files/navigator-mutations.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",

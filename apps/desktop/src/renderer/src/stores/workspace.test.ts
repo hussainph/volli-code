@@ -1848,6 +1848,101 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 });
 
+describe("renaming a file the navigator just renamed (VC-191)", () => {
+  it("moves the Home tab, its pin, its focus and its remembered cursor onto the new path", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+    store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
+
+    store.getState().renameHomeFile("project-a", "two.ts", "renamed.ts");
+
+    const record = store.getState().byProject["project-a"];
+    expect(record?.projectFiles).toEqual({
+      tabs: [
+        { relPath: "one.ts", pinned: true },
+        { relPath: "renamed.ts", pinned: true },
+      ],
+      activeRelPath: "renamed.ts",
+    });
+    expect(record?.projectFileViewStates).toEqual({ "renamed.ts": { cursor: 9 } });
+    expect(record?.homeActiveTab).toBe("file:renamed.ts");
+  });
+
+  it("keeps the renamed tab's place in the close-return history", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+
+    store.getState().renameHomeFile("project-a", "one.ts", "renamed.ts");
+    store.getState().closeHomeFile("project-a", "two.ts", []);
+
+    // Closing the tab in front returns to the renamed one, not to the board:
+    // the tab never went anywhere, only its name changed.
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("file:renamed.ts");
+  });
+
+  it("drops a stale view state left under the destination path", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    store.getState().pinHomeFile("project-a", "two.ts");
+    store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
+
+    // `one.ts` has no remembered cursor; renaming it onto `two.ts`'s path must
+    // not inherit `two.ts`'s, which belonged to different bytes.
+    store.getState().renameHomeFile("project-a", "one.ts", "two.ts");
+
+    expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({});
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
+      { relPath: "two.ts", pinned: true },
+    ]);
+  });
+
+  it("leaves everything alone for a Home file that is not open", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "one.ts");
+    const before = store.getState().byProject["project-a"];
+
+    store.getState().renameHomeFile("project-a", "never-opened.ts", "renamed.ts");
+
+    expect(store.getState().byProject["project-a"]).toBe(before);
+    store.getState().renameHomeFile("project-never-seen", "a.ts", "b.ts");
+    expect(store.getState().byProject["project-never-seen"]).toBeUndefined();
+  });
+
+  it("moves a ticket File tab and follows it with the ticket's active tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "src/one.ts");
+    store.getState().previewTicketFile("project-a", "ticket-1", "src/two.ts");
+
+    store.getState().renameTicketFile("project-a", "ticket-1", "src/two.ts", "src/renamed.ts");
+
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
+    expect(tabs?.files).toEqual([
+      { relPath: "src/one.ts", pinned: true },
+      { relPath: "src/renamed.ts", pinned: false },
+    ]);
+    expect(tabs?.active).toBe("file:src/renamed.ts");
+  });
+
+  it("leaves a ticket alone when the file is not open, or the ticket has no tabs at all", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().openTicketFile("project-a", "ticket-1", "src/one.ts");
+    const before = store.getState().byProject["project-a"];
+
+    store.getState().renameTicketFile("project-a", "ticket-1", "src/other.ts", "src/renamed.ts");
+    expect(store.getState().byProject["project-a"]).toBe(before);
+
+    store.getState().renameTicketFile("project-a", "ticket-none", "a.ts", "b.ts");
+    expect(store.getState().byProject["project-a"]).toBe(before);
+
+    // And a project with no record at all: a rename racing a project removal
+    // must not conjure one back into the map.
+    store.getState().renameTicketFile("project-never-seen", "ticket-1", "a.ts", "b.ts");
+    expect(store.getState().byProject["project-never-seen"]).toBeUndefined();
+  });
+});
+
 describe("Home file workspace persistence", () => {
   it("rehydrates tabs, order, pinned flags, and the active tab across a relaunch", () => {
     const storage = createMemoryStorage();

@@ -17,17 +17,26 @@ import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
+import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
+import { FilesIcon } from "@phosphor-icons/react/dist/csr/Files";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
+import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
+import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@volli/shared";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
+import { useFileNavigatorMutations } from "@renderer/components/files/use-navigator-mutations";
+import type { FileNavigatorControls } from "@renderer/components/files/use-navigator-mutations";
+import type { NavigatorEntryKind } from "@renderer/components/files/navigator-mutations";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { type AttachmentsHandle, useAttachments } from "@renderer/hooks/use-attachments";
 
 import {
+  NewFileRailAction,
   RailFaultBanner,
   RailNavigatorHeader,
   RailPanelSkeleton,
@@ -44,9 +53,11 @@ import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes"
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
@@ -76,12 +87,62 @@ const ROW_ICONS: Record<"file" | "directory" | "reference", PhosphorIcon> = {
   file: FileCodeIcon,
 };
 
+/**
+ * The five items VC-191 adds to a navigator row's menu.
+ *
+ * REFERENCE ROWS DO NOT GET THEM, and that is a fact about what a reference is
+ * rather than a simplification: the row names a path the Ticket Body points at,
+ * which may not exist at all (a Dangling Reference), and "Rename…" on something
+ * that is not there is an action with no object. The two create items ride on
+ * every listing row instead of only on the header, because a right-click in the
+ * folder you are looking at is where the gesture starts.
+ */
+function FileMutationMenuItems({
+  relPath,
+  kind,
+  controls,
+}: {
+  relPath: string;
+  kind: NavigatorEntryKind;
+  controls: FileNavigatorControls;
+}) {
+  return (
+    <>
+      <ContextMenuItem icon={FilePlusIcon} onSelect={() => controls.startDraft("file")}>
+        New File…
+      </ContextMenuItem>
+      <ContextMenuItem icon={FolderPlusIcon} onSelect={() => controls.startDraft("directory")}>
+        New Folder…
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem icon={PencilSimpleIcon} onSelect={() => controls.startRename(relPath)}>
+        Rename…
+      </ContextMenuItem>
+      {/* Files only: main refuses a directory duplicate out loud, and an item
+          that can only fail is worse than one that is not offered. */}
+      {kind === "file" ? (
+        <ContextMenuItem icon={FilesIcon} onSelect={() => controls.duplicate(relPath)}>
+          Duplicate
+        </ContextMenuItem>
+      ) : null}
+      <ContextMenuItem
+        icon={TrashIcon}
+        variant="destructive"
+        onSelect={() => controls.remove(relPath, kind)}
+      >
+        Delete
+      </ContextMenuItem>
+    </>
+  );
+}
+
 function FileRow({
   projectId,
   ticketId,
   relPath,
   label,
   kind,
+  controls,
   onActivate,
   onPin,
 }: {
@@ -90,6 +151,8 @@ function FileRow({
   relPath: string;
   label: string;
   kind: "file" | "directory" | "reference";
+  /** Absent where the surface has no write authority (fixtures, the lab). */
+  controls?: FileNavigatorControls;
   onActivate(): void;
   /** Double-click pin — omitted for directories (they only navigate). */
   onPin?(): void;
@@ -97,16 +160,34 @@ function FileRow({
   const { filename, parentPath } = splitFilesPath(relPath);
   const primary = kind === "reference" ? label : filename;
   const Icon = ROW_ICONS[kind];
+  const mutable = controls !== undefined && kind !== "reference";
+  const renaming = mutable && controls.edit.kind === "rename" && controls.edit.relPath === relPath;
   const row = (
     <ListRow
       density="two-line"
       data-testid="ticket-files-row"
       data-path={relPath}
       data-kind={kind}
-      onActivate={onActivate}
-      onDoubleClick={onPin}
+      // While the field is open the row is inert, for `ticket-sessions-panel`'s
+      // reason: an input inside the activating button would both nest an
+      // interactive control and preview the file on every click into the field.
+      onActivate={renaming ? null : onActivate}
+      onDoubleClick={renaming ? undefined : onPin}
       leading={<Icon className="size-4 shrink-0 text-muted-foreground" />}
-      primary={`${primary}${kind === "directory" ? "/" : ""}`}
+      primary={
+        renaming ? (
+          <InlineRename
+            mono
+            value={filename}
+            ariaLabel={`Rename ${filename}`}
+            className="min-w-0 flex-1"
+            onCommit={(next) => controls.commitRename(relPath, next)}
+            onCancel={controls.cancelEdit}
+          />
+        ) : (
+          `${primary}${kind === "directory" ? "/" : ""}`
+        )
+      }
       // A reference says so here rather than under a caption, which is what
       // lets both kinds share one list.
       secondary={kind === "reference" ? `Referenced · ${parentPath}` : parentPath}
@@ -118,7 +199,7 @@ function FileRow({
         ) : undefined
       }
       actions={
-        kind === "directory" ? undefined : (
+        kind === "directory" || renaming ? undefined : (
           <RailRowActions path={relPath} onOpen={() => onPin?.()} />
         )
       }
@@ -135,8 +216,58 @@ function FileRow({
             two are the keyboard-and-right-click route to both spellings, and
             the only route to the absolute one. */}
         <CopyPathContextMenuItems target={{ projectId, ticketId, relPath }} />
+        {mutable ? (
+          <>
+            <ContextMenuSeparator />
+            <FileMutationMenuItems
+              relPath={relPath}
+              kind={kind === "directory" ? "directory" : "file"}
+              controls={controls}
+            />
+          </>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/**
+ * The unnamed row a New File… / New Folder… gesture puts at the top of the
+ * listing — the same field a rename opens, in a row that has no file behind it
+ * yet.
+ *
+ * A row rather than a dialog because this is where the answer belongs: the name
+ * is relative to the folder on screen, and a modal would take that folder away
+ * to ask about it. Empty commits nothing ({@link InlineRename} cancels on an
+ * empty field), so Escape and "never mind" are the same gesture.
+ */
+function DraftRow({
+  entry,
+  controls,
+}: {
+  entry: NavigatorEntryKind;
+  controls: FileNavigatorControls;
+}) {
+  const Icon = entry === "directory" ? FolderPlusIcon : FilePlusIcon;
+  return (
+    <ListRow
+      density="two-line"
+      data-testid="ticket-files-draft-row"
+      data-kind={entry}
+      onActivate={null}
+      leading={<Icon className="size-4 shrink-0 text-muted-foreground" />}
+      primary={
+        <InlineRename
+          mono
+          value=""
+          ariaLabel={entry === "directory" ? "New folder name" : "New file name"}
+          className="min-w-0 flex-1"
+          onCommit={controls.commitDraft}
+          onCancel={controls.cancelEdit}
+        />
+      }
+      secondary={entry === "directory" ? "New folder" : "New file"}
+    />
   );
 }
 
@@ -146,6 +277,7 @@ export function TicketFilesList({
   ticketId,
   referenced,
   worktree,
+  controls,
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
@@ -154,13 +286,23 @@ export function TicketFilesList({
   ticketId?: string;
   referenced: readonly TicketFileRefRow[];
   worktree: readonly TicketWorktreeEntry[];
+  /**
+   * The create/rename/duplicate/delete controller (VC-191). Optional: the
+   * fixture gallery and the unit tests mount this list without an IPC bridge,
+   * and a navigator with no controller is simply a read-only one.
+   */
+  controls?: FileNavigatorControls;
   /** Single-click: open in the replaceable File preview slot (decision #56). */
   onPreviewFile(relPath: string): void;
   /** Double-click: make the File tab persistent (decision #56). */
   onPinFile(relPath: string): void;
   onOpenDirectory(relPath: string): void;
 }) {
-  if (referenced.length === 0 && worktree.length === 0) {
+  const draft = controls?.edit.kind === "draft" ? controls.edit.entry : null;
+
+  // An empty folder is exactly where New File… gets used, so the draft row wins
+  // over the empty hint rather than being hidden behind it.
+  if (draft === null && referenced.length === 0 && worktree.length === 0) {
     return (
       <p data-testid="ticket-files-empty" className={EMPTY_INLINE}>
         Nothing here yet
@@ -173,6 +315,11 @@ export function TicketFilesList({
       data-testid="ticket-files-list"
       className="min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scroll-padding-bottom:2rem]"
     >
+      {draft !== null && controls !== undefined ? (
+        <li>
+          <DraftRow entry={draft} controls={controls} />
+        </li>
+      ) : null}
       {worktree.map((entry) => (
         <li key={`wt:${entry.relPath}`}>
           <FileRow
@@ -181,6 +328,7 @@ export function TicketFilesList({
             relPath={entry.relPath}
             label={splitFilesPath(entry.relPath).filename}
             kind={entry.kind}
+            controls={controls}
             onActivate={() =>
               entry.kind === "directory"
                 ? onOpenDirectory(entry.relPath)
@@ -227,12 +375,18 @@ export function TicketFilesPanel({
   handle,
   onPreviewFile,
   onPinFile,
+  onOpenCreatedFile,
+  onRenameFile,
 }: {
   ticket: Ticket;
   attachments?: readonly NamedBlobLink[];
   handle?: AttachmentsHandle;
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
+  /** A file this navigator just created: opened PINNED and focused (VC-191). */
+  onOpenCreatedFile(relPath: string): void;
+  /** A file this navigator just renamed: the host moves any open tab across. */
+  onRenameFile(from: string, to: string): void;
 }) {
   // A repository file attached here resolves to an `@` reference, and the body
   // is where such a reference belongs — the HOST now writes it there (VC-106):
@@ -319,6 +473,21 @@ export function TicketFilesPanel({
     void loadDir("");
   }, [loadDir]);
 
+  // The creation track, scoped to THIS ticket (VC-191) — so every verb resolves
+  // into its worktree through the same seam a read does. Offered only while the
+  // worktree exists: without one this navigator lists nothing but Ticket Body
+  // references, and a New File here would silently land in the main checkout.
+  const mutations = useFileNavigatorMutations({
+    scope: { projectId: ticket.projectId, ticketId: ticket.id },
+    cwd,
+    host: {
+      refresh: () => void loadDir(cwd),
+      openCreated: onOpenCreatedFile,
+      renameTab: onRenameFile,
+    },
+  });
+  const controls = ticket.worktreePath === null ? undefined : mutations;
+
   const nav = buildTicketFilesNavigator({
     body: ticket.body,
     attachments,
@@ -377,11 +546,17 @@ export function TicketFilesPanel({
         // Attach lives beside Filter rather than in the list: it acts on the
         // Ticket, not on whatever row is under the cursor. Hidden when a host
         // supplied the attachments, because then this panel is a view of
-        // someone else's list and must not mutate it.
+        // someone else's list and must not mutate it. New File is its neighbour
+        // for the same reason, one object down: it acts on the FOLDER.
         actions={
-          providedAttachments === undefined ? (
-            <ComposerAttachButton onFiles={(picked) => void attachFiles(picked)} />
-          ) : null
+          <>
+            {controls === undefined ? null : (
+              <NewFileRailAction onNewFile={() => controls.startDraft("file")} />
+            )}
+            {providedAttachments === undefined ? (
+              <ComposerAttachButton onFiles={(picked) => void attachFiles(picked)} />
+            ) : null}
+          </>
         }
       >
         <AttachmentStrip
@@ -409,6 +584,7 @@ export function TicketFilesPanel({
         ticketId={ticket.id}
         referenced={referenced}
         worktree={worktree}
+        controls={controls}
         onPreviewFile={onPreviewFile}
         onPinFile={onPinFile}
         onOpenDirectory={(relPath) => void loadDir(relPath)}

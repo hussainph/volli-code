@@ -481,6 +481,25 @@ export interface FileWriteInput extends FilePathInput {
   expectedMtime?: number;
 }
 
+/**
+ * `rename`'s destination — a second project-relative path, resolved through the
+ * SAME scope as `relPath` (plan §4.5). A destination that would resolve against
+ * a different root than the source (`.volli/**` always resolves to Main, the
+ * repo half follows the ticket's worktree) is refused rather than silently
+ * moving a file across checkouts.
+ */
+export interface FileRenameInput extends FilePathInput {
+  toRelPath: string;
+}
+
+/**
+ * What the create/rename/duplicate track resolves with: the project-relative
+ * path the entry now has (plan §4.5). Named rather than echoed back from the
+ * request because the caller does not always know it — `duplicate` derives a
+ * free name in main, and the renderer opens exactly what was created.
+ */
+export type FileMutationResult = { ok: true; relPath: string } | { ok: false; error: string };
+
 /** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
 export interface ArtifactCreateInput {
   projectId: string;
@@ -705,6 +724,20 @@ export interface VolliFileIpcContract {
   "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
   /** Writes utf8 text to an existing file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
+  /**
+   * The sanctioned creation track (plan §4.5), through the same two-layer path
+   * safety and `{ projectId, ticketId }` worktree resolution every read uses.
+   * Creates an EMPTY file; refuses rather than overwriting whatever is there.
+   */
+  "volli:file-create": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Creates one directory (missing parents included); refuses an occupied name. */
+  "volli:dir-create": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Renames/moves a file or directory within one checkout; refuses to clobber an occupied destination. */
+  "volli:file-rename": { args: [input: FileRenameInput]; result: FileMutationResult };
+  /** Copies a file to the first free `… copy` name beside it, and resolves with that name. */
+  "volli:file-duplicate": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Moves a file or directory to the TRASH (`shell.trashItem`) — never an in-place `rm`. */
+  "volli:file-delete": { args: [input: FilePathInput]; result: Result };
   /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
   /** Creates one `<name>.md` prompt template, refusing rather than clobbering (VC-111). */
