@@ -17,7 +17,11 @@ import {
   type LocalWriteReceipt,
 } from "@renderer/editor/live-document-reconciliation";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
-import { loadMonacoRuntime, startModelLanguageWorker } from "@renderer/editor/monaco-runtime";
+import {
+  ensureProjectTypeScriptDefaults,
+  loadMonacoRuntime,
+  startModelLanguageWorker,
+} from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
@@ -110,6 +114,18 @@ const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
   lineHeight: 21,
   lineNumbers: "on",
   minimap: { enabled: false },
+  // STAYS 0 — reconsidered under VC-188, which is the decision plan §4.2 asks
+  // for once diagnostics are trustworthy. Configuring the TS worker took this
+  // repository from 9,048 false diagnostics over 644 of its 721 source files to
+  // 537 over 185, but what is left is not thin noise: it is a systematic class,
+  // the type or global that another FILE declares, so roughly one file in four
+  // still carries at least one red mark that is wrong. A squiggle makes that
+  // claim where the code is, beside the evidence, and costs nothing to
+  // disbelieve. A ruler tick makes it in persistent chrome, about a line you
+  // cannot see, with nothing next to it to judge it by — and the plan's own bar
+  // is that "a ruler mark is only good chrome when it marks something real".
+  // Turn this on when a marker can be trusted per file: that is the cross-file
+  // resolution question the LSP gate (§4.8) exists to answer, not this slice.
   overviewRulerLanes: 0,
   hideCursorInOverviewRuler: true,
   scrollBeyondLastLine: false,
@@ -559,6 +575,16 @@ export function MonacoFileEditor({
         // A document parked dirty from an earlier mount may already disagree
         // with the seed we just re-read from disk.
         reconcileExternal(lease, seedRef.current);
+
+        // What the worker about to start should believe about this file's
+        // project (plan §4.2). Fire-and-forget beside the handshake, never
+        // awaited before it: the model is already being checked under the
+        // permissive defaults, and this only makes the answer more accurate.
+        void ensureProjectTypeScriptDefaults(runtime.monaco, activeIdentity.identity).catch(
+          (error: unknown) => {
+            console.warn("[volli] failed to read project TypeScript options:", error);
+          },
+        );
 
         void startModelLanguageWorker(runtime, lease.model)
           .then((worker) => {

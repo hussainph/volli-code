@@ -72,7 +72,7 @@ place where the UI actively lies.
 
 | # | Lie | Mechanism |
 |---|---|---|
-| L1 | TS/JS files render as a wall of red squiggles in ordinary healthy repos | Monaco's TS worker runs semantic validation against isolated single-file models with **zero configuration** — no `typescriptDefaults` call exists in the codebase — so every cross-file import fails resolution and JSX errors under default compiler options |
+| L1 | ~~TS/JS files render as a wall of red squiggles in ordinary healthy repos~~ | ~~Monaco's TS worker runs semantic validation against isolated single-file models with **zero configuration** — no `typescriptDefaults` call exists in the codebase — so every cross-file import fails resolution and JSX errors under default compiler options~~ — **removed by §4.2 (VC-188)**: both defaults configured once per runtime load, compiler options read from the project's nearest `tsconfig.json`, and the unresolvable-module diagnostic family suppressed. Measured on this repo: 9,048 diagnostics over 644 of 721 source files → 537 over 185
 
 L1 is the ticket's "each file is just a red squiggle entirely," and it is worse
 than an absent feature: it teaches the user to distrust every diagnostic
@@ -192,7 +192,7 @@ first session. Each item names its current state and verdict.
 | F3 | Reorder tabs by drag | Absent (W2) | **Must** |
 | F4 | Create/rename/delete/duplicate files and folders | Absent (W1) | **Must** |
 | F5 | Quick-open by name | ⌘P over `volli:file-index`, now scope-taking (`components/files/quick-open.tsx`) | Done (§4.4, VC-190) |
-| F6 | Diagnostics that tell the truth | Actively wrong for TS/JS (L1) | **Must** |
+| F6 | Diagnostics that tell the truth | Configured `typescriptDefaults`/`javascriptDefaults` on a tsconfig read (`editor/monaco-runtime.ts`) | Done (§4.2, VC-188) |
 | F7 | Rendered markdown editing for repo files | Per-file Source ⇄ Document toggle on markdown tabs; explicit ⌘S unchanged (`editor/document-view-policy.ts`) | Done (§4.6, VC-192) |
 | F8 | Editor controls drawn as controls (diff toggle icons, word wrap, go-to-line, copy path) | Rough (§1.3) | **Must** (cheap) |
 | F9 | Search across files | Absent (W5) | **Should** — the last "reach for another tool" moment |
@@ -227,7 +227,64 @@ One rule while here: controls join the *one* existing slim band above the
 editor (where the diff toggle lives) or the tab context menu — no new chrome
 bands. House design culture is explicit about this.
 
-### 4.2 Honest diagnostics for TS/JS (S)
+### 4.2 Honest diagnostics for TS/JS (S) — **landed: VC-188**
+
+Shipped as written below. What the ticket settled that the plan left open:
+
+- **The codes.** Enumerated by running monaco's own bundled TypeScript service
+  over this repo's files as isolated models. The dominant one is **TS2792**, not
+  the TS2307 one would expect — the configuration leaves `moduleResolution` at
+  TypeScript's default, and forcing `bundler`/`node` only renames the complaint
+  and adds TS2875 on every JSX file. The list is 2307, 2792, 2306, 2688, 2875,
+  7016 plus the "do you need to install type definitions for node / jQuery / a
+  test runner / Bun" pairs (2580/2591, 2581/2592, 2582/2593, 2867/2868), which
+  TypeScript emits INSTEAD of TS2304 for a known `@types` global — so
+  suppressing them cannot hide a typo. Those four pairs are the whole of a
+  literal `switch` in TypeScript's `getCannotFindNameDiagnosticForName`, taken
+  as a set rather than as whatever this repo happened to emit; the sibling arm
+  of the same switch ("do you need to change your target library?", for `Map`,
+  `Promise`, `document`) is deliberately left red, because `lib` and `target`
+  DO come from the project and that complaint is therefore true. The rule
+  behind the list, and the line a later change should not cross: **each
+  suppressed diagnostic's subject is a module path or a types package, never
+  anything written in the file.**
+- **`noImplicitAny` is forced off**, after the project's `strict` is adopted.
+  This was not in the plan and is the single most valuable line: an unresolved
+  import types as `any`, so under `noImplicitAny` every callback parameter, JSX
+  intrinsic and destructured binding downstream of it errors for a reason that
+  is entirely the editor's own — 82 of the 89 diagnostics left in the first
+  sample were that cascade. The project's other `strict` checks stay on.
+  Re-measured at review over the whole repository: turning it back on adds
+  5,956 diagnostics, and **every one of them is a 70xx implicit-any code in a
+  file that imports something** — 3,494 TS7026 (no `JSX.IntrinsicElements`),
+  2,290 TS7006 (parameter), 152 TS7031 (binding element), 22 TS7053. Zero
+  implicit-any diagnostics arise in files with no import at all, so the price
+  of this line on real source is a genuine bare `function f(x)` in an
+  import-free file, of which this repository has none. No non-70xx diagnostic
+  changes either way.
+- **The tsconfig read walks ancestors**, nearest-first, following relative
+  `extends`. A single nearest-config read would find nothing here: the nearest
+  config to a renderer file is `apps/desktop/tsconfig.json`, a references-only
+  solution file that states no `target` and no `strict`. Bare `extends`
+  specifiers (`astro/tsconfigs/strict`) resolve into `node_modules` and are
+  skipped rather than guessed at.
+- **`lib` names are validated** against the set monaco actually ships. A name
+  its worker cannot produce does not degrade — it replaces the whole standard
+  library with nothing, and the same files that report 7 diagnostics with a good
+  `lib` report 151 with a bad one (`Cannot find name 'Error'`, all the way
+  down). Unrecognised names are dropped; if none survive, `lib` is omitted and
+  the target's default applies. The recognised set is a hand-transcribed copy of
+  monaco's `libFileMap`, so a test checks it both ways against the map the
+  shipped worker actually reads — a monaco bump that adds or renames a lib comes
+  out as a red test rather than as a silently dropped `lib`.
+- **`overviewRulerLanes` stays 0** (the decision this slice owed). 9,048
+  diagnostics over 644 of 721 files became 537 over 185, but the remainder is
+  one systematic class — a type or global another FILE declares — so about one
+  file in four still carries a mark that is wrong. A squiggle makes that claim
+  beside the evidence; a ruler tick makes it in persistent chrome about a line
+  you cannot see. The bar below ("only good chrome when it marks something
+  real") is not met until markers can be trusted per file, which is §4.8's
+  question.
 
 Kill L1 without building anything speculative:
 
