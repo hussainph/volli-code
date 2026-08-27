@@ -197,9 +197,12 @@ describe("the repository's own markdown", () => {
         ).toBe(false);
       }
     }
-    // Its own budget: a sweep over 36 files is seconds of parsing even sampled,
-    // and more again under coverage instrumentation.
-  }, 30_000);
+    // Its own budget, and generous on purpose: the sweep is ~1.5s bare, ~6s
+    // under coverage alone, and ~20s under coverage inside the full renderer
+    // suite, where 8 workers are competing for the machine. CI runs the
+    // coverage gate, so a budget sized to this machine's number would be a
+    // flake waiting for a slower runner.
+  }, 60_000);
 });
 
 /** How many concealed spans each corpus file contributes to the reveal sweep. */
