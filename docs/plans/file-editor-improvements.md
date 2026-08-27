@@ -324,6 +324,14 @@ Shipped as written below. Four things worth recording past the plan's own text:
   reducer's own list, because that list is what preview/pin and persistence
   read. The pin below lives there rather than at the two call sites, so Home
   and a ticket workspace cannot answer it differently.
+- **An arrangement follows a tab whose ID changes.** A File tab's id carries
+  its path, and two transitions deliberately hold a tab in its slot while
+  changing the file under it: a preview tab replaced in place (decision #56)
+  and a rename (VC-191). Both hand the strip the same tab under a new name, so
+  the overlay is told — `substitutedPath` READS which swap a transition made
+  and `renamedTabOrder` carries the place across it. Without that step an
+  arranged strip reshuffled on every glance through the navigator, which is the
+  exact motion those two transitions exist to prevent.
 - **Space picks a tab up; Enter selects it.** dnd-kit's keyboard sensor claims
   both, and a tab needs one of them — the same split `ticket-card.tsx` already
   makes on the board, and the sensor's own hidden instructions (which each

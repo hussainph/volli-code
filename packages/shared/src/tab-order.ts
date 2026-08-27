@@ -96,6 +96,36 @@ export function movedTabOrder(ids: TabOrder, movedId: string, toIndex: number): 
 }
 
 /**
+ * The overlay after the tab known as `fromId` becomes `toId` — an arrangement
+ * following a tab whose IDENTITY changed while the tab itself stayed put.
+ *
+ * A File tab's id carries its path (`file:<relPath>`), so the two transitions
+ * that deliberately hold a tab in its slot while changing the file under it —
+ * a preview tab replaced in place (decision #56) and a renamed file (VC-191) —
+ * hand the strip the same tab under a new name. The overlay names ids, so it
+ * has to be told: left alone it would simply stop naming that tab, and
+ * {@link arrangeTabs} would append it to the end, which is the reshuffle both
+ * of those transitions exist to avoid.
+ *
+ * An existing mention of `toId` is absorbed rather than left beside the new
+ * one, mirroring `renameFile`'s own absorption of a stale tab already sitting
+ * on the destination path. Returns its input by identity when the overlay does
+ * not name `fromId` at all.
+ */
+export function renamedTabOrder(order: TabOrder, fromId: string, toId: string): TabOrder {
+  if (fromId === toId) return order;
+  const at = order.indexOf(fromId);
+  if (at === -1) return order;
+  return (
+    order
+      // `index` is the position in the ORIGINAL list, so this drops every other
+      // mention of the destination and keeps the tab being renamed.
+      .filter((id, index) => index === at || id !== toId)
+      .map((id) => (id === fromId ? toId : id))
+  );
+}
+
+/**
  * Validate a rehydrated overlay from a possibly-older build: strings only,
  * first mention wins, everything else dropped. Shape only — see the module doc
  * for why this may not ask whether an id still names a tab.

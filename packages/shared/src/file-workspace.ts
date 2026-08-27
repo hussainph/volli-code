@@ -178,6 +178,41 @@ export function moveFile(
   return { tabs, activeRelPath: state.activeRelPath };
 }
 
+/**
+ * The one tab whose PATH changed IN PLACE between two versions of a strip, or
+ * `null` when this transition was not a substitution.
+ *
+ * READ rather than predicted, so it cannot drift from the reducers it reports
+ * on. {@link previewFile} replacing the preview slot and {@link renameFile}
+ * following a rename are the two transitions that keep a tab's slot while
+ * changing the file under it, and both appear here as "same length, exactly one
+ * index disagrees". Opening, closing, pinning and {@link moveFile} each fail
+ * one of those two tests — a move disagrees at two indices at the very least —
+ * so a caller may hand every transition to this and act only on the ones that
+ * moved a tab's identity.
+ *
+ * The renderer needs it because a File tab's id carries its path, so a
+ * substitution renames that tab as far as a strip ARRANGEMENT is concerned
+ * (VC-189, `tab-order.ts`'s `renamedTabOrder`).
+ */
+export function substitutedPath(
+  before: readonly FileWorkspaceTab[],
+  after: readonly FileWorkspaceTab[],
+): { from: string; to: string } | null {
+  if (before.length !== after.length) return null;
+  let found: { from: string; to: string } | null = null;
+  for (let index = 0; index < after.length; index += 1) {
+    // Both indices are in range: the lengths are equal, and checked above.
+    const was = before[index]!.relPath;
+    const now = after[index]!.relPath;
+    if (was === now) continue;
+    // A second disagreement means the strip was reordered, not substituted.
+    if (found !== null) return null;
+    found = { from: was, to: now };
+  }
+  return found;
+}
+
 /** Whether `relPath` is currently the replaceable preview tab. */
 export function isPreviewTab(state: FileWorkspaceState, relPath: string): boolean {
   return state.tabs.some((tab) => tab.relPath === relPath && !tab.pinned);

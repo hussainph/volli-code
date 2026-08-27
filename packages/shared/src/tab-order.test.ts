@@ -4,6 +4,7 @@ import {
   arrangeTabs,
   EMPTY_TAB_ORDER,
   movedTabOrder,
+  renamedTabOrder,
   sanitizeTabOrder,
   type OrderedTab,
 } from "./tab-order";
@@ -85,6 +86,30 @@ describe("movedTabOrder", () => {
   it("returns the strip by identity for a drop that changed nothing", () => {
     expect(movedTabOrder(strip, "b", 1)).toBe(strip);
     expect(movedTabOrder(strip, "missing", 0)).toBe(strip);
+  });
+});
+
+describe("renamedTabOrder", () => {
+  const strip = ["file:a.ts", "chat:c1", "file:b.ts"];
+
+  it("follows a tab to its new id without moving it", () => {
+    expect(renamedTabOrder(strip, "file:a.ts", "file:renamed.ts")).toEqual([
+      "file:renamed.ts",
+      "chat:c1",
+      "file:b.ts",
+    ]);
+  });
+
+  it("absorbs a mention already sitting on the destination id", () => {
+    // `renameFile` absorbs a stale tab on the destination path rather than
+    // leaving two tabs for one file; the arrangement says the same thing.
+    expect(renamedTabOrder(strip, "file:a.ts", "file:b.ts")).toEqual(["file:b.ts", "chat:c1"]);
+  });
+
+  it("returns the order by identity when it does not name the old id", () => {
+    expect(renamedTabOrder(strip, "file:gone.ts", "file:new.ts")).toBe(strip);
+    expect(renamedTabOrder(strip, "file:a.ts", "file:a.ts")).toBe(strip);
+    expect(renamedTabOrder(EMPTY_TAB_ORDER, "file:a.ts", "file:b.ts")).toBe(EMPTY_TAB_ORDER);
   });
 });
 

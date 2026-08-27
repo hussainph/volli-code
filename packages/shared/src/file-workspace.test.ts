@@ -10,6 +10,7 @@ import {
   previewFile,
   renameFile,
   sanitizeFileWorkspace,
+  substitutedPath,
   type FileWorkspaceState,
   type FileWorkspaceTab,
 } from "./file-workspace";
@@ -424,6 +425,38 @@ describe("moveFile", () => {
   it("returns by identity for a file that is not open and for a pinned no-op move", () => {
     expect(moveFile(three, "missing.ts", 0)).toBe(three);
     expect(moveFile(three, "b.ts", 1)).toBe(three);
+  });
+});
+
+describe("substitutedPath", () => {
+  const open = workspace(
+    [
+      { relPath: "glance.ts", pinned: false },
+      { relPath: "b.ts", pinned: true },
+    ],
+    "glance.ts",
+  );
+
+  it("reports the swap a preview replacement made in place", () => {
+    const after = previewFile(open, "next.ts");
+    expect(substitutedPath(open.tabs, after.tabs)).toEqual({ from: "glance.ts", to: "next.ts" });
+  });
+
+  it("reports the swap a rename made in place", () => {
+    const after = renameFile(open, "b.ts", "renamed.ts");
+    expect(substitutedPath(open.tabs, after.tabs)).toEqual({ from: "b.ts", to: "renamed.ts" });
+  });
+
+  it("reports nothing for a transition that did not swap one tab's path", () => {
+    // Opening and closing change the LENGTH; pinning changes no path at all.
+    expect(substitutedPath(open.tabs, pinFile(open, "c.ts").tabs)).toBeNull();
+    expect(substitutedPath(open.tabs, closeFile(open, "b.ts").tabs)).toBeNull();
+    expect(substitutedPath(open.tabs, pinFile(open, "glance.ts").tabs)).toBeNull();
+    expect(substitutedPath(open.tabs, open.tabs)).toBeNull();
+  });
+
+  it("reports nothing for a move, which disagrees at two indices at the least", () => {
+    expect(substitutedPath(open.tabs, moveFile(open, "b.ts", 0).tabs)).toBeNull();
   });
 });
 

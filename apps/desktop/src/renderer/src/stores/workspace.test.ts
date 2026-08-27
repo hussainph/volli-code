@@ -2282,6 +2282,39 @@ describe("tab arrangement — Home (VC-189)", () => {
     ]);
   });
 
+  it("keeps a preview tab's PLACE when a glance replaces it in place", () => {
+    // Decision #56 replaces the preview slot in place precisely so a walk
+    // through the navigator does not reshuffle the strip. The tab's id carries
+    // its path, so the arrangement has to follow it to its new one.
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewHomeFile("project-a", "a.ts");
+    store.getState().pinHomeFile("project-a", "b.ts");
+    store.getState().moveHomeTab("project-a", "chat:c1", ["file:a.ts", "file:b.ts", "chat:c1"]);
+
+    store.getState().previewHomeFile("project-a", "c.ts");
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "file:c.ts",
+      "file:b.ts",
+      "chat:c1",
+    ]);
+  });
+
+  it("keeps a renamed tab's PLACE, as it keeps its slot", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().pinHomeFile("project-a", "a.ts");
+    store.getState().pinHomeFile("project-a", "b.ts");
+    store.getState().moveHomeTab("project-a", "chat:c1", ["file:a.ts", "file:b.ts", "chat:c1"]);
+
+    store.getState().renameHomeFile("project-a", "a.ts", "renamed.ts");
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "file:renamed.ts",
+      "file:b.ts",
+      "chat:c1",
+    ]);
+  });
+
   it("reads a stored arrangement tolerantly, and never prunes it against what is on screen", () => {
     const storage = createMemoryStorage();
     storage.setItem(
@@ -2372,6 +2405,29 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
     expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.tabOrder).toEqual([
       "chat:c2",
       "chat:c1",
+    ]);
+  });
+
+  it("keeps a preview tab's PLACE when a glance replaces it, and a renamed tab's", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewTicketFile("project-a", "ticket-1", "a.ts");
+    store.getState().openTicketFile("project-a", "ticket-1", "b.ts");
+    store
+      .getState()
+      .moveTicketTab("project-a", "ticket-1", "session-9", ["file:a.ts", "file:b.ts", "session-9"]);
+
+    store.getState().previewTicketFile("project-a", "ticket-1", "c.ts");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.tabOrder).toEqual([
+      "file:c.ts",
+      "file:b.ts",
+      "session-9",
+    ]);
+
+    store.getState().renameTicketFile("project-a", "ticket-1", "b.ts", "renamed.ts");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.tabOrder).toEqual([
+      "file:c.ts",
+      "file:renamed.ts",
+      "session-9",
     ]);
   });
 

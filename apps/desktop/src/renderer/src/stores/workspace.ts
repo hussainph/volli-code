@@ -40,9 +40,11 @@ import {
   moveFile,
   pinFile,
   previewFile,
+  renamedTabOrder,
   renameFile,
   sanitizeFileWorkspace,
   sanitizeTabOrder,
+  substitutedPath,
   TICKET_SORT_KEYS,
   type FileWorkspaceState,
   type FileWorkspaceTab,
@@ -360,6 +362,24 @@ function emptyTicketTabs(active: string = BODY_TAB_ID): TicketTabsState {
  * not name that file's tab, which is a caller that arranged one strip and
  * described another — see the move actions, which then leave the reducer alone.
  */
+/**
+ * Carry a strip's ARRANGEMENT across a File transition that swapped one tab's
+ * path in place (VC-189).
+ *
+ * A File tab's id is `file:<relPath>`, so a preview replacement and a rename
+ * hand the strip the same tab under a new id, and an overlay that names ids has
+ * to be told. Every other transition — open, close, pin, and the drag's own
+ * `moveFile` — returns the order by identity.
+ */
+function orderAfterFileTabs(
+  order: TabOrder,
+  before: readonly FileWorkspaceTab[],
+  after: readonly FileWorkspaceTab[],
+): TabOrder {
+  const swap = substitutedPath(before, after);
+  return swap === null ? order : renamedTabOrder(order, fileTabId(swap.from), fileTabId(swap.to));
+}
+
 function fileSlotInOrder(order: TabOrder, relPath: string): number {
   const paths: string[] = [];
   for (const tabId of order) {
@@ -404,6 +424,10 @@ function ticketFilesWorkspace(tabs: TicketTabsState): FileWorkspaceState {
  * When the reducer's `activeRelPath` changes, the ticket's unified `active` is
  * synced to `file:<relPath>` (or Doc when cleared); pin-without-focus leaves
  * `active` alone.
+ *
+ * The strip's ARRANGEMENT is carried the same way and for the same reason
+ * (VC-189): both fields are keyed by tab id, and a transition that substitutes
+ * one tab's path in place changes that id without moving the tab.
  */
 export function applyTicketFileTransition(
   existing: TicketTabsState,
@@ -416,7 +440,8 @@ export function applyTicketFileTransition(
   if (after.activeRelPath !== before.activeRelPath) {
     active = after.activeRelPath === null ? BODY_TAB_ID : fileTabId(after.activeRelPath);
   }
-  return { ...existing, files: [...after.tabs], active };
+  const tabOrder = orderAfterFileTabs(existing.tabOrder, before.tabs, after.tabs);
+  return { ...existing, files: [...after.tabs], tabOrder, active };
 }
 
 /**
@@ -1071,6 +1096,13 @@ export function createWorkspaceStore(storage?: StateStorage) {
             return patchWorkspace(state, projectId, {
               nav: "home",
               projectFiles,
+              // A preview tab replaced IN PLACE is the same tab under a new id;
+              // the arrangement follows it rather than losing it (VC-189).
+              homeTabOrder: orderAfterFileTabs(
+                current.homeTabOrder,
+                current.projectFiles.tabs,
+                projectFiles.tabs,
+              ),
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
             });
@@ -1181,6 +1213,13 @@ export function createWorkspaceStore(storage?: StateStorage) {
             return patchWorkspace(state, projectId, {
               projectFiles,
               projectFileViewStates,
+              // The renamed tab keeps its place in the arrangement too, for the
+              // reason it keeps its slot at all: it did not go anywhere.
+              homeTabOrder: orderAfterFileTabs(
+                current.homeTabOrder,
+                current.projectFiles.tabs,
+                projectFiles.tabs,
+              ),
               homeActiveTab: current.homeActiveTab === fromTabId ? toTabId : current.homeActiveTab,
               // The renamed tab keeps its place in the return history rather
               // than dropping out of it: closing the tab in front must still

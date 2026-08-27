@@ -162,6 +162,27 @@ describe("TabStrip arrangement", () => {
     expect(board?.getAttribute("role")).toBe("tab");
   });
 
+  it("takes transform out of a tab's transition under reduced motion", () => {
+    // The sortable asks dnd-kit for no transition under the flag, but that only
+    // clears the INLINE one: whatever the tab's own class list transitions is
+    // what would animate the sibling shift instead. jsdom applies no
+    // stylesheet, so the class list is where this is checkable at all — and it
+    // is the half that was silently re-supplying the motion.
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    renderStrip(vi.fn());
+    const [, chat] = tabsInStrip();
+    const transitions = (chat?.className ?? "")
+      .split(" ")
+      .filter((name) => name.includes("transition-["));
+
+    expect(transitions.at(-1)).toBe("motion-reduce:transition-[color,background-color,box-shadow]");
+    expect(transitions.at(-1)).not.toContain("transform");
+  });
+
   it("leaves Enter as the activation on a tab that drags", () => {
     const onReorder = vi.fn();
     const onActivate = vi.fn();

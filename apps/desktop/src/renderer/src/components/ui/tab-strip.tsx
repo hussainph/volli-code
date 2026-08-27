@@ -598,7 +598,15 @@ function TabShell({
       className={cn(
         // `scale` is in the transition list and `scale-100!` is the
         // reduced-motion cancel — see the press note in `ui/button.tsx`.
-        "group relative flex h-7 shrink-0 items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
+        //
+        // `transform` LEAVES that list under reduced motion, and it has to be
+        // said here rather than left to dnd-kit (VC-189): a sortable tab asks
+        // for no transition at all under the flag, but "no transition" means no
+        // INLINE one, and this class would then be what animates the sibling
+        // shift instead — the very motion the flag turned off. The board card
+        // needs no such line because its own transition list is `border-color`
+        // alone (`board/ticket-card.tsx`).
+        "group relative flex h-7 shrink-0 items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-[color,background-color,box-shadow] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
         folder ? "rounded-t-lg" : "rounded-md",
         // A closable tab pays its right inset in the × instead of in padding.
         folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
