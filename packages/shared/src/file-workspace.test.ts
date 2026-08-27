@@ -7,6 +7,7 @@ import {
   markFileEdited,
   pinFile,
   previewFile,
+  renameFile,
   sanitizeFileWorkspace,
   type FileWorkspaceState,
   type FileWorkspaceTab,
@@ -176,6 +177,67 @@ describe("closeFile", () => {
   });
 });
 
+describe("renameFile", () => {
+  const three = workspace(
+    [
+      { relPath: "a.ts", pinned: true },
+      { relPath: "b.ts", pinned: true },
+      { relPath: "c.ts", pinned: false },
+    ],
+    "b.ts",
+  );
+
+  it("keeps the tab in its slot, with its pin, and follows the focus", () => {
+    const next = renameFile(three, "b.ts", "renamed.ts");
+    expect(next.tabs).toEqual([
+      { relPath: "a.ts", pinned: true },
+      { relPath: "renamed.ts", pinned: true },
+      { relPath: "c.ts", pinned: false },
+    ]);
+    expect(next.activeRelPath).toBe("renamed.ts");
+  });
+
+  it("leaves the focus where it was when some other tab is renamed", () => {
+    expect(renameFile(three, "a.ts", "renamed.ts").activeRelPath).toBe("b.ts");
+  });
+
+  it("keeps a preview tab replaceable", () => {
+    const next = renameFile(three, "c.ts", "renamed.ts");
+    expect(isPreviewTab(next, "renamed.ts")).toBe(true);
+  });
+
+  it("is a no-op for a file that is not open, and for a rename onto itself", () => {
+    expect(renameFile(three, "zzz.ts", "other.ts")).toEqual(three);
+    expect(renameFile(three, "b.ts", "b.ts")).toEqual(three);
+  });
+
+  it("absorbs a stale tab already holding the destination path, keeping the pin", () => {
+    const stale = workspace(
+      [
+        { relPath: "a.ts", pinned: false },
+        { relPath: "b.ts", pinned: true },
+      ],
+      "a.ts",
+    );
+    const next = renameFile(stale, "a.ts", "b.ts");
+    expect(next.tabs).toEqual([{ relPath: "b.ts", pinned: true }]);
+    expect(next.activeRelPath).toBe("b.ts");
+  });
+
+  it("brings focus onto the surviving tab when the stale destination held it", () => {
+    const stale = workspace(
+      [
+        { relPath: "a.ts", pinned: true },
+        { relPath: "b.ts", pinned: false },
+      ],
+      "b.ts",
+    );
+    const next = renameFile(stale, "a.ts", "b.ts");
+    expect(next.tabs).toEqual([{ relPath: "b.ts", pinned: true }]);
+    expect(next.activeRelPath).toBe("b.ts");
+  });
+});
+
 describe("purity", () => {
   it("never mutates the state it is handed", () => {
     const tabs: FileWorkspaceTab[] = [
@@ -190,6 +252,7 @@ describe("purity", () => {
     markFileEdited(state, "b.ts");
     activateFile(state, "a.ts");
     closeFile(state, "a.ts");
+    renameFile(state, "a.ts", "renamed.ts");
 
     expect({ tabs, activeRelPath: state.activeRelPath }).toEqual(snapshot);
   });

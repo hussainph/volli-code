@@ -15,6 +15,7 @@ import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOu
 import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
@@ -339,6 +340,30 @@ export function RailNavigatorHeader({
         />
       ) : null}
     </header>
+  );
+}
+
+/**
+ * New File, in the navigator header, at BOTH scopes (VC-191).
+ *
+ * Beside Filter rather than on a row, for the reason Attach is there: it acts
+ * on the FOLDER the navigator is standing in, not on whatever is under the
+ * cursor — and it is the only door to creating a file in an EMPTY folder, where
+ * there is no row to right-click. New Folder… deliberately has no twin here:
+ * the header is a place for the one gesture a person reaches for constantly,
+ * the row menu carries the rest, and two adjacent plus-glyphs read as one
+ * control that someone drew twice.
+ */
+export function NewFileRailAction({ onNewFile }: { onNewFile(): void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button size="icon-sm" variant="ghost" aria-label="New file" onClick={onNewFile}>
+          <FilePlusIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">New file</TooltipContent>
+    </Tooltip>
   );
 }
 

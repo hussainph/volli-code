@@ -47,6 +47,18 @@ describe("HomeFilesPanel", () => {
     expect(html).toContain("Volli Code");
     expect(html).toContain('aria-label="Loading files"');
   });
+
+  it("offers New File in its header — the Home half of VC-191's both-scopes rule", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <HomeFilesPanel project={project} onPreviewFile={noop} onPinFile={noop} />
+      </TooltipProvider>,
+    );
+
+    // Beside Filter, and reachable before the first listing lands: an empty
+    // folder has no row to right-click, which is exactly when it is needed.
+    expect(html).toContain('aria-label="New file"');
+  });
 });
 
 describe("HomeFilesList", () => {

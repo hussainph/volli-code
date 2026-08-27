@@ -62,7 +62,7 @@ place where the UI actively lies.
 
 | # | Wall | Where it is enforced |
 |---|---|---|
-| W1 | Create a file or folder; rename, move, delete, duplicate | NEW-FILE POLICY refuses writes to nonexistent paths outside `.volli/**` (`main/volli-fs.ts:593`); no affordance anywhere in the renderer |
+| W1 | Create a file or folder; rename, move, delete, duplicate | ~~NEW-FILE POLICY refuses writes to nonexistent paths outside `.volli/**` (`main/volli-fs.ts:593`); no affordance anywhere in the renderer~~ — **removed by §4.5 (VC-191)**: five scoped IPC verbs in `main/volli-fs.ts` behind the same two path-safety layers, and a context menu + New File header action on both navigators. The write path still refuses a nonexistent path; creating one is now its own door |
 | W2 | Reorder tabs | No drag or move operation in any strip; order is insertion order (`packages/shared/src/file-workspace.ts` has preview/pin/activate/close only; both strips compose kind-grouped) |
 | W3 | Edit repository markdown in rendered form | `fileSavePolicy` routes all non-artifact markdown to the raw source editor (`packages/shared/src/file-save-policy.ts:37-41`); Document Mode never mounts for it |
 | W4 | Jump to a file by name | ~~No quick-open; the command palette has no file entries (`command-palette-model.ts`); the rail navigator is a one-level-at-a-time walk~~ — **removed by §4.4 (VC-190)**: ⌘P over the scoped file index (`components/files/quick-open.tsx`) |
@@ -292,7 +292,22 @@ spelled for a listing instead of a path.
 - Enter previews, ⌘Enter (or double-invoke) pins — same grammar as the
   navigator. Opening lands in the surface you invoked it from.
 
-### 4.5 File create / rename / delete / duplicate (M)
+### 4.5 File create / rename / delete / duplicate (M) — **landed: VC-191**
+
+Shipped as written below. Three things the ticket settled that the plan left
+open: `duplicate` derives the free `… copy` name in main (Finder's grammar,
+suffix before the extension) and is refused for a directory, because a
+recursive copy of an arbitrary repo folder is a different risk class; a rename
+whose destination would resolve against a different root than its source is
+refused outright (`.volli/**` always resolves to Main, so inside a ticket that
+would be a cross-checkout MOVE under the word "rename"); and creating a file
+makes its missing parent folders, which needed a containment walk from the
+realpath'd root down — `assertWithinRoot` verifies a missing target through its
+PARENT, which for `src/new/thing.ts` is missing too.
+
+The accepted v1 limit stands and is recorded rather than built: a rename can
+leave a Dangling Reference in a Ticket Body, which the product already renders
+honestly. No reference rewriting.
 
 The audit's biggest deliberate omission, now a wall worth removing — with the
 same safety posture the write path has:

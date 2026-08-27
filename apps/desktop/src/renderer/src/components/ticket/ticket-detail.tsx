@@ -152,6 +152,7 @@ export function TicketDetail({
   const pinTicketFile = useWorkspaceStore((state) => state.pinTicketFile);
   const markTicketFileEdited = useWorkspaceStore((state) => state.markTicketFileEdited);
   const closeTicketFile = useWorkspaceStore((state) => state.closeTicketFile);
+  const renameTicketFile = useWorkspaceStore((state) => state.renameTicketFile);
   const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
@@ -719,6 +720,20 @@ export function TicketDetail({
     (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
     [pinTicketFile, projectId, ticket.id],
   );
+  // A file the navigator just created opens PINNED and focused (VC-191): it was
+  // made to be typed in, so it is never the replaceable preview glance.
+  const openCreatedFileFromRail = React.useCallback(
+    (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
+    [openTicketFile, projectId, ticket.id],
+  );
+  // A renamed file's tab follows it. The rename itself is refused while that
+  // document is dirty (`use-navigator-mutations.ts`), so what arrives here is
+  // always a clean tab: the strip keeps its slot and the FileView, keyed by
+  // relPath, remounts onto the new path and re-reads.
+  const renameFileFromRail = React.useCallback(
+    (from: string, to: string) => renameTicketFile(projectId, ticket.id, from, to),
+    [renameTicketFile, projectId, ticket.id],
+  );
   const openDiff = React.useCallback(
     (file: { path: string; previousPath?: string; status: string; binary: boolean }) => {
       openTicketDiff(projectId, ticket.id, file.path, {
@@ -1182,6 +1197,8 @@ export function TicketDetail({
                     handle={ticketAttachments}
                     onPreviewFile={previewFileFromRail}
                     onPinFile={pinFileFromRail}
+                    onOpenCreatedFile={openCreatedFileFromRail}
+                    onRenameFile={renameFileFromRail}
                   />
                 }
               />

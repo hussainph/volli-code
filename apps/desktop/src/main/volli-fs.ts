@@ -3,7 +3,8 @@
  * (docs/plans/global-artifacts.md): the whole-project file index (git
  * ls-files, gitignore-respecting, `.volli/artifacts/` force-included),
  * worktree-aware read/write/reveal and external-app launch of any repo file,
- * the single project-scoped `.volli/artifacts/` create flow, and a per-open-tab
+ * the single project-scoped `.volli/artifacts/` create flow, the navigators'
+ * create/rename/duplicate/delete track (VC-191, plan §4.5), and a per-open-tab
  * debounced file watch —
  * plus, for the Project Files workspace (issue #106), a per-expanded-directory
  * watch that refreshes one listing at a time rather than mirroring the repo.
@@ -17,7 +18,13 @@
  * inside the resolved root ({@link assertWithinRoot}) — guarding a symlink
  * swapped in for a directory (or the target file itself).
  */
-import { existsSync, promises as fsp, statSync, watch as fsWatch } from "node:fs";
+import {
+  constants as fsConstants,
+  existsSync,
+  promises as fsp,
+  statSync,
+  watch as fsWatch,
+} from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -61,8 +68,10 @@ import type {
   FileIndexInput,
   FileIndexResult,
   FileIpcChannel,
+  FileMutationResult,
   FilePathInput,
   FileReadResult,
+  FileRenameInput,
   FileWriteInput,
   FileWriteResult,
   PromptTemplateCreateInput,
@@ -312,6 +321,84 @@ async function resolveSafePath(
   const check = await assertWithinRoot(root, filePath);
   if (!check.ok) return check;
   return { ok: true, value: { root, source, filePath } };
+}
+
+/** A resolved path that may not exist yet, and the one fact the caller has to branch on. */
+interface ResolvedNewFile extends ResolvedFile {
+  /** Whether anything is at `filePath` already — the create track's refusal. */
+  exists: boolean;
+}
+
+/**
+ * The creation track's resolution seam (VC-191): the same two layers as
+ * {@link resolveSafePath}, for a path whose PARENT may not exist either.
+ *
+ * {@link assertWithinRoot} cannot answer for one of those — it verifies a
+ * missing target through `realpath` of its parent directory, which for
+ * `src/new/thing.ts` is itself missing, so a legitimate create would come back
+ * "File was not found". So containment is established the other way round:
+ * start at the REALPATH'd root and walk down one segment at a time. Every
+ * segment past the first missing one is new, and a path built by joining onto
+ * an already-contained real directory cannot escape it — which is the property
+ * that makes creating the missing parents safe.
+ *
+ * The two symlink rules are the READ path's, restated for a walk rather than
+ * inherited by accident: an intermediate link is followed and then required to
+ * land inside the root (a repo may legitimately symlink a directory to another
+ * directory of its own, and a read through one already works), while a link at
+ * the TARGET is refused outright — the swapped-in-file case, where following it
+ * would write through to wherever it points.
+ */
+async function resolveNewPath(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<{ ok: true; value: ResolvedNewFile } | { ok: false; error: string }> {
+  const { root, source } = resolveFileRoot({ projectPath, worktreePath: worktreeRoot, relPath });
+  if (!isSafeRelPath(relPath)) return { ok: false, error: "Invalid file path" };
+  let rootReal: string;
+  try {
+    rootReal = await fsp.realpath(root);
+  } catch {
+    return {
+      ok: false,
+      error:
+        source === "worktree" ? "Worktree folder was not found" : "Project folder was not found",
+    };
+  }
+  const segments = relPath.split("/");
+  let current = rootReal;
+  let exists = true;
+  for (const [index, segment] of segments.entries()) {
+    const next = join(current, segment);
+    let entry: import("node:fs").Stats;
+    try {
+      entry = await fsp.lstat(next);
+    } catch {
+      // Nothing here yet. Everything below is new; the walk is done.
+      exists = false;
+      current = segments.slice(index).reduce((path, rest) => join(path, rest), current);
+      break;
+    }
+    const last = index === segments.length - 1;
+    if (entry.isSymbolicLink()) {
+      if (last) return { ok: false, error: "Path is a symlink" };
+      let real: string;
+      try {
+        real = await fsp.realpath(next);
+      } catch {
+        return { ok: false, error: "File was not found" };
+      }
+      if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+        return { ok: false, error: "Resolved path escapes the project root" };
+      }
+      current = real;
+      continue;
+    }
+    if (!last && !entry.isDirectory()) return { ok: false, error: "Not a directory" };
+    current = next;
+  }
+  return { ok: true, value: { root: rootReal, source, filePath: current, exists } };
 }
 
 // ---- file index --------------------------------------------------------------
@@ -591,11 +678,22 @@ async function assertTextWritable(
  * on-disk binary, anything past {@link TEXT_CAP_BYTES} in either direction —
  * see {@link assertTextWritable}.
  *
- * NEW-FILE POLICY: a write to a path with nothing on disk is refused. Project
- * Files edits files that already exist; creation/rename/delete are a separate,
- * reference-aware track. The single exception is `.volli/**`, which this app
- * owns and self-heals below — an agent's `git clean -xdf` wipes it, and the
- * open artifact tab's buffered edits must not be stranded.
+ * NEW-FILE POLICY: a write to a path with nothing on disk is still refused, and
+ * that is now a statement about WHICH DOOR creates a file rather than about
+ * whether the app may. The sanctioned creation track is the create/rename/
+ * duplicate/delete block below (VC-191, plan §4.5): it names the new path
+ * explicitly, refuses to overwrite, and deletes to the Trash — none of which a
+ * save can do, because a save cannot tell "this file is new" apart from "the
+ * file this buffer came from was deleted or renamed underneath it". Letting the
+ * write path conjure that file back is how a stale tab silently resurrects a
+ * path the user (or an agent's `git mv`) removed. So the refusal stands, and
+ * the two exceptions to it are:
+ *
+ *  - `.volli/**`, which this app owns and self-heals below — an agent's
+ *    `git clean -xdf` wipes it, and the open artifact tab's buffered edits must
+ *    not be stranded.
+ *  - a file the creation track just made, which exists by the time the first
+ *    save reaches it.
  */
 export async function writeFile(
   projectPath: string,
@@ -698,6 +796,219 @@ export async function createArtifact(
     if (errnoCode(error) === "EEXIST") {
       return { ok: false, error: `An artifact named "${name}" already exists` };
     }
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+// ---- the sanctioned creation track (VC-191, plan §4.5) -----------------------
+//
+// Five verbs the write path deliberately does not have: create a file, create a
+// directory, rename, duplicate, delete. Each resolves through the SAME seams a
+// read does — `resolveFileScope`'s `{ projectId, ticketId }` worktree pair at
+// the IPC edge, and the two path-safety layers here — and each refuses rather
+// than destroying: create and rename never overwrite, and delete goes to the
+// Trash. Exported as plain functions (the module's convention) so the refusal
+// paths are testable against real temp dirs without an Electron window.
+
+/** The extension a duplicate has to keep, INCLUDING the dot, or `""` for a name with none. */
+function trailingExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  // `dot <= 0` keeps a dotfile whole: `.gitignore` duplicates as
+  // `.gitignore copy`, never as ` copy.gitignore`.
+  return dot <= 0 ? "" : name.slice(dot);
+}
+
+/**
+ * What the Nth duplicate of `name` is called — Finder's grammar, because this
+ * is Finder's gesture: `plan.md` → `plan copy.md`, then `plan copy 2.md`. The
+ * suffix goes before the extension so the copy is still the same KIND of file,
+ * which is what decides its editor, its syntax highlighting and whether the
+ * navigator will even offer to open it.
+ */
+export function duplicateEntryName(name: string, attempt: number): string {
+  const extension = trailingExtension(name);
+  const base = name.slice(0, name.length - extension.length);
+  return attempt <= 1 ? `${base} copy${extension}` : `${base} copy ${attempt}${extension}`;
+}
+
+/** How many `… copy N` names duplicate tries before it gives up rather than spinning. */
+const DUPLICATE_NAME_ATTEMPTS = 100;
+
+/**
+ * Creates an EMPTY file at `relPath`, making any missing parent directories.
+ *
+ * The `wx` (`O_EXCL`) flag is the real no-clobber guard, exactly as in
+ * {@link createArtifact}: it closes the window between "nothing was there" and
+ * "we wrote", which under a live agent is not a theoretical race, and it refuses
+ * to follow a symlink parked at the target name. Empty rather than templated —
+ * the artifact create flow seeds a `# Heading` because it knows the file is a
+ * Markdown document; a repository file is whatever the person is about to type.
+ */
+export async function createFile(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileMutationResult> {
+  const resolved = await resolveNewPath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath, exists } = resolved.value;
+  if (exists) return { ok: false, error: `"${basename(relPath)}" already exists` };
+  try {
+    await fsp.mkdir(dirname(filePath), { recursive: true });
+    await fsp.writeFile(filePath, "", { encoding: "utf8", flag: "wx" });
+    return { ok: true, relPath };
+  } catch (error) {
+    if (errnoCode(error) === "EEXIST") {
+      return { ok: false, error: `"${basename(relPath)}" already exists` };
+    }
+    return { ok: false, error: fsFaultText(error) };
+  }
+}
+
+/**
+ * Creates one directory at `relPath` (missing parents included).
+ *
+ * The final `mkdir` is deliberately NOT recursive: `recursive: true` treats an
+ * existing directory as success, which would make "New Folder…" silently answer
+ * ok for a name that is already taken — the one thing this verb must refuse.
+ */
+export async function createDirectory(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileMutationResult> {
+  const resolved = await resolveNewPath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath, exists } = resolved.value;
+  if (exists) return { ok: false, error: `"${basename(relPath)}" already exists` };
+  try {
+    await fsp.mkdir(dirname(filePath), { recursive: true });
+    await fsp.mkdir(filePath);
+    return { ok: true, relPath };
+  } catch (error) {
+    if (errnoCode(error) === "EEXIST") {
+      return { ok: false, error: `"${basename(relPath)}" already exists` };
+    }
+    return { ok: false, error: fsFaultText(error) };
+  }
+}
+
+/**
+ * Renames (or moves, within one checkout) a file or directory.
+ *
+ * THREE REFUSALS, and each is a different way this could destroy something:
+ * a destination that is already occupied is never overwritten (`rename(2)`
+ * would silently replace it); a destination that resolves against a DIFFERENT
+ * root than the source is refused, because `.volli/**` always resolves to Main
+ * while the repo half follows the ticket's worktree — so `src/a.ts` →
+ * `.volli/artifacts/a.ts` inside a ticket would move a file between checkouts
+ * under the word "rename"; and a destination whose parent folder does not exist
+ * is named as such instead of creating it, because rename is not the create
+ * verb and a typo'd path should not scatter directories.
+ *
+ * The occupied-destination check is a `lstat` a moment before the `rename(2)`,
+ * so an agent creating that exact path in between would still be clobbered.
+ * There is no portable no-replace rename to close it with (`renameat2`'s
+ * `RENAME_NOREPLACE` is Linux-only, `renamex_np` is macOS-only and unexposed by
+ * Node), so it is stated rather than implied — the same honesty the write
+ * path's mtime guard practices about the same width of window.
+ */
+export async function renameEntry(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+  toRelPath: string,
+): Promise<FileMutationResult> {
+  const source = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!source.ok) return source;
+  const destination = await resolveNewPath(projectPath, worktreeRoot, toRelPath);
+  if (!destination.ok) return destination;
+  if (destination.value.source !== source.value.source) {
+    return { ok: false, error: "A rename cannot move a file between checkouts" };
+  }
+  if (destination.value.exists) {
+    return { ok: false, error: `"${basename(toRelPath)}" already exists` };
+  }
+  try {
+    if ((await statOrNull(source.value.filePath)) === null) {
+      return { ok: false, error: "File was not found" };
+    }
+    const parent = await statOrNull(dirname(destination.value.filePath));
+    if (parent === null || !parent.isDirectory()) {
+      return { ok: false, error: "Destination folder was not found" };
+    }
+    await fsp.rename(source.value.filePath, destination.value.filePath);
+    return { ok: true, relPath: toRelPath };
+  } catch (error) {
+    return { ok: false, error: fsFaultText(error) };
+  }
+}
+
+/**
+ * Copies a file to the first free `… copy` name beside it, resolving with the
+ * name it actually took.
+ *
+ * FILES ONLY in v1, and refused out loud for a directory rather than quietly
+ * doing nothing: a recursive copy of an arbitrary repository folder is a
+ * different risk class (a `node_modules`, a `target`, an unbounded amount of
+ * time and disk) and nobody has asked for it.
+ *
+ * `COPYFILE_EXCL` is what makes the search for a free name correct rather than
+ * a check-then-write race: an occupied candidate — including one that is a
+ * symlink, and one an agent created a millisecond ago — comes back EEXIST and
+ * the loop moves on. Every candidate is a bare name joined onto the source's
+ * own already-contained directory, so containment is inherited and needs no
+ * second walk.
+ */
+export async function duplicateFile(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileMutationResult> {
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath } = resolved.value;
+  const stat = await statOrNull(filePath);
+  if (stat === null) return { ok: false, error: "File was not found" };
+  if (!stat.isFile()) return { ok: false, error: "Only files can be duplicated" };
+
+  const parentDir = dirname(filePath);
+  const parentRel = relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/")) : "";
+  for (let attempt = 1; attempt <= DUPLICATE_NAME_ATTEMPTS; attempt += 1) {
+    const name = duplicateEntryName(basename(relPath), attempt);
+    try {
+      await fsp.copyFile(filePath, join(parentDir, name), fsConstants.COPYFILE_EXCL);
+      return { ok: true, relPath: parentRel === "" ? name : `${parentRel}/${name}` };
+    } catch (error) {
+      if (errnoCode(error) === "EEXIST") continue;
+      return { ok: false, error: fsFaultText(error) };
+    }
+  }
+  return { ok: false, error: "Every copy name beside this file is taken" };
+}
+
+/**
+ * Moves a file or directory to the TRASH — `shell.trashItem`, never `rm`.
+ *
+ * That is the whole reason this verb can exist at all. Deletion from a
+ * navigator is one click next to Rename, the agent in the next pane may have
+ * written the file thirty seconds ago, and an in-place unlink of a file that is
+ * not committed anywhere is unrecoverable. The Trash makes the worst case a
+ * trip to Finder instead of lost work, and it costs nothing.
+ */
+export async function trashEntry(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<Result> {
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath } = resolved.value;
+  if ((await statOrNull(filePath)) === null) return { ok: false, error: "File was not found" };
+  try {
+    await shell.trashItem(filePath);
+    return { ok: true };
+  } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
 }
@@ -1345,6 +1656,50 @@ export function registerFileIpcHandlers(
         input.content,
         input.expectedMtime,
       );
+    },
+
+    // The creation track (VC-191). Every one of the five resolves through
+    // `resolveFileScope` — the same seam `volli:file-read` uses — so a Ticket
+    // workspace creates, renames and trashes inside ITS worktree while Home
+    // acts on the main checkout, and neither can act on a path the other's
+    // navigator was showing.
+    "volli:file-create": async (input: FilePathInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await createFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
+    },
+
+    "volli:dir-create": async (input: FilePathInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await createDirectory(
+        scope.value.projectPath,
+        scope.value.worktreeRoot,
+        input.relPath,
+      );
+    },
+
+    "volli:file-rename": async (input: FileRenameInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await renameEntry(
+        scope.value.projectPath,
+        scope.value.worktreeRoot,
+        input.relPath,
+        input.toRelPath,
+      );
+    },
+
+    "volli:file-duplicate": async (input: FilePathInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await duplicateFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
+    },
+
+    "volli:file-delete": async (input: FilePathInput): Promise<Result> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await trashEntry(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
     },
 
     "volli:artifact-create": async (input: ArtifactCreateInput): Promise<ArtifactCreateResult> => {
