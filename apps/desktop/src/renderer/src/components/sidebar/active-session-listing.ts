@@ -88,8 +88,34 @@ export type ActiveSessionTarget =
   | { kind: "terminal"; tabId: string; paneId: string }
   | { kind: "chat"; tabId: string; sessionId: string };
 
-/** Which execution surface a row speaks for — the axis the Previous band filters on. */
+/** Which execution surface a row speaks for — one of the two axes the Previous band filters on. */
 export type SessionRowKind = "terminal" | "chat";
+
+/**
+ * Whose work a row is — the Previous band's second filter axis (VC-196).
+ *
+ * `project` is a row with no ticket beside it, which is exactly the row this
+ * list is the ONLY home for: a Ticket Session can also be found in its ticket's
+ * own Sessions rail, and a ticketless one has no second surface anywhere. That
+ * asymmetry is the whole reason the axis exists — finding last week's Project
+ * Session meant reading a band sorted by global recency line by line.
+ *
+ * Read off {@link PreviousSessionRow.ticket} rather than off the durable
+ * `bornTicketless` flag, and the difference is deliberate: `bornTicketless`
+ * would split the globe rows in two, hiding an orphaned Session (its ticket
+ * left the board) under a filter whose checked box says the opposite of what
+ * the row draws. The axis a person filters on has to be the mark they can see,
+ * and the mark is `RowIdentity`'s globe.
+ */
+export type SessionRowScope = "project" | "ticket";
+
+/**
+ * Which scope a Previous row falls in. One definition, so the filter and the
+ * globe in `session-band-row.tsx` cannot come to disagree about the same row.
+ */
+export function sessionRowScope(row: Pick<PreviousSessionRow, "ticket">): SessionRowScope {
+  return row.ticket === null ? "project" : "ticket";
+}
 
 /**
  * Why this row needs a human. `blocked` is the agent's own voluntary `volli
@@ -377,6 +403,12 @@ export interface ActiveSessionListing {
 export interface SessionListingFilter {
   /** Which kinds to show; `null` is every kind. */
   kinds: ReadonlySet<SessionRowKind> | null;
+  /**
+   * Which scopes to show; `null` is every scope. Independent of
+   * {@link SessionListingFilter.kinds} — the two narrow different questions
+   * (what a Session runs on, whose work it is) and a row must satisfy both.
+   */
+  scopes: ReadonlySet<SessionRowScope> | null;
   /** Whether cleaned-away rows come back, marked {@link PreviousSessionRow.cleaned}. */
   showCleaned: boolean;
 }
@@ -422,7 +454,7 @@ export interface BuildActiveSessionListingInput {
 }
 
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
-const DEFAULT_FILTER: SessionListingFilter = { kinds: null, showCleaned: false };
+const DEFAULT_FILTER: SessionListingFilter = { kinds: null, scopes: null, showCleaned: false };
 
 function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
@@ -957,6 +989,10 @@ export function buildActiveSessionListing(
   const previous: PreviousSessionRow[] = [];
   for (const candidate of previousById.values()) {
     if (filter.kinds !== null && !filter.kinds.has(candidate.row.kind)) continue;
+    // Before cleanup rather than after: a row the reader has narrowed away is
+    // not a row whose cleanup boundary anyone is waiting on, so skipping here
+    // keeps `nextBoundaryAt` about the list actually on screen.
+    if (filter.scopes !== null && !filter.scopes.has(sessionRowScope(candidate.row))) continue;
     const cleaned = isConcludedBusiness({
       ticketId: candidate.ticketId,
       ticket: candidate.row.ticket,

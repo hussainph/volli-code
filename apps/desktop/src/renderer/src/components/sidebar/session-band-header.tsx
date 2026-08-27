@@ -1,19 +1,26 @@
 /**
  * A session band's header, and the Previous band's own filter menu.
  *
- * The filter belongs to PREVIOUS, not to the list: `kinds` narrows the Previous
- * band only, so the menu sits in that band's header rather than over both.
- * Unchecking Terminals does not — and per the listing model, should not — empty
- * the Active band of terminals. Active is what is happening; you do not get to
- * hide that.
+ * The filter belongs to PREVIOUS, not to the list: every axis here narrows the
+ * Previous band only, so the menu sits in that band's header rather than over
+ * both. Unchecking Terminals does not — and per the listing model, should not —
+ * empty the Active band of terminals. Active is what is happening; you do not
+ * get to hide that. The same rule decided VC-196's scope axis: "Project
+ * sessions" is a way of reading the archive, not a way of hiding running work.
  */
 import * as React from "react";
 import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { FunnelSimpleIcon } from "@phosphor-icons/react/dist/csr/FunnelSimple";
+import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 
-import type { SessionRowKind } from "@renderer/components/sidebar/active-session-listing";
+import type {
+  SessionListingFilter,
+  SessionRowKind,
+  SessionRowScope,
+} from "@renderer/components/sidebar/active-session-listing";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -24,16 +31,62 @@ import {
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
 
-/** What the Previous band is currently showing. */
+/**
+ * What the Previous band is currently showing.
+ *
+ * A checkbox per member rather than the model's `Set | null`, because that is
+ * what a menu of checkboxes is: every box has a state whether or not the axis
+ * is narrowed, and "all checked" has to survive a round trip through the
+ * control. {@link sessionListingFilter} is where the two shapes meet.
+ */
 export interface SessionBandFilter {
   kinds: Record<SessionRowKind, boolean>;
+  scopes: Record<SessionRowScope, boolean>;
   showCleaned: boolean;
 }
 
 export const DEFAULT_SESSION_BAND_FILTER: SessionBandFilter = {
   kinds: { chat: true, terminal: true },
+  scopes: { project: true, ticket: true },
   showCleaned: false,
 };
+
+const SESSION_ROW_KINDS = ["chat", "terminal"] as const satisfies readonly SessionRowKind[];
+const SESSION_ROW_SCOPES = ["project", "ticket"] as const satisfies readonly SessionRowScope[];
+
+/**
+ * One axis of checkboxes as the model's `Set | null`. Everything checked
+ * converts to `null` rather than to a full set: they filter the same rows, but
+ * only `null` says "not narrowed" to a reader of the model, and it is the value
+ * the model's own default carries. Nothing checked converts to an EMPTY set,
+ * not to `null` — a reader who unchecked every box asked for nothing, and
+ * handing the full band back would read as the control being broken.
+ */
+function narrowedAxis<T extends string>(
+  members: readonly T[],
+  checked: Record<T, boolean>,
+): ReadonlySet<T> | null {
+  const on = members.filter((member) => checked[member]);
+  return on.length === members.length ? null : new Set(on);
+}
+
+/**
+ * The menu's checkboxes as the listing model's filter.
+ *
+ * Lives here, with the checkbox shape, and is called by every surface that
+ * builds a listing from this menu — the sidebar band and the lab scratch that
+ * prototypes it. Both used to write the same conversion out by hand, which is
+ * one copy per surface of a rule that has to be identical on all of them: an
+ * axis added on one side and forgotten on the other is a control that silently
+ * does nothing.
+ */
+export function sessionListingFilter(filter: SessionBandFilter): SessionListingFilter {
+  return {
+    kinds: narrowedAxis(SESSION_ROW_KINDS, filter.kinds),
+    scopes: narrowedAxis(SESSION_ROW_SCOPES, filter.scopes),
+    showCleaned: filter.showCleaned,
+  };
+}
 
 /** The sidebar's small-glyph tier, and the hit box this header draws around it. */
 const GLYPH_PX = 12;
@@ -84,12 +137,18 @@ export function SessionBandHeader({
 }
 
 /**
- * Kinds, and whether cleanup's decisions come back into view.
+ * Kinds, scopes, and whether cleanup's decisions come back into view.
  *
  * A menu rather than a standing row of pills because this is a question asked
  * about once a week: the sidebar's steady state should be the list, not the
  * controls for it. The trigger tints when the filter is narrowed, so a list
  * that is hiding something never looks like a list that is empty.
+ *
+ * Three groups, separated, because they are three independent questions and a
+ * reader who has narrowed one should be able to see at a glance that the others
+ * are untouched. Scope (VC-196) sits BETWEEN kind and cleanup: it is a fact
+ * about the Session, like kind, while Cleaned up is a fact about this list's own
+ * housekeeping and belongs last for the same reason it always did.
  */
 export function SessionBandFilterMenu({
   filter,
@@ -98,9 +157,16 @@ export function SessionBandFilterMenu({
   filter: SessionBandFilter;
   onChange(next: SessionBandFilter): void;
 }) {
-  const narrowed = !filter.kinds.chat || !filter.kinds.terminal || filter.showCleaned;
+  const narrowed =
+    !filter.kinds.chat ||
+    !filter.kinds.terminal ||
+    !filter.scopes.project ||
+    !filter.scopes.ticket ||
+    filter.showCleaned;
   const toggleKind = (kind: SessionRowKind): void =>
     onChange({ ...filter, kinds: { ...filter.kinds, [kind]: !filter.kinds[kind] } });
+  const toggleScope = (scope: SessionRowScope): void =>
+    onChange({ ...filter, scopes: { ...filter.scopes, [scope]: !filter.scopes[scope] } });
 
   return (
     <DropdownMenu>
@@ -145,6 +211,26 @@ export function SessionBandFilterMenu({
         >
           <TerminalWindowIcon />
           Terminals
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {/* The globe is the same mark `RowIdentity` puts in a ticketless row's
+            id lane, which is what makes this box legible without a sentence
+            under it: the reader is checking the glyph they are looking for. */}
+        <DropdownMenuCheckboxItem
+          checked={filter.scopes.project}
+          onSelect={(event) => event.preventDefault()}
+          onCheckedChange={() => toggleScope("project")}
+        >
+          <GlobeIcon />
+          Project sessions
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={filter.scopes.ticket}
+          onSelect={(event) => event.preventDefault()}
+          onCheckedChange={() => toggleScope("ticket")}
+        >
+          <TicketIcon />
+          Ticket sessions
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <DropdownMenuCheckboxItem

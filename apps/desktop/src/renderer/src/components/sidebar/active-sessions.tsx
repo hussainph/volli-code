@@ -17,10 +17,10 @@ import {
   listingOutputStamps,
   type ActiveSessionRow,
   type PreviousSessionRow,
-  type SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import {
   DEFAULT_SESSION_BAND_FILTER,
+  sessionListingFilter,
   SessionBandFilterMenu,
   SessionBandHeader,
   type SessionBandFilter,
@@ -154,9 +154,9 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   // next instant one of those ages reads differently. Nothing else on this
   // surface renders a relative stamp, so nothing else is given it.
   const [ageNow, setAgeNow] = React.useState(() => Date.now());
-  // Ephemeral by design: which kinds you are currently looking through is a
-  // question about this glance, not a preference. It resets with the window,
-  // like every other view-local narrowing in the app.
+  // Ephemeral by design: which kinds and scopes you are currently looking
+  // through is a question about this glance, not a preference. It resets with
+  // the window, like every other view-local narrowing in the app.
   const [filter, setFilter] = React.useState<SessionBandFilter>(DEFAULT_SESSION_BAND_FILTER);
   // Bumped to force a re-read on the coarse timer below, without pretending
   // anything about the inputs changed.
@@ -371,12 +371,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
         parkState,
         harness,
         statusEnteredAt,
-        filter: {
-          kinds: new Set(
-            (["chat", "terminal"] as const).filter((kind) => filter.kinds[kind]),
-          ) satisfies ReadonlySet<SessionRowKind>,
-          showCleaned: filter.showCleaned,
-        },
+        filter: sessionListingFilter(filter),
         now: listingNow,
       }),
     [
