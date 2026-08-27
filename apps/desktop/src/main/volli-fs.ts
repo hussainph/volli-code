@@ -381,21 +381,37 @@ async function walkFiles(
   return results;
 }
 
+/** What {@link buildFileIndex} may be told beyond the project's main checkout. */
+export interface BuildFileIndexOptions {
+  /**
+   * SEAM (decision #6, the same one {@link resolveSafePath} applies per path):
+   * the ticket worktree the REPO half of the index is listed from, or `null`
+   * for the main checkout. Artifacts are walked from `projectPath` either way,
+   * because `.volli/**` always resolves to Main — so the index and a read of
+   * one of its rows can never disagree about which file a relPath names.
+   */
+  worktreeRoot?: string | null;
+  /** Entry ceiling; artifacts are pushed first so they survive truncation. */
+  indexCap?: number;
+}
+
 /**
- * The whole-project file index the `@` picker ranks over (decision #3): the
- * git file list (gitignore-respecting; fallback to a bounded walk when git
- * isn't usable) plus a force-included walk of `.volli/artifacts/`
- * (`artifact: true`). Capped at ~20k entries — artifacts come first so they
- * survive truncation.
+ * The scoped file index the `@` picker and quick-open rank over (decision #3):
+ * the git file list of the scope's checkout (gitignore-respecting; fallback to
+ * a bounded walk when git isn't usable) plus a force-included walk of Main's
+ * `.volli/artifacts/` (`artifact: true`). Capped at ~20k entries — artifacts
+ * come first so they survive truncation.
  */
 export async function buildFileIndex(
   projectPath: string,
-  indexCap: number = INDEX_CAP,
+  options: BuildFileIndexOptions = {},
 ): Promise<{ files: IndexedFile[]; truncated: boolean }> {
-  const gitFiles = await gitListFiles(projectPath);
+  const indexCap = options.indexCap ?? INDEX_CAP;
+  // The repo half follows the scope; the artifact half never does.
+  const repoRoot = options.worktreeRoot ?? projectPath;
+  const gitFiles = await gitListFiles(repoRoot);
   const repoRelPaths =
-    gitFiles ??
-    (await walkFiles(projectPath, { skipDirNames: FALLBACK_SKIP_DIRS, limit: indexCap }));
+    gitFiles ?? (await walkFiles(repoRoot, { skipDirNames: FALLBACK_SKIP_DIRS, limit: indexCap }));
   const artifactRelPaths = await walkFiles(projectArtifactsDir(projectPath), {
     relPrefix: VOLLI_ARTIFACTS_REL_DIR,
     limit: indexCap,
@@ -1282,10 +1298,17 @@ export function registerFileIpcHandlers(
   const externalApps = options.externalApps ?? systemExternalAppGateway;
 
   const handlers: IpcHandlerTable<FileIpcChannel> = {
+    // Scope follows the surface that asked (VC-190): Home hands no ticketId and
+    // gets Main; a Ticket workspace hands its own and gets that worktree —
+    // through `resolveFileScope`, the same seam `volli:file-read` resolves
+    // through, so quick-open can never offer a row the read then answers from
+    // the other checkout.
     "volli:file-index": async (input: FileIndexInput): Promise<FileIndexResult> => {
-      const project = resolveProjectPath(db, input.projectId);
-      if (!project.ok) return project;
-      const { files, truncated } = await buildFileIndex(project.projectPath);
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      const { files, truncated } = await buildFileIndex(scope.value.projectPath, {
+        worktreeRoot: scope.value.worktreeRoot,
+      });
       return { ok: true, files, truncated };
     },
 

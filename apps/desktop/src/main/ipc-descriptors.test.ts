@@ -1672,8 +1672,24 @@ describe("FILE_IPC descriptor table", () => {
   describe("volli:file-index", () => {
     const { guard, invalidError } = FILE_IPC["volli:file-index"];
 
-    it("accepts a valid { projectId } payload", () => {
+    it("accepts a valid { projectId } payload — the main checkout", () => {
       expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("accepts the { projectId, ticketId } scope pair — a ticket's worktree (VC-190)", () => {
+      expect(guard([{ projectId: "p1", ticketId: "t1" }])).toBe(true);
+    });
+
+    it("accepts an explicitly undefined ticketId", () => {
+      expect(guard([{ projectId: "p1", ticketId: undefined }])).toBe(true);
+    });
+
+    it("rejects a non-string ticketId", () => {
+      expect(guard([{ projectId: "p1", ticketId: 7 }])).toBe(false);
+    });
+
+    it("rejects a null ticketId — absent means Main, null means malformed", () => {
+      expect(guard([{ projectId: "p1", ticketId: null }])).toBe(false);
     });
 
     it("rejects a non-object payload", () => {
