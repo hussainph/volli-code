@@ -47,14 +47,15 @@
  * like the sidebar width: it's a global chrome preference, not per-workspace,
  * so every ticket you open honors the same choice.
  *
- * `homeRailMode` — which page HOME's rail shows (Now / Sessions), and
+ * `homeRailMode` — which page HOME's rail shows (Now / Sessions / Files /
+ * Search), and
  * `homeEmptyVisual` — which drawing a Project Session's empty chat opens on
  * (Streak / Board / Venue, VC-55). Both persist app-wide for the same reason
  * `railMode` does, and both are their own key rather than a widening of the
  * ticket rail's: the two rails offer different pages, and a ticket's empty chat
  * has one visual to choose from, so there is nothing there to remember.
  *
- * `railMode` — which page the ticket rail shows (Now / Diffs / Files).
+ * `railMode` — which page the ticket rail shows (Now / Diffs / Files / Search).
  * Persisted app-wide like `railCollapsed`. Every value a shipped build could
  * have written stays readable: `resolvePersistedRailMode` maps the retired
  * Sessions/Properties/Session pages, and the pre-icon-rail `detailsExpanded`
