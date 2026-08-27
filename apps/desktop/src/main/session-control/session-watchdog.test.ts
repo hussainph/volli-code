@@ -46,8 +46,16 @@ function harness(input: {
   const notifications: { title: string; body: string }[] = [];
   const errors: unknown[] = [];
   const byId = new Map(input.projections.map((entry) => [entry.session.id, entry]));
+  // Runtime observations, not durable ledger facts, are the watchdog clock.
+  const progressById = new Map(
+    input.projections.map((entry) => [entry.session.id, entry.lastActivityAt]),
+  );
   const watchdog = createSessionWatchdog({
-    listBindings: () => [...byId.keys()].map((sessionId) => ({ sessionId })),
+    listBindings: () =>
+      [...byId.keys()].map((sessionId) => ({
+        sessionId,
+        lastProgressAt: progressById.get(sessionId)!,
+      })),
     projection: async (sessionId) => {
       const found = byId.get(sessionId);
       if (found === undefined) throw new Error(`no projection for ${sessionId}`);
@@ -62,7 +70,7 @@ function harness(input: {
     now: input.now ?? (() => T),
     onError: (error) => errors.push(error),
   });
-  return { watchdog, submits, notifications, errors, byId };
+  return { watchdog, submits, notifications, errors, byId, progressById };
 }
 
 describe("createSessionWatchdog", () => {
@@ -80,34 +88,56 @@ describe("createSessionWatchdog", () => {
       intent: {
         kind: "session.signal",
         signal: "blocked",
-        reason: "Watchdog: no activity for 10m inside an open turn.",
+        reason: "Watchdog: no runtime progress for 10m inside an open turn.",
       },
       provenance: { source: { kind: "system", id: "session-watchdog" } },
     });
     expect(h.notifications).toEqual([
       {
         title: "Session may be wedged",
-        body: "Implementer has an open turn with no activity for 10m.",
+        body: "Implementer has an open turn with no runtime progress for 10m.",
       },
     ]);
   });
 
   it("reports a recovered Session again when it wedges a second time", async () => {
-    const h = harness({ now: () => T * 3, projections: [projection({ lastActivityAt: T * 2 })] });
+    const h = harness({ now: () => T * 3, projections: [projection()] });
+    h.progressById.set(SESSION, T * 2);
 
     await h.watchdog.scan();
     expect(h.submits).toHaveLength(1);
 
-    // Recovery: new durable activity inside the threshold ends the episode…
-    h.byId.set(SESSION, projection({ lastActivityAt: T * 2.5 }));
+    // Recovery: fresh token/tool progress inside the threshold ends the episode…
+    h.progressById.set(SESSION, T * 2.5);
     await h.watchdog.scan();
     expect(h.submits).toHaveLength(1);
 
     // …and the next silence is a new episode with a new durable command id.
-    h.byId.set(SESSION, projection({ lastActivityAt: T * 1.5 }));
+    h.progressById.set(SESSION, T * 1.5);
     await h.watchdog.scan();
     expect(h.submits).toHaveLength(2);
     expect(h.submits[1]).toMatchObject({ commandId: `watchdog:${SESSION}:${T * 1.5}` });
+  });
+
+  it("does not confuse durable bookkeeping with runtime progress", async () => {
+    let now = T;
+    const h = harness({ now: () => now, projections: [projection()] });
+
+    await h.watchdog.scan();
+    expect(h.submits).toHaveLength(1);
+
+    // The watchdog's own blocked signal is a new durable fact, but it is not
+    // a token or tool call. The same silent episode must not trip again.
+    h.byId.set(SESSION, projection({ lastActivityAt: now }));
+    now = T * 2;
+    await h.watchdog.scan();
+    expect(h.submits).toHaveLength(1);
+
+    // Conversely, a healthy long stream may leave its durable event old while
+    // tokens keep the runtime's progress clock fresh.
+    h.progressById.set(SESSION, now - T + 1);
+    await h.watchdog.scan();
+    expect(h.submits).toHaveLength(1);
   });
 
   it("leaves quiet, waiting, and stopped Sessions alone", async () => {

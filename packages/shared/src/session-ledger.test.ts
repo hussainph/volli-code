@@ -745,12 +745,14 @@ describe("projectSession", () => {
     expect(resumed.stopped).toBeNull();
   });
 
-  it("clears a stop on a turn starting even without a fresh attachment", () => {
+  it("keeps a stop through a racing turn on the attachment it stopped", () => {
     const projection = projectSession(session, [
       event(2, { kind: "session.stopped", reason: null, by: { kind: "user" } }),
+      // This turn may already have been admitted when the supervisor recorded
+      // its stop. It must not erase the durable stop before release catches it.
       event(3, { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" }),
     ]);
-    expect(projection.stopped).toBeNull();
+    expect(projection.stopped).toEqual({ at: 20, reason: null, by: { kind: "user" } });
   });
 
   it("keeps the Session open when its own creation, runs, turns, and an executor end", () => {

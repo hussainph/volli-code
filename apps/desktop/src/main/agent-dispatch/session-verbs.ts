@@ -170,6 +170,9 @@ export async function sessionListVerb(
         // this list is deciding where to look, and the launch harness of
         // a terminal somebody has since re-used is the wrong answer.
         harness: effectiveHarnessId(session),
+        // Terminal rows have no structured activity state, but their durable
+        // last event is still the liveness age a fleet reader needs.
+        lastActivityAgeMs: Math.max(0, now() - session.lastActivityAt),
         ageMs: Math.max(0, now() - session.createdAt),
       };
       // Assigned rather than spread (oxc(no-map-spread)); the target is a

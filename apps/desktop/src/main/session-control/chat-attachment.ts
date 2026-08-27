@@ -44,8 +44,8 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
 /**
  * Stopped outranks everything (VC-86): a Session whose work was deliberately
  * ended cannot be helped by answering its stale question and is not "working"
- * however the turn flag was left — the stop fact is the newer truth, and the
- * fold already clears it the moment work genuinely resumes.
+ * however the turn flag was left — the stop fact is the newer truth, and a
+ * fresh attachment explicitly clears it when work genuinely resumes.
  *
  * Waiting outranks working, because an agent that has asked a question is still
  * inside an open turn: a row that said "working" there would hide the one thing

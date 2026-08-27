@@ -34,13 +34,12 @@
  * a mid-turn model reads the direction now rather than after it finishes. The
  * message text carries an explicit supervision marker naming the sending
  * Session — the receiving model must never mistake steering for its own user.
- * The command is fired DETACHED, exactly as the kickoff turn is: a
- * `message.submit` resolves when the TURN ends, and a supervisor's tool call
- * must not block for the length of someone else's turn.
+ * The command is awaited through its delivery receipt: an operation may not
+ * tell a supervisor that steering landed until the target runtime accepted it.
  */
 
 import { shortSessionId } from "@volli/shared";
-import type { SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionProjection } from "@volli/shared";
 import type { SessionEngine, SessionRuntime } from "@volli/session-engine";
 
 import { latestStructuredAttachment, terminalSessionRecord } from "../session-control";
@@ -49,8 +48,6 @@ import { latestStructuredAttachment, terminalSessionRecord } from "../session-co
 export interface SuperviseSessionPorts {
   sessionEngine: Pick<SessionEngine, "listSessions" | "submit">;
   runtime: Pick<SessionRuntime, "command">;
-  /** Detached-delivery diagnostics; defaults to `console.error`. */
-  log?: (message: string) => void;
 }
 
 /** A refusal the door words for the model. `text` is a complete sentence. */
@@ -130,6 +127,8 @@ export interface StopSessionOutcome {
   sessionId: string;
   handle: string;
   title: string | null;
+  /** The durable stop already existed; this call retried only its live executor. */
+  previouslyStopped: boolean;
   /** Whether an open turn was interrupted. */
   interrupted: boolean;
   /** Whether a live attachment was released. */
@@ -144,60 +143,62 @@ export async function stopSessionOperation(
   input: StopSessionInput,
 ): Promise<StopSessionOutcome> {
   const target = await resolveTarget(ports, input);
-  if (target.stopped !== null) {
-    const by = target.stopped.by;
-    const who =
-      by.kind === "session"
-        ? `Session ${shortSessionId(by.sessionId)}`
-        : by.kind === "user"
-          ? "the user"
-          : "the watchdog";
-    throw new SuperviseSessionError(
-      `Session ${input.handle} is already stopped (by ${who}); nothing was done.`,
-    );
-  }
+  const previouslyStopped = target.stopped !== null;
+  let liveTarget = target;
 
-  // The durable fact first: whatever the runtime does next, the stop and its
-  // actor exist. Command id IS the operation id, so a replayed tool call finds
-  // its own stop already in force and answers as such instead of writing two.
-  await ports.sessionEngine.submit({
-    commandId: input.operationId,
-    sessionId: target.session.id,
-    intent: {
-      kind: "session.stop",
-      reason: input.reason ?? null,
-      by: { kind: "session", sessionId: input.callerSessionId },
-    },
-    provenance: {
-      source: { kind: "system", id: "session-supervision", detail: null },
-      venue: { id: "local", kind: "local" },
-    },
-  });
+  if (!previouslyStopped) {
+    // The durable fact first: whatever the runtime does next, the stop and its
+    // actor exist. A failed durable write is not a stop and must not be hidden.
+    const submitted = await ports.sessionEngine.submit({
+      commandId: input.operationId,
+      sessionId: target.session.id,
+      intent: {
+        kind: "session.stop",
+        reason: input.reason ?? null,
+        by: { kind: "session", sessionId: input.callerSessionId },
+      },
+      provenance: {
+        source: { kind: "system", id: "session-supervision", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    if (submitted.receipt?.status !== "completed") {
+      throw new SuperviseSessionError(
+        `Session ${input.handle} could not be durably recorded as stopped.`,
+      );
+    }
+    // A turn can be admitted while the stop fact commits. Re-read before
+    // interrupting so the release acts on the attachment and turn that exist
+    // now, rather than the snapshot we resolved before the stop.
+    liveTarget = await resolveTarget(ports, input);
+  }
 
   const failures: string[] = [];
   let interrupted = false;
   let released = false;
-  const attachment = latestStructuredAttachment(target.attachments);
+  const attachment = latestStructuredAttachment(liveTarget.attachments);
   if (attachment?.status === "open") {
-    if (target.turnActive) {
+    if (liveTarget.turnActive) {
       try {
-        await ports.runtime.command({
+        const result = await ports.runtime.command({
           commandId: `${input.operationId}:interrupt`,
           sessionId: target.session.id,
           command: { kind: "executor.interrupt", attachmentId: attachment.id },
         });
-        interrupted = true;
+        if (receiptAccepted(result.receipt)) interrupted = true;
+        else failures.push(`The active turn did not interrupt: ${receiptFailure(result.receipt)}.`);
       } catch (error) {
         failures.push(`The active turn did not interrupt: ${errorText(error)}.`);
       }
     }
     try {
-      await ports.runtime.command({
+      const result = await ports.runtime.command({
         commandId: `${input.operationId}:release`,
         sessionId: target.session.id,
         command: { kind: "adapter.release", attachmentId: attachment.id },
       });
-      released = true;
+      if (receiptAccepted(result.receipt)) released = true;
+      else failures.push(`The executor did not release: ${receiptFailure(result.receipt)}.`);
     } catch (error) {
       failures.push(`The executor did not release: ${errorText(error)}.`);
     }
@@ -207,6 +208,7 @@ export async function stopSessionOperation(
     sessionId: target.session.id,
     handle: shortSessionId(target.session.id),
     title: target.session.title,
+    previouslyStopped,
     interrupted,
     released,
     failures,
@@ -259,31 +261,25 @@ export async function sendSessionMessageOperation(
     );
   }
 
-  const log = ports.log ?? ((line: string) => console.error(line));
   const text = `${supervisionMarker(input.callerSessionId)}\n\n${message}`;
-  // Detached, like the kickoff turn: `message.submit` resolves when the TURN
-  // ends, and a supervisor must not block on someone else's turn. A delivery
-  // failure lands in the target's own durable state; the log line is for the
-  // host's diagnostics, not a channel anyone waits on.
-  void ports.runtime
-    .command({
-      commandId: input.operationId,
-      sessionId: target.session.id,
-      command: {
-        kind: "message.submit",
-        delivery: "steer",
-        message: {
-          id: `${input.operationId}:message`,
-          role: "user",
-          parts: [{ type: "text", text }],
-        },
+  const delivered = await ports.runtime.command({
+    commandId: input.operationId,
+    sessionId: target.session.id,
+    command: {
+      kind: "message.submit",
+      delivery: "steer",
+      message: {
+        id: `${input.operationId}:message`,
+        role: "user",
+        parts: [{ type: "text", text }],
       },
-    })
-    .catch((error: unknown) => {
-      log(
-        `[volli] session_send delivery into ${shortSessionId(target.session.id)} failed: ${errorText(error)}`,
-      );
-    });
+    },
+  });
+  if (!receiptAccepted(delivered.receipt)) {
+    throw new SuperviseSessionError(
+      `Volli could not confirm steering into Session ${shortSessionId(target.session.id)}: ${receiptFailure(delivered.receipt)}.`,
+    );
+  }
 
   return {
     sessionId: target.session.id,
@@ -291,6 +287,27 @@ export async function sendSessionMessageOperation(
     title: target.session.title,
     midTurn: target.turnActive,
   };
+}
+
+function receiptAccepted(receipt: CommandReceipt | null): boolean {
+  return receipt?.status === "accepted" || receipt?.status === "completed";
+}
+
+function receiptFailure(receipt: CommandReceipt | null): string {
+  if (receipt === null) return "the runtime returned no delivery receipt";
+  switch (receipt.status) {
+    case "rejected":
+      return receipt.detail === null
+        ? `the runtime rejected it (${receipt.code})`
+        : `the runtime rejected it (${receipt.code}): ${receipt.detail}`;
+    case "unreconciled":
+      return receipt.detail === null
+        ? "delivery is unreconciled"
+        : `delivery is unreconciled: ${receipt.detail}`;
+    case "accepted":
+    case "completed":
+      return "delivery was not accepted";
+  }
 }
 
 function errorText(error: unknown): string {

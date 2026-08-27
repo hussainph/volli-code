@@ -72,11 +72,9 @@ function ports(
   ports: SuperviseSessionPorts;
   submit: ReturnType<typeof vi.fn>;
   command: ReturnType<typeof vi.fn>;
-  log: ReturnType<typeof vi.fn<(message: string) => void>>;
 } {
-  const submit = overrides.submit ?? vi.fn(async () => ({}));
-  const command = overrides.command ?? vi.fn(async () => ({}));
-  const log = vi.fn<(message: string) => void>();
+  const submit = overrides.submit ?? vi.fn(async () => ({ receipt: { status: "completed" } }));
+  const command = overrides.command ?? vi.fn(async () => ({ receipt: { status: "accepted" } }));
   return {
     ports: {
       sessionEngine: {
@@ -84,11 +82,9 @@ function ports(
         submit,
       } as unknown as SuperviseSessionPorts["sessionEngine"],
       runtime: { command } as unknown as SuperviseSessionPorts["runtime"],
-      log,
     },
     submit,
     command,
-    log,
   };
 }
 
@@ -170,7 +166,7 @@ describe("stopSessionOperation", () => {
   it("reports a runtime act that failed instead of hiding it, keeping the stop fact", async () => {
     const command = vi.fn(async (request: { command: { kind: string } }) => {
       if (request.command.kind === "adapter.release") throw new Error("executor is gone");
-      return {};
+      return { receipt: { status: "accepted" } };
     });
     const { ports: p, submit } = ports(
       [projection({ attachments: [openAttachment()], turnActive: true })],
@@ -185,17 +181,82 @@ describe("stopSessionOperation", () => {
     expect(outcome.failures).toEqual(["The executor did not release: executor is gone."]);
   });
 
-  it("refuses a second stop by naming who already stopped it", async () => {
-    const { ports: p, submit } = ports([
+  it("uses the fresh projection after recording a stop, catching a turn admitted during commit", async () => {
+    const snapshots = [projection()];
+    const command = vi.fn(async () => ({ receipt: { status: "accepted" } }));
+    const submit = vi.fn(async () => {
+      snapshots.splice(
+        0,
+        1,
+        projection({
+          stopped: { at: 5, reason: null, by: { kind: "session", sessionId: CALLER } },
+          attachments: [openAttachment()],
+          turnActive: true,
+        }),
+      );
+      return { receipt: { status: "completed" } };
+    });
+    const { ports: p } = ports(snapshots, { submit, command });
+
+    const outcome = await stopSessionOperation(p, stopInput());
+
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(outcome).toMatchObject({ interrupted: true, released: true });
+  });
+
+  it("retries a live executor after a prior stop was recorded", async () => {
+    const {
+      ports: p,
+      submit,
+      command,
+    } = ports([
       projection({
         stopped: { at: 5, reason: null, by: { kind: "session", sessionId: CALLER } },
+        attachments: [openAttachment()],
+        turnActive: true,
       }),
     ]);
 
-    await expect(stopSessionOperation(p, stopInput())).rejects.toThrow(
-      `already stopped (by Session ${CALLER.slice(0, 8)})`,
-    );
+    const outcome = await stopSessionOperation(p, stopInput());
+
+    // The durable stop remains the original fact; this invocation is the
+    // retryable executor shutdown it made necessary.
     expect(submit).not.toHaveBeenCalled();
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(outcome).toMatchObject({ previouslyStopped: true, interrupted: true, released: true });
+  });
+
+  it("does not claim rejected runtime commands stopped work", async () => {
+    const command = vi.fn(async () => ({
+      receipt: { status: "rejected", code: "executor_gone", detail: "the process exited" },
+    }));
+    const { ports: p } = ports(
+      [projection({ attachments: [openAttachment()], turnActive: true })],
+      { command },
+    );
+
+    const outcome = await stopSessionOperation(p, stopInput());
+
+    expect(outcome).toMatchObject({ interrupted: false, released: false });
+    expect(outcome.failures).toEqual([
+      "The active turn did not interrupt: the runtime rejected it (executor_gone): the process exited.",
+      "The executor did not release: the runtime rejected it (executor_gone): the process exited.",
+    ]);
+  });
+
+  it("does not release an executor when the durable stop was not confirmed", async () => {
+    const submit = vi.fn(async () => ({
+      receipt: { status: "rejected", code: "session_closed", detail: null },
+    }));
+    const { ports: p, command } = ports(
+      [projection({ attachments: [openAttachment()], turnActive: true })],
+      { submit },
+    );
+
+    await expect(stopSessionOperation(p, stopInput())).rejects.toThrow(
+      "could not be durably recorded",
+    );
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("refuses an unknown handle, an ambiguous handle, self, and a terminal session", async () => {
@@ -239,18 +300,26 @@ function sendInput(overrides: Partial<Parameters<typeof sendSessionMessageOperat
 }
 
 describe("sendSessionMessageOperation", () => {
-  it("steers a marked message into the live attachment, detached", async () => {
-    const turn = Promise.withResolvers<unknown>();
-    const command = vi.fn(() => turn.promise);
+  it("waits for a marked steer to be accepted before answering", async () => {
+    const delivery = Promise.withResolvers<unknown>();
+    const command = vi.fn(() => delivery.promise);
     const { ports: p } = ports(
       [projection({ attachments: [openAttachment()], turnActive: true })],
       { command },
     );
 
-    // Resolves immediately even though the turn (the command promise) has not:
-    // a supervisor never blocks on someone else's turn.
-    const outcome = await sendSessionMessageOperation(p, sendInput());
-    turn.resolve({});
+    let settled = false;
+    const sending = sendSessionMessageOperation(p, sendInput()).then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    // Dispatch has begun, but the tool cannot claim delivery until the runtime
+    // has returned a durable accepted receipt.
+    expect(settled).toBe(false);
+
+    delivery.resolve({ receipt: { status: "accepted" } });
+    const outcome = await sending;
 
     expect(outcome).toMatchObject({ handle: TARGET.slice(0, 8), midTurn: true });
     expect(command).toHaveBeenCalledExactlyOnceWith(
@@ -275,20 +344,29 @@ describe("sendSessionMessageOperation", () => {
     );
   });
 
-  it("logs a detached delivery failure instead of failing the caller", async () => {
-    const command = vi.fn(async () => {
-      throw new Error("attachment closed mid-flight");
+  it("surfaces unconfirmed and failed delivery instead of claiming success", async () => {
+    const rejected = ports([projection({ attachments: [openAttachment()] })], {
+      command: vi.fn(async () => ({
+        receipt: { status: "rejected", code: "attachment_closed", detail: "closed mid-flight" },
+      })),
     });
-    const { ports: p, log } = ports([projection({ attachments: [openAttachment()] })], { command });
+    await expect(sendSessionMessageOperation(rejected.ports, sendInput())).rejects.toThrow(
+      "could not confirm",
+    );
 
-    await expect(sendSessionMessageOperation(p, sendInput())).resolves.toMatchObject({
-      midTurn: false,
+    const noReceipt = ports([projection({ attachments: [openAttachment()] })], {
+      command: vi.fn(async () => ({ receipt: null })),
     });
-    await vi.waitFor(() => {
-      expect(log).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("attachment closed mid-flight"),
-      );
+    await expect(sendSessionMessageOperation(noReceipt.ports, sendInput())).rejects.toThrow(
+      "returned no delivery receipt",
+    );
+
+    const failed = ports([projection({ attachments: [openAttachment()] })], {
+      command: vi.fn(async () => Promise.reject(new Error("runtime unavailable"))),
     });
+    await expect(sendSessionMessageOperation(failed.ports, sendInput())).rejects.toThrow(
+      "runtime unavailable",
+    );
   });
 
   it("refuses a stopped target, a detached target, and an empty message", async () => {

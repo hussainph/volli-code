@@ -1,19 +1,21 @@
 /**
  * The wedge verdict (VC-86): whether one Session's open turn has been silent
- * long enough to self-report, decided from durable projection facts alone.
+ * long enough to self-report, decided from durable Session state plus the
+ * runtime's process-local progress clock.
  *
- * This is the pure half of the session watchdog. The timer, the scan, and the
- * acts (a durable blocked signal, a notification, an optional self-stop) live
- * in the host beside the runtime that owns the executors; what lives here is
- * the one sentence they act on, kept pure so ten minutes of policy is testable
- * with a number instead of a clock.
+ * This is the pure half of the session watchdog. The timer, the scan, the
+ * process-local `lastProgressAt` clock, and the acts (a durable blocked signal,
+ * a notification, an optional self-stop) live in the host beside the runtime
+ * that owns the executors; what lives here is the one sentence they act on,
+ * kept pure so ten minutes of policy is testable with numbers instead of a
+ * clock.
  *
  * ## What counts as wedged
  *
- * A turn is OPEN and nothing durable has happened for the threshold. Every
- * durable fact moves `lastActivityAt` — streamed transcript, tool outcomes,
- * compactions — so "no tool call and no token for N minutes" is exactly
- * "lastActivityAt is N minutes old under an open turn".
+ * A turn is OPEN and has emitted neither a token nor tool progress for the
+ * threshold. `lastProgressAt` is deliberately not durable: streamed tokens are
+ * transient, and the watchdog's own blocked signal must never make a wedged
+ * Session look healthy.
  *
  * ## What deliberately does not count
  *
@@ -44,19 +46,18 @@ export type SessionWedgeVerdict =
   | { wedged: false; reason: SessionWedgeCalm }
   | { wedged: true; silentForMs: number };
 
-/** The wedge verdict for one Session, from its durable projection alone. */
+/** The wedge verdict for one Session and its runtime-observed progress. */
 export function sessionWedge(
-  projection: Pick<
-    SessionProjection,
-    "turnActive" | "stopped" | "interactions" | "attention" | "lastActivityAt"
-  >,
+  projection: Pick<SessionProjection, "turnActive" | "stopped" | "interactions" | "attention">,
   now: number,
   thresholdMs: number,
+  /** The process-local instant of the latest token or tool-progress observation. */
+  lastProgressAt: number,
 ): SessionWedgeVerdict {
   if (!projection.turnActive) return { wedged: false, reason: "no-turn" };
   if (projection.stopped !== null) return { wedged: false, reason: "stopped" };
   if (sessionAwaitsUser(projection)) return { wedged: false, reason: "awaiting-user" };
-  const silentForMs = Math.max(0, now - projection.lastActivityAt);
+  const silentForMs = Math.max(0, now - lastProgressAt);
   return silentForMs >= thresholdMs
     ? { wedged: true, silentForMs }
     : { wedged: false, reason: "active" };

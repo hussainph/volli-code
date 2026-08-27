@@ -304,7 +304,9 @@ async function stopSessionTool(
           : "Nothing was live to interrupt or release.";
     return {
       text: [
-        `Stopped Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`}, recorded as stopped by this Session.`,
+        outcome.previouslyStopped
+          ? `Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`} was already recorded as stopped; retried its live executor.`
+          : `Stopped Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`}, recorded as stopped by this Session.`,
         acts,
         ...outcome.failures,
         "Its history stays openable, and a person can reattach it.",

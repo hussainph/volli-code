@@ -37,20 +37,20 @@ const T = DEFAULT_SESSION_WATCHDOG_SILENCE_MS;
 
 describe("sessionWedge", () => {
   it("calls a live turn silent past the threshold wedged, and says for how long", () => {
-    expect(sessionWedge(projection(), T + 5_000, T)).toEqual({
+    expect(sessionWedge(projection(), T + 5_000, T, 0)).toEqual({
       wedged: true,
       silentForMs: T + 5_000,
     });
   });
 
   it("keeps watching a live turn still inside the threshold", () => {
-    expect(sessionWedge(projection(), T - 1, T)).toEqual({ wedged: false, reason: "active" });
+    expect(sessionWedge(projection(), T - 1, T, 0)).toEqual({ wedged: false, reason: "active" });
     // The boundary itself trips: N minutes of silence IS the claim.
-    expect(sessionWedge(projection(), T, T)).toEqual({ wedged: true, silentForMs: T });
+    expect(sessionWedge(projection(), T, T, 0)).toEqual({ wedged: true, silentForMs: T });
   });
 
   it("never calls a Session with no open turn wedged, however silent", () => {
-    expect(sessionWedge(projection({ turnActive: false }), T * 10, T)).toEqual({
+    expect(sessionWedge(projection({ turnActive: false }), T * 10, T, 0)).toEqual({
       wedged: false,
       reason: "no-turn",
     });
@@ -62,6 +62,7 @@ describe("sessionWedge", () => {
         projection({ stopped: { at: 1, reason: null, by: { kind: "user" } } }),
         T * 10,
         T,
+        0,
       ),
     ).toEqual({ wedged: false, reason: "stopped" });
   });
@@ -85,6 +86,7 @@ describe("sessionWedge", () => {
         projection({ interactions: { active: [interaction], resolved: [] } }),
         T * 10,
         T,
+        0,
       ),
     ).toEqual({ wedged: false, reason: "awaiting-user" });
 
@@ -100,21 +102,23 @@ describe("sessionWedge", () => {
         projection({ attention: { active: [attention], primary: attention } }),
         T * 10,
         T,
+        0,
       ),
     ).toEqual({ wedged: false, reason: "awaiting-user" });
   });
 
-  it("measures silence from the newest durable fact, clamped at zero", () => {
-    expect(sessionWedge(projection({ lastActivityAt: 500 }), T + 500, T)).toEqual({
+  it("measures silence from runtime progress rather than durable recency", () => {
+    // A durable fact can be old while streamed tokens are fresh.
+    expect(sessionWedge(projection({ lastActivityAt: 0 }), T + 500, T, 500)).toEqual({
       wedged: true,
       silentForMs: T,
     });
-    // A clock that reads earlier than the fact is an active session, not a
-    // negative silence.
-    expect(sessionWedge(projection({ lastActivityAt: 900 }), 800, T)).toEqual({
+    expect(sessionWedge(projection({ lastActivityAt: 0 }), T + 500, T, 501)).toEqual({
       wedged: false,
       reason: "active",
     });
+    // A clock that reads earlier than the last progress is active, not negative silence.
+    expect(sessionWedge(projection(), 800, T, 900)).toEqual({ wedged: false, reason: "active" });
   });
 
   it("defaults to ten minutes — one app-wide threshold, the compaction precedent", () => {

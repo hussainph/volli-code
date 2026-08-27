@@ -108,8 +108,8 @@ function SectionHeadingRow({ label, children }: { label: string; children?: Reac
  * The dot takes the STATE, not a colour. This panel used to hold its own
  * status→tone map and the tab strip held a second one that disagreed with it
  * about the same Session — `ui/status-dot.tsx` is now the only place either
- * question is answered. A history row is `exited` by definition, which is why
- * the old `PAST_TONE` constant is gone rather than replaced.
+ * question is answered. Terminal history is `exited`; a stopped chat keeps
+ * `stopped` so the deliberate end does not disappear into generic history.
  */
 function RowStatus({ state, children }: { state: StatusDotState; children: React.ReactNode }) {
   return (
@@ -263,15 +263,17 @@ function SessionList({
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
-              // rather than a status beside a "Chat · Live". A row in History
-              // has no live state left to report, only when it last said
-              // anything.
+              // rather than a status beside a "Chat · Live". Most History rows
+              // say only when they last said anything; a stopped chat retains
+              // that deliberate state alongside its stamp.
               trailing={
                 variant === "current" ? (
                   <RowStatus state={record.activity}>{STATUS_LABEL[record.activity]}</RowStatus>
                 ) : (
-                  <RowStatus state="exited">
-                    {relativeTime(sessionRailRowStampAt(entry), now)}
+                  <RowStatus state={record.activity === "stopped" ? "stopped" : "exited"}>
+                    {record.activity === "stopped"
+                      ? `Stopped · ${relativeTime(sessionRailRowStampAt(entry), now)}`
+                      : relativeTime(sessionRailRowStampAt(entry), now)}
                   </RowStatus>
                 )
               }

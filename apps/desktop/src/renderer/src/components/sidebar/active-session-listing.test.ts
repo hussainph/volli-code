@@ -605,6 +605,8 @@ describe("buildActiveSessionListing — chat Sessions", () => {
         // Derived from the Session, not from an open tab: the row can say where
         // it belongs before anything has been adopted on it.
         target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
+        // The sidebar's age is this durable Session fact, not the row's creation.
+        lastActivityAt: 1,
       },
     ]);
     expect(result.previous).toEqual([]);
@@ -801,6 +803,7 @@ describe("buildActiveSessionListing — the project container", () => {
       activitySource: "inferred",
       attention: null,
       waitingOn: null,
+      lastActivityAt: null,
       target: { kind: "terminal", tabId: "proj-2", paneId: "proj-2" },
     } satisfies ActiveSessionRow;
 
@@ -845,6 +848,7 @@ describe("buildActiveSessionListing — the project container", () => {
       activitySource: "reported",
       attention: null,
       waitingOn: null,
+      lastActivityAt: null,
       target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
     } satisfies ActiveSessionRow;
 
@@ -874,6 +878,7 @@ describe("buildActiveSessionListing — the project container", () => {
       activitySource: "inferred",
       attention: null,
       waitingOn: null,
+      lastActivityAt: null,
       target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" },
     } satisfies ActiveSessionRow;
 
@@ -898,6 +903,7 @@ describe("buildActiveSessionListing — the project container", () => {
 
     expect(titles(result.active)).toEqual(["Poke at the repo"]);
     expect(result.active[0]?.ticket).toBeNull();
+    expect(result.active[0]?.lastActivityAt).toBe(now - 1_000);
     expect(result.active[0]?.target).toEqual({
       kind: "terminal",
       tabId: "proj-1",

@@ -1088,9 +1088,10 @@ export interface SessionProjection {
   signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
   /**
    * The stop currently in force, or null — set by `session.stopped`, cleared
-   * by work resuming (a fresh attachment or a turn). State rather than
-   * history: a listing says "stopped" while this is set, and the event row
-   * keeps the who-and-why forever regardless (VC-86).
+   * only by a fresh attachment. State rather than history: a listing says
+   * "stopped" while this is set, and the event row keeps the who-and-why
+   * forever regardless (VC-86). A turn already admitted to the attachment
+   * being stopped cannot erase the fact before release catches it.
    */
   stopped: { at: number; reason: string | null; by: SessionStopActor } | null;
   /** Latest accepted product model policy, durable across attachment and relaunch. */
@@ -1318,9 +1319,9 @@ export function projectSession(
       // running any more.
       case "turn.started":
         turnActive = true;
-        // A turn is work resuming, however the executor got there: a stop no
-        // longer describes what is happening (VC-86).
-        stopped = null;
+        // A turn can have been admitted before a supervisor recorded its stop.
+        // Only a fresh attachment is an explicit resumption, so this turn must
+        // not erase the stop while the supervisor is still releasing it.
         break;
       case "turn.completed":
       case "turn.interrupted":

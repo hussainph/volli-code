@@ -18,12 +18,12 @@
  * `stopSession` port and ships UNWIRED — a watchdog that kills by default
  * would turn its own false positive into the wedge it exists to catch.
  *
- * One trip per wedge EPISODE: the episode is keyed by the `lastActivityAt`
- * the silence is measured from, so a Session that recovers and wedges again
- * self-reports again, while a scan that comes around during the same silence
- * does not repeat itself. The durable command id carries the same key, so
- * even a restarted host re-tripping the same episode lands on the same
- * command rather than minting a second.
+ * One trip per wedge EPISODE: the episode is keyed by the live binding's
+ * `lastProgressAt`, the token/tool clock the silence is measured from. A
+ * Session that recovers and wedges again self-reports again, while a scan that
+ * comes around during the same silence does not repeat itself. The durable
+ * command id carries the same key, so even a restarted host re-tripping the
+ * same episode lands on the same command rather than minting a second.
  *
  * Failures are swallowed with a diagnostic, never propagated — this is an
  * observer beside the runtime, and a scan that throws must not be able to
@@ -39,8 +39,8 @@ const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 
 export interface SessionWatchdogPorts {
   /** The executors this process holds open — the runtime's own binding list. */
-  listBindings(): readonly { sessionId: string }[];
-  /** One Session's durable projection; the verdict reads only durable facts. */
+  listBindings(): readonly { sessionId: string; lastProgressAt: number }[];
+  /** One Session's durable state; live progress comes from the binding above. */
   projection(sessionId: string): Promise<SessionProjection>;
   /** The durable door the blocked signal goes through. */
   submit: SessionEngine["submit"];
@@ -72,22 +72,23 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   const now = ports.now ?? (() => Date.now());
   const onError =
     ports.onError ?? ((error: unknown) => console.error("[volli] session watchdog:", error));
-  /** The episode each Session last tripped on: the lastActivityAt it was silent from. */
+  /** The episode each Session last tripped on: the live progress instant it was silent from. */
   const tripped = new Map<string, number>();
   let timer: ReturnType<typeof setInterval> | null = null;
 
-  async function inspect(sessionId: string): Promise<void> {
+  async function inspect(binding: { sessionId: string; lastProgressAt: number }): Promise<void> {
+    const { sessionId, lastProgressAt } = binding;
     const projection = await ports.projection(sessionId);
-    const verdict = sessionWedge(projection, now(), thresholdMs);
+    const verdict = sessionWedge(projection, now(), thresholdMs, lastProgressAt);
     if (!verdict.wedged) {
-      // Recovery ends the episode; the next wedge is a new lastActivityAt and
+      // Recovery ends the episode; the next wedge is a new progress instant and
       // reports itself afresh.
       if (verdict.reason === "active" || verdict.reason === "no-turn") {
         tripped.delete(sessionId);
       }
       return;
     }
-    const episode = projection.lastActivityAt;
+    const episode = lastProgressAt;
     if (tripped.get(sessionId) === episode) return;
     tripped.set(sessionId, episode);
     const minutes = Math.round(verdict.silentForMs / 60_000);
@@ -99,7 +100,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
       intent: {
         kind: "session.signal",
         signal: "blocked",
-        reason: `Watchdog: no activity for ${minutes}m inside an open turn.`,
+        reason: `Watchdog: no runtime progress for ${minutes}m inside an open turn.`,
       },
       provenance: {
         source: { kind: "system", id: "session-watchdog", detail: null },
@@ -108,7 +109,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
     });
     ports.notify?.({
       title: "Session may be wedged",
-      body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no activity for ${minutes}m.`,
+      body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m.`,
     });
     if (ports.stopSession !== undefined) {
       await ports.stopSession({ sessionId, silentForMs: verdict.silentForMs });
@@ -118,7 +119,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   async function scan(): Promise<void> {
     for (const binding of ports.listBindings()) {
       try {
-        await inspect(binding.sessionId);
+        await inspect(binding);
       } catch (error) {
         onError(error);
       }

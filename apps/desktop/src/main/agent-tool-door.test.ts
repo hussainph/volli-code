@@ -315,13 +315,13 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
             ],
             submit: async (request: unknown) => {
               stops.push(request);
-              return {};
+              return { receipt: { status: "completed" } };
             },
           },
           runtime: {
             command: async (request: unknown) => {
               sends.push(request);
-              return {};
+              return { receipt: { status: "accepted" } };
             },
           },
         }) as unknown as ReturnType<AgentToolDoorOptions["supervise"]>,

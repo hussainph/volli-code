@@ -266,6 +266,7 @@ describe("renderCliSuccess", () => {
               id: "abcdef12",
               kind: "ticket",
               status: "running",
+              lastActivityAgeMs: 8_000,
               ticket: null,
               costUsd: null,
               costBasis: "unavailable",
@@ -277,7 +278,7 @@ describe("renderCliSuccess", () => {
         },
         options,
       ),
-    ).toBe("abcdef12  ticket  running  \u2014  0  Work\n");
+    ).toBe("abcdef12  ticket  running  last 8s  \u2014  0  Work\n");
     expect(
       renderCliSuccess(
         "session.list",

@@ -47,7 +47,7 @@ const fixture = vi.hoisted(() => {
     sessionId: "chat-0",
     title: "Previous implementation",
     live: false,
-    activity: "idle",
+    activity: "stopped",
     waitingOn: null,
   };
   const rows: SessionListingRow[] = [
@@ -132,6 +132,13 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain(fixture.ended.title);
     expect(html).not.toContain("collapsible");
     expect(html).not.toContain("border-t border-sidebar-border");
+  });
+
+  it("keeps a stopped chat visibly stopped after it moves to History", () => {
+    const html = panel();
+
+    expect(html).toContain("Stopped");
+    expect(html).toContain('data-state="stopped"');
   });
 
   it("insets History with the column instead of a hardcoded edge", () => {

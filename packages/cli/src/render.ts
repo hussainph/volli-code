@@ -553,7 +553,7 @@ function renderStableLines(command: string, data: unknown): string | null {
                 ? `${session["status"]} on ${session["waitingOn"]}`
                 : session["status"],
               // Age of the newest durable fact — the signal a wedge hides in.
-              // Absent on rows that do not measure it (terminals), never "-".
+              // Absent only on a legacy or malformed row, never rendered as "-".
               typeof session["lastActivityAgeMs"] === "number"
                 ? `last ${ageText(session["lastActivityAgeMs"])}`
                 : null,

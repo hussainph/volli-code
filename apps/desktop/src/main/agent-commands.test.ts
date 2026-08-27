@@ -1869,6 +1869,8 @@ describe("agent command service", () => {
             costBasis: "unavailable",
             costCoverage: "unavailable",
             tokens: 0,
+            // Terminal rows expose the same last-event age as chat rows.
+            lastActivityAgeMs: 100,
             ageMs: 100,
           },
         ],
