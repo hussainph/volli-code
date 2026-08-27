@@ -287,6 +287,79 @@ describe("dismissDependencyOffer", () => {
   });
 });
 
+describe("setMarkdownFileView", () => {
+  it("remembers Document view per file, per project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
+
+    expect(store.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual([
+      "docs/DESIGN.md",
+    ]);
+    expect(store.getState().byProject["project-b"]?.markdownDocumentFiles).toBeUndefined();
+  });
+
+  it("records Source by FORGETTING the file — the default is not worth storing", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
+    store.getState().setMarkdownFileView("project-a", "README.md", "document");
+    store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "source");
+
+    expect(store.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual(["README.md"]);
+  });
+
+  it("is a no-op when the file is already in that view", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
+
+    const before = store.getState().byProject;
+    store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
+    expect(store.getState().byProject).toBe(before);
+
+    // Nor does picking Source for a file that never left it write anything.
+    store.getState().setMarkdownFileView("project-a", "docs/BOUNDARIES.md", "source");
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("survives relaunch, and outlives the tab that made the choice", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().previewHomeFile("project-a", "docs/DESIGN.md");
+    store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
+    // The tab goes; the choice does not. Unlike the view-state map beside it,
+    // this is remembered for the FILE.
+    store.getState().closeHomeFile("project-a", "docs/DESIGN.md", []);
+
+    const relaunched = createWorkspaceStore(storage).getState().byProject["project-a"];
+    expect(relaunched?.projectFiles.tabs).toEqual([]);
+    expect(relaunched?.markdownDocumentFiles).toEqual(["docs/DESIGN.md"]);
+  });
+
+  it("reads a stored list tolerantly: paths only, deduped", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              markdownDocumentFiles: ["docs/DESIGN.md", 7, "", null, "docs/DESIGN.md", "README.md"],
+            },
+            "project-b": { markdownDocumentFiles: "docs/DESIGN.md" },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const relaunched = createWorkspaceStore(storage);
+    expect(relaunched.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual([
+      "docs/DESIGN.md",
+      "README.md",
+    ]);
+    expect(relaunched.getState().byProject["project-b"]?.markdownDocumentFiles).toEqual([]);
+  });
+});
+
 describe("setBoardSort", () => {
   it("tracks the sort independently per project", () => {
     const store = createWorkspaceStore(createMemoryStorage());
@@ -2142,6 +2215,7 @@ describe("forget", () => {
       projectFileViewStates: {},
       homeActiveTab: HOME_BOARD_TAB_ID,
       homeTabHistory: [],
+      markdownDocumentFiles: [],
       dependencyOfferDismissed: false,
     });
   });
@@ -2177,6 +2251,7 @@ describe("persistence", () => {
       "boardView",
       "dependencyOfferDismissed",
       "homeActiveTab",
+      "markdownDocumentFiles",
       "openTicketId",
       "projectFileViewStates",
       "projectFiles",

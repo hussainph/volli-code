@@ -64,7 +64,7 @@ place where the UI actively lies.
 |---|---|---|
 | W1 | Create a file or folder; rename, move, delete, duplicate | ~~NEW-FILE POLICY refuses writes to nonexistent paths outside `.volli/**` (`main/volli-fs.ts:593`); no affordance anywhere in the renderer~~ — **removed by §4.5 (VC-191)**: five scoped IPC verbs in `main/volli-fs.ts` behind the same two path-safety layers, and a context menu + New File header action on both navigators. The write path still refuses a nonexistent path; creating one is now its own door |
 | W2 | Reorder tabs | No drag or move operation in any strip; order is insertion order (`packages/shared/src/file-workspace.ts` has preview/pin/activate/close only; both strips compose kind-grouped) |
-| W3 | Edit repository markdown in rendered form | `fileSavePolicy` routes all non-artifact markdown to the raw source editor (`packages/shared/src/file-save-policy.ts:37-41`); Document Mode never mounts for it |
+| W3 | Edit repository markdown in rendered form | ~~`fileSavePolicy` routes all non-artifact markdown to the raw source editor (`packages/shared/src/file-save-policy.ts:37-41`); Document Mode never mounts for it~~ — **removed by §4.6 (VC-192)**: a per-file Source ⇄ Document toggle on markdown file tabs. `fileSavePolicy` is untouched, because it never was the obstacle — the save contract is about which FILES, and Document Mode now mounts inside the same explicit-⌘S editor |
 | W4 | Jump to a file by name | ~~No quick-open; the command palette has no file entries (`command-palette-model.ts`); the rail navigator is a one-level-at-a-time walk~~ — **removed by §4.4 (VC-190)**: ⌘P over the scoped file index (`components/files/quick-open.tsx`) |
 | W5 | Search across files | No search IPC exists at all (`main/volli-fs.ts`, `ipc/contract.ts`) |
 
@@ -193,7 +193,7 @@ first session. Each item names its current state and verdict.
 | F4 | Create/rename/delete/duplicate files and folders | Absent (W1) | **Must** |
 | F5 | Quick-open by name | ⌘P over `volli:file-index`, now scope-taking (`components/files/quick-open.tsx`) | Done (§4.4, VC-190) |
 | F6 | Diagnostics that tell the truth | Configured `typescriptDefaults`/`javascriptDefaults` on a tsconfig read (`editor/monaco-runtime.ts`) | Done (§4.2, VC-188) |
-| F7 | Rendered markdown editing for repo files | Machinery built, policy withholds it (W3) | **Must** |
+| F7 | Rendered markdown editing for repo files | Per-file Source ⇄ Document toggle on markdown tabs; explicit ⌘S unchanged (`editor/document-view-policy.ts`) | Done (§4.6, VC-192) |
 | F8 | Editor controls drawn as controls (diff toggle icons, word wrap, go-to-line, copy path) | Rough (§1.3) | **Must** (cheap) |
 | F9 | Search across files | Absent (W5) | **Should** — the last "reach for another tool" moment |
 | F10 | Broad syntax highlighting | ~30 grammars | **Should** (VC-125, already filed) |
@@ -372,7 +372,37 @@ same safety posture the write path has:
 - The watch/recency pipeline already handles externally-appearing and
   disappearing files (tested paths in `file-view.tsx`), so tabs stay correct.
 
-### 4.6 Rendered markdown for repo files (M)
+### 4.6 Rendered markdown for repo files (M) — **landed: VC-192**
+
+Shipped as written below. Four things the ticket settled that the plan left
+open:
+
+- **The band is allowed to exist, and only markdown draws it.** §4.1's rule is
+  that a control joins the one existing slim band or a context menu, and VC-187
+  read that correctly for word wrap (a file tab had no band, so it went to the
+  tab menu). A segmented control cannot live in a menu, so this borrows the
+  band idiom for the one file kind with a second view to offer — one rule above
+  the editor, on markdown tabs only, never a strip above every file.
+- **It is `MonacoFileEditor` wearing Document Mode, not `MonacoDocumentEditor`
+  mounted without its debouncer.** That component's whole reason to exist is the
+  autosave contract; the `options` + `contribute` seam on the file editor was
+  built for exactly this and had no caller until now. So repository markdown
+  keeps the ⌘S, the dirty flag, the close guard, the conflict banner and the
+  live reconciliation it already had, and gains a look: `surface="document"`.
+- **Refusal is block-level HTML, not every angle bracket.** An HTML BLOCK
+  suspends markdown parsing for the lines it owns (the README's centred header),
+  so the surface would show markup where it promises a rendering. Inline
+  `<editor>` — this repo's own prose, four times across two plans — conceals
+  nothing and stays allowed; refusing over it would take Document view away from
+  the corpus it exists for.
+- **The gate reads the bytes on disk, not the draft.** Typing `<` must not eject
+  you mid-sentence. Saving frontmatter into a file does take it back to Source,
+  and then says why.
+
+The verification the last bullet below asks for is a test over this repo's own
+`docs/` (`editor/document-view-policy.test.ts`): 37 files, 36 accepted, and
+every one of the 13,505 spans the projection hides or replaces comes back when
+the caret is put in it.
 
 The ticket's "we already have the machinery" — true, and the missing piece is
 policy plus one save-contract nuance:

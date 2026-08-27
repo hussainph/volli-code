@@ -1,12 +1,19 @@
 /**
- * The diff pane's control band — the ONE slim strip above the editor, and the
- * only always-visible editor chrome the app draws (plan §4.1).
+ * The diff pane's control band — the slim strip above the diff editor, and the
+ * band plan §4.1's rule is written about.
  *
  * It was a full-width border-bottom row holding two text buttons reading
  * `Inline | Side by side`: page chrome, in words, for a choice about layout.
  * Icons say it in the space of one, which is what buys room for the word-wrap
  * toggle beside them — the rule this band exists under is that controls join it
- * or a context menu, and nothing earns a second band.
+ * or a context menu, and a band has to be earned.
+ *
+ * ONE other surface has since earned one. VC-192 gives markdown file tabs a
+ * Source ⇄ Document control (`editor/markdown-view-toggle.tsx`), and a
+ * segmented control is the one shape that cannot live in a context menu — so
+ * that band is the same idiom, borrowed by the one file kind with a second view
+ * to offer, and not a licence for a strip above every file. Word wrap on a file
+ * tab is still a menu item (VC-187), which is the rule working.
  *
  * Each icon keeps its label as its accessible name (`Segmented`'s `iconOnly`),
  * so nothing is lost to a screen reader or a hover.

@@ -17,7 +17,8 @@
  * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
  * Diff tabs landing where you left them after lazy content reload, issue #109,
  * or the Project Files workspace that must resume where you left it, decisions
- * #55/#56), while `nav`, `expandedSessionGroups`, and Home's close-return
+ * #55/#56) — as does `markdownDocumentFiles`, which markdown files open in
+ * Document view (VC-192), while `nav`, `expandedSessionGroups`, and Home's close-return
  * `homeTabHistory` stay session-only — nav resetting to Home on
  * relaunch is a settled decision (see ui.ts's history) and now applies per
  * workspace. The partialize below prunes each record down to that persisted
@@ -61,6 +62,7 @@ import {
 } from "@renderer/components/ticket/ticket-body-tab";
 import { diffTabId, parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
+import type { MarkdownFileView } from "@renderer/editor/document-view-policy";
 import {
   EMPTY_NAV_HISTORY,
   goBack,
@@ -217,6 +219,25 @@ export interface WorkspaceUiState {
    */
   homeTabHistory: readonly string[];
   /**
+   * The repository Markdown files this project shows in DOCUMENT view — the
+   * per-file half of the Source ⇄ Document toggle (VC-192, plan §4.6).
+   * Persisted, tolerant-read.
+   *
+   * A list of the files that chose Document rather than a map of every file's
+   * view, because Source is the default and always will be: "remembered per
+   * file" only ever has one non-default answer to hold, and storing the other
+   * one would grow an entry for every markdown file ever opened. Choosing
+   * Source again removes the path, which is the same statement.
+   *
+   * Keyed by relPath alone, so Home's Main checkout and a Ticket workspace's
+   * worktree copy of the same file agree: which view a document reads best in
+   * is a fact about the document, not about the checkout it was opened from.
+   * The bytes still get the last word — `resolveMarkdownFileView` refuses
+   * Document view for a file that has since grown frontmatter, without
+   * forgetting the choice.
+   */
+  markdownDocumentFiles: readonly string[];
+  /**
    * Whether this project's owner has waved off the uninstalled-dependencies
    * offer (VC-156). Persisted, and that is the point: the notice it replaces
    * kept its dismissal in component state keyed by the exact alert string, so
@@ -242,6 +263,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   projectFileViewStates: {},
   homeActiveTab: HOME_BOARD_TAB_ID,
   homeTabHistory: [],
+  markdownDocumentFiles: [],
   dependencyOfferDismissed: false,
 };
 
@@ -565,6 +587,14 @@ interface WorkspaceState {
     relPath: string,
     viewState: unknown,
   ): void;
+  /**
+   * Remember which view one repository Markdown file opens in (VC-192).
+   * `"source"` forgets the path rather than recording the default — see
+   * {@link WorkspaceUiState.markdownDocumentFiles}. A choice that changes
+   * nothing returns the state by identity, so re-picking the view already in
+   * front notifies nobody.
+   */
+  setMarkdownFileView(projectId: string, relPath: string, view: MarkdownFileView): void;
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
   /**
@@ -597,6 +627,7 @@ type PersistedWorkspaceUi = Pick<
   | "projectFiles"
   | "projectFileViewStates"
   | "homeActiveTab"
+  | "markdownDocumentFiles"
   | "dependencyOfferDismissed"
 >;
 
@@ -743,6 +774,20 @@ function sanitizeTicketDiffViewStates(
   return out;
 }
 
+/**
+ * Validate a rehydrated `markdownDocumentFiles` list: relPaths only, deduped,
+ * order preserved. Unlike the view-state maps beside it this is NOT pruned
+ * against open tabs — the choice is remembered for the FILE, so closing its tab
+ * (or relaunching with nothing open) must not forget which view it reads in.
+ * The list only ever holds files that asked for the non-default view, so it
+ * cannot accrete an entry per file visited.
+ */
+function sanitizeMarkdownDocumentFiles(raw: unknown): readonly string[] {
+  if (!Array.isArray(raw)) return [];
+  const paths = raw.filter((path): path is string => typeof path === "string" && path.length > 0);
+  return [...new Set(paths)];
+}
+
 function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): PersistedWorkspaceUi {
   const view: BoardView =
     persisted.boardView === "board" || persisted.boardView === "list"
@@ -781,6 +826,7 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     // the project's durable listing (`home-tabs.ts`) — a boot-time guess here
     // could only be the "not hydrated yet reads as gone" bug.
     homeActiveTab: sanitizeHomeActiveTab(persisted.homeActiveTab),
+    markdownDocumentFiles: sanitizeMarkdownDocumentFiles(persisted.markdownDocumentFiles),
     // Only an explicit `true` dismisses: anything else in the JSON — a missing
     // key from a build before this existed, a corrupt value — means the offer
     // stands, which is the recoverable side of the mistake.
@@ -800,6 +846,7 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     ui.projectFiles.tabs.length === 0 &&
     Object.keys(ui.projectFileViewStates).length === 0 &&
     ui.homeActiveTab === DEFAULT_WORKSPACE_UI.homeActiveTab &&
+    ui.markdownDocumentFiles.length === 0 &&
     ui.dependencyOfferDismissed === DEFAULT_WORKSPACE_UI.dependencyOfferDismissed
   );
 }
@@ -1311,6 +1358,20 @@ export function createWorkspaceStore(storage?: StateStorage) {
           });
         },
 
+        setMarkdownFileView(projectId, relPath, view) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const chosen = current.markdownDocumentFiles.includes(relPath);
+            if (chosen === (view === "document")) return state;
+            return patchWorkspace(state, projectId, {
+              markdownDocumentFiles:
+                view === "document"
+                  ? [...current.markdownDocumentFiles, relPath]
+                  : current.markdownDocumentFiles.filter((path) => path !== relPath),
+            });
+          });
+        },
+
         forget(projectId) {
           set((state) => {
             if (!(projectId in state.byProject)) return state;
@@ -1372,6 +1433,9 @@ export function createWorkspaceStore(storage?: StateStorage) {
                   // The Home tab that was in front — an id, never the Session
                   // behind it, which is recovered from its own durable record.
                   homeActiveTab: ui.homeActiveTab,
+                  // Which markdown files open as documents. A choice, not a
+                  // sitting's state, and remembered past the tab's close.
+                  markdownDocumentFiles: ui.markdownDocumentFiles,
                   // A standing answer, not a sitting's state: the offer this
                   // dismisses would otherwise return on every relaunch.
                   dependencyOfferDismissed: ui.dependencyOfferDismissed,

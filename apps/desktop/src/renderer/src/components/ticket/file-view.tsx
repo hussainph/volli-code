@@ -3,8 +3,10 @@ import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
+import { MarkdownViewToggle } from "@renderer/components/editor/markdown-view-toggle";
 import {
   MonacoFileEditor,
+  type MonacoEditorContribution,
   type MonacoFileSaveResult,
 } from "@renderer/components/editor/monaco-file-editor";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -16,6 +18,12 @@ import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Notice } from "@renderer/components/ui/notice";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
+import { attachDocumentMode } from "@renderer/editor/document-mode-contribution";
+import {
+  documentViewRefusal,
+  offersMarkdownViewToggle,
+  resolveMarkdownFileView,
+} from "@renderer/editor/document-view-policy";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { rearmWatch } from "@renderer/editor/rearm-watch";
@@ -24,6 +32,17 @@ import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
+
+/**
+ * Document Mode over REPOSITORY markdown: the live preview, and deliberately no
+ * `@file` wiring. `@ref` chips and the `@` picker are Volli's own idiom for its
+ * own documents (the Ticket Body, Markdown Artifacts); a file in the checkout
+ * is not one, and the completion provider is already written to decline any
+ * model that registers no config (see `document-mode-contribution.ts`).
+ */
+const REPO_DOCUMENT_MODE: MonacoEditorContribution = (context) =>
+  attachDocumentMode(context, { getFileRefs: () => undefined });
 
 interface FileViewProps {
   projectId: string;
@@ -108,7 +127,13 @@ export function overwriteAutosaveConflict(input: {
  *    always-mounted Monaco Document Mode editor (live preview) with 1.5s
  *    debounced autosave.
  *  - `explicit` — everything else editable, REPOSITORY MARKDOWN INCLUDED: a
- *    Monaco source editor that writes only on ⌘S.
+ *    Monaco file editor that writes only on ⌘S. Markdown there gets a per-file
+ *    Source ⇄ Document choice (plan §4.6, VC-192) which changes the SURFACE and
+ *    nothing else: Document Mode's live preview over the same registry document,
+ *    the same `saveSource` on ⌘S, the same dirty flag and close guard. The
+ *    autosave-vs-explicit split is about which FILES, never which editor — so
+ *    the debouncer below is not wired to it, and repository markdown still
+ *    reaches disk only when asked (CONCEPT #49).
  *  - `read-only` — images, binary, and truncated reads (saving a capped prefix
  *    back would destroy everything past the cap): the SAME Monaco source editor
  *    with `readOnly` set (so a mid-draft flip past the cap keeps the editing
@@ -145,6 +170,13 @@ export function FileView({
   // App-wide (stores/ui), toggled from the file tab's menu or the diff's band.
   // Source mode only: Document Mode's prose always wraps.
   const wordWrap = useUiStore((ui) => ui.wordWrap);
+  // Per FILE, per project, persisted (VC-192): repository markdown opens in
+  // Source unless this tab was told otherwise. Artifacts never ask — they take
+  // the autosave path below and are always a document.
+  const prefersDocumentView = useWorkspaceStore((workspace) =>
+    (workspace.byProject[projectId]?.markdownDocumentFiles ?? []).includes(relPath),
+  );
+  const setMarkdownFileView = useWorkspaceStore((workspace) => workspace.setMarkdownFileView);
 
   const draftRef = React.useRef(""); // current autosave-editor content
   const syncedRef = React.useRef(""); // last content loaded or saved (disk baseline)
@@ -528,6 +560,25 @@ export function FileView({
     };
   }, [projectId, ticketId, relPath, readFile, name, onSource, markDocumentSaved, debouncer]);
 
+  // Which file tabs offer the Source ⇄ Document choice at all (plan §4.6): an
+  // editable repository markdown file, and nothing else.
+  const markdownTab =
+    state.status === "code" && offersMarkdownViewToggle({ relPath, editable: state.editable });
+
+  /**
+   * Whether these bytes can honestly be shown as a document, recomputed only
+   * when the file's DISK content changes (load, external re-read, or a
+   * successful ⌘S — `state.text` advances with each). Never on the live draft:
+   * a Document view that ejected you mid-sentence for typing a `<` would be a
+   * worse answer than the misrepresentation it prevents. Saving frontmatter
+   * into a file DOES take it back to Source, and then says why.
+   */
+  const markdownText = state.status === "code" && markdownTab ? state.text : null;
+  const refusal = React.useMemo(
+    () => (markdownText === null ? null : documentViewRefusal(markdownText)),
+    [markdownText],
+  );
+
   function handleChange(next: string) {
     draftRef.current = next;
     if (conflictRef.current !== null || liveErrorRef.current !== null) return;
@@ -710,35 +761,76 @@ export function FileView({
     // bound to one view, rather than two that overwrite each other's
     // remembered cursor.
     const identity = fileDocumentIdentity({ projectId, ticketId, relPath, source: state.source });
+    // The remembered choice, unless these bytes refuse it (frontmatter, raw
+    // HTML). ONE editor either way: the surface changes, the save contract does
+    // not — ⌘S goes out through the same conflict-guarded `saveSource`, the
+    // dirty flag is the same registry document's, and the close guard is
+    // therefore unchanged (plan §4.6).
+    const view = resolveMarkdownFileView({
+      preferred: prefersDocumentView ? "document" : "source",
+      refusal,
+    });
+    const documentView = markdownTab && view === "document";
     return (
-      <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
-        {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
-        {state.truncated && (
-          <Notice title="Showing the first 1 MiB. Open in… for the whole file." />
-        )}
-        <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
-          <MonacoFileEditor
-            // The editor's own dirty/saving/stale/failure state is per-document,
-            // so a change of identity (a repo path that starts resolving from
-            // the ticket's worktree copy, or the reverse) has to remount it —
-            // exactly why this view itself is documented as `key={relPath}`.
-            key={documentIdentityKey(identity)}
-            identity={identity}
-            value={state.text}
-            revision={state.revision}
-            viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:source`}
-            // How a Search result that opened this file says which line to land
-            // on (VC-193). The key is the REQUEST pair, which is what the rail
-            // that made the request has.
-            revealKey={fileRevealKey({ projectId, ticketId, relPath })}
-            ariaLabel={`${name} contents`}
-            readOnly={!state.editable || liveError !== null}
-            wordWrap={wordWrap}
-            onSave={saveSource}
-            onDirtyChange={handleSourceDirtyChange}
-            initialViewState={initialViewState}
-            onViewStateChange={onViewStateChange}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {markdownTab && (
+          <MarkdownViewToggle
+            view={view}
+            refusal={refusal}
+            onChange={(next) => setMarkdownFileView(projectId, relPath, next)}
           />
+        )}
+        <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
+          {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
+          {state.truncated && (
+            <Notice title="Showing the first 1 MiB. Open in… for the whole file." />
+          )}
+          <div
+            className={cn(
+              "min-h-0 flex-1 overflow-hidden",
+              documentView
+                ? // A document is a page, at the canonical reading measure — the
+                  // same Tier A treatment the artifact surface above takes,
+                  // because it is the same surface (docs/DESIGN.md).
+                  "mx-auto w-full max-w-content"
+                : // Source is a workbench object: fluid, in its own box.
+                  "rounded-md border border-border bg-background",
+            )}
+          >
+            <MonacoFileEditor
+              // The editor's own dirty/saving/stale/failure state is per-document,
+              // so a change of identity (a repo path that starts resolving from
+              // the ticket's worktree copy, or the reverse) has to remount it —
+              // exactly why this view itself is documented as `key={relPath}`.
+              // The surface joins the key for a smaller reason: construction
+              // options and contributions are read once, at creation.
+              key={`${documentIdentityKey(identity)}:${documentView ? "document" : "source"}`}
+              identity={identity}
+              value={state.text}
+              revision={state.revision}
+              // Two views of ONE document, so they remember two cursors — the
+              // same reason the diff's modified side has a viewId of its own.
+              viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:${documentView ? "document" : "source"}`}
+              // How a Search result that opened this file says which line to land
+              // on (VC-193). The key is the REQUEST pair, which is what the rail
+              // that made the request has.
+              revealKey={fileRevealKey({ projectId, ticketId, relPath })}
+              ariaLabel={`${name} contents`}
+              readOnly={!state.editable || liveError !== null}
+              surface={documentView ? "document" : "source"}
+              // Document Mode's prose always wraps; the app-wide preference is
+              // about reading code.
+              wordWrap={documentView ? undefined : wordWrap}
+              contribute={documentView ? REPO_DOCUMENT_MODE : undefined}
+              onSave={saveSource}
+              onDirtyChange={handleSourceDirtyChange}
+              // Shared across both surfaces on purpose: one document, one set of
+              // coordinates, so a tab that comes back after relaunch lands where
+              // it was left whichever view it was left in.
+              initialViewState={initialViewState}
+              onViewStateChange={onViewStateChange}
+            />
+          </div>
         </div>
       </div>
     );

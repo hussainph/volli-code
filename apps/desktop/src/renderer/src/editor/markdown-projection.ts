@@ -43,8 +43,13 @@ import { buildLineIndex, lineAt } from "./text-position";
  *
  * `@lezer/markdown` is a direct dependency for exactly this reason. It is the
  * parser, not an editor engine, so it outlived the editor it was chosen with.
+ *
+ * Exported so `document-view-policy.ts` can decide WHICH files may open in
+ * Document Mode from the very tree this projection walks. A lookalike parser
+ * over there would eventually disagree with this one about what a construct
+ * is, and the refusal would then be about a document nobody is looking at.
  */
-const markdownParser = parser.configure([GFM, Subscript, Superscript, Emoji]);
+export const MARKDOWN_PARSER = parser.configure([GFM, Subscript, Superscript, Emoji]);
 
 const HEADING_RE = /^ATXHeading([1-6])$/;
 /** An ordered list's `1.`/`2)` marker, as opposed to a `-`/`*`/`+` bullet. */
@@ -144,7 +149,7 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
     return end;
   };
 
-  markdownParser.parse(text).iterate({
+  MARKDOWN_PARSER.parse(text).iterate({
     enter: (node) => {
       const heading = HEADING_RE.exec(node.name);
       if (heading !== null) {
