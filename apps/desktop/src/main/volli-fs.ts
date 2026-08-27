@@ -209,6 +209,21 @@ async function worktreeRootFromRow(row: TicketRow): Promise<string | null> {
 }
 
 /**
+ * Whether an already-canonical path is the root or sits underneath it — the
+ * containment rule itself, stated ONCE.
+ *
+ * Both path-safety seams end in this comparison ({@link assertWithinRoot} for a
+ * path that exists, {@link resolveNewPath} for one that does not yet), and it is
+ * the line that decides whether a write can leave the checkout. Two copies of it
+ * are two chances to drift, so there is one — the `sep` matters (`/repo-evil`
+ * must not pass for `/repo`) and that is exactly the kind of detail a second
+ * copy loses.
+ */
+function isWithinRoot(rootReal: string, real: string): boolean {
+  return real === rootReal || real.startsWith(rootReal + sep);
+}
+
+/**
  * Verifies `filePath` stays inside `root` after symlink resolution — the second
  * path-safety layer beyond {@link isSafeRelPath}. A target that is itself a
  * symlink is rejected outright (before its target is followed); a nonexistent
@@ -245,7 +260,7 @@ async function assertWithinRoot(
       return { ok: false, error: "File was not found" };
     }
   }
-  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+  if (!isWithinRoot(rootReal, real)) {
     return { ok: false, error: "Resolved path escapes the project root" };
   }
   return { ok: true };
@@ -389,7 +404,7 @@ async function resolveNewPath(
       } catch {
         return { ok: false, error: "File was not found" };
       }
-      if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+      if (!isWithinRoot(rootReal, real)) {
         return { ok: false, error: "Resolved path escapes the project root" };
       }
       current = real;
@@ -893,6 +908,45 @@ export async function createDirectory(
   }
 }
 
+/** Whether two paths name the same on-disk object. `false` if either is gone. */
+async function isSameEntry(left: string, right: string): Promise<boolean> {
+  const [a, b] = await Promise.all([statOrNull(left), statOrNull(right)]);
+  return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
+ * Whether the "occupied" destination is the SOURCE ITSELF under a different
+ * spelling of its own name — `readme.md` → `README.md`.
+ *
+ * macOS's default volume is case-insensitive but case-PRESERVING, so `lstat`
+ * answers for `README.md` when only `readme.md` is on disk, and the occupied
+ * check below would refuse a case change with `"README.md" already exists` — a
+ * sentence about the very file being renamed. Changing a name's case is an
+ * ordinary gesture (Finder does it, `git mv` does it) and nothing is overwritten
+ * by it, so refusing it is a false positive rather than the safety posture.
+ *
+ * Admitted only on all three counts together, because each rules out a
+ * different impostor:
+ *  - basenames that differ ONLY by case — this is what keeps a HARDLINK out.
+ *    Two distinct names sharing an inode are two directory entries, and
+ *    `rename(2)` is specified to no-op on them, which we must not report as a
+ *    completed rename.
+ *  - the same parent DIRECTORY, compared by identity rather than by string:
+ *    the source path is spelled from `root` and the destination from its
+ *    realpath, so a project living under a symlink spells one directory two
+ *    ways.
+ *  - the same on-disk entry. This is the one that proves the VOLUME folded the
+ *    case; on a case-sensitive filesystem two real files answer here with two
+ *    inodes and the refusal correctly stands.
+ */
+async function isCaseOnlyRename(from: string, to: string): Promise<boolean> {
+  const name = basename(from);
+  const target = basename(to);
+  if (name === target || name.toLowerCase() !== target.toLowerCase()) return false;
+  if (!(await isSameEntry(dirname(from), dirname(to)))) return false;
+  return await isSameEntry(from, to);
+}
+
 /**
  * Renames (or moves, within one checkout) a file or directory.
  *
@@ -905,6 +959,10 @@ export async function createDirectory(
  * under the word "rename"; and a destination whose parent folder does not exist
  * is named as such instead of creating it, because rename is not the create
  * verb and a typo'd path should not scatter directories.
+ *
+ * The occupied check has exactly one exception, and it is not a loophole in it:
+ * a destination that IS the source under another casing ({@link
+ * isCaseOnlyRename}) overwrites nothing, because there is only one file there.
  *
  * The occupied-destination check is a `lstat` a moment before the `rename(2)`,
  * so an agent creating that exact path in between would still be clobbered.
@@ -926,7 +984,10 @@ export async function renameEntry(
   if (destination.value.source !== source.value.source) {
     return { ok: false, error: "A rename cannot move a file between checkouts" };
   }
-  if (destination.value.exists) {
+  if (
+    destination.value.exists &&
+    !(await isCaseOnlyRename(source.value.filePath, destination.value.filePath))
+  ) {
     return { ok: false, error: `"${basename(toRelPath)}" already exists` };
   }
   try {

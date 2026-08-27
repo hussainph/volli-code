@@ -4,12 +4,21 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  link as hardLink,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "../ipc/contract";
@@ -969,6 +978,49 @@ describe("renameEntry", () => {
     });
     expect(await readFile(join(project, "b.md"), "utf8")).toBe("b");
     expect(existsSync(join(project, "a.md"))).toBe(true);
+  });
+
+  // macOS's default volume is case-insensitive but case-preserving, so the
+  // occupied-destination `lstat` answers for a spelling that is really the file
+  // being renamed. These three pin the seam that tells that apart from a real
+  // collision, and each asserts the same thing on either kind of volume.
+  it("changes only the letter case of a name, which is not an overwrite", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "readme.md"), "body", "utf8");
+    expect(await renameEntry(project, null, "readme.md", "README.md")).toEqual({
+      ok: true,
+      relPath: "README.md",
+    });
+    expect(await readFile(join(project, "README.md"), "utf8")).toBe("body");
+    expect(readdirSync(project)).toEqual(["README.md"]);
+  });
+
+  it("still refuses a HARDLINK of the same file — one inode, but two names", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await hardLink(join(project, "a.md"), join(project, "b.md"));
+    expect(await renameEntry(project, null, "a.md", "b.md")).toEqual({
+      ok: false,
+      error: '"b.md" already exists',
+    });
+    expect(existsSync(join(project, "a.md"))).toBe(true);
+  });
+
+  it("refuses a case variant that is a second real file, where the volume keeps them apart", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "A.md"), "A", "utf8");
+    if ((await readFile(join(project, "a.md"), "utf8")) !== "a") {
+      // A case-insensitive volume folded the two writes into one file, so there
+      // is no second file here for the refusal to be about.
+      expect(readdirSync(project)).toHaveLength(1);
+      return;
+    }
+    expect(await renameEntry(project, null, "a.md", "A.md")).toEqual({
+      ok: false,
+      error: '"A.md" already exists',
+    });
+    expect(await readFile(join(project, "A.md"), "utf8")).toBe("A");
   });
 
   it("refuses a destination in a folder that does not exist", async () => {
