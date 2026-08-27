@@ -1573,7 +1573,7 @@ describe("configureTypeScriptDefaults", () => {
   /** Cannot-find-module and friends; every code that names something IN the file stays. */
   it("suppresses only diagnostics about modules and types packages", () => {
     expect([...UNRESOLVABLE_MODULE_DIAGNOSTIC_CODES].toSorted((a, b) => a - b)).toEqual([
-      2306, 2307, 2580, 2581, 2582, 2591, 2592, 2593, 2688, 2792, 2875, 7016,
+      2306, 2307, 2580, 2581, 2582, 2591, 2592, 2593, 2688, 2792, 2867, 2868, 2875, 7016,
     ]);
     for (const stillRed of [
       2304, // Cannot find name '{0}'.

@@ -151,6 +151,13 @@ const HEALTHY_AND_WRONG = {
     `export const version = (manifest as { version: string }).version;\n` +
     `export type Named = Pick<Project, "id">;\n`,
   "scripts/run.ts": `export const root = process.cwd();\nexport const bytes = Buffer.from("x");\n`,
+  // One file per arm of TypeScript's `getCannotFindNameDiagnosticForName`
+  // switch — the closed set of globals it reports as "install @types/…"
+  // INSTEAD of a plain TS2304. Held together so a later monaco bump that adds
+  // a fifth arm shows up here as a red rather than as a mystery squiggle.
+  "src/globals-jquery.ts": `export const el = $("#id");\n`,
+  "src/globals-runner.ts": `describe("x", () => {\n  it("y", () => {});\n});\nexport {};\n`,
+  "src/globals-bun.ts": `export const port = Bun.env["PORT"];\n`,
   "src/typo.ts": `const v = { name: "x" };\nexport const n = v.nmae;\n`,
   "src/assign.ts": `const n: number = "no";\nexport { n };\n`,
   "src/arity.ts": `function f(a: number) { return a; }\nexport const r = f(1, 2);\n`,
@@ -177,6 +184,9 @@ describe("a healthy file on a single-file model", () => {
     ["callbacks over values that come from unresolved modules", "src/edits.ts"],
     ["a JSON import and a type-only import", "src/version.ts"],
     ["globals that only an @types package could provide", "scripts/run.ts"],
+    ["the jQuery global", "src/globals-jquery.ts"],
+    ["a test runner's globals", "src/globals-runner.ts"],
+    ["the Bun global", "src/globals-bun.ts"],
   ])(
     "reports nothing for %s",
     (_case, relPath) => {
@@ -192,6 +202,42 @@ describe("a healthy file on a single-file model", () => {
     },
     SLOW,
   );
+});
+
+/**
+ * `MONACO_LIB_NAMES` is a hand-transcribed copy of monaco's `libFileMap`, and a
+ * copy can drift on the next version bump. Drift does not degrade, it breaks:
+ * a name the worker cannot produce replaces the whole standard library with
+ * nothing (`Cannot find name 'Error'`, all the way down), and a name it CAN
+ * produce that this list has never heard of is silently dropped, quietly
+ * costing a project the `lib` it asked for. Both directions are checked here
+ * against the map the shipped worker actually reads.
+ */
+describe("the lib names this configuration recognises", () => {
+  /**
+   * Every name a tsconfig could legally write, as monaco spells its files.
+   * `lib.d.ts` itself has no name to write, and the `.full` bundles are the
+   * worker's own target defaults — neither is something a `lib` array names.
+   */
+  const shippable = Object.keys(libs).flatMap((file) => {
+    const name = /^lib\.(.+)\.d\.ts$/.exec(file)?.[1];
+    return name === undefined || name.endsWith(".full") ? [] : [name];
+  });
+
+  it("keeps every lib monaco actually ships", () => {
+    const dropped = shippable.filter(
+      (name) =>
+        !(typeScriptCompilerOptions({ lib: [name] }).lib ?? []).includes(`lib.${name}.d.ts`),
+    );
+    expect(dropped).toEqual([]);
+  });
+
+  it("claims no lib monaco does not ship", () => {
+    const claimed = typeScriptCompilerOptions({
+      lib: shippable.concat("es2099", "nonsense"),
+    }).lib;
+    expect(claimed).toEqual(shippable.map((name) => `lib.${name}.d.ts`));
+  });
 });
 
 describe("a file that is genuinely wrong", () => {

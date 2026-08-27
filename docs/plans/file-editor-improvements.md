@@ -237,17 +237,31 @@ Shipped as written below. What the ticket settled that the plan left open:
   TypeScript's default, and forcing `bundler`/`node` only renames the complaint
   and adds TS2875 on every JSX file. The list is 2307, 2792, 2306, 2688, 2875,
   7016 plus the "do you need to install type definitions for node / jQuery / a
-  test runner" pairs (2580/2591, 2581/2592, 2582/2593), which TypeScript emits
-  INSTEAD of TS2304 for a known `@types` global — so suppressing them cannot
-  hide a typo. The rule behind the list, and the line a later change should not
-  cross: **each suppressed diagnostic's subject is a module path or a types
-  package, never anything written in the file.**
+  test runner / Bun" pairs (2580/2591, 2581/2592, 2582/2593, 2867/2868), which
+  TypeScript emits INSTEAD of TS2304 for a known `@types` global — so
+  suppressing them cannot hide a typo. Those four pairs are the whole of a
+  literal `switch` in TypeScript's `getCannotFindNameDiagnosticForName`, taken
+  as a set rather than as whatever this repo happened to emit; the sibling arm
+  of the same switch ("do you need to change your target library?", for `Map`,
+  `Promise`, `document`) is deliberately left red, because `lib` and `target`
+  DO come from the project and that complaint is therefore true. The rule
+  behind the list, and the line a later change should not cross: **each
+  suppressed diagnostic's subject is a module path or a types package, never
+  anything written in the file.**
 - **`noImplicitAny` is forced off**, after the project's `strict` is adopted.
   This was not in the plan and is the single most valuable line: an unresolved
   import types as `any`, so under `noImplicitAny` every callback parameter, JSX
   intrinsic and destructured binding downstream of it errors for a reason that
   is entirely the editor's own — 82 of the 89 diagnostics left in the first
   sample were that cascade. The project's other `strict` checks stay on.
+  Re-measured at review over the whole repository: turning it back on adds
+  5,956 diagnostics, and **every one of them is a 70xx implicit-any code in a
+  file that imports something** — 3,494 TS7026 (no `JSX.IntrinsicElements`),
+  2,290 TS7006 (parameter), 152 TS7031 (binding element), 22 TS7053. Zero
+  implicit-any diagnostics arise in files with no import at all, so the price
+  of this line on real source is a genuine bare `function f(x)` in an
+  import-free file, of which this repository has none. No non-70xx diagnostic
+  changes either way.
 - **The tsconfig read walks ancestors**, nearest-first, following relative
   `extends`. A single nearest-config read would find nothing here: the nearest
   config to a renderer file is `apps/desktop/tsconfig.json`, a references-only
@@ -259,7 +273,10 @@ Shipped as written below. What the ticket settled that the plan left open:
   library with nothing, and the same files that report 7 diagnostics with a good
   `lib` report 151 with a bad one (`Cannot find name 'Error'`, all the way
   down). Unrecognised names are dropped; if none survive, `lib` is omitted and
-  the target's default applies.
+  the target's default applies. The recognised set is a hand-transcribed copy of
+  monaco's `libFileMap`, so a test checks it both ways against the map the
+  shipped worker actually reads — a monaco bump that adds or renames a lib comes
+  out as a red test rather than as a silently dropped `lib`.
 - **`overviewRulerLanes` stays 0** (the decision this slice owed). 9,048
   diagnostics over 644 of 721 files became 537 over 185, but the remainder is
   one systematic class — a type or global another FILE declares — so about one

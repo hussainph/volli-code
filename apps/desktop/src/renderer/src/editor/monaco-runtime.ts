@@ -601,17 +601,29 @@ export const UNRESOLVABLE_MODULE_DIAGNOSTIC_CODES: readonly number[] = [
   2875, // This JSX tag requires the module path '{0}' to exist, but none could be found.
   7016, // Could not find a declaration file for module '{0}'. '{1}' implicitly has an 'any' type.
   // "Cannot find name '{0}'. Do you need to install type definitions for
-  // node / jQuery / a test runner?" — TypeScript emits these INSTEAD of the
-  // plain TS2304 when the unresolved name is a known global from an @types
+  // node / jQuery / a test runner / Bun?" — TypeScript emits these INSTEAD of
+  // the plain TS2304 when the unresolved name is a known global from an @types
   // package, so suppressing them cannot hide a typo: they hide exactly the
   // `process`/`Buffer`/`describe` reds no single-file model can resolve (68 of
   // them across this repository's Node-side files).
+  //
+  // The set is closed and worth naming as one, because it is a literal `switch`
+  // on the identifier in TypeScript's own `getCannotFindNameDiagnosticForName`:
+  // `$`, `describe`/`suite`/`it`/`test`, `process`/`require`/`Buffer`/`module`,
+  // `Bun`, and nothing else. Each arm has a plain variant and an "…and then add
+  // it to the types field" variant that fires when the project states `types`.
+  // The sibling arm of that same switch — `Map`, `Promise`, `document` and
+  // friends, "do you need to change your target library?" — is deliberately NOT
+  // here: `lib` and `target` DO come from the project, so that one is a true
+  // claim about a configuration we actually read.
   2580, // …for node? ("and then add 'node' to the types field" variant: 2591)
   2591,
   2581, // …for jQuery? (2592)
   2592,
   2582, // …for a test runner? (2593)
   2593,
+  2867, // …for Bun? (2868). None in this repository; the switch arm is the reason.
+  2868,
 ];
 
 /** tsconfig `target` spellings → the `ScriptTarget` numbers the worker compares. */
