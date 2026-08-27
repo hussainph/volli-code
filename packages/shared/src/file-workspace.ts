@@ -143,6 +143,76 @@ export function renameFile(
   return { tabs, activeRelPath };
 }
 
+/**
+ * Arrange a tab: move `relPath` to `toIndex` in the strip, and PIN it (VC-189,
+ * plan §4.3).
+ *
+ * THE PIN IS THE DECISION. Arranging a tab is a deliberate act — the person
+ * said where this file belongs — and a tab the person placed must not be
+ * silently replaced by the next glance from the navigator. That is decision
+ * #56's "a dirty tab is never replaced" applied to the other way a tab earns
+ * its slot, and it is here in the reducer rather than at the two call sites so
+ * Home and the ticket workspace cannot answer it differently.
+ *
+ * `toIndex` is clamped into the strip rather than validated: a drop lands
+ * between two tabs that exist, so an index past either end means "the end it
+ * ran past". Focus is untouched — arranging a tab is not selecting it, and a
+ * drag can start on a tab that is not in front. A path that is not open is
+ * ignored, like every other operation here: a strip cannot arrange a tab it
+ * does not have.
+ */
+export function moveFile(
+  state: FileWorkspaceState,
+  relPath: string,
+  toIndex: number,
+): FileWorkspaceState {
+  const from = state.tabs.findIndex((tab) => tab.relPath === relPath);
+  if (from === -1) return state;
+  const to = Math.min(Math.max(toIndex, 0), state.tabs.length - 1);
+  const pinned = state.tabs.some((tab) => tab.relPath === relPath && tab.pinned);
+  // A pinned tab dropped back on its own slot changed nothing — return by
+  // identity so subscribers don't re-render for a drag that went nowhere.
+  if (from === to && pinned) return state;
+  const tabs = state.tabs.filter((tab) => tab.relPath !== relPath);
+  tabs.splice(to, 0, { relPath, pinned: true });
+  return { tabs, activeRelPath: state.activeRelPath };
+}
+
+/**
+ * The one tab whose PATH changed IN PLACE between two versions of a strip, or
+ * `null` when this transition was not a substitution.
+ *
+ * READ rather than predicted, so it cannot drift from the reducers it reports
+ * on. {@link previewFile} replacing the preview slot and {@link renameFile}
+ * following a rename are the two transitions that keep a tab's slot while
+ * changing the file under it, and both appear here as "same length, exactly one
+ * index disagrees". Opening, closing, pinning and {@link moveFile} each fail
+ * one of those two tests — a move disagrees at two indices at the very least —
+ * so a caller may hand every transition to this and act only on the ones that
+ * moved a tab's identity.
+ *
+ * The renderer needs it because a File tab's id carries its path, so a
+ * substitution renames that tab as far as a strip ARRANGEMENT is concerned
+ * (VC-189, `tab-order.ts`'s `renamedTabOrder`).
+ */
+export function substitutedPath(
+  before: readonly FileWorkspaceTab[],
+  after: readonly FileWorkspaceTab[],
+): { from: string; to: string } | null {
+  if (before.length !== after.length) return null;
+  let found: { from: string; to: string } | null = null;
+  for (let index = 0; index < after.length; index += 1) {
+    // Both indices are in range: the lengths are equal, and checked above.
+    const was = before[index]!.relPath;
+    const now = after[index]!.relPath;
+    if (was === now) continue;
+    // A second disagreement means the strip was reordered, not substituted.
+    if (found !== null) return null;
+    found = { from: was, to: now };
+  }
+  return found;
+}
+
 /** Whether `relPath` is currently the replaceable preview tab. */
 export function isPreviewTab(state: FileWorkspaceState, relPath: string): boolean {
   return state.tabs.some((tab) => tab.relPath === relPath && !tab.pinned);

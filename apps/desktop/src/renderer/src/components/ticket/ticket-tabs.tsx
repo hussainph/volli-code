@@ -5,6 +5,12 @@
  * right rail. The drawing and the focus mechanics are `ui/tab-strip.tsx`'s (the
  * folder variant, shared with the Project Files workbench).
  *
+ * The composed order is Body → files → diffs → sessions → chats; whether the
+ * person has since ARRANGED it by dragging (VC-189) is decided by the caller's
+ * `tabOrder` overlay, so this strip still just draws the list it is handed. All
+ * it owns of that feature is the sortable itself — and the Body tab's absence
+ * from it.
+ *
  * Data-driven by design: `TicketTabDescriptor` is the one shape a tab needs, so
  * ticket-detail.tsx appends one `"file"`-kind descriptor per open `@file` ref,
  * one `"diff"`-kind descriptor per open Change Set diff, one `"session"`-kind
@@ -146,6 +152,13 @@ interface TicketTabStripProps {
    * Doc/file/diff tabs, which never raise it.
    */
   onRenameSessionTab(tabId: string, title: string): void;
+  /**
+   * A tab was dragged to a new place (VC-189): the tab that moved, and the
+   * strip's movable tab ids in the order the drop left them. The Body tab is
+   * never among them — it does not drag and nothing lands before it. Optional:
+   * a strip without it mounts no drag machinery.
+   */
+  onReorderTabs?(movedId: string, ids: readonly string[]): void;
   /** Boots a terminal session tab — the same path as the rail's Terminal control. */
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
@@ -171,6 +184,7 @@ function TicketTab({
   tab,
   active,
   tabStop,
+  dragId,
   editing,
   onSelect,
   onClose,
@@ -185,6 +199,8 @@ function TicketTab({
   active: boolean;
   /** This tab is the strip's single roving-tabindex entry point. */
   tabStop: boolean;
+  /** This tab's id for the strip's sortable, or undefined for the Body tab. */
+  dragId?: string;
   editing: boolean;
   onSelect(): void;
   onClose(): void;
@@ -234,6 +250,7 @@ function TicketTab({
       label={tab.label}
       active={active}
       tabStop={tabStop}
+      dragId={dragId}
       closable={closable}
       dirty={tab.dirty === true}
       // The one line a hover can add to what the tab already says. Silent for
@@ -383,6 +400,7 @@ export function TicketTabStrip({
   onCloseTab,
   onPinFileTab,
   onRenameSessionTab,
+  onReorderTabs,
   onNewSession,
   onNewChat,
   skills,
@@ -395,10 +413,16 @@ export function TicketTabStrip({
     tabs.length,
     tabs.findIndex((tab) => tab.id === activeTabId),
   );
+  // Every tab but the permanent Body tab may be dragged; the strip holds this
+  // list's identity steady for dnd-kit itself.
+  const movableIds = tabs.filter((tab) => tab.kind !== "body").map((tab) => tab.id);
 
   return (
     <TabStrip
       label="Ticket tabs"
+      reorder={
+        onReorderTabs === undefined ? undefined : { ids: movableIds, onReorder: onReorderTabs }
+      }
       actions={
         <>
           <div className="flex items-center">
@@ -454,6 +478,10 @@ export function TicketTabStrip({
           tab={tab}
           active={tab.id === activeTabId}
           tabStop={index === stop}
+          // The Body tab is the permanent first tab: no id here means no
+          // sortable registration, which is half of "index 0 is not a drop
+          // target" (the other half is its absence from `movableIds`).
+          dragId={tab.kind === "body" ? undefined : tab.id}
           editing={editingId === tab.id}
           onSelect={() => onSelectTab(tab.id)}
           onClose={() => onCloseTab(tab)}
