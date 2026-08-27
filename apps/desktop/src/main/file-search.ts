@@ -38,6 +38,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
+import { sep } from "node:path";
 import { errorMessage } from "@volli/shared";
 
 import type { FileSearchFile, FileSearchLimit, FileSearchMatch } from "../ipc/contract";
@@ -62,6 +63,27 @@ const RG_BINARY = process.platform === "win32" ? "rg.exe" : "rg";
 const RG_PLATFORM_PACKAGE = `@vscode/ripgrep-${process.platform}-${process.arch}`;
 
 /**
+ * The real on-disk path of a binary `asarUnpack` put beside the archive.
+ *
+ * WHY A PACKAGED BUILD NEEDS THIS AND A DEVELOPMENT ONE DOES NOT. Electron
+ * teaches `require`, `fs` and `execFile` to treat `app.asar` as a directory —
+ * but NOT `spawn`, which its own documentation lists as unsupported for a
+ * binary inside an archive ("only `execFile` is supported"). So the resolution
+ * below answers with a path INSIDE `app.asar` even for a file electron-builder
+ * unpacked to `app.asar.unpacked`, and spawning that path fails with `ENOTDIR`
+ * — measured, in the packaged app, not deduced.
+ *
+ * Rewriting the one archive segment is the fix node-pty makes for its own
+ * `spawn-helper` and VS Code makes for this very binary. It is a no-op
+ * everywhere else: no development run or test has an `app.asar` segment, which
+ * is exactly why the failure it prevents would have been invisible until a
+ * release — `pnpm start` finds matches all day.
+ */
+export function unpackedBinaryPath(path: string): string {
+  return path.replace(`${sep}app.asar${sep}`, `${sep}app.asar.unpacked${sep}`);
+}
+
+/**
  * Where the rg binary is, found two ways because the two environments this app
  * runs in resolve packages differently. Exported so a test can assert that at
  * least one of them answers on the machine it is running on.
@@ -76,15 +98,20 @@ const RG_PLATFORM_PACKAGE = `@vscode/ripgrep-${process.platform}-${process.arch}
  *    workspace — pnpm's strict layout puts it somewhere only `@vscode/ripgrep`
  *    can see, and its `rgPath` is that lookup.
  *
+ * Either answer is then taken out of the archive ({@link unpackedBinaryPath}),
+ * because what this module does with the path is spawn it.
+ *
  * Both are lazy: this module is loaded during boot and a search may never be
  * run at all.
  */
 export async function resolveRgPath(): Promise<string> {
   try {
-    return createRequire(import.meta.url).resolve(`${RG_PLATFORM_PACKAGE}/bin/${RG_BINARY}`);
+    return unpackedBinaryPath(
+      createRequire(import.meta.url).resolve(`${RG_PLATFORM_PACKAGE}/bin/${RG_BINARY}`),
+    );
   } catch {
     const module = await import("@vscode/ripgrep");
-    return module.rgPath;
+    return unpackedBinaryPath(module.rgPath);
   }
 }
 
@@ -369,10 +396,23 @@ export async function searchFiles(input: {
     let stderr = "";
     let stdoutBytes = 0;
 
-    const timer = setTimeout(() => {
-      limit = "time";
+    /**
+     * Ends the run at `reached` and kills the child — LATCHED: the first cap to
+     * fire is the one reported.
+     *
+     * A kill does not empty the pipe. stdout written before the signal is still
+     * delivered and still parsed, so without the latch a search that ran out of
+     * time while 500 matches sat buffered would settle as `"matches"` — "the
+     * first 500", a list that merely stops — when the truth is that it never
+     * reached most of the checkout. WHICH cap ended a search is the honest half
+     * of this feature; it is not a field a late frame gets to rewrite.
+     */
+    const stopAt = (reached: FileSearchLimit): void => {
+      if (limit === "none") limit = reached;
       child.kill("SIGKILL");
-    }, budget);
+    };
+
+    const timer = setTimeout(() => stopAt("time"), budget);
     // A search must never keep an otherwise idle app alive at quit.
     timer.unref?.();
 
@@ -382,11 +422,6 @@ export async function searchFiles(input: {
       settled = true;
       clearTimeout(timer);
       resolve(run);
-    };
-
-    const stopAt = (reached: FileSearchLimit): void => {
-      limit = reached;
-      child.kill("SIGKILL");
     };
 
     // Optional only because naming `stdio` costs the never-null child type;

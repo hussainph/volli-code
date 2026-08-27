@@ -115,6 +115,13 @@ asarUnpack:
   # names the binary is `@vscode/ripgrep`'s own ES module, and keeping the two
   # halves on the same side of the archive is what makes the runtime import
   # find the file it then reports.
+  #
+  # UNPACKING IS ONLY HALF OF IT. `require.resolve` still answers with the path
+  # INSIDE app.asar for a file unpacked beside it, and Electron supports only
+  # `execFile` — not `spawn` — on such a path (it fails with ENOTDIR). The
+  # `app.asar` -> `app.asar.unpacked` rewrite that finishes the job lives in
+  # `unpackedBinaryPath` in src/main/file-search.ts; a search that reports
+  # "Search is unavailable" only in the packaged app is that rewrite missing.
   - "**/node_modules/@vscode/**"
 
 electronLanguages:

@@ -9,9 +9,17 @@
  * and only the binary can answer it.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -20,6 +28,7 @@ import {
   resolveRgPath,
   searchArgs,
   searchFiles,
+  unpackedBinaryPath,
   SEARCH_MATCH_CAP,
   SEARCH_PREVIEW_CHARS,
 } from "./file-search";
@@ -44,6 +53,60 @@ function pathsOf(run: Awaited<ReturnType<typeof searchFiles>>): string[] {
   return run.ok ? run.value.files.map((file) => file.relPath).toSorted() : [];
 }
 
+/** One rg `--json` match frame, as the stub below prints them. */
+function matchFrame(line: number): string {
+  return JSON.stringify({
+    type: "match",
+    data: {
+      path: { text: "./src/app.ts" },
+      lines: { text: "const needle = 1;\n" },
+      line_number: line,
+      submatches: [{ start: 6, end: 12 }],
+    },
+  });
+}
+
+/**
+ * A stand-in `rg` that writes `frames`, then blocks until it is killed.
+ *
+ * THE ONE PLACE THE REAL BINARY CANNOT BE USED. The time budget is a claim
+ * about this module's own timer and kill, not about ripgrep, and pointing a
+ * short budget at a real rg is a coin toss: rg can finish a small checkout —
+ * matches, exit and all — before the event loop reaches its timers phase, and
+ * the run then ends at the MATCH cap instead. That is exactly how the earlier
+ * version of this test failed under a loaded full-suite run. A child that never
+ * exits on its own removes the coin: only the budget can end this search, and a
+ * regressed kill fails the test loudly instead of passing for the wrong reason.
+ *
+ * Three details are load-bearing:
+ *
+ *  - `cat` rather than a `printf` builtin — a shell's own stdout is block
+ *    buffered into a pipe and SIGKILL throws that buffer away, so the frames
+ *    have to be written by a process that exits and flushes.
+ *  - `exec sleep` — without it the shell forks `sleep`, which inherits the
+ *    stdout pipe and holds it open after the shell is killed, so `close` never
+ *    fires and the search never settles.
+ *  - the warm-up run — the FIRST exec of a newly written file costs hundreds of
+ *    milliseconds on macOS (the kernel validates a binary it has not seen). Left
+ *    inside the measured window that delay races the budget and the stub arrives
+ *    after its own deadline; spending it up front leaves the budget measuring
+ *    what it is meant to measure.
+ */
+function stubRg(frames: readonly string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), "volli-search-stub-"));
+  tempDirs.push(dir);
+  const path = join(dir, "rg");
+  writeFileSync(join(dir, "frames"), frames.map((frame) => `${frame}\n`).join(""), "utf8");
+  writeFileSync(
+    path,
+    `#!/bin/sh\n[ "$1" = "--warm" ] && exit 0\ncat "$(dirname "$0")/frames"\nexec sleep 30\n`,
+    "utf8",
+  );
+  chmodSync(path, 0o755);
+  execFileSync(path, ["--warm"]);
+  return path;
+}
+
 afterAll(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
@@ -58,6 +121,33 @@ describe("resolveRgPath", () => {
 
     expect(path.endsWith(process.platform === "win32" ? "rg.exe" : "rg")).toBe(true);
     expect(execFileSync(path, ["--version"], { encoding: "utf8" })).toContain("ripgrep");
+  });
+});
+
+describe("unpackedBinaryPath", () => {
+  // The bug this exists for is invisible in development and fatal in a
+  // release: Electron resolves a path INSIDE `app.asar` for a binary
+  // electron-builder unpacked beside it, and `spawn` on that path fails with
+  // ENOTDIR (Electron supports only `execFile` inside an archive).
+  it("takes a packaged binary out of the archive", () => {
+    const packaged = ["", "Applications", "V.app", "Contents", "Resources", "app.asar"].join(sep);
+    const rg = [packaged, "node_modules", "@vscode", "ripgrep-darwin-arm64", "bin", "rg"].join(sep);
+
+    expect(unpackedBinaryPath(rg)).toBe(rg.replace("app.asar", "app.asar.unpacked"));
+  });
+
+  it("leaves a development path exactly as it was", () => {
+    const dev = ["", "repo", "node_modules", "@vscode", "ripgrep-darwin-arm64", "bin", "rg"].join(
+      sep,
+    );
+
+    expect(unpackedBinaryPath(dev)).toBe(dev);
+  });
+
+  it("rewrites the archive segment only, never a directory that merely reads like one", () => {
+    const lookalike = ["", "repo", "app.asarium", "bin", "rg"].join(sep);
+
+    expect(unpackedBinaryPath(lookalike)).toBe(lookalike);
   });
 });
 
@@ -322,17 +412,47 @@ describe("searchFiles", () => {
     expect(run.value.files[0]?.matches).toHaveLength(SEARCH_MATCH_CAP);
   });
 
-  it("caps the search time and says so", async () => {
+  it("caps the search time, keeps what had arrived, and names THAT cap", async () => {
     const root = makeRepo();
-    for (let index = 0; index < 200; index += 1) {
-      write(root, `src/file-${index}.ts`, "needle\n".repeat(50));
-    }
 
-    const run = await searchFiles({ root, query: "needle", timeBudgetMs: 0 });
+    const run = await searchFiles({
+      root,
+      query: "needle",
+      rgPath: stubRg([matchFrame(1), matchFrame(2)]),
+      timeBudgetMs: 500,
+    });
 
     expect(run.ok).toBe(true);
     if (!run.ok) return;
     expect(run.value.limit).toBe("time");
+    // Honest, not empty: the matches that DID arrive are still the answer, and
+    // `limit` is the only thing saying the list is not the whole of it.
+    expect(run.value.matches).toBe(2);
+    expect(run.value.files).toEqual([
+      {
+        relPath: "src/app.ts",
+        matches: [
+          { line: 1, column: 7, preview: "const needle = 1;", start: 6, end: 12 },
+          { line: 2, column: 7, preview: "const needle = 1;", start: 6, end: 12 },
+        ],
+      },
+    ]);
+  });
+
+  it("spawns the binary rather than a shell, so a query can never be a command", async () => {
+    const root = makeRepo();
+    write(root, "a.ts", "needle\n");
+    write(root, "marker.txt", "untouched\n");
+
+    // Shell metacharacters in the query: under a shell this would run `touch`
+    // and redirect. Spawned directly with the query after `--`, it is text.
+    const run = await searchFiles({ root, query: "needle; touch pwned > marker.txt #" });
+
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.value.matches).toBe(0);
+    expect(existsSync(join(root, "pwned"))).toBe(false);
+    expect(readFileSync(join(root, "marker.txt"), "utf8")).toBe("untouched\n");
   });
 
   it("reports an unavailable engine rather than pretending there were no matches", async () => {
