@@ -157,6 +157,12 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
+        // what a query matches, and whether an invocation previews or pins.
+        // Pure `.ts` beside the overlay for the gate's sake — a scope that
+        // silently answered "Main" inside a Ticket workspace would open the
+        // wrong file with no error anywhere.
+        "src/components/files/quick-open-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",

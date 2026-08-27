@@ -242,7 +242,7 @@ describe("buildFileIndex", () => {
 
     // A cap of 2 forces truncation: the artifact survives (pushed first), one
     // repo file fills the rest, the remainder is skipped without materializing.
-    const { files, truncated } = await buildFileIndex(project, 2);
+    const { files, truncated } = await buildFileIndex(project, { indexCap: 2 });
     expect(truncated).toBe(true);
     expect(files).toHaveLength(2);
     expect(files.some((f) => f.relPath === ".volli/artifacts/art.md" && f.artifact)).toBe(true);
@@ -252,7 +252,7 @@ describe("buildFileIndex", () => {
     const project = makeGitRepoDir();
     await writeFile(join(project, "a.md"), "a", "utf8");
     await writeFile(join(project, "b.md"), "b", "utf8");
-    const { files, truncated } = await buildFileIndex(project, 2);
+    const { files, truncated } = await buildFileIndex(project, { indexCap: 2 });
     expect(truncated).toBe(false);
     expect(files).toHaveLength(2);
   });
@@ -290,6 +290,47 @@ describe("buildFileIndex", () => {
 
     expect(paths).toContain("main.py");
     expect(paths.some((p) => p.includes("generated"))).toBe(false);
+  });
+
+  // Quick-open's scope (VC-190). The split is decision #6's, the same one a
+  // READ applies per path: repo files come from the worktree, `.volli/**`
+  // never does — so a row the index offered and the read that follows it can
+  // never name two different files.
+  it("lists repo files from a worktree root while artifacts still come from Main", async () => {
+    const project = makeGitRepoDir();
+    const worktree = makeGitRepoDir();
+    await writeFile(join(project, "main-only.ts"), "main", "utf8");
+    await writeFile(join(worktree, "worktree-only.ts"), "worktree", "utf8");
+    await createArtifact(project, "notes"); // Main's .volli/artifacts/notes.md
+    await createArtifact(worktree, "never"); // must never be reached
+
+    const { files } = await buildFileIndex(project, { worktreeRoot: worktree });
+    const paths = files.map((f) => f.relPath);
+
+    expect(paths).toContain("worktree-only.ts");
+    expect(paths).not.toContain("main-only.ts");
+    expect(paths).toContain(".volli/artifacts/notes.md");
+    expect(paths).not.toContain(".volli/artifacts/never.md");
+  });
+
+  it("treats a null worktree root as the main checkout", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "main-only.ts"), "main", "utf8");
+    const { files } = await buildFileIndex(project, { worktreeRoot: null });
+    expect(files.map((f) => f.relPath)).toContain("main-only.ts");
+  });
+
+  it("falls back to a bounded walk of the WORKTREE when git can't answer there", async () => {
+    const project = makeGitRepoDir();
+    const worktree = makeTempProjectDir(); // NOT a git repo → git ls-files fails
+    await writeFile(join(worktree, "walked.ts"), "x", "utf8");
+    await mkdir(join(worktree, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(worktree, "node_modules", "pkg", "index.js"), "x", "utf8");
+
+    const { files } = await buildFileIndex(project, { worktreeRoot: worktree });
+    const paths = files.map((f) => f.relPath);
+    expect(paths).toContain("walked.ts");
+    expect(paths.some((p) => p.startsWith("node_modules/"))).toBe(false);
   });
 });
 
@@ -2047,6 +2088,94 @@ describe("registerFileIpcHandlers", () => {
       { projectId: "nope" },
     );
     expect(result).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  // ---- file-index scope (VC-190) --------------------------------------------
+  // The index now takes the SAME `{ projectId, ticketId }` pair a read takes,
+  // through the same `resolveFileScope` seam — so quick-open in a Ticket
+  // workspace offers that worktree's files, and the read behind the row it
+  // picked resolves to the same checkout.
+
+  it("indexes the ticket's live worktree when given the scope pair", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const worktree = join(setup.projectPath, "ticket-worktree");
+    await mkdir(worktree);
+    await writeFile(join(setup.projectPath, "main-only.ts"), "main", "utf8");
+    await writeFile(join(worktree, "worktree-only.ts"), "worktree", "utf8");
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "shared" });
+
+    const scoped = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id },
+    );
+    expect(scoped.ok).toBe(true);
+    if (!scoped.ok) return;
+    const paths = scoped.files.map((f) => f.relPath);
+    expect(paths).toContain("worktree-only.ts");
+    expect(paths).not.toContain("main-only.ts");
+    // `.volli/**` stays on Main whatever the scope (decision #6), so an
+    // artifact is `@`-referenceable from either surface.
+    expect(paths).toContain(".volli/artifacts/shared.md");
+
+    const unscoped = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId },
+    );
+    expect(unscoped.ok).toBe(true);
+    if (!unscoped.ok) return;
+    const mainPaths = unscoped.files.map((f) => f.relPath);
+    expect(mainPaths).toContain("main-only.ts");
+    expect(mainPaths).not.toContain("worktree-only.ts");
+  });
+
+  it("degrades a ticket whose worktree folder is gone to the main checkout, exactly as a read does", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "main-only.ts"), "main", "utf8");
+    const ticket = testTicket(setup.projectId, {
+      worktreePath: join(makeTempProjectDir(), "missing-worktree"),
+    });
+    insertTicket(ctx.db, ticket);
+
+    const result = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.files.map((f) => f.relPath)).toContain("main-only.ts");
+  });
+
+  it("rejects an unknown ticket rather than silently indexing Main", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: "nope" },
+    );
+    expect(result).toEqual({ ok: false, error: "Unknown ticket" });
+  });
+
+  it("rejects a ticket that belongs to another project", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const otherProject = testProject({ path: makeGitRepoDir() });
+    insertProject(ctx.db, otherProject);
+    const foreign = testTicket(otherProject.id, { ticketNumber: 3 });
+    insertTicket(ctx.db, foreign);
+
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: foreign.id },
+    );
+    expect(result).toEqual({ ok: false, error: "Ticket does not belong to project" });
   });
 
   it("answers prompt-templates with both tiers, the project's name winning", async () => {
