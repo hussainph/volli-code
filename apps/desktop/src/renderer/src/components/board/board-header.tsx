@@ -234,8 +234,8 @@ function BoardSummary({ visible, total }: { visible: number; total: number }) {
                 </span>
               </TooltipTrigger>
               <TooltipContent side="bottom" sideOffset={6}>
-                {summary.waiting} {summary.waiting === 1 ? "ticket has" : "tickets have"} an agent
-                blocked on a person
+                {summary.waiting} {summary.waiting === 1 ? "ticket needs" : "tickets need"} your
+                input
               </TooltipContent>
             </Tooltip>
           ) : null}
@@ -248,8 +248,8 @@ function BoardSummary({ visible, total }: { visible: number; total: number }) {
                 </span>
               </TooltipTrigger>
               <TooltipContent side="bottom" sideOffset={6}>
-                {summary.working} {summary.working === 1 ? "ticket has" : "tickets have"} an agent
-                producing right now
+                {summary.working} {summary.working === 1 ? "ticket has" : "tickets have"} an active
+                agent
               </TooltipContent>
             </Tooltip>
           ) : null}
