@@ -90,6 +90,8 @@ import type {
   FilePathInput,
   FileReadResult,
   FileRenameInput,
+  FileSearchInput,
+  FileSearchResult,
   FileWriteInput,
   FileWriteResult,
   FirstPaintHint,
@@ -759,6 +761,12 @@ const api = {
     index: (input: FileIndexInput): Promise<FileIndexResult> => invoke("volli:file-index", input),
     /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
     read: (input: FilePathInput): Promise<FileReadResult> => invoke("volli:file-read", input),
+    /**
+     * Finds literal text across the scope's checkout (VC-193): gitignore
+     * respected, `node_modules` never walked, capped in both matches and time
+     * with the cap that ended it named in `limit`.
+     */
+    search: (input: FileSearchInput): Promise<FileSearchResult> => invoke("volli:search", input),
     /** Writes utf8 text to an EXISTING file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
     write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
     /**

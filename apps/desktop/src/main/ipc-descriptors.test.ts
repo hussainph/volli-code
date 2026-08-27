@@ -1709,6 +1709,50 @@ describe("FILE_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:search", () => {
+    const { guard, invalidError } = FILE_IPC["volli:search"];
+    const valid = { projectId: "p1", query: "resolveFileScope" };
+
+    it("accepts a query scoped to the main checkout", () => {
+      expect(guard([valid])).toBe(true);
+    });
+
+    it("accepts the { projectId, ticketId } scope pair — a ticket's worktree", () => {
+      expect(guard([{ ...valid, ticketId: "t1" }])).toBe(true);
+    });
+
+    // An empty box is what a Search page holds every time it opens, so the
+    // boundary must not call it malformed — main answers it with an empty
+    // result instead.
+    it("accepts an empty query rather than refusing it as a bad shape", () => {
+      expect(guard([{ ...valid, query: "" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a missing query", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(false);
+    });
+
+    it("rejects a non-string projectId", () => {
+      expect(guard([{ ...valid, projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a ticketId of the wrong type", () => {
+      expect(guard([{ ...valid, ticketId: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
   describe("volli:file-read / volli:file-reveal / volli:file-watch / volli:file-unwatch (shared FilePathInput shape)", () => {
     const channels = [
       "volli:file-read",
@@ -2058,8 +2102,9 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 20 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(20);
+    it("covers all 21 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(21);
+      expect(FILE_CHANNELS).toContain("volli:search");
       expect(FILE_CHANNELS).toContain("volli:file-create");
       expect(FILE_CHANNELS).toContain("volli:dir-create");
       expect(FILE_CHANNELS).toContain("volli:file-rename");

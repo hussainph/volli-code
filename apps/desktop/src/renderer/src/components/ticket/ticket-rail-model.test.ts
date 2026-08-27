@@ -36,13 +36,32 @@ describe("selectRailMode (decision #46)", () => {
     expect(selectRailMode(onSession, "changes").activeTabId).toBe("session-abc");
   });
 
-  it("offers exactly the three Calm Stack pages, in tab order", () => {
-    expect(availableRailModes()).toEqual(["now", "changes", "files"]);
+  // Search appends rather than sitting beside Files (VC-193): the list is a
+  // keyboard order too, so a page inserted in the middle would move every page
+  // after it under a reader's fingers.
+  it("offers exactly the four Calm Stack pages, in tab order", () => {
+    expect(availableRailModes()).toEqual(["now", "changes", "files", "search"]);
     expect(resolveRailMode({ mode: "changes", activeTabId: TICKET_BODY_TAB_ID })).toBe("changes");
+    expect(resolveRailMode({ mode: "search", activeTabId: TICKET_BODY_TAB_ID })).toBe("search");
   });
 
   it("labels the pages the way the tab pill reads them", () => {
-    expect(TICKET_RAIL_MODE_LABELS).toEqual({ now: "Now", changes: "Diffs", files: "Files" });
+    expect(TICKET_RAIL_MODE_LABELS).toEqual({
+      now: "Now",
+      changes: "Diffs",
+      files: "Files",
+      search: "Search",
+    });
+  });
+
+  // The rule the whole page contract exists for, restated for the new page: a
+  // rail switching to Search must not open, close or retarget a main-view tab.
+  it("leaves the active tab alone when Search is selected", () => {
+    const chrome: TicketRailChrome = { mode: "files", activeTabId: "session-abc" };
+    expect(selectRailMode(chrome, "search")).toEqual({
+      mode: "search",
+      activeTabId: "session-abc",
+    });
   });
 });
 

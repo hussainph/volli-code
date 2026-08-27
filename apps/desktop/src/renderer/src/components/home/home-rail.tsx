@@ -17,6 +17,9 @@
  *    Project Session you closed, which reopens from here.
  *  • **Files** — the Main checkout navigator. It opens preview/pinned File tabs
  *    in Home rather than sending the whole app to a separate nav page.
+ *  • **Search** — find across the same Main checkout (VC-193). The same page
+ *    the ticket rail draws, at this scope: one component, two scopes, exactly
+ *    as the two file navigators are one navigator.
  *
  * WHAT IS DELIBERATELY NOT HERE. The "Mentioned" block the design calls for —
  * the tickets a transcript wrote `@vc-nn` at — needs the backlink mechanism
@@ -34,11 +37,13 @@ import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDot
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { effectiveHarnessId, harnessLabel, venueLooseCount, type Project } from "@volli/shared";
 
 import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
+import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { terminalTabDot, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
@@ -133,6 +138,18 @@ export function HomeRail({
             onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
           />
         ) : null}
+        {mode === "search" ? (
+          // A match opens in the same replaceable preview slot a navigator row
+          // does (decision #56) — the line it lands on is the search panel's
+          // own business, through `editor/reveal-line.ts`.
+          <FileSearchPanel
+            scope={{ kind: "home", projectId: project.id }}
+            root={project.name}
+            onOpenMatch={(relPath) =>
+              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+            }
+          />
+        ) : null}
       </section>
     </div>
   );
@@ -146,7 +163,12 @@ export function HomeRail({
 const HOME_MODE_TABS: readonly RailModeTab<HomeRailMode>[] = HOME_RAIL_MODES.map((key) => ({
   key,
   label: HOME_RAIL_MODE_LABELS[key],
-  icon: { now: ChatCircleDotsIcon, sessions: ClockCounterClockwiseIcon, files: FoldersIcon }[key],
+  icon: {
+    now: ChatCircleDotsIcon,
+    sessions: ClockCounterClockwiseIcon,
+    files: FoldersIcon,
+    search: MagnifyingGlassIcon,
+  }[key],
 }));
 
 /** Now: where this Session runs, and what it is. */

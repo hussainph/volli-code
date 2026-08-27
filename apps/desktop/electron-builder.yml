@@ -41,7 +41,10 @@ directories:
 # xmlchars — jsdom reads files relative to its own package layout at module
 # load, so it is neverBundle'd rather than bundled; bidi-js is imported at
 # module load by @asamuzakjp/dom-selector, whose absence shipped the
-# canary.7 boot crash), and
+# canary.7 boot crash), @vscode/ripgrep (VC-193: find-across-files, kept
+# external for jsdom's reason — its whole body resolves a path relative to its
+# own package — plus its platform binary package, see the optionalDependencies
+# note below), and
 # electron-updater (VC-24) with its own runtime tree
 # (builder-util-runtime -> debug -> ms, sax; fs-extra -> graceful-fs,
 # jsonfile, universalify; js-yaml -> argparse; lazy-val; lodash.escaperegexp;
@@ -55,7 +58,7 @@ files:
   - dist/**
   - dist-electron/**
   - "!dist-electron/*.map"
-  - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@exodus|@img|@trpc|argparse|better-sqlite3|bidi-js|bindings|builder-util-runtime|css-tree|data-urls|debug|decimal.js|detect-libc|electron-updater|entities|file-uri-to-path|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|require-from-string|sax|saxes|semver|sharp|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
+  - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@exodus|@img|@trpc|@vscode|argparse|better-sqlite3|bidi-js|bindings|builder-util-runtime|css-tree|data-urls|debug|decimal.js|detect-libc|electron-updater|entities|file-uri-to-path|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|require-from-string|sax|saxes|semver|sharp|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
   - "!node_modules/@trpc/!(server)/**"
   # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
   # SQLite source, prebuilds/ is the Node-ABI cache that cache-node-sqlite.mjs
@@ -92,6 +95,12 @@ npmRebuild: false
 # installs the same workspace, skips them on `os`/`cpu` instead of failing.
 # arm64-only mirrors the mac target below; an Intel or universal target needs
 # `@img/sharp-darwin-x64` + `@img/sharp-libvips-darwin-x64` beside them.
+#
+# `@vscode/ripgrep-darwin-arm64` is listed there for exactly the same reason
+# and behaves the same way (VC-193): `@vscode/ripgrep` reaches its `rg` binary
+# through an optional per-platform package, which the pnpm collector would not
+# follow on its own. Miss it and `volli:search` reports "Search is unavailable"
+# in the packaged app while `pnpm start` keeps finding matches.
 
 # Native modules cannot load from inside an asar; node-pty also exec()s its
 # sibling spawn-helper binary, and sharp loads native bindings plus libvips from
@@ -101,6 +110,12 @@ asarUnpack:
   - "**/node_modules/node-pty/**"
   - "**/node_modules/sharp/**"
   - "**/node_modules/@img/**"
+  # An executable cannot be spawned from inside an asar, and `rg` is one. The
+  # whole @vscode tree is unpacked rather than just `bin/`: the resolver that
+  # names the binary is `@vscode/ripgrep`'s own ES module, and keeping the two
+  # halves on the same side of the archive is what makes the runtime import
+  # find the file it then reports.
+  - "**/node_modules/@vscode/**"
 
 electronLanguages:
   - en

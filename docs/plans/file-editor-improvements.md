@@ -354,7 +354,26 @@ policy plus one save-contract nuance:
   view for that file (Document Mode's projection already runs on artifacts;
   verify against repo-typical markdown before enabling broadly).
 
-### 4.7 Search across files (M–L)
+### 4.7 Search across files (M–L) — **landed: VC-193**
+
+Shipped as written below. What the ticket settled that the plan left open:
+
+- **The caps are 500 matches and 5 seconds**, and the result names WHICH of
+  them ended it (`limit: "none" | "matches" | "time"`) rather than carrying a
+  bare `truncated` boolean. The two are not the same news — "the first 500" is
+  a list that stops, while a search that ran out of time may have missed
+  matches in files it never reached — and the page says them apart.
+- **The query is literal** (`--fixed-strings`, `--smart-case`). No regex, no
+  match-case toggle, no controls at all: the box is the whole surface.
+- **`.volli/**` is NOT force-included** the way the file index force-includes
+  `.volli/artifacts/`. The rule for search is the one stated here — gitignore
+  decides — and `.volli` self-ignores. Hidden files ARE searched (`.github/`
+  is a place people look) with `.git` and `node_modules` excluded by name.
+- **A click previews and reveals**, joined through a one-slot request in
+  `editor/reveal-line.ts`: the reveal is asked for before the tab opens, so an
+  editor that has to mount and load Monaco first claims it when it is ready,
+  and an already-open one is told immediately. It does not take focus —
+  stepping through matches means clicking the next row.
 
 The last "leave the app to do a basic thing" moment, and the one **Should**
 that needs a real build:

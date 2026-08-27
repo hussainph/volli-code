@@ -2560,6 +2560,7 @@ describe("registerFileIpcHandlers", () => {
   it.each([
     "volli:file-index",
     "volli:file-read",
+    "volli:search",
     "volli:file-write",
     "volli:artifact-create",
     "volli:file-reveal",
@@ -2676,6 +2677,113 @@ describe("registerFileIpcHandlers", () => {
       { projectId: setup.projectId, ticketId: foreign.id },
     );
     expect(result).toEqual({ ok: false, error: "Ticket does not belong to project" });
+  });
+
+  // ---- search scope (VC-193, plan §4.7) -------------------------------------
+  // `volli:search` resolves through the SAME `resolveFileScope` seam a read
+  // does, which is the property that keeps a result row honest: the checkout
+  // that answered the search is the checkout the click on that row opens. The
+  // ripgrep run itself is `file-search.test.ts`'s subject; what these assert is
+  // the scope, the refusals, and the truncation flag crossing the boundary.
+
+  it("searches the ticket's live worktree when given the scope pair, and Main without one", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const worktree = join(makeTempProjectDir(), "ticket-worktree");
+    mkdirSync(worktree, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: worktree });
+    await writeFile(join(setup.projectPath, "main-only.ts"), "const needle = 1;\n", "utf8");
+    await writeFile(join(worktree, "worktree-only.ts"), "const needle = 2;\n", "utf8");
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+
+    const scoped = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:search",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id, query: "needle" },
+    );
+    expect(scoped.ok).toBe(true);
+    if (!scoped.ok) return;
+    expect(scoped.files.map((file) => file.relPath)).toEqual(["worktree-only.ts"]);
+
+    const home = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:search",
+      {},
+      { projectId: setup.projectId, query: "needle" },
+    );
+    expect(home.ok).toBe(true);
+    if (!home.ok) return;
+    expect(home.files.map((file) => file.relPath)).toEqual(["main-only.ts"]);
+  });
+
+  it("degrades a ticket whose worktree folder is gone to the main checkout, exactly as a read does", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "main-only.ts"), "const needle = 1;\n", "utf8");
+    const ticket = testTicket(setup.projectId, {
+      worktreePath: join(makeTempProjectDir(), "missing-worktree"),
+    });
+    insertTicket(ctx.db, ticket);
+
+    const result = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:search",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id, query: "needle" },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.files.map((file) => file.relPath)).toEqual(["main-only.ts"]);
+  });
+
+  it("reports the cap that ended a search rather than presenting a partial list as the whole", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "many.ts"), "needle\n".repeat(600), "utf8");
+
+    const result = await invoke<
+      { ok: true; matches: number; limit: string } | { ok: false; error: string }
+    >("volli:search", {}, { projectId: setup.projectId, query: "needle" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.matches).toBe(500);
+    expect(result.limit).toBe("matches");
+  });
+
+  it("answers an empty query with nothing rather than listing the checkout", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "a.ts"), "const needle = 1;\n", "utf8");
+
+    expect(
+      await invoke<unknown>("volli:search", {}, { projectId: setup.projectId, query: "  " }),
+    ).toEqual({ ok: true, files: [], matches: 0, limit: "none" });
+  });
+
+  it("refuses a search scoped to an unknown or foreign ticket instead of searching Main", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const otherProject = testProject({ path: makeGitRepoDir() });
+    insertProject(ctx.db, otherProject);
+    const foreign = testTicket(otherProject.id, { ticketNumber: 4 });
+    insertTicket(ctx.db, foreign);
+
+    expect(
+      await invoke<unknown>(
+        "volli:search",
+        {},
+        { projectId: setup.projectId, ticketId: "nope", query: "needle" },
+      ),
+    ).toEqual({ ok: false, error: "Unknown ticket" });
+    expect(
+      await invoke<unknown>(
+        "volli:search",
+        {},
+        { projectId: setup.projectId, ticketId: foreign.id, query: "needle" },
+      ),
+    ).toEqual({ ok: false, error: "Ticket does not belong to project" });
+    expect(
+      await invoke<unknown>("volli:search", {}, { projectId: "nope", query: "needle" }),
+    ).toEqual({ ok: false, error: "Unknown project" });
   });
 
   it("answers prompt-templates with both tiers, the project's name winning", async () => {

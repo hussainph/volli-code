@@ -68,7 +68,15 @@ const packedElectronDeps = {
   // electron-builder.yml whitelists its tree.
   // sharp loads its platform binary and libvips files relative to its package;
   // keep it external just like jsdom, then ship/unpack that tree explicitly.
-  neverBundle: ["electron", "jsdom", "sharp"],
+  //
+  // @vscode/ripgrep (VC-193) is the same shape as jsdom for the same reason:
+  // its entire body is a `require.resolve("@vscode/ripgrep-<platform>-<arch>/
+  // bin/rg")` that answers relative to ITS OWN package directory. Inlined into
+  // dist-electron/main.cjs that lookup runs from dist-electron instead, where
+  // pnpm's strict layout has no such package to find — search would be broken
+  // in development and in the packaged app alike. Keep it a runtime import of
+  // the real package, then ship and unpack the tree (electron-builder.yml).
+  neverBundle: ["electron", "jsdom", "sharp", "@vscode/ripgrep"],
 };
 
 export default defineConfig(({ mode }) => ({
@@ -163,6 +171,11 @@ export default defineConfig(({ mode }) => ({
         // silently answered "Main" inside a Ticket workspace would open the
         // wrong file with no error anywhere.
         "src/components/files/quick-open-model.ts",
+        // Search's own decisions (VC-193): the scope pair a query is sent
+        // under, and what the page says when a cap ended the search. Enrolled
+        // for the second one especially — a truncated result presented as the
+        // whole answer is a lie no view test would catch.
+        "src/components/files/search-model.ts",
         // What the navigators' inline field is allowed to mean (VC-191). Pure
         // `.ts` beside the panels for the gate's sake: this is the last place a
         // typed name is judged before it becomes a path main creates, renames
@@ -258,6 +271,11 @@ export default defineConfig(({ mode }) => ({
         // whether there is one at all — a pure `.ts` beside the two editor
         // components precisely so the gate can reach it.
         "src/editor/go-to-line.ts",
+        // And where a search result lands (VC-193). Module state with a single
+        // pending slot: the failure it guards against — an unclaimed request
+        // resurfacing as a jump in a file opened for another reason — is
+        // invisible except in a test that can reach the slot.
+        "src/editor/reveal-line.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-runtime.ts",

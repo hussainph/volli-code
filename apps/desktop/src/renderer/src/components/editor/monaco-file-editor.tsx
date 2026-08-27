@@ -6,6 +6,7 @@ import { errorMessage } from "@volli/shared";
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import { documentIdentityKey, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { surfaceGoToLine } from "@renderer/editor/go-to-line";
+import { applyFileReveal, onFileReveal, takeFileReveal } from "@renderer/editor/reveal-line";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import {
   applyLiveDocumentReconciliation,
@@ -149,6 +150,12 @@ export interface MonacoFileEditorProps {
   options?: MonacoDocumentOptions;
   /** Attaches Document Mode (or anything else) to this view's editor. */
   contribute?: MonacoEditorContribution;
+  /**
+   * The document's reveal key (`editor/reveal-line.ts`) — how a search result
+   * that opened this file says WHERE in it to land (VC-193). Omitted by a host
+   * with no such gesture; an editor without one simply never checks the slot.
+   */
+  revealKey?: string;
   /** Cursor/folding/scroll persisted by the store, used when the registry has none. */
   initialViewState?: unknown;
   /** Emitted when this view releases, so the store can persist the view state. */
@@ -279,6 +286,7 @@ export function MonacoFileEditor({
   onDirtyChange,
   options,
   contribute,
+  revealKey,
   initialViewState,
   onViewStateChange,
 }: MonacoFileEditorProps) {
@@ -313,6 +321,7 @@ export function MonacoFileEditor({
     initialViewState,
     options,
     contribute,
+    revealKey,
   });
   liveRef.current = {
     readOnly,
@@ -323,6 +332,7 @@ export function MonacoFileEditor({
     initialViewState,
     options,
     contribute,
+    revealKey,
   };
 
   const syncDirty = React.useCallback(() => {
@@ -401,6 +411,7 @@ export function MonacoFileEditor({
     let changeSubscription: { dispose(): void } | null = null;
     let contribution: { dispose(): void } | null = null;
     let goToLine: { dispose(): void } | null = null;
+    let revealSubscription: (() => void) | null = null;
     host.dataset.monacoStatus = "loading";
 
     void loadMonacoRuntime()
@@ -483,6 +494,22 @@ export function MonacoFileEditor({
           syncDirty();
         });
 
+        // Land on a match (VC-193). Both halves of the race are served here:
+        // the click that OPENED this tab left its request in the slot while
+        // Monaco was still loading, and a click made from now on arrives
+        // through the subscription. Neither can double-apply — the slot is
+        // taken, not read.
+        const revealTarget = liveRef.current.revealKey;
+        if (revealTarget !== undefined) {
+          const view = editorView;
+          const landOnPending = (): void => {
+            const target = takeFileReveal(revealTarget);
+            if (target !== null) applyFileReveal(view, target);
+          };
+          revealSubscription = onFileReveal(revealTarget, landOnPending);
+          landOnPending();
+        }
+
         const language = lease.snapshot().language;
         host.dataset.monacoStatus = "ready";
         host.dataset.monacoLanguage = language;
@@ -510,6 +537,8 @@ export function MonacoFileEditor({
         contribution = null;
         goToLine?.dispose();
         goToLine = null;
+        revealSubscription?.();
+        revealSubscription = null;
         changeSubscription?.dispose();
         changeSubscription = null;
         editorView?.dispose();
@@ -530,6 +559,7 @@ export function MonacoFileEditor({
       // to it, and its provider registrations are global.
       contribution?.dispose();
       goToLine?.dispose();
+      revealSubscription?.();
       changeSubscription?.dispose();
       if (leaseRef.current?.key === key) leaseRef.current = null;
       editorRef.current = null;
