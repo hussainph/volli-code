@@ -11,6 +11,7 @@ function draw(tabs: readonly HomeTabDescriptor[], activeTabId: string): string {
   return renderToStaticMarkup(
     <TooltipProvider>
       <HomeTabStrip
+        projectId="project-1"
         tabs={tabs}
         activeTabId={activeTabId}
         onSelect={noop}

@@ -34,9 +34,11 @@ import {
   isArtifactRelPath,
   isSafeRelPath,
   isValidNewArtifactName,
+  isVolliRelPath,
   projectArtifactsDir,
   projectCommandsDir,
   projectSkillsDir,
+  resolveFileRoot,
   VOLLI_ARTIFACTS_REL_DIR,
   VOLLI_GITIGNORE_CONTENT,
   volliDir,
@@ -174,26 +176,9 @@ export async function ensureProjectArtifactsDir(projectPath: string): Promise<vo
 
 // ---- resolution + path safety ------------------------------------------------
 
-/** Whether a project-relative path is (or is under) `.volli/` — always resolved against the MAIN checkout. */
-function isVolliRelPath(relPath: string): boolean {
-  return relPath === ".volli" || relPath.startsWith(".volli/");
-}
-
-/**
- * The resolved root + source for a relPath (decision #6): `.volli/**` always
- * resolves to the MAIN checkout; any other path resolves to the ticket's live
- * worktree when one is given, else the main checkout.
- */
-function resolveRootFor(
-  projectPath: string,
-  worktreeRoot: string | null,
-  relPath: string,
-): { root: string; source: FileSource } {
-  if (worktreeRoot !== null && !isVolliRelPath(relPath)) {
-    return { root: worktreeRoot, source: "worktree" };
-  }
-  return { root: projectPath, source: "main" };
-}
+// The resolved root + source for a relPath (decision #6) is `resolveFileRoot`
+// in `@volli/shared`: the renderer's Copy Path has to name the same file this
+// module would open, so the rule is stated once and tested once.
 
 /**
  * SEAM (global-artifacts decision #6): a ticket's live worktree root, or `null`
@@ -305,7 +290,7 @@ async function resolveSafePath(
   relPath: string,
   options: { allowRoot?: boolean } = {},
 ): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
-  const { root, source } = resolveRootFor(projectPath, worktreeRoot, relPath);
+  const { root, source } = resolveFileRoot({ projectPath, worktreePath: worktreeRoot, relPath });
   // The one caller that names a ROOT is the ticket-repository external-app
   // action. It never receives a renderer-supplied absolute path: `root` came
   // from resolveFileScope's project/ticket lookup, and realpath canonicalizes

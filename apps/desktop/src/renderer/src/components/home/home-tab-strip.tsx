@@ -12,6 +12,8 @@ import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
 import type { SkillReference } from "@volli/shared";
 
+import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
+import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
@@ -65,6 +67,12 @@ export type HomeTabDescriptor =
 export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
 
 interface HomeTabStripProps {
+  /**
+   * The project whose Main checkout Home's File tabs come from — what Copy Path
+   * resolves against. Home has no ticket, so those paths never resolve into a
+   * worktree copy.
+   */
+  projectId: string;
   tabs: readonly HomeTabDescriptor[];
   activeTabId: string;
   onSelect(tab: HomeTabDescriptor): void;
@@ -116,6 +124,7 @@ interface HomeTabStripProps {
  * #51), and a chat Session holds none.
  */
 export function HomeTabStrip({
+  projectId,
   tabs,
   activeTabId,
   onSelect,
@@ -201,6 +210,7 @@ export function HomeTabStrip({
           return (
             <HomeFileTab
               key={descriptor.id}
+              projectId={projectId}
               tab={descriptor}
               active={active}
               tabStop={tabStop}
@@ -288,13 +298,14 @@ function BoardTab({
  * One Main-checkout File tab.
  *
  * These are main-checkout files, opened out of the same `FileWorkspaceState`
- * reducer ticket File tabs share, and this tab carries its own menu: Keep
- * Open (disabled once pinned, so the menu keeps one shape), Close, Close
- * Others. The ticket strip differs because a pinned ticket File tab has no
- * menu at all, which would leave Home's keyboard users with no route to
- * Close.
+ * reducer ticket File tabs share, and this tab carries its own menu: the two
+ * Copy Path items, Word Wrap, then Keep Open (disabled once pinned, so the menu
+ * keeps one shape), Close, Close Others. The ticket strip differs because a
+ * pinned ticket File tab has no menu at all, which would leave Home's keyboard
+ * users with no route to Close.
  */
 function HomeFileTab({
+  projectId,
   tab,
   active,
   tabStop,
@@ -303,6 +314,7 @@ function HomeFileTab({
   onClose,
   onCloseOthers,
 }: {
+  projectId: string;
   tab: Extract<HomeTabDescriptor, { kind: "file" }>;
   active: boolean;
   tabStop: boolean;
@@ -335,6 +347,10 @@ function HomeFileTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <CopyPathContextMenuItems target={{ projectId, relPath: tab.relPath }} />
+        <ContextMenuSeparator />
+        <WordWrapContextMenuItem />
+        <ContextMenuSeparator />
         <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -13,9 +14,11 @@ import { runAutomationOnTicket } from "@renderer/components/automations/run-auto
 import {
   buildAutomationRunItems,
   buildCommandPaletteItems,
+  buildEditorCommandItems,
   paletteRunContext,
   type CommandPaletteItems,
 } from "@renderer/components/command-palette-model";
+import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
@@ -103,6 +106,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     selectedProjectId === null ? [] : (automationsByProject[selectedProjectId] ?? []),
     runContext,
   );
+
+  // Read at render rather than subscribed to: which editor is live is answered
+  // at the moment a row runs, and the palette re-renders whenever it opens.
+  const editorCommands = buildEditorCommandItems(open && canGoToLine());
 
   // Closed and invisible: every board/session mutation would otherwise
   // re-run this projects×tickets×sessions rebuild for nothing. Gating on
@@ -261,6 +268,37 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 </span>
               </Command.Item>
             ) : null}
+          </Command.Group>
+        ) : null}
+
+        {editorCommands.length > 0 ? (
+          <Command.Group heading="Editor" className={MENU_LABEL_CMDK}>
+            {editorCommands.map((item) => (
+              <Command.Item
+                key={`editor:${item.id}`}
+                value={`go to line jump ${item.title}`}
+                keywords={["go to line", "goto", "jump", "line number"]}
+                onSelect={() => {
+                  finishNavigation();
+                  // After the dialog is gone: Monaco's line prompt is an overlay
+                  // widget of the editor and needs the focus this dialog is
+                  // still holding — and hands back on close.
+                  requestAnimationFrame(() => {
+                    if (!runGoToLine()) {
+                      toastError("Couldn't go to line: no editor is open.");
+                    }
+                  });
+                }}
+                className={PALETTE_ROW}
+              >
+                <ListNumbersIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ui font-medium">{item.title}</span>
+                  <span className="truncate text-label text-muted-foreground">{item.hint}</span>
+                </span>
+                <span className="shrink-0 text-label text-muted-foreground">⌃G</span>
+              </Command.Item>
+            ))}
           </Command.Group>
         ) : null}
 

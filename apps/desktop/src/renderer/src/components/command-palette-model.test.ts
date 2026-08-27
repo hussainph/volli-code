@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildAutomationRunItems,
   buildCommandPaletteItems,
+  buildEditorCommandItems,
   paletteRunContext,
 } from "./command-palette-model";
 import { projectScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
@@ -243,5 +244,24 @@ describe("buildAutomationRunItems", () => {
 
   it("offers no run rows without a target Ticket", () => {
     expect(buildAutomationRunItems([automation()], null)).toEqual([]);
+  });
+});
+
+describe("buildEditorCommandItems", () => {
+  it("offers Go to Line when an editor is on screen to answer it", () => {
+    expect(buildEditorCommandItems(true)).toEqual([
+      {
+        kind: "editor-command",
+        id: "go-to-line",
+        title: "Go to Line…",
+        hint: "In the editor you were last in",
+      },
+    ]);
+  });
+
+  it("offers nothing when no editor is open", () => {
+    // A row that opened a line prompt over no document would be a lie the
+    // palette tells before the user even presses it.
+    expect(buildEditorCommandItems(false)).toEqual([]);
   });
 });

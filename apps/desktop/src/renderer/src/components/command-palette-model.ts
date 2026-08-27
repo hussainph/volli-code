@@ -181,6 +181,38 @@ export function buildAutomationRunItems(
   }));
 }
 
+/* ---------------------------------------------------------------- editor */
+
+/**
+ * One editor command the palette offers — today exactly one, Go to Line
+ * (plan §4.1). Monaco has always had the action and a ⌃G binding; what it had
+ * no way of saying is that the command exists at all. This row is that saying.
+ */
+export interface CommandPaletteEditorItem {
+  kind: "editor-command";
+  id: "go-to-line";
+  title: string;
+  hint: string;
+}
+
+/**
+ * The editor rows, given whether an editor is actually on screen to answer
+ * them. Nothing open means no rows rather than a row that would open a line
+ * prompt over no document — the same stance `buildAutomationRunItems` takes
+ * about a run with no Ticket to run on.
+ */
+export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEditorItem[] {
+  if (!editorOpen) return [];
+  return [
+    {
+      kind: "editor-command",
+      id: "go-to-line",
+      title: "Go to Line…",
+      hint: "In the editor you were last in",
+    },
+  ];
+}
+
 /**
  * The open Ticket as a run target, or null. Resolved against the project's
  * live ticket list — `openTicketId` is remembered workspace state and may

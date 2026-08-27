@@ -164,6 +164,28 @@ describe("diffPresentation", () => {
   });
 });
 
+describe("wordWrap", () => {
+  it("wraps by default — what the editor did before there was a control", () => {
+    expect(createUiStore(createMemoryStorage()).getState().wordWrap).toBe(true);
+  });
+
+  it("toggles and sets from either kind of control", () => {
+    const store = createUiStore(createMemoryStorage());
+
+    store.getState().toggleWordWrap();
+    expect(store.getState().wordWrap).toBe(false);
+
+    store.getState().toggleWordWrap();
+    expect(store.getState().wordWrap).toBe(true);
+
+    store.getState().setWordWrap(false);
+    expect(store.getState().wordWrap).toBe(false);
+
+    store.getState().setWordWrap(true);
+    expect(store.getState().wordWrap).toBe(true);
+  });
+});
+
 describe("defaultExternalAppId", () => {
   it("round-trips a chosen app id", () => {
     const storage = createMemoryStorage();
@@ -405,6 +427,7 @@ describe("persistence", () => {
     store.getState().setHomeRailMode("sessions");
     store.getState().setHomeEmptyVisual("board");
     store.getState().setDiffPresentation("side-by-side");
+    store.getState().setWordWrap(false);
     store.getState().setCostVisible(false);
     store.getState().dismissEnvironmentFault("login-path-unreadable");
 
@@ -423,6 +446,7 @@ describe("persistence", () => {
       homeEmptyVisual: "board",
       costVisible: false,
       diffPresentation: "side-by-side",
+      wordWrap: false,
       defaultExternalAppId: null,
       dismissedEnvironmentFaults: ["login-path-unreadable"],
     });
@@ -494,6 +518,30 @@ describe("persistence", () => {
       }),
     );
     expect(createUiStore(nonString).getState().diffPresentation).toBe("inline");
+  });
+
+  it("rehydrates wordWrap; only an explicit false turns wrapping off", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setWordWrap(false);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().wordWrap).toBe(false);
+
+    // Older state without the key, and corrupt JSON, both keep wrapping on — a
+    // preference nobody turned off must not arrive turned off.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().wordWrap).toBe(true);
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1, wordWrap: "off" }, version: 1 }),
+    );
+    expect(createUiStore(corrupt).getState().wordWrap).toBe(true);
   });
 
   it("ignores a retired lastHarnessId left in older persisted state", () => {

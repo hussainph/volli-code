@@ -65,6 +65,12 @@
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
  *
+ * `wordWrap` — whether the source editor and the diff wrap long lines. Persisted
+ * app-wide for exactly the reasons `diffPresentation` is, and deliberately not
+ * per file: wrapping is how a person reads code, not a fact about one document.
+ * Defaults ON, which is what `SOURCE_MODE_OPTIONS` hardcoded before there was a
+ * control, so an existing install sees no change until it asks for one.
+ *
  * `defaultExternalAppId` — a chosen external app, or explicit `null` for Ask
  * every time. It is app-wide chrome too; a successful Launch Services listing
  * resolves an app removed since the choice was saved back to asking.
@@ -131,6 +137,9 @@ export const RAIL_MAX_WIDTH = 560;
 export type DiffPresentation = "inline" | "side-by-side";
 
 const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
+
+/** Wrapping is what the editor did before it was askable; keep that the default. */
+const DEFAULT_WORD_WRAP = true;
 
 /** A chosen external app, or the explicit preference to ask on every open. */
 export type DefaultExternalAppId = ExternalAppId | null;
@@ -220,6 +229,16 @@ function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
   return presentation === "inline" || presentation === "side-by-side"
     ? presentation
     : DEFAULT_DIFF_PRESENTATION;
+}
+
+/**
+ * A persisted word-wrap choice. Anything but an explicit `false` wraps — the
+ * same discipline `costVisible` and `sidebarPinned` follow: a missing key or
+ * corrupt JSON lands on the visible default rather than silently turning a
+ * behaviour off that the reader never turned off.
+ */
+function sanitizeWordWrap(wordWrap: unknown): boolean {
+  return wordWrap !== false;
 }
 
 /**
@@ -317,6 +336,8 @@ interface UiState {
   costVisible: boolean;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
+  /** Wrap long lines in the source editor and the diff. Persisted app-wide. */
+  wordWrap: boolean;
   /** Chosen external app, or explicit Ask every time. Persisted app-wide. */
   defaultExternalAppId: DefaultExternalAppId;
   /**
@@ -364,6 +385,9 @@ interface UiState {
   setHomeEmptyVisual(visual: EmptyVisual): void;
   setCostVisible(visible: boolean): void;
   setDiffPresentation(presentation: DiffPresentation): void;
+  setWordWrap(wordWrap: boolean): void;
+  /** The one gesture every word-wrap control makes — a band button, a menu item. */
+  toggleWordWrap(): void;
   setDefaultExternalAppId(appId: DefaultExternalAppId): void;
   /**
    * Reconcile the persisted choice against a successful Launch Services list.
@@ -415,6 +439,7 @@ type PersistedUiState = Pick<
   | "homeEmptyVisual"
   | "costVisible"
   | "diffPresentation"
+  | "wordWrap"
   | "defaultExternalAppId"
   | "dismissedEnvironmentFaults"
 > & {
@@ -450,6 +475,7 @@ export function createUiStore(storage?: StateStorage) {
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         costVisible: true,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
+        wordWrap: DEFAULT_WORD_WRAP,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
         dismissedEnvironmentFaults: [],
         terminalFocusTarget: null,
@@ -477,6 +503,8 @@ export function createUiStore(storage?: StateStorage) {
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setCostVisible: (visible) => set({ costVisible: visible }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
+        setWordWrap: (wordWrap) => set({ wordWrap }),
+        toggleWordWrap: () => set((state) => ({ wordWrap: !state.wordWrap })),
         setDefaultExternalAppId: (appId) => set({ defaultExternalAppId: appId }),
         reconcileDefaultExternalApp: (apps) =>
           set((state) =>
@@ -532,6 +560,7 @@ export function createUiStore(storage?: StateStorage) {
           homeEmptyVisual: state.homeEmptyVisual,
           costVisible: state.costVisible,
           diffPresentation: state.diffPresentation,
+          wordWrap: state.wordWrap,
           defaultExternalAppId: state.defaultExternalAppId,
           dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
         }),
@@ -576,6 +605,7 @@ export function createUiStore(storage?: StateStorage) {
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
+            wordWrap: sanitizeWordWrap(stored.wordWrap),
             defaultExternalAppId: sanitizeDefaultExternalAppId(stored.defaultExternalAppId),
             // A dismissal only survives while this build still raises its kind.
             dismissedEnvironmentFaults: sanitizeEnvironmentFaults(

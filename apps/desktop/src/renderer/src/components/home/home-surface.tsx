@@ -354,6 +354,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     <>
       {stripVisible && selectedId !== null ? (
         <HomeTabs
+          projectId={selectedId}
           terminalTabs={terminalTabs}
           chatIds={openChatIds}
           fileTabs={fileTabs}
@@ -472,6 +473,7 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
  * neither moved.
  */
 function HomeTabs({
+  projectId,
   terminalTabs,
   chatIds,
   fileTabs,
@@ -491,6 +493,8 @@ function HomeTabs({
   railTogglable,
   onToggleRail,
 }: {
+  /** Home's file tabs are Main-checkout files of THIS project (Copy Path). */
+  projectId: string;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -551,6 +555,7 @@ function HomeTabs({
 
   return (
     <HomeTabStrip
+      projectId={projectId}
       tabs={tabs}
       activeTabId={activeTabId}
       creating={creating}

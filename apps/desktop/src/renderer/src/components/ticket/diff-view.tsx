@@ -17,7 +17,7 @@ import {
 } from "@renderer/components/editor/monaco-diff-editor";
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import type { MonacoFileSaveResult } from "@renderer/components/editor/monaco-file-editor";
-import { DiffPresentationToggle } from "@renderer/components/ticket/diff-presentation-toggle";
+import { DiffControlBand } from "@renderer/components/ticket/diff-presentation-toggle";
 import { DiffStub } from "@renderer/components/ticket/diff-stub";
 import {
   applyDiffLiveReconciliation,
@@ -111,6 +111,8 @@ export function DiffView({
   const [liveError, setLiveError] = React.useState<string | null>(null);
   const presentation = useUiStore((s) => s.diffPresentation);
   const setDiffPresentation = useUiStore((s) => s.setDiffPresentation);
+  const wordWrap = useUiStore((s) => s.wordWrap);
+  const toggleWordWrap = useUiStore((s) => s.toggleWordWrap);
   const leasesRef = React.useRef<DiffLeases | null>(null);
   /** In-flight guard for the conflict banner's explicit overwrite. */
   const writingRef = React.useRef(false);
@@ -578,7 +580,12 @@ export function DiffView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <DiffPresentationToggle presentation={presentation} onChange={setDiffPresentation} />
+      <DiffControlBand
+        presentation={presentation}
+        onPresentationChange={setDiffPresentation}
+        wordWrap={wordWrap}
+        onToggleWordWrap={toggleWordWrap}
+      />
       {liveError !== null ? (
         <LiveReconciliationAffordance kind="error" message={liveError} />
       ) : null}
@@ -593,6 +600,7 @@ export function DiffView({
         originalLease={state.leases.original}
         modifiedLease={state.leases.modified}
         presentation={presentation}
+        wordWrap={wordWrap}
         modifiedReadOnly={state.plan.modifiedReadOnly || liveError !== null}
         ariaLabel={`${baseNameOf(relPath)} diff`}
         onSave={handleSave}
