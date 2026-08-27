@@ -49,6 +49,8 @@ const {
     typescript: {
       getTypeScriptWorker: vi.fn(),
       getJavaScriptWorker: vi.fn(),
+      typescriptDefaults: { setCompilerOptions: vi.fn(), setDiagnosticsOptions: vi.fn() },
+      javascriptDefaults: { setCompilerOptions: vi.fn(), setDiagnosticsOptions: vi.fn() },
     },
   },
 }));
@@ -79,17 +81,29 @@ vi.mock("monaco-editor/language/typescript/ts.worker?worker", () => ({
 vi.mock("monaco-editor", () => monacoModule);
 
 import {
+  configureTypeScriptDefaults,
   createLazyInitializer,
   createShikiBackedModelFactory,
+  ensureProjectTypeScriptDefaults,
   externalEditOperations,
   initializeMonacoRuntime,
   mapCodeEditorViewState,
   MAX_VIEW_STATE_LOGICAL_LINES,
+  parseTsconfigOptions,
   prepareMonacoEditorThemes,
+  projectFileScope,
+  readProjectTypeScriptOptions,
+  resetProjectTypeScriptDefaultsForTests,
+  resolveExtendedTsconfigPath,
   startModelLanguageWorker,
+  stripJsonComments,
+  tsconfigCandidatePaths,
+  typeScriptCompilerOptions,
+  UNRESOLVABLE_MODULE_DIAGNOSTIC_CODES,
   waitForLanguageWorkerRegistration,
   workerKindForLabel,
 } from "./monaco-runtime";
+import type { DocumentIdentity } from "./document-identity";
 import { resetMonacoEditorThemeForTests } from "./monaco-theme";
 
 interface FakeRange {
@@ -274,7 +288,9 @@ function runtimeWithWorkers() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   resetMonacoEditorThemeForTests();
+  resetProjectTypeScriptDefaultsForTests();
   bootstrapShikiMonaco.mockResolvedValue({
     highlighter: {
       getLoadedThemes: () => ["vitesse-light", "vitesse-dark"],
@@ -374,6 +390,25 @@ describe("initializeMonacoRuntime", () => {
     expect(runtime.monaco.languages).toBe(monacoModule.languages);
     expect(runtime.registry).toBeDefined();
     expect(runtime.shiki).toBeDefined();
+  });
+
+  /**
+   * Before any model can exist, so the first TS/JS file ever opened is checked
+   * under the honest configuration rather than monaco's unconfigured defaults.
+   */
+  it("configures the TypeScript and JavaScript defaults once per runtime load", async () => {
+    await initializeMonacoRuntime();
+
+    for (const defaults of [
+      monacoModule.typescript.typescriptDefaults,
+      monacoModule.typescript.javascriptDefaults,
+    ]) {
+      expect(defaults.setCompilerOptions).toHaveBeenCalledTimes(1);
+      expect(defaults.setDiagnosticsOptions).toHaveBeenCalledTimes(1);
+    }
+    expect(monacoModule.typescript.typescriptDefaults.setCompilerOptions).toHaveBeenCalledWith(
+      typeScriptCompilerOptions({}),
+    );
   });
 });
 
@@ -1386,5 +1421,650 @@ describe("startModelLanguageWorker", () => {
     );
     expect(seams[factoryKey]).toHaveBeenCalledTimes(1);
     expect(seams[workerKey]).toHaveBeenCalledWith(uri);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Honest TS/JS diagnostics on single-file models (plan §4.2)
+// ---------------------------------------------------------------------------
+
+/** A stand-in for monaco's two language-service default objects. */
+function defaultsHost() {
+  const typescriptDefaults = {
+    setCompilerOptions: vi.fn(),
+    setDiagnosticsOptions: vi.fn(),
+  };
+  const javascriptDefaults = {
+    setCompilerOptions: vi.fn(),
+    setDiagnosticsOptions: vi.fn(),
+  };
+  return {
+    host: { typescript: { typescriptDefaults, javascriptDefaults } },
+    typescriptDefaults,
+    javascriptDefaults,
+  };
+}
+
+describe("typeScriptCompilerOptions", () => {
+  it("is permissive when the project says nothing", () => {
+    expect(typeScriptCompilerOptions({})).toEqual({
+      allowNonTsExtensions: true,
+      allowJs: true,
+      module: 99,
+      target: 99,
+      jsx: 4,
+      strict: false,
+      experimentalDecorators: false,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
+      resolveJsonModule: true,
+      skipLibCheck: true,
+      noEmit: true,
+      noImplicitAny: false,
+    });
+  });
+
+  it("omits `lib` entirely when the project names none, leaving the target's default", () => {
+    expect(typeScriptCompilerOptions({})).not.toHaveProperty("lib");
+  });
+
+  /** `module` decides which syntax is LEGAL here; nothing is ever emitted. */
+  it("keeps modern module syntax legal whatever the project's target", () => {
+    expect(typeScriptCompilerOptions({ target: "ES2015" })).toMatchObject({
+      target: 2,
+      module: 99,
+    });
+  });
+
+  it.each([
+    ["react-jsx", 4],
+    ["React-JSX", 4],
+    ["preserve", 1],
+    ["react", 2],
+    ["react-native", 3],
+    ["react-jsxdev", 5],
+    ["none", 0],
+  ])("adopts the project's jsx %s", (jsx, expected) => {
+    expect(typeScriptCompilerOptions({ jsx })).toMatchObject({ jsx: expected });
+  });
+
+  it.each([
+    ["ES5", 1],
+    ["es2022", 9],
+    ["ESNext", 99],
+    ["Latest", 99],
+  ])("adopts the project's target %s", (target, expected) => {
+    expect(typeScriptCompilerOptions({ target })).toMatchObject({ target: expected });
+  });
+
+  it("falls back to permissive values for spellings it does not know", () => {
+    expect(typeScriptCompilerOptions({ jsx: "solid", target: "es2099" })).toMatchObject({
+      jsx: 4,
+      target: 99,
+    });
+  });
+
+  it("adopts strict and experimentalDecorators", () => {
+    expect(typeScriptCompilerOptions({ strict: true, experimentalDecorators: true })).toMatchObject(
+      {
+        strict: true,
+        experimentalDecorators: true,
+      },
+    );
+  });
+
+  /**
+   * The cascade guard. An unresolved import types as `any`, so `noImplicitAny`
+   * would light up every callback parameter and JSX intrinsic downstream of it
+   * for a reason that is ours, not the file's.
+   */
+  it("never lets a strict project turn noImplicitAny back on", () => {
+    expect(typeScriptCompilerOptions({ strict: true })).toMatchObject({
+      strict: true,
+      noImplicitAny: false,
+    });
+  });
+
+  it("translates tsconfig lib spellings into the worker's file names", () => {
+    expect(typeScriptCompilerOptions({ lib: ["ESNext", "DOM", "DOM.Iterable"] })).toMatchObject({
+      lib: ["lib.esnext.d.ts", "lib.dom.d.ts", "lib.dom.iterable.d.ts"],
+    });
+  });
+
+  /** A lib the worker cannot produce replaces the whole standard library with nothing. */
+  it("drops lib names monaco does not ship", () => {
+    expect(typeScriptCompilerOptions({ lib: ["ESNext", "ES2099", "nonsense"] })).toMatchObject({
+      lib: ["lib.esnext.d.ts"],
+    });
+  });
+
+  it("omits lib rather than passing an empty one when no name survives", () => {
+    expect(typeScriptCompilerOptions({ lib: ["ES2099"] })).not.toHaveProperty("lib");
+  });
+});
+
+describe("configureTypeScriptDefaults", () => {
+  it("writes the compiler options to both languages", () => {
+    const { host, typescriptDefaults, javascriptDefaults } = defaultsHost();
+    const options = typeScriptCompilerOptions({ strict: true });
+
+    configureTypeScriptDefaults(host, options);
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenCalledWith(options);
+    expect(javascriptDefaults.setCompilerOptions).toHaveBeenCalledWith({
+      ...options,
+      checkJs: false,
+    });
+  });
+
+  it("ignores the unresolvable-module family on both languages", () => {
+    const { host, typescriptDefaults, javascriptDefaults } = defaultsHost();
+
+    configureTypeScriptDefaults(host, typeScriptCompilerOptions({}));
+
+    for (const defaults of [typescriptDefaults, javascriptDefaults]) {
+      const [options] = defaults.setDiagnosticsOptions.mock.calls[0] as [
+        { diagnosticCodesToIgnore: number[] },
+      ];
+      expect(options.diagnosticCodesToIgnore).toEqual([...UNRESOLVABLE_MODULE_DIAGNOSTIC_CODES]);
+    }
+  });
+
+  /** Cannot-find-module and friends; every code that names something IN the file stays. */
+  it("suppresses only diagnostics about modules and types packages", () => {
+    expect([...UNRESOLVABLE_MODULE_DIAGNOSTIC_CODES].toSorted((a, b) => a - b)).toEqual([
+      2306, 2307, 2580, 2581, 2582, 2591, 2592, 2593, 2688, 2792, 2875, 7016,
+    ]);
+    for (const stillRed of [
+      2304, // Cannot find name '{0}'.
+      2322, // Type '{0}' is not assignable to type '{1}'.
+      2339, // Property '{0}' does not exist on type '{1}'.
+      2554, // Expected {0} arguments, but got {1}.
+      18046, // '{0}' is of type 'unknown'.
+    ]) {
+      expect(UNRESOLVABLE_MODULE_DIAGNOSTIC_CODES).not.toContain(stillRed);
+    }
+  });
+
+  it("keeps syntax validation on for every file", () => {
+    const { host, typescriptDefaults, javascriptDefaults } = defaultsHost();
+
+    configureTypeScriptDefaults(host, typeScriptCompilerOptions({}));
+
+    expect(typescriptDefaults.setDiagnosticsOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ noSyntaxValidation: false }),
+    );
+    expect(javascriptDefaults.setDiagnosticsOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ noSyntaxValidation: false }),
+    );
+  });
+
+  /**
+   * `setDiagnosticsOptions` REPLACES the object, so stating only the ignore
+   * list would silently switch JavaScript's semantic validation on — monaco
+   * ships it off, and without `checkJs` there are no types to check against.
+   */
+  it("keeps monaco's semantic split: on for TypeScript, off for JavaScript", () => {
+    const { host, typescriptDefaults, javascriptDefaults } = defaultsHost();
+
+    configureTypeScriptDefaults(host, typeScriptCompilerOptions({}));
+
+    expect(typescriptDefaults.setDiagnosticsOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ noSemanticValidation: false }),
+    );
+    expect(javascriptDefaults.setDiagnosticsOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ noSemanticValidation: true }),
+    );
+  });
+});
+
+describe("stripJsonComments", () => {
+  it("removes line and block comments", () => {
+    expect(stripJsonComments('{ // one\n /* two\n three */ "a": 1 }')).toBe('{ \n  "a": 1 }');
+  });
+
+  it("leaves comment-looking text inside strings alone", () => {
+    expect(stripJsonComments('{ "a": "http://x/y", "b": "/* not a comment */" }')).toBe(
+      '{ "a": "http://x/y", "b": "/* not a comment */" }',
+    );
+  });
+
+  it("survives an escaped quote inside a string", () => {
+    expect(stripJsonComments('{ "a": "say \\" // no" }')).toBe('{ "a": "say \\" // no" }');
+  });
+
+  it("drops trailing commas in objects and arrays", () => {
+    expect(JSON.parse(stripJsonComments('{ "a": [1, 2,], "b": 3, }'))).toEqual({
+      a: [1, 2],
+      b: 3,
+    });
+  });
+
+  it("keeps separating commas", () => {
+    expect(JSON.parse(stripJsonComments('{ "a": 1, "b": 2 }'))).toEqual({ a: 1, b: 2 });
+  });
+
+  it("tolerates a backslash at the very end of the text", () => {
+    expect(stripJsonComments('{ "a": "x\\')).toBe('{ "a": "x\\');
+  });
+
+  it("tolerates an unterminated block comment", () => {
+    expect(stripJsonComments('{ "a": 1 } /* and then')).toBe('{ "a": 1 } ');
+  });
+
+  it("tolerates a line comment at end of file", () => {
+    expect(stripJsonComments('{ "a": 1 } // done')).toBe('{ "a": 1 } ');
+  });
+});
+
+describe("parseTsconfigOptions", () => {
+  it("reads the five fields a single-file model cannot guess", () => {
+    expect(
+      parseTsconfigOptions(`{
+        "compilerOptions": {
+          "jsx": "react-jsx",
+          "target": "ESNext",
+          "lib": ["ESNext", "DOM"],
+          "strict": true,
+          "experimentalDecorators": true,
+          "outDir": "dist"
+        }
+      }`),
+    ).toEqual({
+      options: {
+        jsx: "react-jsx",
+        target: "ESNext",
+        lib: ["ESNext", "DOM"],
+        strict: true,
+        experimentalDecorators: true,
+      },
+      extends: [],
+    });
+  });
+
+  /** This repository's own `apps/desktop/tsconfig.json` opens with a comment block. */
+  it("parses a config with comments and trailing commas", () => {
+    expect(
+      parseTsconfigOptions(`{
+        // why this exists
+        "compilerOptions": { "strict": true, },
+      }`),
+    ).toEqual({ options: { strict: true }, extends: [] });
+  });
+
+  it("reports fields the config did not state as absent, never as undefined", () => {
+    const parsed = parseTsconfigOptions('{ "compilerOptions": { "strict": true } }');
+    expect(Object.keys(parsed?.options ?? {})).toEqual(["strict"]);
+  });
+
+  it.each([
+    ['{ "extends": "../base.json" }', ["../base.json"]],
+    ['{ "extends": ["./a.json", "./b.json"] }', ["./a.json", "./b.json"]],
+    ['{ "extends": ["./a.json", 7] }', ["./a.json"]],
+    ['{ "extends": 7 }', []],
+    ["{}", []],
+  ])("reads the extends chain of %s", (text, expected) => {
+    expect(parseTsconfigOptions(text)?.extends).toEqual(expected);
+  });
+
+  it.each([
+    ["not json at all", null],
+    ["[1, 2, 3]", null],
+    ['"a string"', null],
+  ])("answers %s with nothing rather than throwing", (text, expected) => {
+    expect(parseTsconfigOptions(text)).toBe(expected);
+  });
+
+  it.each([
+    '{ "compilerOptions": "nonsense" }',
+    '{ "compilerOptions": { "strict": "yes", "jsx": 4, "target": true, "experimentalDecorators": 1 } }',
+    '{ "compilerOptions": { "lib": "ESNext" } }',
+    '{ "compilerOptions": { "lib": ["ESNext", 7] } }',
+  ])("ignores wrongly-typed fields in %s", (text) => {
+    expect(parseTsconfigOptions(text)).toEqual({ options: {}, extends: [] });
+  });
+});
+
+describe("tsconfigCandidatePaths", () => {
+  it("walks from the file's own directory up to the checkout root", () => {
+    expect(tsconfigCandidatePaths("apps/desktop/src/main.ts")).toEqual([
+      "apps/desktop/src/tsconfig.json",
+      "apps/desktop/tsconfig.json",
+      "apps/tsconfig.json",
+      "tsconfig.json",
+    ]);
+  });
+
+  it("asks only the root for a file at the root", () => {
+    expect(tsconfigCandidatePaths("vite.config.ts")).toEqual(["tsconfig.json"]);
+  });
+});
+
+describe("resolveExtendedTsconfigPath", () => {
+  it.each([
+    ["apps/desktop/tsconfig.json", "../../tsconfig.base.json", "tsconfig.base.json"],
+    ["apps/desktop/tsconfig.json", "./tsconfig.web.json", "apps/desktop/tsconfig.web.json"],
+    ["apps/desktop/tsconfig.json", "./configs/./strict.json", "apps/desktop/configs/strict.json"],
+    ["apps/desktop/tsconfig.json", "../shared/base", "apps/shared/base.json"],
+  ])("resolves %s + %s", (from, specifier, expected) => {
+    expect(resolveExtendedTsconfigPath(from, specifier)).toBe(expected);
+  });
+
+  /** node_modules is outside the read seam's root — say nothing rather than guess. */
+  it.each([
+    ["tsconfig.json", "@tsconfig/strictest/tsconfig.json"],
+    ["tsconfig.json", "astro/tsconfigs/strict"],
+    ["tsconfig.json", "../outside.json"],
+    ["tsconfig.json", "./"],
+  ])("refuses %s + %s", (from, specifier) => {
+    expect(resolveExtendedTsconfigPath(from, specifier)).toBeNull();
+  });
+});
+
+/** A checkout as a map of paths to text; anything absent reads as `null`. */
+function fakeReader(files: Record<string, string>) {
+  const read = vi.fn(async (relPath: string) => files[relPath] ?? null);
+  return read;
+}
+
+describe("readProjectTypeScriptOptions", () => {
+  it("takes the nearest config's answer", async () => {
+    const read = fakeReader({
+      "apps/desktop/tsconfig.json": '{ "compilerOptions": { "jsx": "react-jsx" } }',
+      "tsconfig.json": '{ "compilerOptions": { "jsx": "preserve" } }',
+    });
+
+    await expect(readProjectTypeScriptOptions(read, "apps/desktop/src/app.tsx")).resolves.toEqual({
+      jsx: "react-jsx",
+    });
+  });
+
+  /**
+   * The monorepo case this repository actually is: the nearest config to a
+   * renderer file states neither `target` nor `strict`, and the real answers
+   * live two directories up behind the root config's `extends`.
+   */
+  it("lets ancestors fill what the nearest config left unsaid", async () => {
+    const read = fakeReader({
+      "apps/desktop/tsconfig.json": '{ "compilerOptions": { "jsx": "react-jsx" } }',
+      "tsconfig.json": '{ "extends": "./tsconfig.base.json" }',
+      "tsconfig.base.json": '{ "compilerOptions": { "target": "ESNext", "strict": true } }',
+    });
+
+    await expect(readProjectTypeScriptOptions(read, "apps/desktop/src/app.tsx")).resolves.toEqual({
+      jsx: "react-jsx",
+      target: "ESNext",
+      strict: true,
+    });
+  });
+
+  it("lets a config's own options beat the ones it extends", async () => {
+    const read = fakeReader({
+      "tsconfig.json": '{ "extends": "./base.json", "compilerOptions": { "strict": false } }',
+      "base.json": '{ "compilerOptions": { "strict": true, "target": "ES2022" } }',
+    });
+
+    await expect(readProjectTypeScriptOptions(read, "app.ts")).resolves.toEqual({
+      strict: false,
+      target: "ES2022",
+    });
+  });
+
+  it("lets a later entry of an extends array win", async () => {
+    const read = fakeReader({
+      "tsconfig.json": '{ "extends": ["./a.json", "./b.json"] }',
+      "a.json": '{ "compilerOptions": { "target": "ES2015", "jsx": "preserve" } }',
+      "b.json": '{ "compilerOptions": { "target": "ES2022" } }',
+    });
+
+    await expect(readProjectTypeScriptOptions(read, "app.ts")).resolves.toEqual({
+      target: "ES2022",
+      jsx: "preserve",
+    });
+  });
+
+  it("stops on a cycle instead of reading forever", async () => {
+    const read = fakeReader({
+      "tsconfig.json": '{ "extends": "./a.json" }',
+      "a.json": '{ "extends": "./tsconfig.json", "compilerOptions": { "strict": true } }',
+    });
+
+    await expect(readProjectTypeScriptOptions(read, "app.ts")).resolves.toEqual({ strict: true });
+  });
+
+  it("reads each config once however many candidates point at it", async () => {
+    const read = fakeReader({ "tsconfig.json": '{ "compilerOptions": { "strict": true } }' });
+
+    await readProjectTypeScriptOptions(read, "a/b/c/app.ts");
+
+    expect(read.mock.calls.filter(([path]) => path === "tsconfig.json")).toHaveLength(1);
+  });
+
+  it("falls back to nothing when there is no project at all", async () => {
+    await expect(readProjectTypeScriptOptions(fakeReader({}), "scratch.ts")).resolves.toEqual({});
+  });
+
+  it("falls back to nothing when the config is unreadable", async () => {
+    const read = fakeReader({ "tsconfig.json": "{ this is not json" });
+
+    await expect(readProjectTypeScriptOptions(read, "app.ts")).resolves.toEqual({});
+  });
+
+  it("skips an extends it cannot resolve without node_modules", async () => {
+    const read = fakeReader({
+      "tsconfig.json":
+        '{ "extends": "@tsconfig/strictest/tsconfig.json", "compilerOptions": { "strict": true } }',
+    });
+
+    await expect(readProjectTypeScriptOptions(read, "app.ts")).resolves.toEqual({ strict: true });
+  });
+});
+
+describe("projectFileScope", () => {
+  it("reads a main-checkout file from Main", () => {
+    expect(
+      projectFileScope({
+        kind: "file",
+        projectId: "p1",
+        checkout: { kind: "main" },
+        relPath: "src/app.ts",
+      }),
+    ).toEqual({ projectId: "p1", relPath: "src/app.ts" });
+  });
+
+  /** A ticket workspace reads the tsconfig.json in ITS worktree (decision #6). */
+  it("reads a ticket file from that ticket's worktree", () => {
+    expect(
+      projectFileScope({
+        kind: "file",
+        projectId: "p1",
+        checkout: { kind: "ticket", ticketId: "t1" },
+        relPath: "src/app.ts",
+      }),
+    ).toEqual({ projectId: "p1", ticketId: "t1", relPath: "src/app.ts" });
+  });
+
+  it.each([
+    { kind: "ticket-body", projectId: "p1", ticketId: "t1" },
+    { kind: "diff-base", projectId: "p1", ticketId: "t1", baseRevision: "abc", relPath: "a.ts" },
+  ] as const)("has no project scope for a $kind document", (identity) => {
+    expect(projectFileScope(identity)).toBeNull();
+  });
+});
+
+const tsFile = (relPath: string, ticketId?: string): DocumentIdentity => ({
+  kind: "file",
+  projectId: "p1",
+  checkout: ticketId === undefined ? { kind: "main" } : { kind: "ticket", ticketId },
+  relPath,
+});
+
+describe("ensureProjectTypeScriptDefaults", () => {
+  it("configures the defaults from the project's tsconfig", async () => {
+    const { host, typescriptDefaults } = defaultsHost();
+    const read = fakeReader({
+      "tsconfig.json": '{ "compilerOptions": { "jsx": "preserve", "strict": true } }',
+    });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/app.ts"), () => read);
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ jsx: 1, strict: true }),
+    );
+  });
+
+  it("reads nothing at all for a document that is neither TypeScript nor JavaScript", async () => {
+    const { host, typescriptDefaults } = defaultsHost();
+    const read = fakeReader({ "tsconfig.json": "{}" });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("docs/plan.md"), () => read);
+
+    expect(read).not.toHaveBeenCalled();
+    expect(typescriptDefaults.setCompilerOptions).not.toHaveBeenCalled();
+  });
+
+  it("reads nothing for a document with no project scope", async () => {
+    const { host } = defaultsHost();
+    const read = fakeReader({ "tsconfig.json": "{}" });
+
+    await ensureProjectTypeScriptDefaults(
+      host,
+      { kind: "diff-base", projectId: "p1", ticketId: "t1", baseRevision: "abc", relPath: "a.ts" },
+      () => read,
+    );
+
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("walks a directory's configs once, however many of its files open", async () => {
+    const { host } = defaultsHost();
+    const read = fakeReader({ "tsconfig.json": '{ "compilerOptions": { "strict": true } }' });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/a.ts"), () => read);
+    const afterFirst = read.mock.calls.length;
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/b.tsx"), () => read);
+
+    expect(read.mock.calls).toHaveLength(afterFirst);
+  });
+
+  /** Monaco re-checks EVERY open model on a defaults change; an identical answer is not a change. */
+  it("does not re-apply an answer identical to the live one", async () => {
+    const { host, typescriptDefaults } = defaultsHost();
+    const read = fakeReader({ "tsconfig.json": '{ "compilerOptions": { "strict": true } }' });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/a.ts"), () => read);
+    await ensureProjectTypeScriptDefaults(host, tsFile("other/b.ts"), () => read);
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-applies when a different project answers differently", async () => {
+    const { host, typescriptDefaults } = defaultsHost();
+    const read = fakeReader({
+      "tsconfig.json": '{ "compilerOptions": { "strict": true } }',
+      "vendor/tsconfig.json": '{ "compilerOptions": { "strict": false, "target": "ES5" } }',
+    });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/a.ts"), () => read);
+    await ensureProjectTypeScriptDefaults(host, tsFile("vendor/b.ts"), () => read);
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ strict: false, target: 1 }),
+    );
+  });
+
+  it("reads through the scoped file seam, in the checkout the document came from", async () => {
+    const { host } = defaultsHost();
+    const read = vi.fn(async () => null);
+    const readerFor = vi.fn(() => read);
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/app.ts", "t1"), readerFor);
+
+    expect(readerFor).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "t1",
+      relPath: "src/app.ts",
+    });
+  });
+});
+
+/** Stubs the preload bridge so the default reader has a `window.api` to ask. */
+function readResult(result: unknown) {
+  const read = vi.fn(async () => result);
+  vi.stubGlobal("window", { api: { files: { read } } });
+  return read;
+}
+
+describe("the default project file reader", () => {
+  it("asks main for each candidate tsconfig in the document's scope", async () => {
+    const { host } = defaultsHost();
+    const read = readResult({ ok: false, error: "No such file" });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("src/app.ts", "t1"));
+
+    expect(read).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "t1",
+      relPath: "src/tsconfig.json",
+    });
+  });
+
+  it("omits ticketId for a main-checkout document", async () => {
+    const { host } = defaultsHost();
+    const read = readResult({ ok: false, error: "No such file" });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("app.ts"));
+
+    expect(read).toHaveBeenCalledWith({ projectId: "p1", relPath: "tsconfig.json" });
+  });
+
+  it("adopts the text main returns", async () => {
+    const { host, typescriptDefaults } = defaultsHost();
+    readResult({
+      ok: true,
+      source: "main",
+      kind: "text",
+      size: 1,
+      mtime: 1,
+      content: {
+        type: "text",
+        text: '{ "compilerOptions": { "target": "ES5" } }',
+        truncated: false,
+      },
+    });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("app.ts"));
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ target: 1 }),
+    );
+  });
+
+  /** Half a tsconfig.json is not a tsconfig.json. */
+  it.each([
+    { type: "text", text: '{ "compilerOptions": { "target": "ES5" } }', truncated: true },
+    { type: "image", dataUrl: "data:image/png;base64,AAA" },
+    { type: "binary" },
+  ])("treats a $type read as no project at all", async (content) => {
+    const { host, typescriptDefaults } = defaultsHost();
+    readResult({ ok: true, source: "main", kind: "text", size: 1, mtime: 1, content });
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("app.ts"));
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ target: 99 }),
+    );
+  });
+
+  /** The node renderer tests and the UI lab mount editors with no preload bridge. */
+  it("reads nothing when there is no window to ask", async () => {
+    const { host, typescriptDefaults } = defaultsHost();
+
+    await ensureProjectTypeScriptDefaults(host, tsFile("app.ts"));
+
+    expect(typescriptDefaults.setCompilerOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ target: 99, strict: false }),
+    );
   });
 });
