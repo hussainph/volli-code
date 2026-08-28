@@ -67,13 +67,15 @@ import {
   type ActiveSessionRow,
   type BuildActiveSessionListingInput,
   type PreviousSessionRow,
-  type SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import {
   DEFAULT_SESSION_BAND_FILTER,
+  sessionListingFilter,
+  type SessionBandFilter,
+} from "@renderer/components/sidebar/session-band-filter";
+import {
   SessionBandFilterMenu,
   SessionBandHeader,
-  type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-header";
 import {
   ActiveBandRow,
@@ -753,12 +755,7 @@ export default function SidebarNestingScratch() {
     () =>
       buildActiveSessionListing({
         ...loadInput(activeLoad, depth),
-        filter: {
-          kinds: new Set(
-            (["chat", "terminal"] as const).filter((kind) => filter.kinds[kind]),
-          ) satisfies ReadonlySet<SessionRowKind>,
-          showCleaned: filter.showCleaned,
-        },
+        filter: sessionListingFilter(filter),
         now,
       }),
     [activeLoad, depth, filter, now],

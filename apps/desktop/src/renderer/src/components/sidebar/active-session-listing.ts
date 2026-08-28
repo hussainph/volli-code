@@ -88,8 +88,20 @@ export type ActiveSessionTarget =
   | { kind: "terminal"; tabId: string; paneId: string }
   | { kind: "chat"; tabId: string; sessionId: string };
 
-/** Which execution surface a row speaks for — the axis the Previous band filters on. */
+/** Which execution surface a row speaks for — one of the two axes the Previous band filters on. */
 export type SessionRowKind = "terminal" | "chat";
+
+/** Whose work a row is — the Previous band's second filter axis (VC-196). */
+export type SessionRowScope = "project" | "ticket";
+
+/**
+ * Which scope a Session was created in. The immutable creation fact matters:
+ * an archived ticket can leave its Session without a current `ticketId`, but
+ * that does not turn the Ticket Session into a Project Session.
+ */
+export function sessionRowScope(session: { readonly bornTicketless: boolean }): SessionRowScope {
+  return session.bornTicketless ? "project" : "ticket";
+}
 
 /**
  * Why this row needs a human. `blocked` is the agent's own voluntary `volli
@@ -377,6 +389,12 @@ export interface ActiveSessionListing {
 export interface SessionListingFilter {
   /** Which kinds to show; `null` is every kind. */
   kinds: ReadonlySet<SessionRowKind> | null;
+  /**
+   * Which scopes to show; `null` is every scope. Independent of
+   * {@link SessionListingFilter.kinds} — the two narrow different questions
+   * (what a Session runs on, whose work it is) and a row must satisfy both.
+   */
+  scopes: ReadonlySet<SessionRowScope> | null;
   /** Whether cleaned-away rows come back, marked {@link PreviousSessionRow.cleaned}. */
   showCleaned: boolean;
 }
@@ -422,7 +440,7 @@ export interface BuildActiveSessionListingInput {
 }
 
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
-const DEFAULT_FILTER: SessionListingFilter = { kinds: null, showCleaned: false };
+const DEFAULT_FILTER: SessionListingFilter = { kinds: null, scopes: null, showCleaned: false };
 
 function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
@@ -957,6 +975,10 @@ export function buildActiveSessionListing(
   const previous: PreviousSessionRow[] = [];
   for (const candidate of previousById.values()) {
     if (filter.kinds !== null && !filter.kinds.has(candidate.row.kind)) continue;
+    // Before cleanup rather than after: a row the reader has narrowed away is
+    // not a row whose cleanup boundary anyone is waiting on, so skipping here
+    // keeps `nextBoundaryAt` about the list actually on screen.
+    if (filter.scopes !== null && !filter.scopes.has(sessionRowScope(candidate))) continue;
     const cleaned = isConcludedBusiness({
       ticketId: candidate.ticketId,
       ticket: candidate.row.ticket,

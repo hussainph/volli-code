@@ -33,6 +33,7 @@ import {
   isConcludedBusiness,
   listingOutputStamps,
   PREVIOUS_MAX_AGE_MS,
+  sessionRowScope,
   type ActiveSessionRow,
   type PreviousSessionRow,
 } from "./active-session-listing";
@@ -768,7 +769,7 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     expect(
       buildActiveSessionListing({
         ...input,
-        filter: { kinds: null, showCleaned: true },
+        filter: { kinds: null, scopes: null, showCleaned: true },
       }).previous,
     ).toMatchObject([
       {
@@ -1461,7 +1462,7 @@ describe("buildActiveSessionListing — the Previous filter", () => {
   it("shows every kind when `kinds` is null", () => {
     const result = buildActiveSessionListing({
       ...input,
-      filter: { kinds: null, showCleaned: false },
+      filter: { kinds: null, scopes: null, showCleaned: false },
     });
     expect(titles(result.previous)).toEqual(["Ended terminal", "Quiet chat"]);
   });
@@ -1471,7 +1472,7 @@ describe("buildActiveSessionListing — the Previous filter", () => {
       titles(
         buildActiveSessionListing({
           ...input,
-          filter: { kinds: new Set(["chat" as const]), showCleaned: false },
+          filter: { kinds: new Set(["chat" as const]), scopes: null, showCleaned: false },
         }).previous,
       ),
     ).toEqual(["Quiet chat"]);
@@ -1479,7 +1480,7 @@ describe("buildActiveSessionListing — the Previous filter", () => {
       titles(
         buildActiveSessionListing({
           ...input,
-          filter: { kinds: new Set(["terminal" as const]), showCleaned: false },
+          filter: { kinds: new Set(["terminal" as const]), scopes: null, showCleaned: false },
         }).previous,
       ),
     ).toEqual(["Ended terminal"]);
@@ -1501,7 +1502,7 @@ describe("buildActiveSessionListing — the Previous filter", () => {
           lastActivityAt: now - 1_000,
         }),
       ],
-      filter: { kinds: new Set(["chat" as const]), showCleaned: false },
+      filter: { kinds: new Set(["chat" as const]), scopes: null, showCleaned: false },
     });
 
     // Terminals are filtered out of Previous and stay in Active: you do not get
@@ -1516,13 +1517,137 @@ describe("buildActiveSessionListing — the Previous filter", () => {
 
     const shown = buildActiveSessionListing({
       ...input,
-      filter: { kinds: null, showCleaned: true },
+      filter: { kinds: null, scopes: null, showCleaned: true },
     });
     expect(shown.previous.map((row) => ({ title: row.title, cleaned: row.cleaned }))).toEqual([
       { title: "Orphaned", cleaned: true },
       { title: "Ended terminal", cleaned: false },
       { title: "Quiet chat", cleaned: false },
     ]);
+  });
+});
+
+describe("sessionRowScope", () => {
+  it("reads the immutable creation scope even after a ticket is gone", () => {
+    expect(sessionRowScope({ bornTicketless: true })).toBe("project");
+    expect(sessionRowScope({ bornTicketless: false })).toBe("ticket");
+  });
+});
+
+describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () => {
+  const now = 5_000_000;
+  /**
+   * One Session of each kind in each scope, so every case below is a 2x2 and
+   * neither axis can pass by accidentally agreeing with the other.
+   *
+   * Stamps descend in declaration order, which is the order `previous` sorts
+   * into: project terminal, ticket terminal, project chat, ticket chat.
+   */
+  const input = {
+    tickets: [ticket({ id: "t1", status: "todo" })],
+    containers: {},
+    signalsByTicket: {},
+    records: [
+      record({ id: "r-project", ticketId: null, title: "Project shell", endedAt: now - 1_000 }),
+      record({ id: "r-ticket", ticketId: "t1", title: "Ticket shell", endedAt: now - 2_000 }),
+      record({ id: "r-gone", ticketId: "t-archived", title: "Orphaned", endedAt: now - 500 }),
+    ],
+    chatSessions: [
+      chatSession({
+        sessionId: "c-project",
+        ticketId: null,
+        title: "Project chat",
+        live: false,
+        lastActivityAt: now - 2 * ACTIVE_QUIET_WINDOW_MS,
+      }),
+      chatSession({
+        sessionId: "c-ticket",
+        ticketId: "t1",
+        title: "Ticket chat",
+        live: false,
+        lastActivityAt: now - 3 * ACTIVE_QUIET_WINDOW_MS,
+      }),
+    ],
+    lastOutputAt: {},
+    parkState: {},
+    harness: {},
+    now,
+  };
+
+  it("shows every scope when `scopes` is null", () => {
+    expect(titles(buildActiveSessionListing(input).previous)).toEqual([
+      "Project shell",
+      "Ticket shell",
+      "Project chat",
+      "Ticket chat",
+    ]);
+  });
+
+  it("shows only the scopes asked for", () => {
+    expect(
+      titles(
+        buildActiveSessionListing({
+          ...input,
+          filter: { kinds: null, scopes: new Set(["project" as const]), showCleaned: false },
+        }).previous,
+      ),
+    ).toEqual(["Project shell", "Project chat"]);
+    expect(
+      titles(
+        buildActiveSessionListing({
+          ...input,
+          filter: { kinds: null, scopes: new Set(["ticket" as const]), showCleaned: false },
+        }).previous,
+      ),
+    ).toEqual(["Ticket shell", "Ticket chat"]);
+  });
+
+  it("narrows on both axes at once, since kind and scope are different questions", () => {
+    expect(
+      titles(
+        buildActiveSessionListing({
+          ...input,
+          filter: {
+            kinds: new Set(["chat" as const]),
+            scopes: new Set(["project" as const]),
+            showCleaned: false,
+          },
+        }).previous,
+      ),
+    ).toEqual(["Project chat"]);
+  });
+
+  it("leaves Active alone, exactly as the kind filter does", () => {
+    const result = buildActiveSessionListing({
+      ...input,
+      containers: { t1: container("s-live", [paneTab("s-live", "Live ticket terminal")]) },
+      lastOutputAt: { "s-live": now - 60_000 },
+      filter: { kinds: null, scopes: new Set(["project" as const]), showCleaned: false },
+    });
+
+    // "Project sessions" is a way of reading the archive, never a way of hiding
+    // a ticket's running work.
+    expect(titles(result.active)).toEqual(["Live ticket terminal"]);
+    expect(titles(result.previous)).toEqual(["Project shell", "Project chat"]);
+  });
+
+  it("keeps an orphaned Ticket Session in ticket scope", () => {
+    const projectRows = buildActiveSessionListing({
+      ...input,
+      filter: { kinds: null, scopes: new Set(["project" as const]), showCleaned: true },
+    });
+
+    // Losing the current ticket reference changes the row identity, not the
+    // immutable Session scope recorded when it was created.
+    expect(titles(projectRows.previous)).toEqual(["Project shell", "Project chat"]);
+    expect(
+      titles(
+        buildActiveSessionListing({
+          ...input,
+          filter: { kinds: null, scopes: new Set(["ticket" as const]), showCleaned: true },
+        }).previous,
+      ),
+    ).toEqual(["Orphaned", "Ticket shell", "Ticket chat"]);
   });
 });
 
