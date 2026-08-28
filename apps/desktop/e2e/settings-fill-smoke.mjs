@@ -129,17 +129,40 @@ try {
     await page.getByRole("button", { name: "Settings", exact: true }).first().click();
     await page.getByRole("navigation", { name: "Settings categories" }).waitFor();
     await page.getByRole("button", { name: "Models", exact: true }).click();
-    // Attached-then-scroll, not `waitFor()`'s default visibility. Check 4 leaves
-    // the window 520px tall and this check asks for 1440x900 back; a runner
-    // whose display is smaller than that CLAMPS the resize, so the table is
-    // laid out but scrolled out of view and never becomes "visible". Waiting on
-    // visibility therefore timed out on CI while the cap being measured here
-    // was perfectly correct. Attachment is the precondition this check actually
-    // needs — it measures a box height, not whether the table is on screen.
+    // Attached, not `waitFor()`'s default visibility: check 4 leaves the window
+    // 520px tall and this asks for 1440x900 back, which a smaller runner
+    // display clamps — the table is then laid out but scrolled out of view and
+    // never becomes "visible". This measures a box height, not whether the
+    // table is on screen.
+    //
+    // The Models catalog can also be legitimately EMPTY. DataTable renders
+    // `<Empty>` and NO `<table>` when it has no items (kit/data-table.tsx), and
+    // the catalog comes from the Pi runtime — a CI runner has none, so the pane
+    // correctly shows "No models. Sign in to a provider below." and this waited
+    // 30s for a table that was never going to exist.
+    //
+    // Both outcomes are asserted rather than skipped. With rows, the cap is
+    // measured as before. Without rows there is no cap to measure, so the
+    // assertion becomes the documented empty state — which still proves the
+    // pane mounted and still fails if it renders neither.
     const modelsTable = page.locator("table").first();
-    await modelsTable.waitFor({ state: "attached" });
-    await modelsTable.scrollIntoViewIfNeeded().catch(() => {});
+    const modelsEmpty = page.getByText("No models. Sign in to a provider below.");
+    await Promise.race([
+      modelsTable.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
+      modelsEmpty.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
+    ]);
 
+    if ((await modelsTable.count()) === 0) {
+      const empty = (await modelsEmpty.count()) === 1;
+      return {
+        ok: empty,
+        detail: empty
+          ? "catalog empty (no Pi runtime) — empty state rendered; cap not measurable here"
+          : "Models pane rendered neither a table nor its empty state",
+      };
+    }
+
+    await modelsTable.scrollIntoViewIfNeeded().catch(() => {});
     const m = await measure(page);
     // 8 rows * 36 + 32 = 320. A little slack for sub-pixel layout.
     return { ok: m.boxHeight <= 340, detail: `box=${m.boxHeight}px (capped, not filling)` };

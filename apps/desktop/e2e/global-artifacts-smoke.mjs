@@ -234,13 +234,24 @@ async function pickCompletion(page, query, label) {
   await page.keyboard.type(query);
   const widget = page.locator(".suggest-widget.visible");
   // Monaco's suggest widget appears only once its completion provider has
-  // answered, and that runs through a language worker whose cold start is not
-  // this probe's to control. 8s was measured against a warm dev Mac; on a CI
-  // runner the popup for @newnote had not appeared in time and check 4 failed
-  // for a reason unrelated to artifact creation.
-  await waitUntil(`completion popup for ${query}`, async () => (await widget.count()) === 1, {
-    timeout: 25_000,
-  });
+  // answered. 8s was measured against a warm dev Mac and was not enough on CI.
+  //
+  // Waiting longer is not sufficient on its own: for a query that matches no
+  // existing artifact (`@newnote`), Monaco can CLOSE the popup when the
+  // synchronous pass yields nothing, and the `Create artifact "…"` row only
+  // arrives when the provider resolves. A closed popup never reopens by
+  // itself, so the probe re-triggers suggestions while it waits — which is
+  // exactly what a user does. `@probe`, which matches a seeded file, passed on
+  // CI throughout; only the create-a-new-one path failed.
+  await waitUntil(
+    `completion popup for ${query}`,
+    async () => {
+      if ((await widget.count()) === 1) return true;
+      await page.keyboard.press("Control+Space");
+      return null;
+    },
+    { timeout: 25_000, interval: 500 },
+  );
   const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
   const option = widget
     .locator(".monaco-list-row")
