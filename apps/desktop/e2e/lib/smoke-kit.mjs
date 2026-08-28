@@ -634,11 +634,23 @@ export async function makeGitRepo(parentDir, name = "project-") {
  * envelope-then-import path — used verbatim by board-smoke / global-artifacts —
  * is the established, deterministic way to get projects into a scratch profile.)
  *
+ * WAITS FOR THE IMPORT, rather than assuming it. This used to reload and then
+ * sleep a flat 1500ms, which is a bet on how fast the first-run import reaches
+ * SQLite — a bet that holds on a warm dev Mac and loses on a cold CI runner,
+ * where `volli board --project CL` came back PROJECT_NOT_FOUND because the row
+ * was not there yet. 44 probes call this, so the flat sleep was a single race
+ * sitting underneath most of the suite. The settle below is now a floor for
+ * renderer state, not the thing that makes the data exist.
+ *
  * @param {import("playwright-core").Page} page
  * @param {{id:string,name:string,path:string,prefix:string,colorIndex?:number}[]} projects
- * @param {{reloadWaitMs?:number}} [opts]
+ * @param {{reloadWaitMs?:number, importTimeoutMs?:number}} [opts]
  */
-export async function seedProjects(page, projects, { reloadWaitMs = 1500 } = {}) {
+export async function seedProjects(
+  page,
+  projects,
+  { reloadWaitMs = 1500, importTimeoutMs = 30_000 } = {},
+) {
   await page.evaluate((list) => {
     localStorage.setItem(
       "volli:projects",
@@ -660,6 +672,26 @@ export async function seedProjects(page, projects, { reloadWaitMs = 1500 } = {})
   }, projects);
   await page.reload();
   await page.waitForLoadState("domcontentloaded");
+
+  // The real gate: every seeded project is readable from the database. The
+  // bridge is not necessarily installed the instant the document parses, and
+  // `bootstrap()` can reject while the import is mid-flight — both are "not
+  // ready", not failures, so they retry rather than throw.
+  await waitUntil(
+    `seeded project(s) to reach the database: ${projects.map((p) => p.name).join(", ")}`,
+    async () => {
+      const names = await page
+        .evaluate(async () => {
+          if (!window.api?.data?.bootstrap) return null;
+          const boot = await window.api.data.bootstrap();
+          return boot.ok ? boot.data.projects.map((p) => p.name) : null;
+        })
+        .catch(() => null);
+      return names !== null && projects.every((p) => names.includes(p.name));
+    },
+    { timeout: importTimeoutMs, interval: 100 },
+  );
+
   await sleep(reloadWaitMs);
 }
 

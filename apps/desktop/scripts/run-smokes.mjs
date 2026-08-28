@@ -30,7 +30,7 @@
  * fresh machine, `ensure:electron`.
  */
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,15 +44,11 @@ const REPO_ROOT = resolve(E2E_DIR, "..", "..", "..");
  * the probe cannot work on a clean CI runner, not that it is inconvenient.
  */
 const DENY = new Map([
-  // ---- need a real credential this runner has no way to hold -------------
-  // These drive a LIVE model turn against `~/.pi/agent/auth.json`. Run them
-  // locally with `pnpm smoke:pi`.
-  ["pi-ticket-chat-smoke.mjs", "live Pi turn; needs a real ~/.pi/agent/auth.json"],
-  ["pi-project-chat-smoke.mjs", "live Pi turn; needs a real ~/.pi/agent/auth.json"],
-  ["pi-sessions-host-smoke.mjs", "live Pi turn; needs a real ~/.pi/agent/auth.json"],
-  ["pi-ask-user-smoke.mjs", "live Pi turn; needs a real ~/.pi/agent/auth.json"],
-  ["pi-session-start-tool-smoke.mjs", "live Pi turn; needs a real ~/.pi/agent/auth.json"],
-  ["cli-chat-mode-smoke.mjs", "live Pi turn inside a Session; same credential need"],
+  // NOTE: probes that need real Pi credentials are NOT listed here. They are
+  // detected structurally — see `needsPiCredentials()`. Hand-listing them was
+  // how three of them (composer-kickoff, composer-verbs, session-env-parity)
+  // reached CI and aborted: their headers do not mention a credential, only
+  // their code does.
 
   // ---- QUARANTINE: already failing against main -------------------------
   //
@@ -159,12 +155,26 @@ function parseArgs(argv) {
   return args;
 }
 
-/** Every runnable probe, sorted, with denied names removed. */
+/**
+ * Whether a probe copies the developer's real `~/.pi/agent/auth.json` into its
+ * scratch HOME — i.e. whether it drives a LIVE model turn.
+ *
+ * Detected from the source rather than from a hand-kept list, because a list is
+ * what failed: `ensurePiAuthInto()` throws when the file is absent, so such a
+ * probe can only ever abort on a runner, and three of them were only
+ * discovered by watching CI abort. The call is the requirement, so the call is
+ * what this reads. Run them locally with `pnpm smoke:pi`.
+ */
+function needsPiCredentials(name) {
+  return readFileSync(join(E2E_DIR, name), "utf8").includes("ensurePiAuthInto(");
+}
+
+/** Every runnable probe, sorted, with denied and credential-gated names removed. */
 function discover() {
   const found = readdirSync(E2E_DIR)
     .filter((name) => name.endsWith("-smoke.mjs") || EXTRA.has(name))
     .toSorted();
-  return found.filter((name) => !DENY.has(name));
+  return found.filter((name) => !DENY.has(name) && !needsPiCredentials(name));
 }
 
 /**
