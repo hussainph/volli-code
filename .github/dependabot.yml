@@ -1,23 +1,28 @@
 version: 2
 
-# Monthly cadence: every Dependabot PR triggers a CI run against the paid
-# Actions minutes pool, so batch updates instead of weekly drips.
+# Weekly cadence. This was monthly because "every Dependabot PR triggers a CI
+# run against the paid Actions minutes pool" — which stopped being true when
+# the repository went public and standard runners became free. Monthly batching
+# now only delays security fixes and makes each PR a bigger, harder-to-bisect
+# jump, so the reason for it is gone with the bill.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "04:17"
       timezone: Asia/Kuwait
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 3
 
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "04:47"
       timezone: Asia/Kuwait
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 5
     groups:
       non-major-dependencies:
         update-types:
