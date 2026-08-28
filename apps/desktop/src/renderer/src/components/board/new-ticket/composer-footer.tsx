@@ -112,7 +112,7 @@ export function ComposerFooter({
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top">Adds the ticket. ⌘↵</TooltipContent>
+            <TooltipContent side="top">Create ticket (⌘↵)</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -128,7 +128,7 @@ export function ComposerFooter({
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top">Adds it and starts an agent on it. ⇧⌘↵</TooltipContent>
+            <TooltipContent side="top">Create ticket and start agent (⇧⌘↵)</TooltipContent>
           </Tooltip>
         </div>
       </TooltipProvider>

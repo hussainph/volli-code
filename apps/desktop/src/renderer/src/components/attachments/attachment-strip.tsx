@@ -42,7 +42,7 @@ export function AttachmentThumb({
       className={cn("group relative size-16 shrink-0", className)}
       // The full name lives in the tooltip rather than the tile: a tile wide
       // enough for `Screenshot 2026-08-18 at 10.31.44.png` is not a thumbnail.
-      title={`${attachment.label} — ${detail}`}
+      title={`${attachment.label} · ${detail}`}
     >
       {kind === "image" ? (
         <img
@@ -53,7 +53,7 @@ export function AttachmentThumb({
         />
       ) : (
         <div
-          aria-label={`${attachment.label} — ${detail}`}
+          aria-label={`${attachment.label} · ${detail}`}
           className="flex size-full flex-col justify-between rounded-md border border-border/70 bg-muted/40 p-1.5"
         >
           <span className="text-[10px] font-medium tracking-wide text-muted-foreground">

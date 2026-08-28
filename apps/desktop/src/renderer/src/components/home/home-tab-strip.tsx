@@ -465,7 +465,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
             exited
               ? `Exited (${exitCode})`
               : parked
-                ? "Parked to save memory. Click to wake."
+                ? "Terminal is parked to save memory. Select to wake it."
                 : tab.title
           }
           labelClassName={exited ? "line-through" : undefined}

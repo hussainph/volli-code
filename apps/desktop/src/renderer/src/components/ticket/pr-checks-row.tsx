@@ -134,7 +134,7 @@ function CheckLine({ check }: { check: PrCheck }) {
   if (url === null) {
     return (
       <div
-        title={`${label} — ${word}`}
+        title={`${label} · ${word}`}
         className="flex w-full items-center gap-2 rounded-control px-2 py-1 text-ui text-foreground"
       >
         {body}
@@ -146,7 +146,7 @@ function CheckLine({ check }: { check: PrCheck }) {
     <button
       type="button"
       onClick={() => openExternal(url)}
-      title={`${label} — ${word}`}
+      title={`${label} · ${word}`}
       aria-label={`${label}, ${word}. Open the run on GitHub`}
       className="group/check flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45"
     >
