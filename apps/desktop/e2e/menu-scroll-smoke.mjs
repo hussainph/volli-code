@@ -178,7 +178,16 @@ async function main() {
     await page.keyboard.press("Escape");
     await sleep(200);
     await page.keyboard.press("Escape");
-    await sleep(300);
+    // Wait for the composer to be GONE, rather than sleeping 300ms and hoping.
+    // The next line double-clicks a card on the board underneath, and a modal
+    // that is still closing intercepts that pointer: on CI Playwright reported
+    // the dialog's own Monaco `view-lines` div swallowing the dblclick while
+    // the card sat there visible, enabled and stable. The section header below
+    // says "NO dialog underneath" — this makes that true instead of likely.
+    await page
+      .locator('[data-testid="new-ticket-composer"]')
+      .waitFor({ state: "detached", timeout: 10_000 })
+      .catch(() => {});
 
     // === 3. The rail's label picker, with NO dialog underneath =============
     await page.locator("article").first().dblclick();

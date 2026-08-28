@@ -233,8 +233,13 @@ async function openTicketViaCard(page) {
 async function pickCompletion(page, query, label) {
   await page.keyboard.type(query);
   const widget = page.locator(".suggest-widget.visible");
+  // Monaco's suggest widget appears only once its completion provider has
+  // answered, and that runs through a language worker whose cold start is not
+  // this probe's to control. 8s was measured against a warm dev Mac; on a CI
+  // runner the popup for @newnote had not appeared in time and check 4 failed
+  // for a reason unrelated to artifact creation.
   await waitUntil(`completion popup for ${query}`, async () => (await widget.count()) === 1, {
-    timeout: 8000,
+    timeout: 25_000,
   });
   const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
   const option = widget
@@ -607,12 +612,19 @@ async function main() {
           timeout: 20000,
         });
         const probeTab = fileTab(page, ARTIFACT_NAME);
-        const tabsRestored = await waitUntil("file tabs restored", async () => {
-          const probe = (await probeTab.count()) === 1;
-          const created = (await fileTab(page, `${CREATED_NAME}.md`).count()) === 1;
-          const repo = (await fileTab(page, REPO_FILE_NAME).count()) === 1;
-          return probe && created && repo;
-        });
+        // Restoring three file tabs from persisted state after a real relaunch
+        // is slower than waitUntil's 12s default allows on a CI runner, where
+        // this timed out with last value false.
+        const tabsRestored = await waitUntil(
+          "file tabs restored",
+          async () => {
+            const probe = (await probeTab.count()) === 1;
+            const created = (await fileTab(page, `${CREATED_NAME}.md`).count()) === 1;
+            const repo = (await fileTab(page, REPO_FILE_NAME).count()) === 1;
+            return probe && created && repo;
+          },
+          { timeout: 30_000 },
+        );
         const activeRestored = await waitUntil(
           "probe.md active after restart",
           async () => (await probeTab.getAttribute("aria-selected")) === "true",

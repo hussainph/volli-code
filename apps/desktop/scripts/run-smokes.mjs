@@ -50,6 +50,14 @@ const DENY = new Map([
   // reached CI and aborted: their headers do not mention a credential, only
   // their code does.
 
+  // ---- needs a third-party binary the runner does not ship ---------------
+  // Boots N real `claude` TUIs in raw PTYs and drives /usr/bin/memory_pressure
+  // to measure warm-parking (issue #51). A GitHub runner has no Claude Code
+  // install, so every session produces no output and the probe reports
+  // "booted 0/8". Not a bug and not a race — a missing dependency it cannot
+  // create. It stays a local research probe.
+  ["sigstop-smoke.mjs", "needs the `claude` CLI + memory_pressure; runner ships neither"],
+
   // ---- QUARANTINE: already failing against main -------------------------
   //
   // These are NOT runner limitations and NOT regressions from this change.

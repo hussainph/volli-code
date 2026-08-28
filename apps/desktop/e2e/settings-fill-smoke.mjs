@@ -129,7 +129,16 @@ try {
     await page.getByRole("button", { name: "Settings", exact: true }).first().click();
     await page.getByRole("navigation", { name: "Settings categories" }).waitFor();
     await page.getByRole("button", { name: "Models", exact: true }).click();
-    await page.locator("table").first().waitFor();
+    // Attached-then-scroll, not `waitFor()`'s default visibility. Check 4 leaves
+    // the window 520px tall and this check asks for 1440x900 back; a runner
+    // whose display is smaller than that CLAMPS the resize, so the table is
+    // laid out but scrolled out of view and never becomes "visible". Waiting on
+    // visibility therefore timed out on CI while the cap being measured here
+    // was perfectly correct. Attachment is the precondition this check actually
+    // needs — it measures a box height, not whether the table is on screen.
+    const modelsTable = page.locator("table").first();
+    await modelsTable.waitFor({ state: "attached" });
+    await modelsTable.scrollIntoViewIfNeeded().catch(() => {});
 
     const m = await measure(page);
     // 8 rows * 36 + 32 = 320. A little slack for sub-pixel layout.
