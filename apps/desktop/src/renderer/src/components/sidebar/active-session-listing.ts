@@ -157,6 +157,12 @@ export interface ActiveSessionRow {
    * how to ask a person for a decision.
    */
   waitingOn: ChatWaitingReason | null;
+  /**
+   * The newest activity this row can honestly date. Terminal output wins while
+   * live; a durable Session fact is the fallback after relaunch. `null` means
+   * neither source can name an age.
+   */
+  lastActivityAt: number | null;
   target: ActiveSessionTarget | null;
 }
 
@@ -477,6 +483,9 @@ const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
   idle: 2,
   parked: 3,
   exited: 4,
+  // A pane never produces it (the stop fact is chat-side, VC-86); ranked last
+  // so the map stays total without ever outranking a live state.
+  stopped: 5,
 };
 
 /**
@@ -539,6 +548,8 @@ function sessionRow(
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
     waitingOn: null,
+    lastActivityAt:
+      input.lastOutputAt[subject.paneId] ?? recordsById.get(subject.paneId)?.lastActivityAt ?? null,
     target: { kind: "terminal", tabId: tab.sessionId, paneId: subject.paneId },
   };
 }
@@ -556,6 +567,7 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
     // The record's two waiting fields move together by construction in main, so
     // this rides along with the attention above rather than being re-decided.
     waitingOn: record.waitingOn,
+    lastActivityAt: record.lastActivityAt,
     // A chat Session's tab id is derivable from the Session, whether or not a
     // tab is open. For a ticket-owned Session this names its ticket-tab
     // destination; ticket-independent chat hosting belongs to Session 5.

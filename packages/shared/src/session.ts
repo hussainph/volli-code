@@ -171,9 +171,10 @@ export interface ChatSessionRecord {
    * What is happening in this Session right now, in the honest subset of
    * {@link SessionActivityState} a chat row can be in: there is no PTY to
    * SIGSTOP, so never "parked", and a Session outlives every attachment it has
-   * ever had, so never "exited" — a chat row that stops is "idle".
+   * ever had, so never "exited" — a chat row that goes quiet is "idle", and
+   * one whose work was deliberately ended is "stopped" (VC-86).
    */
-  activity: Extract<SessionActivityState, "working" | "waiting" | "idle">;
+  activity: Extract<SessionActivityState, "working" | "waiting" | "idle" | "stopped">;
   /**
    * What the Session is waiting on, when `activity` is `"waiting"`; `null` in
    * every other state. The two move together by construction — a waiting row
@@ -257,8 +258,21 @@ export function shortSessionId(sessionId: string): string {
  * it as "idle", which is exactly backwards. It is only ever *declared*, by a
  * harness hook event (`input.needed`), and so exists only for the sessions
  * whose harness reports one.
+ *
+ * "stopped" (VC-86) is the chat-side sibling of "waiting": derivable from no
+ * PTY and no recency, only from the durable stop fact — a supervisor, the
+ * person, or the watchdog ended the Session's work. Without it a stopped
+ * Session reads "idle", which hides exactly the who-ended-this a triaging
+ * orchestrator is asking about. A PTY never produces it.
  */
-export const SESSION_ACTIVITY_STATES = ["working", "waiting", "idle", "parked", "exited"] as const;
+export const SESSION_ACTIVITY_STATES = [
+  "working",
+  "waiting",
+  "idle",
+  "parked",
+  "exited",
+  "stopped",
+] as const;
 
 export type SessionActivityState = (typeof SESSION_ACTIVITY_STATES)[number];
 

@@ -170,6 +170,9 @@ export async function sessionListVerb(
         // this list is deciding where to look, and the launch harness of
         // a terminal somebody has since re-used is the wrong answer.
         harness: effectiveHarnessId(session),
+        // Terminal rows have no structured activity state, but their durable
+        // last event is still the liveness age a fleet reader needs.
+        lastActivityAgeMs: Math.max(0, now() - session.lastActivityAt),
         ageMs: Math.max(0, now() - session.createdAt),
       };
       // Assigned rather than spread (oxc(no-map-spread)); the target is a
@@ -198,6 +201,15 @@ export async function sessionListVerb(
           ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
           : null,
       title: record.title,
+      // Liveness on the row itself (VC-86): the same three words and waiting
+      // reason `session.peek` answers and the app sidebar shows, off the same
+      // `chatSessionRecord` fold — never a second derivation. An orchestrator
+      // triaging a fleet reads these instead of spending a peek per Session.
+      status: record.activity,
+      waitingOn: record.waitingOn,
+      // Age of the newest durable fact, against the caller's clock — beside
+      // `ageMs` (age since creation), which stays for sorting what is old.
+      lastActivityAgeMs: Math.max(0, now() - record.lastActivityAt),
       ageMs: Math.max(0, now() - record.createdAt),
     };
     return [Object.assign(row, usageCells(usageById.get(record.sessionId)))];

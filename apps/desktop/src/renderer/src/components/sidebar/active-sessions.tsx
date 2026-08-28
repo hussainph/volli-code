@@ -423,9 +423,9 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   }, [nextBoundaryAt]);
 
   /**
-   * The same trick for the Previous band's age column, which is the only thing
-   * on this surface that reads a wall clock the listing does not: the soonest
-   * instant any visible age stops being the string it is now.
+   * The same trick for every visible age column. Active rows now carry their
+   * own last-activity age; the listing itself still does not depend on this
+   * clock, so a minute tick refreshes labels without rebuilding its ordering.
    *
    * A band whose newest row is minutes old wakes about once a minute; one whose
    * rows are all days old wakes about once a day. An interval could not tell
@@ -442,8 +442,13 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       const at = nextAgeChangeAt(row.endedOrQuietAt, ageNow);
       if (soonest === null || at < soonest) soonest = at;
     }
+    for (const row of listing.active) {
+      if (row.lastActivityAt === null || row.lastActivityAt <= 0) continue;
+      const at = nextAgeChangeAt(row.lastActivityAt, ageNow);
+      if (soonest === null || at < soonest) soonest = at;
+    }
     return soonest;
-  }, [listing.previous, ageNow]);
+  }, [listing.active, listing.previous, ageNow]);
   // `ageNow` is a dependency as well as an input, which the listing's boundary
   // above deliberately is not. That one can never be clamped (its furthest
   // instant is seven days out), so a wake it does not move is a wake nothing
@@ -607,6 +612,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
                 key={row.id}
                 row={row}
                 ticketPrefix={project.ticketPrefix}
+                now={ageNow}
                 selected={isSelected(row)}
                 onSelect={activate}
               />

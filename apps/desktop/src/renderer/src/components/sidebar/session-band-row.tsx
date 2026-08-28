@@ -50,6 +50,7 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
+  stopped: "Stopped",
 };
 
 /**
@@ -193,11 +194,14 @@ function stateLine(row: ActiveSessionRow): string {
 export const ActiveBandRow = React.memo(function ActiveBandRow({
   row,
   ticketPrefix,
+  now,
   selected,
   onSelect,
 }: {
   row: ActiveSessionRow;
   ticketPrefix: string;
+  /** The clock the last-activity age is read against. */
+  now: number;
   selected: boolean;
   onSelect(row: ActiveSessionRow): void;
 }) {
@@ -251,6 +255,11 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
             <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
             <span aria-hidden>·</span>
             <span className="truncate">{stateLine(row)}</span>
+            {row.lastActivityAt !== null ? (
+              <span className="shrink-0 text-label tabular-nums">
+                last {compactAge(row.lastActivityAt, now)}
+              </span>
+            ) : null}
           </span>
         </span>
       </SidebarMenuButton>

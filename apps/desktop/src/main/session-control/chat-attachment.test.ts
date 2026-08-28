@@ -35,6 +35,7 @@ function projectionWith(
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
+    stopped: null,
     turnActive: false,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
@@ -194,6 +195,30 @@ describe("chatSessionRecord activity", () => {
     expect(chatSessionRecord(projectionWith([], { turnActive: true }))).toMatchObject({
       activity: "idle",
     });
+  });
+
+  // VC-86. A stop is the one state a released attachment cannot imply —
+  // without it, deliberately-ended and merely-quiet both read "idle", and the
+  // orchestrator is back to git archaeology.
+  it("reads a Session under a stop as stopped, over every other state", () => {
+    const stop = {
+      stopped: { at: 9, reason: "Wedged", by: { kind: "session" as const, sessionId: "boss" } },
+    };
+    expect(chatSessionRecord(projectionWith([], stop))).toMatchObject({
+      activity: "stopped",
+      waitingOn: null,
+    });
+    // Stop outranks a stale waiting question: nothing a person answers can
+    // reach a Session whose work was ended.
+    expect(chatSessionRecord(projectionWith([], { ...stop, ...openInteraction() }))).toMatchObject({
+      activity: "stopped",
+      waitingOn: null,
+    });
+    // And a stale open turn: the stop fact is newer truth than the turn flag
+    // a failed release may have left behind.
+    expect(
+      chatSessionRecord(projectionWith([structuredAttachment()], { ...stop, turnActive: true })),
+    ).toMatchObject({ activity: "stopped" });
   });
 
   it("reads an unanswered Interaction as waiting on a question", () => {

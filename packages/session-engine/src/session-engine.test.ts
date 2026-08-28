@@ -791,6 +791,39 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  // VC-86: the stop intent completes in-engine like a signal — one durable
+  // command, one stopped event carrying its actor, one internal receipt.
+  it("records a stop with its actor as an immutable fact with an internal receipt", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+
+    const stopped = await plane.submit({
+      commandId: "command-stop",
+      sessionId: session.id,
+      intent: {
+        kind: "session.stop",
+        reason: "Wedged for 3h",
+        by: { kind: "session", sessionId: "supervisor-1" },
+      },
+      provenance: userProvenance,
+    });
+
+    expect(stopped).toMatchObject({
+      commandEvent: { payload: { kind: "command.recorded" } },
+      receipt: {
+        status: "completed",
+        result: { kind: "session.stopped", sessionId: session.id },
+      },
+      receiptEvent: { payload: { kind: "command.receipt.recorded" } },
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      stopped: {
+        reason: "Wedged for 3h",
+        by: { kind: "session", sessionId: "supervisor-1" },
+      },
+    });
+  });
+
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
     const ledger = createInMemorySessionLedger();
     const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });

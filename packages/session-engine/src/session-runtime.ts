@@ -339,6 +339,14 @@ export interface OpenNativeBinding {
    * exact replay this listing exists to let callers avoid.
    */
   attachmentId: string;
+  /**
+   * Epoch milliseconds of the newest live token or tool-progress observation.
+   *
+   * Process-local by design: durable Session events intentionally do not carry
+   * streamed tokens, and a watchdog must not treat its own bookkeeping as
+   * runtime progress.
+   */
+  lastProgressAt: number;
 }
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
@@ -386,6 +394,8 @@ interface BindingRecord {
   attachment: SessionAttachment;
   venue: SessionExecutionVenue;
   cursor: SessionNativeDetail | null;
+  /** Latest token/tool observation this live binding received, never a durable fact. */
+  lastProgressAt: number;
   reconcileInFlight: Promise<void> | null;
   /**
    * The same translator the attachment's sink holds, for the replay path.
@@ -573,10 +583,11 @@ class DefaultSessionRuntime implements SessionRuntime {
   constructor(private readonly ports: SessionRuntimePorts) {}
 
   openNativeBindings(): readonly OpenNativeBinding[] {
-    return [...this.#bindings.values()].map(({ spec }) => ({
+    return [...this.#bindings.values()].map(({ spec, lastProgressAt }) => ({
       sessionId: spec.sessionId,
       directory: spec.directory,
       attachmentId: spec.attachmentId,
+      lastProgressAt,
     }));
   }
 
@@ -905,6 +916,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         attachment,
         venue: location.venue,
         cursor: null,
+        lastProgressAt: this.ports.clock.now(),
         reconcileInFlight: null,
         translator,
         sink,
@@ -1859,6 +1871,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
   }
 
+  /** Update only the live binding that produced a real runtime observation. */
+  #recordBindingProgress(spec: Pick<NativeAttachmentSpec, "sessionId" | "attachmentId">): void {
+    const binding = this.#bindings.get(spec.attachmentId);
+    /* v8 ignore next -- only this attachment-keyed sink calls here, and it is discarded before its binding leaves this private map. */
+    if (binding?.spec.sessionId !== spec.sessionId) return;
+    binding.lastProgressAt = this.ports.clock.now();
+  }
+
   /**
    * One attachment's observation pipeline, and the translator it runs on.
    *
@@ -1877,7 +1897,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       now: () => this.ports.clock.now(),
     });
     const sink: BufferedObservationSink = new BufferedObservationSink(translator, (fact) =>
-      this.#recordFact(adapter, spec, venue, fact, sink),
+      this.#recordFact(adapter, spec, venue, fact, sink, "live"),
     );
     return { translator, sink };
   }
@@ -1889,7 +1909,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     observation: TranslatedObservation,
     /** The pipeline this fact came through, re-read for the one write that can outlast it. */
     sink: BufferedObservationSink,
+    source: "live" | "replay" = "live",
   ): Promise<void> {
+    // Replayed facts may be hours old. Only live tokens/tool observations reset
+    // the watchdog's process-local clock; durable recovery is not progress.
+    if (source === "live") this.#recordBindingProgress(spec);
     // A transient fact, and every durable step below is skipped on purpose: no
     // artifact write, no ledger event, and no observation-id dedupe — at ~31
     // emissions a second a delta carries no durable identity worth deduping.
@@ -2292,6 +2316,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachment,
       venue: attachment.venue,
       cursor: null,
+      lastProgressAt: this.ports.clock.now(),
       reconcileInFlight: null,
       translator,
       sink,
@@ -2324,7 +2349,14 @@ class DefaultSessionRuntime implements SessionRuntime {
   ): Promise<void> {
     for (const observation of reconciliation.observations) {
       for (const fact of binding.translator.replay(observation)) {
-        await this.#recordFact(binding.adapter, binding.spec, binding.venue, fact, binding.sink);
+        await this.#recordFact(
+          binding.adapter,
+          binding.spec,
+          binding.venue,
+          fact,
+          binding.sink,
+          "replay",
+        );
       }
     }
     const projection = await this.#requireSession(binding.spec.sessionId);

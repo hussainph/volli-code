@@ -27,7 +27,14 @@ import type {
 
 describe("SESSION_ACTIVITY_STATES", () => {
   it("lists working, waiting, idle, parked, exited in order", () => {
-    expect(SESSION_ACTIVITY_STATES).toEqual(["working", "waiting", "idle", "parked", "exited"]);
+    expect(SESSION_ACTIVITY_STATES).toEqual([
+      "working",
+      "waiting",
+      "idle",
+      "parked",
+      "exited",
+      "stopped",
+    ]);
   });
 });
 

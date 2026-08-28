@@ -24,11 +24,21 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
   it("gives a Project Session the agent-control family and a Ticket Role's default bundle none", () => {
-    expect(roleVerbBundle("project")).toEqual(["session.start", "ticket.await", "automation.run"]);
-    // The default-bundle property is asserted as absence rather than prose. A
-    // durable birth grant is the explicit exception (VC-183), never a bundle
-    // edit. `ticket.await` is not part of the agent-control family — waiting
-    // controls nobody (VC-85/VC-92).
+    // The whole family travels together (VC-92's pairing rule; stop and send
+    // joined start in VC-86, and `automation.run` rides with them per VC-134)
+    // — shipping part of it would make the bundle no boundary.
+    expect(roleVerbBundle("project")).toEqual([
+      "session.start",
+      "session.stop",
+      "session.send",
+      "ticket.await",
+      "automation.run",
+    ]);
+    // The default-bundle property is asserted as absence rather than prose. An
+    // injected instruction telling a Ticket Session to start ten Sessions has
+    // nothing to call, and a durable birth grant is the explicit exception
+    // (VC-183), never a bundle edit. `ticket.await` is not part of the
+    // agent-control family — waiting controls nobody (VC-85/VC-92).
     expect(roleVerbBundle("ticket")).toEqual(["ticket.await"]);
     // VC-9 defines this one; until then an empty bundle is the honest answer.
     expect(roleVerbBundle("subagent")).toEqual([]);
@@ -45,6 +55,10 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
 
 describe("resolveAgentToolSurface — the three sets, kept apart", () => {
   it("resolves capability tools, then the Role's verbs, in canonical order", () => {
+    // Verb order is REGISTRY DECLARATION order, not bundle order: stop and
+    // send were appended after `automation.run` (VC-86), so they follow it —
+    // that is what keeps `ticket.await`'s and `automation.run`'s positions
+    // stable inside every tool-surface record frozen before they existed.
     expect(resolveAgentToolSurface(capabilities())).toEqual([
       "read",
       "edit",
@@ -56,6 +70,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.start",
       "ticket.await",
       "automation.run",
+      "session.stop",
+      "session.send",
     ]);
   });
 
@@ -101,6 +117,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.start",
       "ticket.await",
       "automation.run",
+      "session.stop",
+      "session.send",
     ]);
   });
 
@@ -124,6 +142,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.start",
       "ticket.await",
       "automation.run",
+      "session.stop",
+      "session.send",
     ]);
   });
 });
@@ -147,11 +167,16 @@ describe("automation.run is the orchestrator's verb, and only that (VC-134)", ()
     expect(isSessionToolId("automation_run")).toBe(false);
   });
 
-  it("is last in canonical order, so no frozen surface shifted under it", () => {
+  it("holds its canonical index, so no frozen surface shifted under it", () => {
     // Appended, never inserted: a Session frozen before this verb existed must
     // find every tool it already held at the position it already had, or it
     // pays a full Cache Prefix miss for a list that did not change for it.
-    expect(VERB_TOOL_KEYS.at(-1)).toBe("automation.run");
+    //
+    // Asserted as a PREFIX rather than as "automation.run is last", because
+    // last is an incidental fact about the newest verb while the prefix is the
+    // invariant. VC-86's supervision pair appended behind this row and would
+    // have falsified the incidental spelling of a discipline it in fact kept.
+    expect(VERB_TOOL_KEYS.slice(0, 3)).toEqual(["session.start", "ticket.await", "automation.run"]);
   });
 });
 

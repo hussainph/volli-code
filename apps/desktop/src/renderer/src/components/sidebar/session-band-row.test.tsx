@@ -56,6 +56,7 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
     activitySource: "reported",
     attention: null,
     waitingOn: null,
+    lastActivityAt: 60_000,
     target: { kind: "terminal", tabId: "s1", paneId: "p1" },
     ...overrides,
   };
@@ -64,7 +65,13 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
 function render(subject: ActiveSessionRow): string {
   return renderToStaticMarkup(
     <SidebarProvider>
-      <ActiveBandRow row={subject} ticketPrefix="VC" selected={false} onSelect={() => {}} />
+      <ActiveBandRow
+        row={subject}
+        ticketPrefix="VC"
+        now={120_000}
+        selected={false}
+        onSelect={() => {}}
+      />
     </SidebarProvider>,
   );
 }
@@ -98,6 +105,10 @@ describe("ActiveBandRow", () => {
     expect(stateLine(markup)).toBe("Doing · Working");
     // Displaced, not dropped.
     expect(hoverTitle(markup)).toContain("Claude Code");
+  });
+
+  it("shows the age of the row's newest activity", () => {
+    expect(render(row())).toContain("last 1m");
   });
 
   it("says where a chat Session lives instead of saying it is Live", () => {

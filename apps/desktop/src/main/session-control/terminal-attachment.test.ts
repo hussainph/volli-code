@@ -25,6 +25,7 @@ function projectionWith(attachments: SessionAttachmentProjection[]): SessionProj
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
+    stopped: null,
     modelSelection: null,
     turnActive: false,
     authorityDenials: 0,

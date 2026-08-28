@@ -42,6 +42,11 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
 }
 
 /**
+ * Stopped outranks everything (VC-86): a Session whose work was deliberately
+ * ended cannot be helped by answering its stale question and is not "working"
+ * however the turn flag was left — the stop fact is the newer truth, and a
+ * fresh attachment explicitly clears it when work genuinely resumes.
+ *
  * Waiting outranks working, because an agent that has asked a question is still
  * inside an open turn: a row that said "working" there would hide the one thing
  * the user could actually do about it.
@@ -54,6 +59,7 @@ function chatActivity(
   projection: SessionProjection,
   attachment: SessionAttachmentProjection | null,
 ): ChatSessionRecord["activity"] {
+  if (projection.stopped !== null) return "stopped";
   if (sessionAwaitsUser(projection)) return "waiting";
   if (projection.turnActive && attachment?.status === "open") return "working";
   return "idle";
@@ -87,6 +93,9 @@ const WAITING_ON_BY_ATTENTION: Readonly<Partial<Record<SessionAttentionKind, Cha
  * a test rather than by comment alone.
  */
 function chatWaitingOn(projection: SessionProjection): ChatWaitingReason | null {
+  // A stopped Session is not waiting on anyone — the reason must go with the
+  // state, or a row would say "Stopped" while handing the reader an errand.
+  if (projection.stopped !== null) return null;
   if (projection.interactions.active.length > 0) return "question";
   for (const attention of projection.attention.active) {
     const reason = WAITING_ON_BY_ATTENTION[attention.kind];

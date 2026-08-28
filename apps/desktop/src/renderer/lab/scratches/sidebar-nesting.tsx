@@ -471,10 +471,12 @@ const NEST_RULE = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
  */
 function ActiveBand({
   rows,
+  now,
   selectedId,
   onSelect,
 }: {
   rows: readonly ActiveSessionRow[];
+  now: number;
   selectedId: string | null;
   onSelect(id: string): void;
 }) {
@@ -486,6 +488,7 @@ function ActiveBand({
           key={row.id}
           row={row}
           ticketPrefix={project.ticketPrefix}
+          now={now}
           selected={row.id === selectedId}
           onSelect={select}
         />
@@ -614,7 +617,12 @@ function SidebarColumn({
             {listing.active.length === 0 ? (
               <p className="px-2 py-1 text-xs text-muted-foreground">No active sessions</p>
             ) : (
-              <ActiveBand rows={listing.active} selectedId={selectedId} onSelect={onSelect} />
+              <ActiveBand
+                rows={listing.active}
+                now={now}
+                selectedId={selectedId}
+                onSelect={onSelect}
+              />
             )}
           </SidebarGroup>
 

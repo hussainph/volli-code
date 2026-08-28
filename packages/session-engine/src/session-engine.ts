@@ -415,6 +415,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           command.intent.kind !== "session.archive" &&
           command.intent.kind !== "session.retitle" &&
           command.intent.kind !== "session.signal" &&
+          command.intent.kind !== "session.stop" &&
           (command.intent.kind !== "model.select" || command.route !== null)
         ) {
           return { command, commandEvent, receipt: null, receiptEvent: null };
@@ -435,11 +436,17 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 ? { kind: "session.retitled", title: command.intent.title }
                 : command.intent.kind === "model.select"
                   ? { kind: "model.selected", selection: command.intent.selection }
-                  : {
-                      kind: "session.signaled",
-                      signal: command.intent.signal,
-                      reason: command.intent.reason,
-                    },
+                  : command.intent.kind === "session.stop"
+                    ? {
+                        kind: "session.stopped",
+                        reason: command.intent.reason,
+                        by: command.intent.by,
+                      }
+                    : {
+                        kind: "session.signaled",
+                        signal: command.intent.signal,
+                        reason: command.intent.reason,
+                      },
         };
         transaction.appendEvent(sessionEvent);
         const receiptEvent = receiptRecordedEvent(
@@ -459,7 +466,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 ? { kind: "session.retitled", sessionId: session.id }
                 : command.intent.kind === "model.select"
                   ? { kind: "model.selected", sessionId: session.id }
-                  : { kind: "session.signaled", sessionId: session.id },
+                  : command.intent.kind === "session.stop"
+                    ? { kind: "session.stopped", sessionId: session.id }
+                    : { kind: "session.signaled", sessionId: session.id },
           ),
         );
         transaction.appendReceipt(receiptEvent.payload.receipt);
@@ -956,6 +965,7 @@ function resolveCommandRoute(
     case "session.archive":
     case "session.retitle":
     case "session.signal":
+    case "session.stop":
       return { route: null, rejection: null };
   }
 }
@@ -1198,6 +1208,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "session.archive": "session.archived",
     "session.retitle": "session.retitled",
     "session.signal": "session.signaled",
+    "session.stop": "session.stopped",
     "model.select": "model.selected",
     "executor.start": "executor.start.requested",
     "executor.stop": "executor.stop.requested",
