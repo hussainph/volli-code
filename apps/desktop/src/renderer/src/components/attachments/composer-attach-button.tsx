@@ -40,7 +40,7 @@ export function ComposerAttachButton({
         size="xs"
         variant="ghost"
         aria-label="Attach files"
-        title={imagesUnsupported ? "Attach files — this model cannot read images" : "Attach files"}
+        title={imagesUnsupported ? "Attach files (this model cannot read images)" : "Attach files"}
         className={className}
         onClick={() => inputRef.current?.click()}
       >

@@ -47,13 +47,13 @@ export function UpdateButton() {
     state.phase === "checking"
       ? "Checking for updates…"
       : state.phase === "downloading"
-        ? `Downloading ${state.targetVersion ?? "update"} — ${Math.round(state.percent ?? 0)}%`
+        ? `Downloading ${state.targetVersion ?? "update"} (${Math.round(state.percent ?? 0)}%)`
         : state.phase === "downloaded"
           ? state.targetVersion === null
-            ? "An update is ready — click to install"
-            : `Volli Code ${state.targetVersion} is ready — click to install`
+            ? "Update ready. Select to install."
+            : `Volli Code ${state.targetVersion} is ready. Select to install.`
           : state.phase === "error"
-            ? `Update check failed: ${state.error ?? "unknown error"} — click to retry`
+            ? `Update check failed: ${state.error ?? "unknown error"}. Select to retry.`
             : "Check for updates";
 
   return (

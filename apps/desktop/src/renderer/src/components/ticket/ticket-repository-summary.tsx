@@ -1069,14 +1069,14 @@ export function TicketRepositorySummary({
             variant="outline"
             size="sm"
             className="shrink-0 border-sidebar-border bg-background/30 px-2 text-ui shadow-raised"
-            aria-label="Open the pull request on GitHub"
+            aria-label="Open pull request in GitHub"
             onClick={openPr}
           >
             <GithubLogoIcon weight="fill" />
             PR
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top">Open the pull request on GitHub</TooltipContent>
+        <TooltipContent side="top">Open pull request in GitHub</TooltipContent>
       </Tooltip>
     ) : null;
 
